@@ -68,11 +68,12 @@ jobs:
             "https://github.com/gitleaks/gitleaks/releases/download/v$GITLEAKS_VERSION/$tarball"
           echo "$GITLEAKS_SHA256  $RUNNER_TEMP/$tarball" | sha256sum -c -
           tar -xzf "$RUNNER_TEMP/$tarball" -C "$RUNNER_TEMP" gitleaks
-      - name: gitleaks over the full history (default rules, values redacted)
+      - name: gitleaks over the full history of every ref (default rules, values redacted)
         run: |
           "$RUNNER_TEMP/gitleaks" version
-          # -m: also scan what merge commits introduce (conflict resolutions).
-          "$RUNNER_TEMP/gitleaks" git --no-banner --redact --verbose --log-opts=-m .
+          # --log-opts replaces gitleaks' default (--full-history --all): keep --all, and add -m to
+          # scan what merge commits introduce (conflict resolutions).
+          "$RUNNER_TEMP/gitleaks" git --no-banner --redact --verbose --log-opts="--all -m" .
 
   workflow-lint:
     name: workflow-lint

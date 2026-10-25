@@ -29,7 +29,7 @@ The plan is binding: `docs/plan/ARCHITECTURE.md` (cited A§x), `docs/plan/PHASES
 - Tags: [CI] · [box] · [weekend] · [owner].
 - A new dependency needs an ADR-lite line in the PR: why · licence · maintainer health · transitive count. Exact pins only, 7-day release age.
 
-- Agent environment: `.claude/settings.json` denies reads of `.env*`, `secrets/`, `*.secret`, `/etc/f1/secrets`, key files and the `gh` config, the force/mirror/delete push forms, `pnpm dlx`/`exec` and `npx`. These are defence in depth; the real control is that no secret ever lives in the repository or the sandbox.
+- Agent environment: `.claude/settings.json` denies reads of `.env*`, `secrets/`, `*.secret`, `/etc/f1/secrets`, key files and the `gh` config, the force/mirror/delete push forms, any push to `main`, `gh pr merge`, `gh api` calls on branch protection, rulesets or refs, `gh repo edit/delete`, `gh secret`, `pnpm dlx`/`exec` and `npx`. These are defence in depth. The real controls are that no secret ever lives in the repository or the sandbox, and the branch protection on `main` (A§12.4).
 
 ## Gotchas (2026 versions newer than most model knowledge)
 

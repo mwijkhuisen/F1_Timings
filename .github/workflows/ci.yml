@@ -46,6 +46,13 @@ jobs:
           test "$(pnpm config get minimumReleaseAge)" = 10080
           test "$(pnpm config get strictDepBuilds)" = true
           test "$(pnpm config get blockExoticSubdeps)" = true
+      # pnpm 12.5.1 still lets a transitive https tarball through blockExoticSubdeps.
+      - name: Every lockfile resolution is a registry integrity hash (no git or tarball source)
+        run: |
+          if grep 'resolution:' pnpm-lock.yaml | grep -vE '^\s+resolution: \{integrity: sha512-[A-Za-z0-9+/]+=*\}$'; then
+            echo "pnpm-lock.yaml resolves a package from outside the registry" >&2
+            exit 1
+          fi
       - run: pnpm install --frozen-lockfile
       - run: pnpm check
 

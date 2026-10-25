@@ -226,6 +226,18 @@ Roles (owner, 2026-10-25; built in P1b): `deploy/postgres/roles.sql`, a PostgreS
 - The token is cached at `/srv/f1/state/f1tv-token` (0600, live UID). The token itself is never logged; only its expiry is.
 - Fallback if the login breaks (bot protection, a flow change): the owner pastes the `login-session` cookie value from formula1.com into the token file (as undercut-f1 does). The status panel warns 24 h before expiry and when a login fails.
 
+### 12.4 Agents and CI (P0 security review, 2026-10-25)
+
+- **Trust anchors:** the lockfile, the hand-maintained sha256 pins of the CI binaries (Dependabot does not bump them), and the required checks, which the PR itself defines. A diff under `.github/`, `scripts/`, `pnpm-workspace.yaml` or `.claude/` gets a line-by-line owner read.
+- **`main`:** branch protection requires `ci` and `security`, enforced for admins, with no force-push or deletion, and a pull request before merging (0 approvals). Merge commits only.
+- **Agent identity:** agents use the owner's admin OAuth token until P1f, when they move to their own fine-grained token without the Administration permission (A8). Until then "agents never merge" rests on the deny rules in `.claude/settings.json` and on the branch protection.
+- **Secrets:** `db_f1_migrator` is the first one. It lives in the `migrate` process and in the dbmate child's environment (readable through `/proc/<pid>/environ` by the same UID in the one-shot container). `DATABASE_URL` overrides it in dev and test; P1f checks that Compose never sets it.
+- **CI egress (CI only):** GitHub release assets, registry.npmjs.org, Docker Hub, nodejs.org (setup-node), api.github.com (zizmor). Production gains no host.
+- **Accepted risks (owner, 2026-10-25):**
+  - The `git diff *`, `git log *` and `git show *` allow rules stay, although `--output=<path>` lets them write a file without a prompt.
+  - `npm`, `yarn` and `bunx`, `git push --prune` and `git -c … push` are not denied.
+  - GitHub does not itself enforce SHA-pinned or allow-listed actions; `scripts/check-workflows.sh` and zizmor do, in files a PR can change.
+
 ## 13. Frontend
 
 - **Routes** (no router library; `routeOf(location.pathname)` plus `history.pushState`, as in Waterheight): `/` (latest session) · `/:year` · `/:year/:meeting/:session/{laps|compare|minisectors|stints}` · `/live` · `/replay/:recording`.

@@ -14,6 +14,16 @@ export const SECRETS_DIR = '/run/secrets';
 
 const exec = promisify(execFile);
 const MIGRATIONS = fileURLToPath(new URL('../../../../db/migrations', import.meta.url));
+// URL-safe as is: the URL setter would leave a `%` unencoded, and dbmate would decode it.
+const PASSWORD = /^[A-Za-z0-9_-]{24,}$/;
+
+const decoded = (s: string) => {
+  try {
+    return decodeURIComponent(s);
+  } catch {
+    return s;
+  }
+};
 
 /** A Compose file secret: one line, trimmed; undefined when missing, empty or multi-line. */
 export function readSecret(name: string, dir = SECRETS_DIR): string | undefined {
@@ -43,9 +53,11 @@ export function migratorUrl(env: Env, secretsDir = SECRETS_DIR): URL | string {
   }
   const password = readSecret('db_f1_migrator', secretsDir);
   if (password === undefined) return 'the file secret db_f1_migrator is missing';
+  if (!PASSWORD.test(password))
+    return 'the file secret db_f1_migrator must be 24 or more characters of A-Z a-z 0-9 _ -';
   const url = new URL('postgres://db:5432/f1?sslmode=disable');
   url.username = 'f1_migrator';
-  url.password = password; // percent-encoded by the setter
+  url.password = password;
   return url;
 }
 
@@ -56,7 +68,7 @@ export async function runMigrate(env: Env, log: (line: string) => void): Promise
     return EXIT_CONFIG;
   }
   // dbmate's output can quote the URL; everything it prints passes through this.
-  const secrets = [url.href, url.password, decodeURIComponent(url.password)].filter((s) => s !== '');
+  const secrets = [url.href, url.password, decoded(url.password)].filter((s) => s !== '');
   const scrub = (text: string) => secrets.reduce((out, s) => out.split(s).join('[redacted]'), text).slice(0, 4000);
   const print = (text: unknown) => {
     if (typeof text === 'string') for (const line of scrub(text).split('\n')) if (line.trim()) log(`migrate: ${line}`);

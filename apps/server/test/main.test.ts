@@ -51,13 +51,31 @@ describe('migratorUrl', () => {
     expect(migratorUrl({ DATABASE_URL: 'not a url' })).toBe('DATABASE_URL is not a URL');
   });
 
-  it('otherwise logs in as f1_migrator on db with the file secret, encoded', () => {
+  it('otherwise logs in as f1_migrator on db with a URL-safe file secret', () => {
     const dir = tmp();
     expect(migratorUrl({}, dir)).toBe('the file secret db_f1_migrator is missing');
-    writeFileSync(join(dir, 'db_f1_migrator'), 'p@ss/w:rd\n');
-    const url = migratorUrl({}, dir);
-    expect(String(url)).toBe('postgres://f1_migrator:p%40ss%2Fw%3Ard@db:5432/f1?sslmode=disable');
+    writeFileSync(join(dir, 'db_f1_migrator'), 'Abc-123_xyz-456_DEF-789_gh\n');
+    expect(String(migratorUrl({}, dir))).toBe(
+      'postgres://f1_migrator:Abc-123_xyz-456_DEF-789_gh@db:5432/f1?sslmode=disable',
+    );
     writeFileSync(join(dir, 'db_f1_migrator'), 'two\nlines');
     expect(migratorUrl({}, dir)).toBe('the file secret db_f1_migrator is missing');
+    for (const bad of ['p%41ss-but-long-enough-0123', 'p@ss/w:rd=+but-long-enough-0123', 'short_but_ok_chars']) {
+      writeFileSync(join(dir, 'db_f1_migrator'), bad);
+      expect(migratorUrl({}, dir)).toMatch(/must be 24 or more/);
+    }
+  });
+});
+
+describe('runMigrate', () => {
+  it('never logs the password, even when dbmate prints the URL', async () => {
+    const bin = tmp();
+    const dbmate = '#!/bin/sh\necho "out $DATABASE_URL"\necho "err $DATABASE_URL" >&2\nexit 1\n';
+    writeFileSync(join(bin, 'dbmate'), dbmate, { mode: 0o755 });
+    const lines: string[] = [];
+    const env = { PATH: bin, DATABASE_URL: 'postgres://u:Pa55-word%25x@localhost:5432/x' };
+    expect(await run(['migrate'], env, (l) => lines.push(l))).toBe(1);
+    expect(lines.join('\n')).not.toMatch(/Pa55-word/);
+    expect(lines).toEqual(['migrate: dbmate failed (exit 1)', 'migrate: out [redacted]', 'migrate: err [redacted]']);
   });
 });

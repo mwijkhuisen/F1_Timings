@@ -133,7 +133,7 @@ Remaining 2026 weekends (OpenF1 schedule): Austin (race 25 Oct) · Mexico City 3
 ### P1f: Deploy on the VM
 
 - **Goal:** v1 running at the owner's hostname behind Access.
-- **Depends on:** P1c (P1d/P1e can ship on top), owner actions A1–A3, A5–A6.
+- **Depends on:** P1c (P1d/P1e can ship on top), owner actions A1–A3, A5–A6, A8.
 - **Scope in:**
   - Dockerfiles (distroless server, Caddy web, sha256-pinned dbmate)
   - `deploy/compose.yaml` (project `f1`, A§14.2, hardening anchor repeated literally per file)
@@ -259,6 +259,7 @@ Remaining 2026 weekends (OpenF1 schedule): Austin (race 25 Oct) · Mexico City 3
 | A5 | GitHub: GHCR packages public, branch protection on `main`, Dependabot on | P0 / P1f |
 | A6 | healthchecks.io: create `f1-ingest` and `f1-live` and put the ping key in a secret file | P1f / P2c |
 | A7 | Record the remaining 2026 sessions with FastF1 (P2-rec) | Mexico City onward |
+| A8 | Create a fine-grained GitHub token for agent sessions on this repository only (contents, pull requests and issues read/write; no Administration, no secrets) and log agent sessions in with it instead of your admin token (A§12.4) | P1f |
 
 ## 5. First task
 
