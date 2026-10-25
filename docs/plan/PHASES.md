@@ -23,6 +23,12 @@ Remaining 2026 weekends (OpenF1 schedule): Austin (race 25 Oct) · Mexico City 3
   - **[owner]** is a manual owner action or judgement.
 - **Per phase:** one issue with the goal, scope, deliverables and acceptance criteria copied from this file. Branch `claude/p<N><x>-<slug>`, conventional commits, and a PR with an evidence checklist (each criterion → test or command output). Agents never merge. The owner merges once the `ci` check is green.
 - **Reviews:** a fresh-session `/code-review` before merging P1b, P1c, P2b, P2c and P2d. A security review for anything touching secrets, the firewall, Access, the token or the compose hardening (P0 CI, P1f, P2c).
+- **Models and effort** (owner, 2026-10-25; each phase issue has its own table):
+  - Build: Opus 5.5 at `xhigh` (`high` for UI and well-specified phases, `max` for P2b's lap reconstruction). Sonnet 5.5 at `high` for small phases (P2f, P3b, P3c).
+  - Code review: a fresh session with a different model from the build. Sonnet 5.5 at `xhigh` for required reviews and `high`/`medium` otherwise; Opus 5.5 when Sonnet built.
+  - Security review: a fresh Opus 5.5 session at `xhigh` when required; Sonnet 5.5 otherwise.
+  - Fable 5.1 is never the default (cost and usage limits). It is only an escalation: one more review when a fix round still leaves a High or Critical finding, or a [CI]/[box] bar is still missed after one fix round.
+  - GitHub chores (issues, labels, PR text): Haiku 5.5 at `low`.
 - **Done:** CI green, criteria evidenced, docs and ADRs updated, any new dependency has an ADR-lite line in the PR ("why · licence · maintainer health · transitive count").
 - **New facts:** an **[U]** fact proven or disproven in a phase is written back into ARCHITECTURE.md in the same PR.
 
