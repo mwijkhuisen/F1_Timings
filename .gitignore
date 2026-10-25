@@ -9,3 +9,8 @@ secrets/
 fixtures-private/
 spikes/**/out/
 .DS_Store
+*.tsbuildinfo
+# registry auth tokens; pnpm settings belong in pnpm-workspace.yaml
+.npmrc
+.claude/settings.local.json
+.claude/worktrees/

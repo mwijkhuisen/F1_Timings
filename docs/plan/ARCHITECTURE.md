@@ -55,6 +55,8 @@ Same versions as Waterheight at P0 time. Re-check each pin against the 7-day rel
 | Watchdog role, public status page | drop | A status panel in the UI plus 2 healthchecks.io checks |
 | BOM table + `check-bom.ts`, `check-boundaries`, OpenAPI generators, CodeQL, 3-browser Playwright matrix, Lighthouse | drop | Exact pins + Dependabot cooldown cover the supply-chain part; the rest guards a public product |
 | dbmate built from source in the image | lighter | Official static release binary, sha256-pinned in the Dockerfile |
+| `harden-runner` in every CI job | drop | In audit mode it blocks nothing, and it is one less third-party action with access to every job (owner, 2026-10-25) |
+| Separate `dbmate` CI job with a round-trip script | lighter | The `integration` test creates a database and runs the real `migrate` role up → down → up (owner, 2026-10-25) |
 
 ## 4. Components
 
@@ -141,6 +143,8 @@ All times are `timestamptz` in UTC, durations are integer milliseconds, and spee
 
 Size: 2023–2026 is about 470 sessions, under 2 GB including raw JSON **[U]** (measured after the backfill).
 
+Roles (owner, 2026-10-25; built in P1b): `deploy/postgres/roles.sql`, a PostgreSQL init script that runs once when the volume is created, makes the logins `f1_migrator` (owns every object), `f1_ingest` (writes) and `f1_api` (reads). Their grants live in a migration. Each login's password is a file secret `db_<login>`.
+
 ## 8. Ingestion (OpenF1)
 
 - **Schedule sync:** daily at 00:30 UTC, plus at start: `meetings` and `sessions` for the current year (and every year from 2023 on the first run). Upserts `meeting`/`session`.
@@ -222,6 +226,18 @@ Size: 2023–2026 is about 470 sessions, under 2 GB including raw JSON **[U]** (
 - The token is cached at `/srv/f1/state/f1tv-token` (0600, live UID). The token itself is never logged; only its expiry is.
 - Fallback if the login breaks (bot protection, a flow change): the owner pastes the `login-session` cookie value from formula1.com into the token file (as undercut-f1 does). The status panel warns 24 h before expiry and when a login fails.
 
+### 12.4 Agents and CI (P0 security review, 2026-10-25)
+
+- **Trust anchors:** the lockfile, the hand-maintained sha256 pins of the CI binaries (Dependabot does not bump them), and the required checks, which the PR itself defines. A diff under `.github/`, `scripts/`, `pnpm-workspace.yaml` or `.claude/` gets a line-by-line owner read.
+- **`main`:** branch protection requires `ci` and `security`, enforced for admins, with no force-push or deletion, and a pull request before merging (0 approvals). Merge commits only.
+- **Agent identity:** agents use the owner's admin OAuth token until P1f, when they move to their own fine-grained token without the Administration permission (A8). Until then "agents never merge" rests on the deny rules in `.claude/settings.json` and on the branch protection.
+- **Secrets:** `db_f1_migrator` is the first one. It lives in the `migrate` process and in the dbmate child's environment (readable through `/proc/<pid>/environ` by the same UID in the one-shot container). `DATABASE_URL` overrides it in dev and test; P1f checks that Compose never sets it.
+- **CI egress (CI only):** GitHub release assets, registry.npmjs.org, Docker Hub, nodejs.org (setup-node), api.github.com (zizmor). Production gains no host.
+- **Accepted risks (owner, 2026-10-25):**
+  - The `git diff *`, `git log *` and `git show *` allow rules stay, although `--output=<path>` lets them write a file without a prompt.
+  - `npm`, `yarn` and `bunx`, `git push --prune` and `git -c … push` are not denied.
+  - GitHub does not itself enforce SHA-pinned or allow-listed actions; `scripts/check-workflows.sh` and zizmor do, in files a PR can change.
+
 ## 13. Frontend
 
 - **Routes** (no router library; `routeOf(location.pathname)` plus `history.pushState`, as in Waterheight): `/` (latest session) · `/:year` · `/:year/:meeting/:session/{laps|compare|minisectors|stints}` · `/live` · `/replay/:recording`.
@@ -257,6 +273,7 @@ Size: 2023–2026 is about 470 sessions, under 2 GB including raw JSON **[U]** (
 - Total limits are ~2.7 GB. Expected steady state is ~0.9 GB.
 - Bridges are named `f1-*`, with fixed subnets that must not overlap Waterheight's 172.30.0.0/16 or the LAN (P1f picks them after inspecting the host). `enable_icc: false`.
 - UIDs/GIDs: containers run as 62532 (not Waterheight's 65532/65533). Secret GIDs start at 62001 (Waterheight uses 61001–61012).
+- The `migrate` contract (built in P0, owner 2026-10-25): host `db:5432`, database `f1`, login `f1_migrator`, and the password from the file secret `db_f1_migrator` (`/etc/f1/secrets/db_f1_migrator` on the host, `/run/secrets/db_f1_migrator` in the container). `DATABASE_URL` is a dev/test switch that Compose never sets. The server image has dbmate on its `PATH`.
 
 ### 14.3 Firewall
 

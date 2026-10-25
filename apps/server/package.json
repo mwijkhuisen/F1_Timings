@@ -1,0 +1,8 @@
+{
+  "name": "@f1/server",
+  "private": true,
+  "type": "module",
+  "files": [
+    "dist"
+  ]
+}

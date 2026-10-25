@@ -1,0 +1,144 @@
+# CI (PHASES P0). The required check is the aggregate job `ci`. Hardening:
+# top-level permissions {}, contents: read per job, persist-credentials: false,
+# no caches, no expressions inside run: (values come in through env:), actions
+# pinned to full SHAs and downloaded binaries checked against pinned sha256 sums.
+# CI never calls OpenF1, F1 or Jolpica (A§12.1 invariant 4).
+name: ci
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions: {}
+
+concurrency:
+  group: ci-${{ github.ref }}
+  # Cancel superseded runs on PRs only; every commit on main is checked to the end.
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  check:
+    name: check
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version-file: .node-version
+          package-manager-cache: false
+      - name: Install pnpm (pinned native binary, sha512-checked)
+        run: |
+          scripts/install-pnpm.sh "$RUNNER_TEMP/pnpm"
+          echo "$RUNNER_TEMP/pnpm/bin" >>"$GITHUB_PATH"
+      - name: pnpm policy is in effect (pnpm ignores a misspelt key)
+        run: |
+          test "$(pnpm config get minimumReleaseAge)" = 10080
+          test "$(pnpm config get strictDepBuilds)" = true
+          test "$(pnpm config get blockExoticSubdeps)" = true
+      # pnpm 12.5.1 still lets a transitive https tarball through blockExoticSubdeps.
+      - name: Every lockfile resolution is a registry integrity hash (no git or tarball source)
+        run: |
+          if grep 'resolution:' pnpm-lock.yaml | grep -vE '^\s+resolution: \{integrity: sha512-[A-Za-z0-9+/]+=*\}$'; then
+            echo "pnpm-lock.yaml resolves a package from outside the registry" >&2
+            exit 1
+          fi
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm check
+
+  # The dbmate round trip: the test creates a database on the PG 18 service and
+  # runs the migrate role (dbmate migrate) → a rollback of every migration → migrate.
+  integration:
+    name: integration
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    services:
+      postgres:
+        image: postgres:18.6-trixie@sha256:5a5a84b19854a9ffaa54082c166ff4ec27473a361e496e5ea167f298f2da9722
+        env:
+          # Throwaway CI-only credential for an ephemeral service container.
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_INITDB_ARGS: --locale-provider=builtin --builtin-locale=C.UTF-8
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd "pg_isready -U postgres" --health-interval 2s --health-timeout 5s --health-retries 30
+    env:
+      DATABASE_URL: postgres://postgres:postgres@localhost:5432/postgres?sslmode=disable
+      DBMATE_VERSION: v2.36.0
+      DBMATE_SHA256: 47e284b3d8cbad1ba5f090495aa05afd1bbd5f35e2ed5577aad06da74ce780ce
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Install dbmate (pinned, sha256-checked)
+        run: |
+          mkdir -p "$RUNNER_TEMP/bin"
+          curl --proto '=https' -fsSL -o "$RUNNER_TEMP/bin/dbmate" \
+            "https://github.com/amacneil/dbmate/releases/download/$DBMATE_VERSION/dbmate-linux-amd64"
+          echo "$DBMATE_SHA256  $RUNNER_TEMP/bin/dbmate" | sha256sum -c -
+          chmod +x "$RUNNER_TEMP/bin/dbmate"
+          echo "$RUNNER_TEMP/bin" >>"$GITHUB_PATH"
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version-file: .node-version
+          package-manager-cache: false
+      - name: Install pnpm (pinned native binary, sha512-checked)
+        run: |
+          scripts/install-pnpm.sh "$RUNNER_TEMP/pnpm"
+          echo "$RUNNER_TEMP/pnpm/bin" >>"$GITHUB_PATH"
+      - run: pnpm install --frozen-lockfile
+      - name: pnpm test:integration (dbmate up → down → up on a new database)
+        run: pnpm test:integration
+
+  shellcheck:
+    name: shellcheck
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    env:
+      SHELLCHECK_VERSION: v0.11.0
+      SHELLCHECK_SHA256: b7af85e41cc99489dcc21d66c6d5f3685138f06d34651e6d34b42ec6d54fe6f6
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Install shellcheck (pinned, sha256-checked)
+        run: |
+          tarball="shellcheck-$SHELLCHECK_VERSION.linux.x86_64.tar.gz"
+          curl --proto '=https' -fsSL -o "$RUNNER_TEMP/$tarball" \
+            "https://github.com/koalaman/shellcheck/releases/download/$SHELLCHECK_VERSION/$tarball"
+          echo "$SHELLCHECK_SHA256  $RUNNER_TEMP/$tarball" | sha256sum -c -
+          tar -xzf "$RUNNER_TEMP/$tarball" -C "$RUNNER_TEMP"
+      - name: shellcheck every shell script
+        run: |
+          mapfile -t files < <(git ls-files '*.sh')
+          "$RUNNER_TEMP/shellcheck-$SHELLCHECK_VERSION/shellcheck" --version
+          "$RUNNER_TEMP/shellcheck-$SHELLCHECK_VERSION/shellcheck" "${files[@]}"
+
+  ci:
+    name: ci
+    if: always()
+    needs: [check, integration, shellcheck]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions: {}
+    steps:
+      - name: Every job succeeded
+        env:
+          NEEDS: ${{ toJSON(needs) }}
+        run: |
+          echo "$NEEDS" | jq -r 'to_entries[] | "\(.key): \(.value.result)"'
+          echo "$NEEDS" | jq -e 'all(.[]; .result == "success")' >/dev/null

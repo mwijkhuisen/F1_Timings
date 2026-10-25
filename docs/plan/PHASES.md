@@ -21,8 +21,14 @@ Remaining 2026 weekends (OpenF1 schedule): Austin (race 25 Oct) · Mexico City 3
   - **[box]** is checked on the VM with a command the PR supplies.
   - **[weekend]** needs a real F1 session.
   - **[owner]** is a manual owner action or judgement.
-- **Per phase:** one issue with the goal, scope, deliverables and acceptance criteria copied from this file. Branch `claude/p<N><x>-<slug>`, conventional commits, and a PR with an evidence checklist (each criterion → test or command output). Agents never merge. The owner merges once the `ci` check is green.
+- **Per phase:** one issue with the goal, scope, deliverables and acceptance criteria copied from this file. Branch `claude/p<N><x>-<slug>`, conventional commits, and a PR with an evidence checklist (each criterion → test or command output). Agents never merge. The owner merges with a merge commit once `ci` and `security` are green (branch protection on `main` requires both; owner, 2026-10-25).
 - **Reviews:** a fresh-session `/code-review` before merging P1b, P1c, P2b, P2c and P2d. A security review for anything touching secrets, the firewall, Access, the token or the compose hardening (P0 CI, P1f, P2c).
+- **Models and effort** (owner, 2026-10-25; each phase issue has its own table):
+  - Build: Opus 5.5 at `xhigh` (`high` for UI and well-specified phases, `max` for P2b's lap reconstruction). Sonnet 5.5 at `high` for small phases (P2f, P3b, P3c).
+  - Code review: a fresh session with a different model from the build. Sonnet 5.5 at `xhigh` for required reviews and `high`/`medium` otherwise; Opus 5.5 when Sonnet built.
+  - Security review: a fresh Opus 5.5 session at `xhigh` when required; Sonnet 5.5 otherwise.
+  - Fable 5.1 is never the default (cost and usage limits). It is only an escalation: one more review when a fix round still leaves a High or Critical finding, or a [CI]/[box] bar is still missed after one fix round.
+  - GitHub chores (issues, labels, PR text): Haiku 5.5 at `low`.
 - **Done:** CI green, criteria evidenced, docs and ADRs updated, any new dependency has an ADR-lite line in the PR ("why · licence · maintainer health · transitive count").
 - **New facts:** an **[U]** fact proven or disproven in a phase is written back into ARCHITECTURE.md in the same PR.
 
@@ -127,7 +133,7 @@ Remaining 2026 weekends (OpenF1 schedule): Austin (race 25 Oct) · Mexico City 3
 ### P1f: Deploy on the VM
 
 - **Goal:** v1 running at the owner's hostname behind Access.
-- **Depends on:** P1c (P1d/P1e can ship on top), owner actions A1–A3, A5–A6.
+- **Depends on:** P1c (P1d/P1e can ship on top), owner actions A1–A3, A5–A6, A8.
 - **Scope in:**
   - Dockerfiles (distroless server, Caddy web, sha256-pinned dbmate)
   - `deploy/compose.yaml` (project `f1`, A§14.2, hardening anchor repeated literally per file)
@@ -253,6 +259,7 @@ Remaining 2026 weekends (OpenF1 schedule): Austin (race 25 Oct) · Mexico City 3
 | A5 | GitHub: GHCR packages public, branch protection on `main`, Dependabot on | P0 / P1f |
 | A6 | healthchecks.io: create `f1-ingest` and `f1-live` and put the ping key in a secret file | P1f / P2c |
 | A7 | Record the remaining 2026 sessions with FastF1 (P2-rec) | Mexico City onward |
+| A8 | Create a fine-grained GitHub token for agent sessions on this repository only (contents, pull requests and issues read/write; no Administration, no secrets) and log agent sessions in with it instead of your admin token (A§12.4) | P1f |
 
 ## 5. First task
 
