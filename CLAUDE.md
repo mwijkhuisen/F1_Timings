@@ -6,7 +6,12 @@ The plan is binding: `docs/plan/ARCHITECTURE.md` (cited A§x), `docs/plan/PHASES
 
 ## Commands
 
-Filled in by P0: `pnpm install --frozen-lockfile`, `pnpm check`, `pnpm test`, `pnpm test:integration`.
+- Toolchain: Node 26.10.0 (`.node-version`) and pnpm 12.5.1 from `scripts/install-pnpm.sh <prefix>` (no corepack).
+- `pnpm install --frozen-lockfile` · `pnpm check` (Biome, `tsc -b`, unit tests: what CI's `check` job runs) · `pnpm test` (unit only).
+- `pnpm test:integration` needs `DATABASE_URL` (a superuser of a throw-away PostgreSQL 18 server; CI uses a service container) and `dbmate` 2.36.0 on `PATH`. Each test file creates its own database.
+- Tests: `*.test.ts` is unit, `*.int.test.ts` is integration, under `test/`, `apps/*/test/` or `packages/*/test/`. msw fails any request or WebSocket without a handler (`test/msw.setup.ts`).
+- Migrations: `db/migrations/YYYYMMDDHHMMSS_name.sql` (dbmate, `-- migrate:up` / `-- migrate:down`). An applied migration never changes.
+- Server roles: `node apps/server/src/main.ts <role>` (A§4). P0 implements `healthcheck` and `migrate`; the others exit 2 until their phase.
 
 ## Security invariants (A§12.1)
 
@@ -24,6 +29,31 @@ Filled in by P0: `pnpm install --frozen-lockfile`, `pnpm check`, `pnpm test`, `p
 - Tags: [CI] · [box] · [weekend] · [owner].
 - A new dependency needs an ADR-lite line in the PR: why · licence · maintainer health · transitive count. Exact pins only, 7-day release age.
 
-## Gotchas
+- Agent environment: `.claude/settings.json` denies reads of `.env*`, `secrets/`, `*.secret`, `/etc/f1/secrets`, key files and the `gh` config, the force/mirror/delete push forms, `pnpm dlx`/`exec` and `npx`. These are defence in depth; the real control is that no secret ever lives in the repository or the sandbox.
 
-P0 copies the relevant part of Waterheight's "Gotchas (2026 versions newer than most model knowledge)" here: TS 6, Node 26, pnpm 12, Vite 8, Vitest 5, zod 4 jitless, Biome `"preset": "recommended"`, PG 18 image paths, Docker 29 file secrets, Caddy 2.11, nftables never `flush ruleset`.
+## Gotchas (2026 versions newer than most model knowledge)
+
+From Waterheight's list, the ones that apply here:
+
+- **TypeScript 7 is forbidden.** TS 6: a project that another project references may not use `noEmit` (use `emitDeclarationOnly`); `types` defaults to `[]`.
+- **Node 26:** native `Temporal`; `.ts` runs through type stripping, so only erasable syntax (`erasableSyntaxOnly`: no enums, namespaces or parameter properties), relative imports with the `.ts` extension, and no type stripping inside `node_modules`. Web Storage is on by default (the Vitest config turns it off). **corepack is not bundled**: never rely on it.
+- **pnpm 12** is a native executable; its npm package is a wrapper that may download the binary at run time. Install it with `scripts/install-pnpm.sh`. The lockfile is multi-document YAML (pnpm's own pin comes first). `blockExoticSubdeps` blocks git-hosted subdependencies but, in 12.5.1, not a plain https tarball URL. pnpm ignores a misspelt policy key, so CI asserts each one with `pnpm config get`.
+- **Workspace packages** run from `src` in development and tests and from `dist` in the image, through the `f1-dist` export condition (`NODE_OPTIONS=--conditions=f1-dist`), because Node does not strip types inside `node_modules`.
+- **Vitest 5:** `clearMocks` defaults to true, and an unawaited async assertion fails the test.
+- **msw 3:** the option is `onUnhandledFrame` (covers HTTP and WebSocket), not msw 2's `onUnhandledRequest`. It has no postinstall script.
+- **Vite 8** (Rolldown) treats `<link href>` in HTML as an asset reference; `build.rolldownOptions` replaces `rollupOptions`. A Vite build started inside Vitest bundles React's development build (`NODE_ENV=test`): a test that measures a bundle stubs `NODE_ENV=production`.
+- **Zod 4 in the browser must be `jitless`:** Zod probes `new Function` when an object schema is built, which is a `securitypolicyviolation` under the CSP (no `'unsafe-eval'`). The web entry point calls `config({ jitless: true })` before any contract schema is built. Never widen the CSP for it.
+- **Biome 2.5:** `biome migrate` rewrote `"recommended": true` to `"preset": "none"` (all rules off); the right value is `"preset": "recommended"`.
+- **PostgreSQL 18 image:** `PGDATA` moved to `/var/lib/postgresql/18/docker` and the volume to `/var/lib/postgresql`. Clusters use `--locale-provider=builtin --builtin-locale=C.UTF-8`. dbmate needs `?sslmode=disable` against a local server without TLS. dbmate `up` tries to create the database: the `migrate` role runs `dbmate migrate`. `pg_dump` 17.6+ and 18 write a random `\restrict` line (strip it before comparing dumps).
+- **Docker 29 / Compose 5:**
+  - Compose bind-mounts a **file** secret with its host owner and mode (`uid`/`gid`/`mode` are ignored), so secrets are `root:<gid> 0440` plus `group_add`.
+  - Published ports are DNATed in `nat PREROUTING` and never reach INPUT: filter them on the forward hook, and **never `flush ruleset`** (it deletes Docker's tables, and Waterheight's).
+  - Debian's `nftables.service` flushes everything on stop; F1 loads its own `table inet f1` from `f1-firewall.service` only.
+  - Docker never restarts an *unhealthy* container (only an exited one), so `f1-tick` does.
+  - The stock caddy image's file capability breaks exec under `cap_drop: ALL`: the web image strips it.
+- **Caddy 2.11:**
+  - Headers set before `file_server` stay on its own 404s (an immutable `Cache-Control` on a missing asset): give asset routes a `file` matcher.
+  - Responses Caddy builds in its error path (413, 502, `file_server`'s 404) carry none of the site headers; a route's own `respond` keeps them.
+  - An inline matcher takes one path (`handle /a /a/*` does not parse); use a named matcher. Caddy re-sorts named matchers that hold only a `path`: use `path_regexp` or `expression` when the order matters.
+- **setup-node v7** caches automatically when `packageManager` names npm; every job sets `package-manager-cache: false` (no caches in CI).
+- **Claude Code deny rules match the whole command line**, a commit message included: write the message to a file and use `git commit -F <file>`. A worktree session refuses a shell command that names the version-control tool in a form it cannot verify (a heredoc, a variable, even `.gitignore`): edit such files with the Edit or Write tool.
