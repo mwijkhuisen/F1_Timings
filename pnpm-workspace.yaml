@@ -1,0 +1,15 @@
+packages:
+  - apps/*
+  - packages/*
+
+# Supply-chain policy (CLAUDE.md "Workflow"). Every key is asserted by CI
+# (`pnpm config get`), because pnpm ignores a misspelt key.
+# Install only versions published at least 7 days ago (minutes).
+minimumReleaseAge: 10080
+# Fail the install when a dependency wants to run a build script that is not
+# decided in allowBuilds (none is allowed yet).
+strictDepBuilds: true
+# Transitive dependencies may not come from git (ERR_PNPM_EXOTIC_SUBDEP). pnpm
+# 12.5.1 still lets a transitive plain https tarball URL through; the lockfile
+# review covers that gap.
+blockExoticSubdeps: true

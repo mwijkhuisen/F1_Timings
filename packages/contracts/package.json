@@ -1,0 +1,15 @@
+{
+  "name": "@f1/contracts",
+  "private": true,
+  "type": "module",
+  "sideEffects": false,
+  "files": [
+    "dist"
+  ],
+  "exports": {
+    ".": {
+      "f1-dist": "./dist/index.js",
+      "default": "./src/index.ts"
+    }
+  }
+}
