@@ -1,0 +1,7 @@
+[
+{"date":"2026-10-11T12:41:34.430000+00:00","session_key":11388,"stop_duration":null,"lap_number":22,"pit_duration":24,"meeting_key":1296,"driver_number":23,"lane_duration":24},
+{"date":"2026-10-11T12:43:44.154000+00:00","session_key":11388,"stop_duration":null,"lap_number":24,"pit_duration":24.6,"meeting_key":1296,"driver_number":16,"lane_duration":24.6},
+{"date":"2026-10-11T12:56:58.386000+00:00","session_key":11388,"stop_duration":null,"lap_number":32,"pit_duration":23.9,"meeting_key":1296,"driver_number":1,"lane_duration":23.9},
+{"date":"2026-10-11T13:06:47.682000+00:00","session_key":11388,"stop_duration":null,"lap_number":37,"pit_duration":25.8,"meeting_key":1296,"driver_number":23,"lane_duration":25.8},
+{"date":"2026-10-11T13:08:43.002000+00:00","session_key":11388,"stop_duration":null,"lap_number":39,"pit_duration":24.1,"meeting_key":1296,"driver_number":16,"lane_duration":24.1}
+]

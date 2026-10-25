@@ -1,0 +1,13 @@
+{
+  "url": "https://api.openf1.org/v1/pit?session_key=11388",
+  "fetchedAt": "2026-10-25T22:33:08.299Z",
+  "status": 200,
+  "trim": {
+    "drivers": "1,16,23,43",
+    "laps": null
+  },
+  "rows": {
+    "fetched": 25,
+    "kept": 5
+  }
+}

@@ -1,0 +1,13 @@
+{
+  "url": "https://api.openf1.org/v1/stints?session_key=11388",
+  "fetchedAt": "2026-10-25T22:32:56.843Z",
+  "status": 200,
+  "trim": {
+    "drivers": "1,16,23,43",
+    "laps": null
+  },
+  "rows": {
+    "fetched": 47,
+    "kept": 9
+  }
+}
