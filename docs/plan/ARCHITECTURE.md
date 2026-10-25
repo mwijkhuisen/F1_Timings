@@ -55,6 +55,8 @@ Same versions as Waterheight at P0 time. Re-check each pin against the 7-day rel
 | Watchdog role, public status page | drop | A status panel in the UI plus 2 healthchecks.io checks |
 | BOM table + `check-bom.ts`, `check-boundaries`, OpenAPI generators, CodeQL, 3-browser Playwright matrix, Lighthouse | drop | Exact pins + Dependabot cooldown cover the supply-chain part; the rest guards a public product |
 | dbmate built from source in the image | lighter | Official static release binary, sha256-pinned in the Dockerfile |
+| `harden-runner` in every CI job | drop | In audit mode it blocks nothing, and it is one less third-party action with access to every job (owner, 2026-10-25) |
+| Separate `dbmate` CI job with a round-trip script | lighter | The `integration` test creates a database and runs the real `migrate` role up → down → up (owner, 2026-10-25) |
 
 ## 4. Components
 
@@ -140,6 +142,8 @@ All times are `timestamptz` in UTC, durations are integer milliseconds, and spee
 | `recording` (P2) | id | session_key, path, started_at, ended_at, bytes, complete |
 
 Size: 2023–2026 is about 470 sessions, under 2 GB including raw JSON **[U]** (measured after the backfill).
+
+Roles (owner, 2026-10-25; built in P1b): `deploy/postgres/roles.sql`, a PostgreSQL init script that runs once when the volume is created, makes the logins `f1_migrator` (owns every object), `f1_ingest` (writes) and `f1_api` (reads). Their grants live in a migration. Each login's password is a file secret `db_<login>`.
 
 ## 8. Ingestion (OpenF1)
 
@@ -257,6 +261,7 @@ Size: 2023–2026 is about 470 sessions, under 2 GB including raw JSON **[U]** (
 - Total limits are ~2.7 GB. Expected steady state is ~0.9 GB.
 - Bridges are named `f1-*`, with fixed subnets that must not overlap Waterheight's 172.30.0.0/16 or the LAN (P1f picks them after inspecting the host). `enable_icc: false`.
 - UIDs/GIDs: containers run as 62532 (not Waterheight's 65532/65533). Secret GIDs start at 62001 (Waterheight uses 61001–61012).
+- The `migrate` contract (built in P0, owner 2026-10-25): host `db:5432`, database `f1`, login `f1_migrator`, and the password from the file secret `db_f1_migrator` (`/etc/f1/secrets/db_f1_migrator` on the host, `/run/secrets/db_f1_migrator` in the container). `DATABASE_URL` is a dev/test switch that Compose never sets. The server image has dbmate on its `PATH`.
 
 ### 14.3 Firewall
 
