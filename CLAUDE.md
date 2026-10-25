@@ -12,6 +12,7 @@ The plan is binding: `docs/plan/ARCHITECTURE.md` (cited A§x), `docs/plan/PHASES
 - Tests: `*.test.ts` is unit, `*.int.test.ts` is integration, under `test/`, `apps/*/test/` or `packages/*/test/`. msw fails any request or WebSocket without a handler (`test/msw.setup.ts`).
 - Migrations: `db/migrations/YYYYMMDDHHMMSS_name.sql` (dbmate, `-- migrate:up` / `-- migrate:down`). An applied migration never changes.
 - Server roles: `node apps/server/src/main.ts <role>` (A§4). P0 implements `healthcheck` and `migrate`; the others exit 2 until their phase.
+- OpenF1 fixtures: `node scripts/record-fixture.ts <endpoint> <case> <query> [--drivers 1,44] [--laps 1-3,30-35]` writes `apps/server/src/openf1/fixtures/<endpoint>-<case>.{raw,meta.json,golden.json}`. It runs on the owner's machine only (it refuses under `CI`) and never during a live session (OpenF1 answers every free request with 401 then). The `meta.json` holds each fixture's query and trim.
 
 ## Security invariants (A§12.1)
 
@@ -40,7 +41,7 @@ From Waterheight's list, the ones that apply here:
 - **pnpm 12** is a native executable; its npm package is a wrapper that may download the binary at run time. Install it with `scripts/install-pnpm.sh`. The lockfile is multi-document YAML (pnpm's own pin comes first). `blockExoticSubdeps` blocks git-hosted subdependencies but, in 12.5.1, not a plain https tarball URL. pnpm ignores a misspelt policy key, so CI asserts each one with `pnpm config get`.
 - **Workspace packages** run from `src` in development and tests and from `dist` in the image, through the `f1-dist` export condition (`NODE_OPTIONS=--conditions=f1-dist`), because Node does not strip types inside `node_modules`.
 - **Vitest 5:** `clearMocks` defaults to true, and an unawaited async assertion fails the test.
-- **msw 3:** the option is `onUnhandledFrame` (covers HTTP and WebSocket), not msw 2's `onUnhandledRequest`. It has no postinstall script.
+- **msw 3:** the option is `onUnhandledFrame` (covers HTTP and WebSocket), not msw 2's `onUnhandledRequest`. It has no postinstall script. `setupServer` intercepts global `fetch`, `http`/`https`, XHR and WebSocket, **not undici's own `request()`/`fetch()`**: server HTTP goes through global `fetch` with an undici `Agent` as `dispatcher` (`apps/server/src/openf1/client.ts`). The Agent needs a cast, because undici 8.12's `Dispatcher` type and `@types/node`'s undici-types 8.9 differ.
 - **Vite 8** (Rolldown) treats `<link href>` in HTML as an asset reference; `build.rolldownOptions` replaces `rollupOptions`. A Vite build started inside Vitest bundles React's development build (`NODE_ENV=test`): a test that measures a bundle stubs `NODE_ENV=production`.
 - **Zod 4 in the browser must be `jitless`:** Zod probes `new Function` when an object schema is built, which is a `securitypolicyviolation` under the CSP (no `'unsafe-eval'`). The web entry point calls `config({ jitless: true })` before any contract schema is built. Never widen the CSP for it.
 - **Biome 2.5:** `biome migrate` rewrote `"recommended": true` to `"preset": "none"` (all rules off); the right value is `"preset": "recommended"`.
