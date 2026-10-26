@@ -2,7 +2,7 @@ import { mkdtempSync, utimesSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { EXIT_CONFIG, migratorUrl } from '../src/db/migrate.ts';
+import { dbUrl, EXIT_CONFIG, migratorUrl } from '../src/db/migrate.ts';
 import { HEARTBEAT_MAX_AGE_MS, healthy, startHeartbeat, touch } from '../src/heartbeat.ts';
 import { EXIT_NOT_IMPLEMENTED, EXIT_USAGE, run } from '../src/main.ts';
 
@@ -81,6 +81,18 @@ describe('migratorUrl', () => {
       writeFileSync(join(dir, 'db_f1_migrator'), bad);
       expect(migratorUrl({}, dir)).toMatch(/must be 24 or more/);
     }
+  });
+});
+
+describe('dbUrl', () => {
+  it('logs f1_ingest in with its own file secret, never the migrator one', () => {
+    const dir = tmp();
+    writeFileSync(join(dir, 'db_f1_migrator'), 'Abc-123_xyz-456_DEF-789_gh');
+    expect(dbUrl('f1_ingest', {}, dir)).toBe('the file secret db_f1_ingest is missing');
+    writeFileSync(join(dir, 'db_f1_ingest'), 'Ing-123_xyz-456_DEF-789_gh\n');
+    expect(String(dbUrl('f1_ingest', {}, dir))).toBe(
+      'postgres://f1_ingest:Ing-123_xyz-456_DEF-789_gh@db:5432/f1?sslmode=disable',
+    );
   });
 });
 
