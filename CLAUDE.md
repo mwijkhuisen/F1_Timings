@@ -8,10 +8,12 @@ The plan is binding: `docs/plan/ARCHITECTURE.md` (cited A§x), `docs/plan/PHASES
 
 - Toolchain: Node 26.10.0 (`.node-version`) and pnpm 12.5.1 from `scripts/install-pnpm.sh <prefix>` (no corepack).
 - `pnpm install --frozen-lockfile` · `pnpm check` (Biome, `tsc -b`, unit tests: what CI's `check` job runs) · `pnpm test` (unit only).
-- `pnpm test:integration` needs `DATABASE_URL` (a superuser of a throw-away PostgreSQL 18 server; CI uses a service container) and `dbmate` 2.36.0 on `PATH`. Each test file creates its own database.
+- `pnpm test:integration` needs `DATABASE_URL` (a superuser of a throw-away PostgreSQL 18 server; CI uses a service container) and `dbmate` 2.36.0 on `PATH`. Each test file creates its own database and applies `deploy/postgres/roles.sql` through `createTestDb()` (`apps/server/test/db.ts`); tests log in as `f1_migrator`/`f1_ingest`/`f1_api`, not as the superuser.
+- Database logins in development: `DATABASE_URL=<superuser URL of a throw-away database> node apps/server/scripts/dev-db.ts` applies `roles.sql` with random passwords (never printed).
+- Kysely types: `DATABASE_URL=<a freshly migrated database> pnpm --filter @f1/server db:types` regenerates `apps/server/src/db/types.ts` (generated, excluded from Biome); an integration test runs it with `--verify`.
 - Tests: `*.test.ts` is unit, `*.int.test.ts` is integration, under `test/`, `apps/*/test/` or `packages/*/test/`. msw fails any request or WebSocket without a handler (`test/msw.setup.ts`).
 - Migrations: `db/migrations/YYYYMMDDHHMMSS_name.sql` (dbmate, `-- migrate:up` / `-- migrate:down`). An applied migration never changes.
-- Server roles: `node apps/server/src/main.ts <role>` (A§4). P0 implements `healthcheck` and `migrate`; the others exit 2 until their phase.
+- Server roles: `node apps/server/src/main.ts <role>` (A§4). Implemented: `healthcheck`, `migrate` (P0), `ingest` (daemon), `backfill` and `refetch <session_key>` (P1b, A§8; they log in as `f1_ingest`, `DATABASE_URL` wins in development); the others exit 2 until their phase. Never run `backfill` next to a running `ingest` daemon (two rate limiters).
 - OpenF1 fixtures: `node scripts/record-fixture.ts <endpoint> <case> <query> [--drivers 1,44] [--laps 1-3,30-35]` writes `apps/server/src/openf1/fixtures/<endpoint>-<case>.{raw,meta.json,golden.json}`. It runs on the owner's machine only (it refuses under `CI`) and never during a live session (OpenF1 answers every free request with 401 then). The `meta.json` holds each fixture's query and trim.
 
 ## Security invariants (A§12.1)
