@@ -101,8 +101,9 @@ Checked against the live APIs on 2026-10-25 (Austin quali `11392`, Marina Bay ra
 
 - Free, no auth, 2023+. Paid only within "live", which runs from 30 min before a session starts until 30 min after it ends. Free limit: 3 req/s and 30 req/min. `meetings`/`sessions` refresh daily at 00:00 UTC.
 - Sessions per year: 2023: 118, 2024: 123, 2025: 123, 2026: 131 (including testing days and future sessions). Session names: `Practice 1–3`, `Sprint Qualifying`, `Sprint`, `Qualifying`, `Race`, `Day 1–3`.
+- **Cancelled sessions stay listed** with `is_cancelled: true` (`sessions-year` fixture: 10 of the 131 sessions of 2026, those of the cancelled Bahrain `1282` and Saudi Arabia `1283` meetings, 10–19 April). Their data endpoints answer "No results found.". P1b stores the flag on `meeting` and `session` and never fetches a cancelled session, so it stays `scheduled` without `next_fetch_at` and P1c can tell "cancelled" from "no data".
 - Known issues (open on `br-g/openf1`): null pit `stop_duration` (#484), sessions needing re-ingest (#483), wrong `tyre_age_at_start` for used sets (#473), slowness right after a session becomes free (#474).
-- **During a live session every free request fails, past sessions included** (P1a, 2026-10-25 20:03 UTC, Austin race): HTTP 401 `{"detail":"Live F1 session in progress. Global API access (including past sessions) is restricted to authenticated users until the session ends. …"}`, with a link to buy a paid API key (the plan uses none). It lifted between 22:26:45 and 22:31:46 UTC, at the end of the live window (scheduled end 22:00 + 30 min), not at the chequered flag. The client reports it as `http 401` without retrying. P1b keeps the schedule sync, refetches and the backfill out of live windows.
+- **During a live session every free request fails, past sessions included** (P1a, 2026-10-25 20:03 UTC, Austin race): HTTP 401 `{"detail":"Live F1 session in progress. Global API access (including past sessions) is restricted to authenticated users until the session ends. …"}`, with a link to buy a paid API key (the plan uses none). It lifted between 22:26:45 and 22:31:46 UTC, at the end of the live window (scheduled end 22:00 + 30 min), not at the chequered flag. The client reports it as `http 401` without retrying. P1b: nothing calls OpenF1 while a session in `session` is inside its window (`date_start − 30 min` … `date_end + 30 min`; a cancelled session or a row longer than 12 h opens none). The tick waits it out, the daemon's sync retries 15 min later, the backfill stops (exit 1) and a `refetch` fails with exit 1 and writes nothing (A§8). The very first sync has no schedule to check yet: a 401 there fails with `http_401` and is retried the same way.
 - **A query without rows answers 404 `{"detail":"No results found."}`**, not `[]` (P1a). The client turns exactly that answer into an empty list; any other 404 is an error. Bahrain 2023 race `7953` has no `pit` rows at all.
 - **Nulls** (P1a scan, 2026-10-25: the full responses of 11388, 11392, 11383 and 7953, plus `meetings`/`sessions` 2023–2026; the zod schemas in `apps/server/src/openf1/schemas.ts` follow it):
   - `laps` (2,898 rows): `date_start` 2, `lap_duration` 42, S1 102, S2 11, S3 20, `i1_speed` 618, `i2_speed` 11, `st_speed` 502, each `segments_sector_n` array 6–8, and single `null` elements inside the arrays.
@@ -110,6 +111,7 @@ Checked against the live APIs on 2026-10-25 (Austin quali `11392`, Marina Bay ra
   - `race_control` (428): `driver_number` 336, `flag` and `scope` 191, `sector` 298, `lap_number` 39, `qualifying_phase` 408.
   - `session_result` (86): `position` 14, `duration` 30, `gap_to_leader` 16 (a number, a string such as `+1 LAP`, or Q1–Q3 in qualifying). `points` is missing from qualifying results.
   - Never null in the scan: `meetings`, `sessions`, `stints`, and the `drivers` fields A§7 stores (`country_code`, not stored, is null in 66 of 86).
+  - **The scan was too small** (P1b [box] backfill, 2026-10-26): about 5% of real sessions failed the P1a schemas with `schema`. Seen: a string `session_result.position` (11384), a null `stints.compound` (11246, 11342), a null `session_result.number_of_laps` (11275). Since then every field outside a row key, `meeting.year` and the session dates may be null or missing (it parses to null), a position string is kept only when it is a number ("DQ" → null; `dnf`/`dns`/`dsq` say why), and each field is bounded by its column (integers that fit smallint/int, seconds that fit int ms, text without NUL), so a value the schema accepts never fails an INSERT.
 
 | View | Endpoints → fields | Known gaps → UI |
 |---|---|---|
@@ -138,29 +140,66 @@ All times are `timestamptz` in UTC, durations are integer milliseconds, and spee
 
 | Table | Key | Columns (outline) |
 |---|---|---|
-| `meeting` | `meeting_key` | year, name, official_name, location, country_code, circuit_short_name, gmt_offset, date_start, date_end |
-| `session` | `session_key` | meeting_key, type, name, date_start, date_end, `ingest_state` (scheduled · due · fetched · final · failed), `next_fetch_at`, `fetch_count`, `last_error` |
+| `meeting` | `meeting_key` | year, name, official_name, location, country_code, circuit_short_name, gmt_offset, date_start, date_end, is_cancelled |
+| `session` | `session_key` | meeting_key, type, name, date_start, date_end (both NOT NULL), is_cancelled, `ingest_state` (scheduled · due · fetched · final · failed), `next_fetch_at`, `fetch_count` (successes), `fail_count` (consecutive failures), `last_error` (a fixed code, CHECK: `http_NNN` · `rate_limited` · `timeout` · `network` · `schema` · `empty` · `db` · `unknown`; never OpenF1 or PostgreSQL text) |
 | `driver` | (session_key, driver_number) | acronym, full_name, team_name, team_colour |
 | `lap` | (session_key, driver_number, lap_number) | date_start, lap_ms, s1_ms, s2_ms, s3_ms, i1_kph, i2_kph, st_kph, is_pit_out, is_pit_in, seg1/seg2/seg3 `smallint[]`, deleted, deleted_reason, quali_phase |
 | `stint` | (session_key, driver_number, stint_number) | lap_start, lap_end, compound, tyre_age_at_start |
 | `pit` | (session_key, driver_number, lap_number) | date, pit_ms, lane_ms, stop_ms |
 | `race_control` | id | session_key, date, category, flag, scope, sector, driver_number, lap_number, qualifying_phase, message |
-| `result` | (session_key, driver_number) | position, laps, dnf, dns, dsq, durations_ms `int[]`, gaps_ms `int[]` |
-| `raw_response` | (session_key, endpoint) | fetched_at, http_status, body `jsonb` (latest only) |
+| `result` | (session_key, driver_number) | position, laps, dnf, dns, dsq, durations_ms `int[]`, gaps_ms `int[]` (a race's single value as a 1-element array, Q1–Q3 in qualifying; a string gap such as `+1 LAP` is stored as `{NULL}`: 8 of 22 rows in `session_result-normal`) |
+| `raw_response` | (session_key, endpoint) | fetched_at, http_status (OpenF1's 404 "No results found." is stored as 404 with body `[]`), body `jsonb` (latest only) |
 | `recording` (P2) | id | session_key, path, started_at, ended_at, bytes, complete |
 
 Size: 2023–2026 is about 470 sessions, under 2 GB including raw JSON **[U]** (measured after the backfill).
 
-Roles (owner, 2026-10-25; built in P1b): `deploy/postgres/roles.sql`, a PostgreSQL init script that runs once when the volume is created, makes the logins `f1_migrator` (owns every object), `f1_ingest` (writes) and `f1_api` (reads). Their grants live in a migration. Each login's password is a file secret `db_<login>`.
+Built in P1b: `db/migrations/20261026000001_timing_tables.sql`. Every child table references `session` and `session` references `meeting` (`ON DELETE CASCADE`); nothing references `driver`, because OpenF1 can list a lap for a driver missing from `drivers`. `deleted`, `deleted_reason` and `quali_phase` exist but stay default/null until P1c (A§8).
+
+Roles (owner, 2026-10-25; built in P1b): `deploy/postgres/roles.sql`, a PostgreSQL init script that runs once when the volume is created, makes the logins `f1_migrator` (owns every object), `f1_ingest` (writes) and `f1_api` (reads). Each login's password is a file secret `db_<login>`.
+
+- It is plain SQL: a `DO` block reads each password on the server with `pg_read_file(prefix || login)`, where the prefix is the setting `f1.secret_prefix` or else `/run/secrets/db_`. In production the password never appears in SQL text or a statement log, and an error names only the login and the SQLSTATE. It is idempotent (create if missing, then `ALTER ROLE … NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS`), makes `f1_migrator` the database owner, revokes every database privilege from `PUBLIC` (and `CONNECT` on `postgres` and `template1`) and grants `CONNECT` to `f1_ingest` and `f1_api`. No `CONNECTION LIMIT`: each process's pool is capped in code (2 connections).
+- **One database per cluster** is a premise: roles and the `CONNECT` revokes are cluster-wide, and a database created later keeps `PUBLIC` `CONNECT`, so "no login reaches another database" holds only while `f1` is the only one (P1f can add a `pg_hba` guard).
+- The `db` container must be able to read `/run/secrets/db_f1_*`: it needs the secrets' GID (`group_add`, P1f). After rotating a `db_*` secret, run `roles.sql` again by hand; it runs by itself only on a new volume.
+- Grants live in `20261026000002_grants.sql`: `f1_ingest` gets `SELECT, INSERT, UPDATE` on `meeting` and `session` and also `DELETE` on the seven child tables it replaces (a `DELETE` on `meeting` or `session` would cascade through every timing table); `f1_api` gets `SELECT` on all but `raw_response`. Later phases grant their own tables (no default privileges).
+- Development and tests: `apps/server/scripts/dev-db.ts` writes a random password per login on the server with `COPY … TO` (so in development the password does appear in that statement's text), sets `f1.secret_prefix`, runs `roles.sql` and empties the files again. `apps/server/test/db.ts` (`createTestDb()`) does this for each integration test file.
 
 ## 8. Ingestion (OpenF1)
 
-- **Schedule sync:** daily at 00:30 UTC, plus at start: `meetings` and `sessions` for the current year (and every year from 2023 on the first run). Upserts `meeting`/`session`.
-- **Per-session pipeline:** `due` at `date_end + 35 min` (after the paid window). Fetch `drivers`, `laps`, `stints`, `pit`, `race_control`, `session_result` → store raw → normalise in one transaction → `fetched`. Fetch again at +3 h and +24 h for OpenF1 corrections → `final`. Failures back off exponentially (5 min … 6 h), then `failed`, shown in the status panel.
-- **Rate budget:** at most 25 requests in any 60 s and 2 in any 1 s (sliding windows, shared by every call of the client), below the 30/3 limit. On a 429, honour `Retry-After` or wait 60 s. 6 requests per session. Free requests fail with 401 during any live session (A§6.1), so the sync, refetches and backfill wait for the live window to end.
-- **First backfill:** every past session from 2023 that isn't `final`, newest first: ~470 × 6 ≈ 2,800 requests ≈ **1 h 55 min**. It's resumable, because state lives in the DB.
-- **Manual:** `refetch <session_key>` for OpenF1 re-ingests (as in #483).
-- **Scheduling pattern:** in-process croner (UTC) with its own busy guard. Missed ticks run once (the Waterheight pattern).
+- **Schedule sync:** daily at 00:30 UTC, plus at start: `meetings` and `sessions` for the current year and every year from 2023 that has no `meeting` row yet (all of them on the first run). Upserts `meeting`/`session`, metadata only. A new session is `scheduled` with `next_fetch_at = date_end + 35 min` (none when cancelled); a changed `date_end` moves `next_fetch_at` only while the session is still `scheduled`. A session whose meeting is missing from `meetings` is skipped and counted. The raw schedule responses are not stored.
+  - The daemon skips the sync during a live window (A§6.1). A skipped or failed sync is tried again from the minute job at most every 15 min until it succeeds.
+  - One response is one parse and one transaction: a single bad row (a missing date, a value the schema rejects) fails that year's sync, which keeps the previous schedule and shows up as `schema` or `db` in the log.
+- **Per-session pipeline** (P1b, `apps/server/src/ingest/`; the rules are pure functions in `state.ts`):
+  - Every minute the tick marks `scheduled`/`fetched` sessions with `next_fetch_at ≤ now` as `due`, then processes the due ones one at a time, newest `date_end` first. Cancelled sessions are never due. It waits while any session is live (A§6.1) and logs the wait when it starts and when it ends.
+  - **Success at t** (after the 35 min wait, i.e. after the paid window): `fetch_count + 1`, `fail_count = 0`, `last_error = null`, then the first of `date_end + 3 h` and `date_end + 24 h` that is later than t → `fetched` with that `next_fetch_at`, or else `final`. A session older than 24 h is fetched once, so the backfill costs 6 requests per session. A success before `date_end + 35 min` (only a `refetch` gets there) leaves the session `scheduled` for its first fetch.
+  - **Failure n** (consecutive): `due` again at t + min(5 min · 2^(n−1), 6 h), that is 5, 10, 20, 40, 80, 160, 320 and 360 min; the 9th → `failed` (shown in the status panel, P1c). `last_error` holds the code: HTTP 429 → `rate_limited`, any other status → `http_<status>`, `timeout`, `network`, a body that is not JSON or does not match the zod schema → `schema`, a PostgreSQL error → `db`, anything else (a bug in the normaliser) → `unknown`.
+  - **One transaction:** all six endpoints (`drivers`, `laps`, `stints`, `pit`, `race_control`, `session_result`) are fetched first, and any fetch or schema error writes nothing but the failure. Then one transaction locks the session row (`FOR UPDATE`), decides the transition from that locked row, replaces the six `raw_response` rows and all the session's child rows (delete, then insert in chunks of 1,000 rows), and sets the state. Replace-per-session is idempotent and drops rows OpenF1 removed; the lock serialises a `refetch` against the daemon.
+  - **Raw is stored in that same transaction, not first** (a P1b decision, against the PHASES wording "store raw → normalise"): the empty guard compares a new reply with the stored raw, so storing a transient `[]` first would replace the good raw and the next normalise would wipe good rows. The cost: a reply that fails the schema is not kept (only its `schema` code is).
+  - **Empty guard:** an endpoint that answers `[]` where its stored `raw_response` had rows is a failure with code `empty`, and the stored data stays.
+  - **Contract for P1c:** the timing rules (deleted laps, `quali_phase`) run inside that transaction, after the insert, so replace-per-session never wipes them.
+  - The app clock is injected: no state decision uses SQL `now()`, so unit and integration tests run on a fake clock.
+  - **In/out laps:** `is_pit_out` is OpenF1's `is_pit_out_lap`; `is_pit_in` is derived (A§9). Seconds become integer ms (rounded), and nulls stay null.
+  - One log line per session: key, new state, rows per table, skipped rows (another session's rows, or duplicate keys: the last wins), duration and `last_error`; a failure adds the endpoint and, for `schema`, zod's paths and codes (at most 10). Never a value, a URL, a password or a response body.
+- **Rate budget:** at most 25 requests in any 60 s and 2 in any 1 s (sliding windows, shared by every call of the client), below the 30/3 limit. On a 429, honour `Retry-After` or wait 60 s. Each attempt refuses redirects, ends after 120 s in all (headers and body: `timeout`) and stops reading past 64 MiB (`schema`, not retried); a race's `laps` is about 1 MB. 6 requests per session. Free requests fail with 401 during any live session (A§6.1), so the sync, the tick, the backfill and a refetch wait for the live window to end.
+- **First backfill** (`backfill` role): syncs every year from 2023, then processes every session that is neither `final` nor cancelled and ended more than 35 min ago, newest first, each once per run, with the same transitions as the tick. Exit 0 when nothing failed, else 1. A live window stops it (exit 1); run it again later. ~470 × 6 ≈ 2,800 requests ≈ **1 h 55 min** **[U]** (measured after the [box] backfill). It's resumable, because state lives in the DB. Don't run it next to a running `ingest` daemon: each process has its own rate limiter.
+- **[box] backfill** (WSL, home IP, a throw-away PostgreSQL 18). The superuser login is used because the grants are proven in CI (handoff §12):
+
+  ```
+  export DATABASE_URL='postgres://postgres@127.0.0.1:5439/f1?sslmode=disable'
+  dbmate create
+  node apps/server/scripts/dev-db.ts
+  node apps/server/src/main.ts migrate
+  date -u; time node apps/server/src/main.ts backfill > backfill.log 2>&1; echo "exit $?"; date -u
+  psql -h 127.0.0.1 -p 5439 -U postgres -d f1 \
+    -c "SELECT pg_size_pretty(pg_database_size('f1')), pg_size_pretty(pg_total_relation_size('raw_response'))" \
+    -c "SELECT relname, pg_size_pretty(pg_total_relation_size(relid)) FROM pg_stat_user_tables ORDER BY pg_total_relation_size(relid) DESC" \
+    -c "SELECT ingest_state, count(*) FROM session GROUP BY 1"
+  ```
+
+  Duration **[U]** and database size **[U]**: filled in from that run.
+- **Manual:** `refetch <session_key>` (digits only, else exit 64; unknown key → exit 1) for OpenF1 re-ingests (as in #483). It processes the session now: a success makes the normal transition, a failure changes nothing (a `final` session stays `final`) and exits 1. During a live window it writes nothing and exits 1 (it does not wait: a manual command should not hang for hours).
+- **Scheduling pattern:** in-process croner (UTC). One job runs every minute inside a busy guard: it syncs the schedule when due (at start, after `30 0 * * *` asks for it, or 15 min after a failed try), then ticks. A minute that fires while the job runs is remembered, and the job runs once more when it ends (missed ticks run once, the Waterheight pattern). SIGTERM/SIGINT stops the cron, lets the current session finish, closes the pool and exits 0.
+- **Heartbeat:** the work touches it at start, as each OpenF1 attempt starts (after the rate limiter), after each call, after each session and at the end of each tick (a waiting one too). One attempt lasts at most 120 s (the client's deadline), within the 120 s limit (A§4), so slow but progressing work never goes stale. Staleness means an attempt that ran into its deadline, a 429 `Retry-After` over 2 min, or a database wait past its timeouts; then `f1-tick` restarts the container.
+- **Database waits are bounded:** connect 10 s, a statement 60 s on the server and 70 s on the client, TCP keepalive on, so a half-open connection cannot hang the job and its busy guard.
 
 ## 9. Timing rules (pure TS in `apps/server/src/timing/`, unit- and property-tested)
 
@@ -320,7 +359,7 @@ Roles (owner, 2026-10-25; built in P1b): `deploy/postgres/roles.sql`, a PostgreS
 ## 15. Testing
 
 - **Unit:** parsers, timing rules, the rate limiter (fake timers), and live delta merging (a fast-check property: merging snapshot + deltas equals merging the deltas from empty).
-- **Integration:** real PostgreSQL 18 as a CI service container. Each file creates its own DB and runs dbmate up → tests. `db-check` does up → down → up.
+- **Integration:** real PostgreSQL 18 as a CI service container. Each file creates its own DB, applies `roles.sql` (`apps/server/test/db.ts`) and runs dbmate up → tests; the ingest tests log in as `f1_ingest`, never as the superuser. `db-check` is P0's up → down → up test (`apps/server/test/migrate.int.test.ts`) plus `kysely-codegen --verify` against a freshly migrated database (`apps/server/test/db.int.test.ts`: the committed `types.ts` matches the migrations). A unit test pins the sha256 of every migration (`test/migrations.test.ts`).
 - **Fixtures:** `apps/server/src/openf1/fixtures/` holds trimmed real OpenF1 responses (public, no auth). Live/archive parser fixtures are synthetic in the repo. Real recordings stay in `fixtures-private/` (gitignored) and are used locally only. `scripts/record-fixture.ts` refuses to run when `CI` is set.
 - **Web:** component tests for the lap table colouring and deleted rendering. No browser matrix in CI.
 

@@ -2,22 +2,39 @@ import { mkdtempSync, utimesSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { EXIT_CONFIG, migratorUrl } from '../src/db/migrate.ts';
+import { dbUrl, EXIT_CONFIG, migratorUrl } from '../src/db/migrate.ts';
 import { HEARTBEAT_MAX_AGE_MS, healthy, startHeartbeat, touch } from '../src/heartbeat.ts';
 import { EXIT_NOT_IMPLEMENTED, EXIT_USAGE, run } from '../src/main.ts';
 
 const tmp = () => mkdtempSync(join(tmpdir(), 'f1-test-'));
 
 describe('run', () => {
-  it.each([[[]], [['nope']], [['ingest', 'extra']]])('%j is a usage error', async (argv) => {
+  it.each([
+    [[]],
+    [['nope']],
+    [['ingest', 'extra']],
+    [['backfill', 'extra']],
+    [['refetch']],
+    [['refetch', 'abc']],
+    [['refetch', '11388', '11392']],
+  ])('%j is a usage error', async (argv) => {
     const lines: string[] = [];
     expect(await run(argv, {}, (l) => lines.push(l))).toBe(EXIT_USAGE);
     expect(lines[0]).toMatch(/^usage: main\.js <api\|ingest\|/);
   });
 
-  it.each(['api', 'ingest', 'live', 'refetch', 'backfill', 'archive'])('%s is not implemented yet', async (role) => {
+  it.each(['api', 'live', 'archive'])('%s is not implemented yet', async (role) => {
     expect(await run([role], {}, () => {})).toBe(EXIT_NOT_IMPLEMENTED);
   });
+
+  it.each([[['ingest']], [['backfill']], [['refetch', '11388']]])(
+    '%j without a database setting is a config error',
+    async (argv) => {
+      const lines: string[] = [];
+      expect(await run(argv, { DATABASE_URL: 'mysql://x/y' }, (l) => lines.push(l))).toBe(EXIT_CONFIG);
+      expect(lines).toEqual([`${argv[0]}: DATABASE_URL is not a postgres URL`]);
+    },
+  );
 
   it('healthcheck exits 0 while the heartbeat is fresh', async () => {
     const stop = startHeartbeat();
@@ -64,6 +81,18 @@ describe('migratorUrl', () => {
       writeFileSync(join(dir, 'db_f1_migrator'), bad);
       expect(migratorUrl({}, dir)).toMatch(/must be 24 or more/);
     }
+  });
+});
+
+describe('dbUrl', () => {
+  it('logs f1_ingest in with its own file secret, never the migrator one', () => {
+    const dir = tmp();
+    writeFileSync(join(dir, 'db_f1_migrator'), 'Abc-123_xyz-456_DEF-789_gh');
+    expect(dbUrl('f1_ingest', {}, dir)).toBe('the file secret db_f1_ingest is missing');
+    writeFileSync(join(dir, 'db_f1_ingest'), 'Ing-123_xyz-456_DEF-789_gh\n');
+    expect(String(dbUrl('f1_ingest', {}, dir))).toBe(
+      'postgres://f1_ingest:Ing-123_xyz-456_DEF-789_gh@db:5432/f1?sslmode=disable',
+    );
   });
 });
 
