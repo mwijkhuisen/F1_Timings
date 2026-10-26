@@ -12,6 +12,9 @@ updates:
       npm:
         patterns: ['*']
     open-pull-requests-limit: 5
+    ignore:
+      - dependency-name: typescript
+        versions: [">=7"]
 
   - package-ecosystem: github-actions
     directory: /
