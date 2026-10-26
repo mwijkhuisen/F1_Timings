@@ -36,12 +36,14 @@ export function readSecret(name: string, dir = SECRETS_DIR): string | undefined 
   }
 }
 
+export type DbLogin = 'f1_migrator' | 'f1_ingest' | 'f1_api';
+
 /**
- * f1_migrator on the `db` service (A§14.2), or an error text. `DATABASE_URL` is
- * the development and test switch; Compose never sets it, so production always
- * takes the file secret.
+ * The URL of a database login on the `db` service (A§14.2), or an error text.
+ * `DATABASE_URL` is the development and test switch; Compose never sets it, so
+ * production always takes the login's file secret `db_<login>`.
  */
-export function migratorUrl(env: Env, secretsDir = SECRETS_DIR): URL | string {
+export function dbUrl(login: DbLogin, env: Env, secretsDir = SECRETS_DIR): URL | string {
   if (env.DATABASE_URL) {
     let url: URL;
     try {
@@ -51,15 +53,17 @@ export function migratorUrl(env: Env, secretsDir = SECRETS_DIR): URL | string {
     }
     return url.protocol === 'postgres:' || url.protocol === 'postgresql:' ? url : 'DATABASE_URL is not a postgres URL';
   }
-  const password = readSecret('db_f1_migrator', secretsDir);
-  if (password === undefined) return 'the file secret db_f1_migrator is missing';
-  if (!PASSWORD.test(password))
-    return 'the file secret db_f1_migrator must be 24 or more characters of A-Z a-z 0-9 _ -';
+  const secret = `db_${login}`;
+  const password = readSecret(secret, secretsDir);
+  if (password === undefined) return `the file secret ${secret} is missing`;
+  if (!PASSWORD.test(password)) return `the file secret ${secret} must be 24 or more characters of A-Z a-z 0-9 _ -`;
   const url = new URL('postgres://db:5432/f1?sslmode=disable');
-  url.username = 'f1_migrator';
+  url.username = login;
   url.password = password;
   return url;
 }
+
+export const migratorUrl = (env: Env, secretsDir = SECRETS_DIR) => dbUrl('f1_migrator', env, secretsDir);
 
 export async function runMigrate(env: Env, log: (line: string) => void): Promise<number> {
   const url = migratorUrl(env);
