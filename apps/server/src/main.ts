@@ -1,7 +1,7 @@
 import pino from 'pino';
 import { createDb } from './db/db.ts';
 import { dbUrl, EXIT_CONFIG, runMigrate } from './db/migrate.ts';
-import { healthy } from './heartbeat.ts';
+import { healthy, touch } from './heartbeat.ts';
 import { backfill, codeOf, processSession, startIngest } from './ingest/ingest.ts';
 import { createClient } from './openf1/client.ts';
 
@@ -50,7 +50,7 @@ async function runIngest(role: 'ingest' | 'backfill' | 'refetch', key: number, e
   const logger = pino({ base: { role } });
   // An idle-connection error must not crash the process; the pool reconnects.
   const db = createDb(url, (err) => logger.error({ cause: codeOf(err) }, 'database pool error'));
-  const deps = { db, client: createClient(), now: () => new Date(), log: logger };
+  const deps = { db, client: createClient(), now: () => new Date(), log: logger, beat: () => touch() };
   try {
     if (role === 'ingest') {
       await startIngest(deps);

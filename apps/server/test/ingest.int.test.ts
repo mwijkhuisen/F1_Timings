@@ -6,9 +6,19 @@ import pino from 'pino';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { server } from '../../../test/msw.setup.ts';
 import { createDb, type DB } from '../src/db/db.ts';
-import { backfill, type Deps, processSession, syncSchedule, tick } from '../src/ingest/ingest.ts';
+import {
+  backfill,
+  type Deps,
+  processSession,
+  SYNC_RETRY_MS,
+  scheduleSync,
+  syncSchedule,
+  tick,
+} from '../src/ingest/ingest.ts';
+import { ERROR_CODES } from '../src/ingest/state.ts';
 import { run } from '../src/main.ts';
 import { type Clock, createClient, OPENF1 } from '../src/openf1/client.ts';
+import type { Lap, Session } from '../src/openf1/schemas.ts';
 import { createTestDb, type TestDb } from './db.ts';
 
 // The ingest pipeline against a real PostgreSQL 18, logged in as f1_ingest (the grants),
@@ -18,8 +28,11 @@ import { createTestDb, type TestDb } from './db.ts';
 const FIXTURES = join(import.meta.dirname, '../src/openf1/fixtures');
 const CASES: Record<number, string> = { 11388: 'normal', 11392: 'quali', 11383: 'sprint' };
 const EMPTY = 11465; // 2026 testing, day 1: served the *-empty fixtures (OpenF1's 404 "No results found.")
+// The 10 sessions sessions-year marks is_cancelled (Bahrain and Saudi Arabia, April 2026).
+const CANCELLED = [11254, 11255, 11256, 11257, 11261, 11262, 11263, 11264, 11265, 11269];
 const TABLES = ['driver', 'lap', 'stint', 'pit', 'race_control', 'result', 'raw_response'] as const;
 
+const raw = (name: string): unknown => JSON.parse(readFileSync(join(FIXTURES, `${name}.raw`), 'utf8'));
 function fixture(name: string): Response {
   const meta = JSON.parse(readFileSync(join(FIXTURES, `${name}.meta.json`), 'utf8')) as { status: number };
   if (meta.status === 404) return HttpResponse.json({ detail: 'No results found.' }, { status: 404 });
@@ -28,15 +41,22 @@ function fixture(name: string): Response {
   });
 }
 
-/** Serves every endpoint from the fixtures; `override` may answer a request first. */
+/** Every request, as `endpoint?query`. */
+const requests: string[] = [];
+const requested = (key: number) => requests.filter((r) => r.includes(`session_key=${key}`)).length;
+
+/** Serves every endpoint from the fixtures; `override` may answer a request first (key is NaN for a year). */
 const openf1 = (override: (endpoint: string, key: number) => Response | undefined = () => undefined) =>
   server.use(
     http.get(`${OPENF1}/:endpoint`, ({ params, request }) => {
       const query = new URL(request.url).searchParams;
       const endpoint = String(params.endpoint);
+      requests.push(`${endpoint}?${query}`);
+      const key = Number(query.get('session_key') ?? Number.NaN);
+      const answer = override(endpoint, key);
+      if (answer) return answer;
       if (query.has('year')) return fixture(`${endpoint}-${query.get('year') === '2026' ? 'year' : 'empty'}`);
-      const key = Number(query.get('session_key'));
-      return override(endpoint, key) ?? fixture(`${endpoint}-${CASES[key] ?? 'empty'}`);
+      return fixture(`${endpoint}-${CASES[key] ?? 'empty'}`);
     }),
   );
 const status500 = (endpoint: string, key: number) =>
@@ -51,7 +71,9 @@ const clock: Clock = {
   },
 };
 let at = new Date(0);
+let beats = 0;
 const lines: string[] = [];
+const logged = (msg: string) => lines.filter((l) => l.includes(`"msg":"${msg}"`)).length;
 
 let testDb: TestDb;
 let db: Kysely<DB>;
@@ -67,12 +89,13 @@ const states = async () => {
     .execute();
   return Object.fromEntries(rows.map((r) => [r.ingest_state, Number(r.n)]));
 };
-const countWhere = async (table: string, key: number, where = 'true') => {
+const count = async (table: string, where: string) => {
   const { rows } = await sql<{
     n: string;
-  }>`SELECT count(*) AS n FROM ${sql.table(table)} WHERE session_key = ${key} AND ${sql.raw(where)}`.execute(db);
+  }>`SELECT count(*) AS n FROM ${sql.table(table)} WHERE ${sql.raw(where)}`.execute(db);
   return Number(rows[0]?.n);
 };
+const countWhere = (table: string, key: number, where = 'true') => count(table, `session_key = ${key} AND ${where}`);
 const rowCounts = async (key: number) =>
   Object.fromEntries(await Promise.all(TABLES.map(async (table) => [table, await countWhere(table, key)])));
 /** Per table: md5 over every row, minus what a re-run legitimately changes (identity, fetch time, counter). */
@@ -93,29 +116,28 @@ describe('ingest (fixtures through msw, f1_ingest login)', { timeout: 120_000 },
     expect(await run(['migrate'], { PATH: process.env.PATH, DATABASE_URL: testDb.urls.f1_migrator }, () => {})).toBe(0);
     db = createDb(testDb.urls.f1_ingest);
     const log = pino({ base: null }, { write: (line: string) => void lines.push(line) });
-    deps = { db, client: createClient({ clock }), now: () => at, log };
+    deps = { db, client: createClient({ clock }), now: () => at, log, beat: () => void beats++ };
   });
   afterAll(async () => {
     await db?.destroy();
     await testDb?.drop();
   });
 
-  it('syncs 2026: 27 meetings and 131 sessions, scheduled at date_end + 35 min', async () => {
+  it('syncs 2026: 27 meetings and 131 sessions, scheduled at date_end + 35 min; cancelled ones never', async () => {
     openf1();
     expect(await syncSchedule(deps, [2026])).toBe(true);
-    expect(
-      await db
-        .selectFrom('meeting')
-        .select((eb) => eb.fn.countAll<string>().as('n'))
-        .executeTakeFirst(),
-    ).toEqual({ n: '27' });
+    expect(await count('meeting', 'true')).toBe(27);
+    expect(await count('meeting', 'is_cancelled')).toBe(2);
     expect(await states()).toEqual({ scheduled: 131 });
+    expect(await count('session', 'is_cancelled AND next_fetch_at IS NULL')).toBe(CANCELLED.length);
+    expect(await count('session', `is_cancelled AND session_key IN (${CANCELLED})`)).toBe(10);
     expect(await session(11388)).toMatchObject({
       meeting_key: 1296,
       type: 'Race',
       name: 'Race',
       date_end: new Date('2026-10-11T14:00:00Z'),
       next_fetch_at: new Date('2026-10-11T14:35:00Z'),
+      is_cancelled: false,
       source: 'openf1',
     });
   });
@@ -133,19 +155,30 @@ describe('ingest (fixtures through msw, f1_ingest login)', { timeout: 120_000 },
     });
   });
 
-  it('a tick waits while any session is live (start − 30 min … end + 30 min, A§6.1)', async () => {
+  it('a tick and a refetch wait while any session is live (start − 30 min … end + 30 min, A§6.1)', async () => {
     openf1();
+    const before = { beats, requests: requests.length };
     at = new Date('2026-10-24T21:30:00Z'); // 11392 qualifying, 21:00–22:00
     expect(await tick(deps)).toBe(0);
-    expect(await states()).toEqual({ due: 104, scheduled: 27 });
-    expect(lines.at(-1)).toMatch(/"due":104,"msg":"live session: waiting"/);
+    at = new Date('2026-10-24T21:31:00Z');
+    expect(await tick(deps)).toBe(0);
+    expect(await states()).toEqual({ due: 94, scheduled: 37 });
+    expect(beats - before.beats).toBe(2); // a waiting tick still proves the daemon alive
+    expect(logged('live session: waiting')).toBe(1); // on the transition only
+    const row = await session(11392);
+    expect(await processSession(deps, 11392, true)).toEqual({ ok: false, error: 'live_session' });
+    expect(await session(11392)).toEqual(row);
+    expect(requests.length).toBe(before.requests);
   });
 
   it('a tick processes every due session; a 500 on laps leaves the session due with no rows', async () => {
     openf1(status500);
+    const before = beats;
     at = new Date('2026-10-25T12:00:00Z');
-    expect(await tick(deps)).toBe(105);
-    expect(await states()).toEqual({ final: 102, fetched: 2, due: 1, scheduled: 26 });
+    expect(await tick(deps)).toBe(95);
+    expect(beats - before).toBe(96); // after each session and at the end
+    expect(logged('live session: over')).toBe(1);
+    expect(await states()).toEqual({ final: 92, fetched: 2, due: 1, scheduled: 36 });
     expect(await session(11388)).toMatchObject({
       ingest_state: 'due',
       next_fetch_at: new Date('2026-10-25T12:05:00Z'),
@@ -166,6 +199,9 @@ describe('ingest (fixtures through msw, f1_ingest login)', { timeout: 120_000 },
       ingest_state: 'fetched',
       next_fetch_at: new Date('2026-10-25T22:00:00Z'),
     });
+    // The cancelled sessions (April) were past: never due, never fetched, no rows.
+    expect(CANCELLED.map(requested)).toEqual(CANCELLED.map(() => 0));
+    expect(await count('session', "is_cancelled AND ingest_state = 'scheduled' AND fetch_count = 0")).toBe(10);
   });
 
   it('an empty laps reply where rows were stored fails with `empty` and keeps the rows', async () => {
@@ -200,7 +236,7 @@ describe('ingest (fixtures through msw, f1_ingest login)', { timeout: 120_000 },
       ingest_state: 'fetched',
       next_fetch_at: new Date('2026-10-26T01:00:00Z'),
     });
-    expect(await states()).toEqual({ final: 105, fetched: 1, scheduled: 25 });
+    expect(await states()).toEqual({ final: 95, fetched: 1, scheduled: 35 });
   });
 
   it('fixtures → rows per table and session; nulls stay null', async () => {
@@ -305,7 +341,66 @@ describe('ingest (fixtures through msw, f1_ingest login)', { timeout: 120_000 },
     for (const key of [11388, 11392, 11383, EMPTY])
       expect(await processSession(deps, key, true)).toEqual({ ok: true, value: 'final' });
     expect(await hashes()).toEqual(before);
-    expect(await states()).toEqual({ final: 105, fetched: 1, scheduled: 25 });
+    expect(await states()).toEqual({ final: 95, fetched: 1, scheduled: 35 });
+  });
+
+  it('a re-ingest with changed data replaces the rows: fewer laps, a changed lap time', async () => {
+    const laps = raw('laps-normal') as Lap[];
+    const changed = [{ ...laps[0], lap_duration: 99.999 }, ...laps.slice(1, -2)];
+    openf1((endpoint, key) => (endpoint === 'laps' && key === 11388 ? HttpResponse.json(changed) : undefined));
+    expect(await processSession(deps, 11388, true)).toEqual({ ok: true, value: 'final' });
+    expect(await rowCounts(11388)).toMatchObject({ lap: 60, raw_response: 6 });
+    const lap = (driver: number, n: number) =>
+      db
+        .selectFrom('lap')
+        .select('lap_ms')
+        .where('session_key', '=', 11388)
+        .where('driver_number', '=', driver)
+        .where('lap_number', '=', n)
+        .executeTakeFirst();
+    const [first, gone] = [laps[0], laps.at(-1)];
+    expect(await lap(first?.driver_number ?? 0, first?.lap_number ?? 0)).toEqual({ lap_ms: 99_999 });
+    expect(await lap(gone?.driver_number ?? 0, gone?.lap_number ?? 0)).toBeUndefined();
+
+    openf1();
+    expect(await processSession(deps, 11388, true)).toEqual({ ok: true, value: 'final' });
+    expect((await rowCounts(11388)).lap).toBe(62);
+  });
+
+  it('a sync moves next_fetch_at only while scheduled, and a cancelled session never gets one', async () => {
+    const shift = (s: Session, hours: number) =>
+      ({ ...s, date_end: new Date(Date.parse(s.date_end) + hours * 3_600_000).toISOString() }) as Session;
+    const sessions = (raw('sessions-year') as Session[]).map((s) =>
+      [11397, 11396, 11388].includes(s.session_key)
+        ? shift(s, 1)
+        : s.session_key === 11405
+          ? { ...s, is_cancelled: true }
+          : s,
+    );
+    const before = await session(11396);
+    openf1((endpoint, key) => (endpoint === 'sessions' && Number.isNaN(key) ? HttpResponse.json(sessions) : undefined));
+    expect(await syncSchedule(deps, [2026])).toBe(true);
+    expect(await session(11397)).toMatchObject({
+      ingest_state: 'scheduled',
+      date_end: new Date('2026-10-30T20:30:00Z'),
+      next_fetch_at: new Date('2026-10-30T21:05:00Z'),
+    });
+    expect(await session(11396)).toMatchObject({
+      ingest_state: 'fetched',
+      date_end: new Date('2026-10-25T23:00:00Z'),
+      next_fetch_at: before.next_fetch_at,
+    });
+    expect(await session(11388)).toMatchObject({ ingest_state: 'final', next_fetch_at: null });
+    expect(await session(11405)).toMatchObject({ ingest_state: 'scheduled', is_cancelled: true, next_fetch_at: null });
+
+    openf1();
+    expect(await syncSchedule(deps, [2026])).toBe(true);
+    expect(await session(11397)).toMatchObject({ next_fetch_at: new Date('2026-10-30T20:05:00Z') });
+    expect(await session(11405)).toMatchObject({
+      is_cancelled: false,
+      next_fetch_at: new Date('2026-11-06T17:05:00Z'),
+    });
+    expect(await session(11396)).toMatchObject({ date_end: new Date('2026-10-25T22:00:00Z') });
   });
 
   it('a failed refetch leaves a final session, its counters and its rows as they were', async () => {
@@ -319,6 +414,54 @@ describe('ingest (fixtures through msw, f1_ingest login)', { timeout: 120_000 },
     expect(await processSession(deps, 999_999, true)).toEqual({ ok: false, error: 'unknown_session' });
   });
 
+  it('last_error takes every D5 code through the CHECK; the 9th failure in a row marks the session failed', async () => {
+    const set = (code: string) =>
+      sql`UPDATE session SET last_error = ${code} WHERE session_key = ${EMPTY}`.execute(db).then(
+        () => 'ok',
+        (e: { code?: string }) => e.code,
+      );
+    for (const code of ['http_401', 'http_500', ...ERROR_CODES]) expect(await set(code)).toBe('ok');
+    for (const code of ['http_5000', 'boom', 'live_session']) expect(await set(code)).toBe('23514');
+
+    await db.updateTable('session').set({ fail_count: 8, last_error: null }).where('session_key', '=', EMPTY).execute();
+    openf1((endpoint, key) =>
+      endpoint === 'laps' && key === EMPTY ? new HttpResponse(null, { status: 500 }) : undefined,
+    );
+    expect(await processSession(deps, EMPTY)).toEqual({ ok: false, error: 'http_500' });
+    expect(await session(EMPTY)).toMatchObject({
+      ingest_state: 'failed',
+      next_fetch_at: null,
+      fail_count: 9,
+      last_error: 'http_500',
+    });
+    openf1();
+    expect(await processSession(deps, EMPTY, true)).toEqual({ ok: true, value: 'final' }); // a refetch recovers it
+    expect(await session(EMPTY)).toMatchObject({ ingest_state: 'final', fail_count: 0, last_error: null });
+  });
+
+  it('the daemon sync skips a live window and retries every 15 min until it succeeds', async () => {
+    openf1();
+    const sync = scheduleSync(deps);
+    const syncs = () => requests.filter((r) => r.includes('year=')).length;
+    const before = syncs();
+    at = new Date('2026-10-30T23:20:00Z'); // Mexico practice 2 (22:00–23:00) is live until 23:30
+    await sync.run();
+    expect(syncs()).toBe(before);
+    expect(logged('sync: live session, retry in 15 min')).toBe(1);
+    at = new Date(at.getTime() + SYNC_RETRY_MS - 1000);
+    await sync.run();
+    expect(syncs()).toBe(before);
+    at = new Date('2026-10-30T23:35:00Z');
+    await sync.run();
+    expect(syncs()).toBe(before + 8); // 2023–2025 still have no meeting row: 4 years × 2 requests
+    at = new Date('2026-10-31T00:00:00Z');
+    await sync.run();
+    expect(syncs()).toBe(before + 8); // synced: nothing until requested again (00:30 UTC)
+    sync.request();
+    await sync.run();
+    expect(syncs()).toBe(before + 16);
+  });
+
   it('backfill syncs 2023 onwards and processes each past session that is not final; a live window stops it', async () => {
     openf1();
     at = new Date('2026-10-26T12:00:00Z');
@@ -329,10 +472,12 @@ describe('ingest (fixtures through msw, f1_ingest login)', { timeout: 120_000 },
       next_fetch_at: new Date('2026-10-26T22:00:00Z'),
       fetch_count: 2,
     });
-    expect(await states()).toEqual({ final: 105, fetched: 1, scheduled: 25 });
+    expect(await states()).toEqual({ final: 95, fetched: 1, scheduled: 35 });
 
     at = new Date('2026-10-30T22:30:00Z'); // Mexico practice 2 is live; practice 1 (11397) is past
+    const sent = requests.length;
     expect(await backfill(deps)).toBe(false);
+    expect(requests.length).toBe(sent);
     expect(await session(11397)).toMatchObject({ ingest_state: 'scheduled', fetch_count: 0 });
     expect(await session(11396)).toMatchObject({ ingest_state: 'fetched', fetch_count: 2 });
   });
@@ -343,5 +488,6 @@ describe('ingest (fixtures through msw, f1_ingest login)', { timeout: 120_000 },
     expect(text).not.toContain(new URL(testDb.urls.f1_ingest).password);
     const failure = lines.map((l) => JSON.parse(l)).find((l) => l.session_key === 11388 && l.last_error === 'http_500');
     expect(failure).toMatchObject({ msg: 'session', state: 'due', last_error: 'http_500' });
+    expect(CANCELLED.map(requested)).toEqual(CANCELLED.map(() => 0)); // over the whole file
   });
 });

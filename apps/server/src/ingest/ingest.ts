@@ -2,7 +2,6 @@ import { Cron } from 'croner';
 import { type Insertable, type Kysely, sql, type Transaction } from 'kysely';
 import type { Logger } from 'pino';
 import type { DB } from '../db/db.ts';
-import { startHeartbeat } from '../heartbeat.ts';
 import type { createClient, Query } from '../openf1/client.ts';
 import { type Endpoint, parse, type Result, type Rows } from '../openf1/schemas.ts';
 import { meetingRow, normaliseSession, type SessionData, type SessionRows, sessionRow } from './normalise.ts';
@@ -33,8 +32,10 @@ export type Deps = {
   /** The app clock (D7): every state decision takes its time from here, never from SQL now(). */
   now: () => Date;
   log: Pick<Logger, 'info' | 'error'>;
+  /** Touches the heartbeat: the work proves it is alive, not a free-running timer (A§4). */
+  beat: () => void;
 };
-export type Outcome = Result<IngestState, ErrorCode | 'unknown_session'>;
+export type Outcome = Result<IngestState, ErrorCode | 'unknown_session' | 'live_session'>;
 
 /** A thrown value's code (a SQLSTATE or a Node errno), never its message. */
 export const codeOf = (err: unknown) =>
@@ -55,7 +56,11 @@ async function fetchRows<E extends Endpoint>(
   return { ok: true, value: { ...fetched.value, rows: parsed.value } };
 }
 
-/** meetings + sessions per year → upsert, metadata only; `next_fetch_at` moves only while `scheduled`. */
+/**
+ * meetings + sessions per year → upsert, metadata only; `next_fetch_at` moves only while
+ * `scheduled`; a cancelled session gets none, and the tick and the backfill skip it. One bad
+ * row fails that year (one parse).
+ */
 export async function syncSchedule({ db, client, log }: Deps, years: readonly number[]): Promise<boolean> {
   let ok = true;
   for (const year of years) {
@@ -75,7 +80,7 @@ export async function syncSchedule({ db, client, log }: Deps, years: readonly nu
     const known = new Set(meetings.value.rows.map((m) => m.meeting_key));
     const rows = sessions.value.rows
       .filter((s) => known.has(s.meeting_key))
-      .map((s) => ({ ...sessionRow(s), next_fetch_at: firstFetchAt(new Date(s.date_end)) }));
+      .map((s) => ({ ...sessionRow(s), next_fetch_at: s.is_cancelled ? null : firstFetchAt(new Date(s.date_end)) }));
     try {
       await db.transaction().execute(async (trx) => {
         for (const chunk of chunks(meetings.value.rows.map(meetingRow))) {
@@ -94,6 +99,7 @@ export async function syncSchedule({ db, client, log }: Deps, years: readonly nu
                 gmt_offset: eb.ref('excluded.gmt_offset'),
                 date_start: eb.ref('excluded.date_start'),
                 date_end: eb.ref('excluded.date_end'),
+                is_cancelled: eb.ref('excluded.is_cancelled'),
               })),
             )
             .execute();
@@ -110,6 +116,7 @@ export async function syncSchedule({ db, client, log }: Deps, years: readonly nu
                 name: eb.ref('excluded.name'),
                 date_start: eb.ref('excluded.date_start'),
                 date_end: eb.ref('excluded.date_end'),
+                is_cancelled: eb.ref('excluded.is_cancelled'),
                 next_fetch_at: eb
                   .case()
                   .when('session.ingest_state', '=', 'scheduled')
@@ -181,6 +188,11 @@ export async function processSession(deps: Deps, key: number, refetch = false): 
     if (!(await db.selectFrom('session').select('session_key').where('session_key', '=', key).executeTakeFirst())) {
       log.error(line({ error: 'unknown_session' }), 'session');
       return { ok: false, error: 'unknown_session' };
+    }
+    // A manual refetch waits for the live window too (A§8): it writes nothing and fails.
+    if (refetch && (await live(deps))) {
+      log.error(line({ state: 'unchanged', error: 'live_session' }), 'session');
+      return { ok: false, error: 'live_session' };
     }
   } catch (err) {
     log.error(line({ state: 'unchanged', last_error: 'db', cause: codeOf(err) }), 'session');
@@ -257,7 +269,9 @@ export async function processSession(deps: Deps, key: number, refetch = false): 
 
 /**
  * A§6.1: from 30 min before any session starts until 30 min after it ends, OpenF1 answers
- * every free request with 401, past sessions included. The tick and the backfill wait it out.
+ * every free request with 401, past sessions included. The sync, the tick, the backfill and
+ * a refetch wait it out. Cancelled sessions open no window, and neither does a row longer
+ * than 12 h (a bad date must not stop ingest for days).
  */
 async function live({ db, now }: Deps): Promise<boolean> {
   const at = now().getTime();
@@ -265,11 +279,16 @@ async function live({ db, now }: Deps): Promise<boolean> {
   const row = await db
     .selectFrom('session')
     .select('session_key')
+    .where('is_cancelled', '=', false)
+    .where(sql<boolean>`date_end - date_start <= interval '12 hours'`)
     .where('date_start', '<=', new Date(at + margin))
     .where('date_end', '>', new Date(at - margin))
     .executeTakeFirst();
   return row !== undefined;
 }
+
+// ponytail: module state, one daemon per process; the live wait is logged on its transitions only.
+let waiting = false;
 
 /** Marks every session whose time has come `due`, then processes the due ones, newest first. */
 export async function tick(deps: Deps, stopping: () => boolean = () => false): Promise<number> {
@@ -278,51 +297,61 @@ export async function tick(deps: Deps, stopping: () => boolean = () => false): P
     .updateTable('session')
     .set({ ingest_state: 'due' })
     .where('ingest_state', 'in', ['scheduled', 'fetched'])
+    .where('is_cancelled', '=', false)
     .where('next_fetch_at', '<=', at)
     .execute();
   const due = await deps.db
     .selectFrom('session')
     .select('session_key')
     .where('ingest_state', '=', 'due')
+    .where('is_cancelled', '=', false)
     .where('next_fetch_at', '<=', at)
     .orderBy('date_end', 'desc')
     .execute();
   let processed = 0;
   for (const { session_key } of due) {
     if (stopping()) break; // SIGTERM ends a long (first) tick after the current session
-    if (await live(deps)) {
-      deps.log.info({ due: due.length - processed }, 'live session: waiting'); // a later tick goes on
-      break;
+    const isLive = await live(deps);
+    if (isLive !== waiting) {
+      waiting = isLive;
+      deps.log.info({ due: due.length - processed }, isLive ? 'live session: waiting' : 'live session: over');
     }
+    if (isLive) break; // a later tick goes on
     await processSession(deps, session_key);
+    deps.beat();
     processed++;
   }
+  deps.beat();
   return processed;
 }
 
 const yearRange = (from: number, to: number) => Array.from({ length: to - from + 1 }, (_, i) => from + i);
 
 /**
- * Every year from 2023, then each past session that is not final, newest first, once.
- * Resumable: the state is in the database. True when nothing failed. A live window
- * stops it (run it again afterwards).
+ * Every year from 2023, then each past session that is neither final nor cancelled, newest
+ * first, once. Resumable: the state is in the database. True when nothing failed. A live
+ * window stops it (run it again afterwards).
  */
 export async function backfill(deps: Deps): Promise<boolean> {
+  const stopped = async (done: number, failed: number) => {
+    if (!(await live(deps))) return false;
+    deps.log.error({ done, failed }, 'backfill: live session, stopping');
+    return true;
+  };
+  if (await stopped(0, 0)) return false;
   const ok = await syncSchedule(deps, yearRange(FIRST_YEAR, deps.now().getUTCFullYear()));
   const todo = await deps.db
     .selectFrom('session')
     .select('session_key')
     .where('ingest_state', '<>', 'final')
+    .where('is_cancelled', '=', false)
     .where('date_end', '<=', new Date(deps.now().getTime() - FIRST_FETCH_AFTER_MS))
     .orderBy('date_end', 'desc')
     .execute();
   let done = 0;
   let failed = 0;
   for (const { session_key } of todo) {
-    if (await live(deps)) {
-      deps.log.error({ sessions: todo.length, done, failed }, 'backfill: live session, stopping');
-      return false;
-    }
+    if (await stopped(done, failed)) return false;
     if (!(await processSession(deps, session_key)).ok) failed++;
     done++;
   }
@@ -330,13 +359,43 @@ export async function backfill(deps: Deps): Promise<boolean> {
   return ok && failed === 0;
 }
 
+export const SYNC_RETRY_MS = 15 * 60_000;
+
 /**
- * The daemon: a schedule sync at start and daily at 00:30 UTC (the current year plus
- * every year from 2023 without a meeting: all of them on the first run), a tick every
- * minute. Resolves after SIGTERM/SIGINT once the running jobs have finished.
+ * The daemon's schedule sync: the current year plus every year from 2023 without a meeting
+ * row. It runs once requested (at start, daily at 00:30 UTC), never in a live window, and a
+ * failed or skipped sync is retried at most every 15 min until it succeeds.
+ */
+export function scheduleSync(deps: Deps) {
+  let next: number | undefined = 0; // epoch ms of the next try; undefined once synced
+  return {
+    request: () => {
+      next = 0;
+    },
+    async run(): Promise<void> {
+      const at = deps.now().getTime();
+      if (next === undefined || at < next) return;
+      next = at + SYNC_RETRY_MS;
+      if (await live(deps)) {
+        deps.log.info({}, 'sync: live session, retry in 15 min');
+        return;
+      }
+      const seen = new Set(
+        (await deps.db.selectFrom('meeting').select('year').distinct().execute()).map((m) => m.year),
+      );
+      const current = deps.now().getUTCFullYear();
+      const years = yearRange(FIRST_YEAR, current).filter((y) => y === current || !seen.has(y));
+      if (await syncSchedule(deps, years)) next = undefined;
+    },
+  };
+}
+
+/**
+ * The daemon: one job every minute that syncs the schedule when due, then ticks. Resolves
+ * after SIGTERM/SIGINT once the running job has finished.
  */
 export async function startIngest(deps: Deps): Promise<void> {
-  const { db, now, log } = deps;
+  const { log } = deps;
   let stopping = false;
   const stop = new Promise<void>((resolve) => {
     process.once('SIGTERM', resolve);
@@ -344,32 +403,28 @@ export async function startIngest(deps: Deps): Promise<void> {
   }).then(() => {
     stopping = true;
   });
-  const guarded = (job: string, fn: () => Promise<unknown>) =>
-    busyGuard(async () => {
-      if (stopping) return;
-      await fn().catch((err: unknown) => log.error({ job, cause: codeOf(err) }, 'job failed'));
-    });
-
-  const stopHeartbeat = startHeartbeat();
-  const sync = guarded('sync', async () => {
-    const seen = new Set((await db.selectFrom('meeting').select('year').distinct().execute()).map((m) => m.year));
-    const current = now().getUTCFullYear();
-    await syncSchedule(
-      deps,
-      yearRange(FIRST_YEAR, current).filter((y) => y === current || !seen.has(y)),
-    );
+  const sync = scheduleSync(deps);
+  const work = busyGuard(async () => {
+    if (stopping) return;
+    try {
+      await sync.run();
+      await tick(deps, () => stopping);
+    } catch (err) {
+      log.error({ cause: codeOf(err) }, 'tick failed'); // the code only: busyGuard needs fn not to reject
+    }
   });
-  const work = guarded('tick', () => tick(deps, () => stopping));
-  await sync.run();
+  deps.beat();
   void work.run();
   const jobs = [
-    new Cron('30 0 * * *', { timezone: 'UTC' }, () => void sync.run()),
+    new Cron('30 0 * * *', { timezone: 'UTC' }, () => {
+      sync.request();
+      void work.run();
+    }),
     new Cron('* * * * *', { timezone: 'UTC' }, () => void work.run()),
   ];
 
   await stop;
   log.info({}, 'stopping');
   for (const job of jobs) job.stop();
-  await Promise.all([sync.idle(), work.idle()]);
-  stopHeartbeat();
+  await work.idle();
 }

@@ -26,6 +26,7 @@ export const meetingRow = (m: Meeting): Insertable<DB['meeting']> => ({
   gmt_offset: m.gmt_offset,
   date_start: m.date_start,
   date_end: m.date_end,
+  is_cancelled: m.is_cancelled,
 });
 
 export const sessionRow = (s: Session) => ({
@@ -36,6 +37,7 @@ export const sessionRow = (s: Session) => ({
   name: s.session_name,
   date_start: s.date_start,
   date_end: s.date_end,
+  is_cancelled: s.is_cancelled,
 });
 
 export type SessionData = {

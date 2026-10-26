@@ -17,16 +17,9 @@ export const BACKOFF_CAP_MS = 6 * HOUR;
 export const MAX_FAILURES = 9;
 
 export type IngestState = 'scheduled' | 'due' | 'fetched' | 'final' | 'failed';
+export const ERROR_CODES = ['rate_limited', 'timeout', 'network', 'schema', 'empty', 'db', 'unknown'] as const;
 /** The only values `session.last_error` takes (D5, a CHECK in the migration). */
-export type ErrorCode =
-  | `http_${number}`
-  | 'rate_limited'
-  | 'timeout'
-  | 'network'
-  | 'schema'
-  | 'empty'
-  | 'db'
-  | 'unknown';
+export type ErrorCode = `http_${number}` | (typeof ERROR_CODES)[number];
 export type Progress = {
   ingest_state: IngestState;
   next_fetch_at: Date | null;
@@ -35,14 +28,14 @@ export type Progress = {
   last_error: ErrorCode | null;
 };
 
-/** When a newly synced session becomes due; never while date_end is unknown. */
-export const firstFetchAt = (dateEnd: Date | null): Date | null =>
-  dateEnd === null ? null : new Date(dateEnd.getTime() + FIRST_FETCH_AFTER_MS);
+/** When a newly synced session becomes due. */
+export const firstFetchAt = (dateEnd: Date): Date => new Date(dateEnd.getTime() + FIRST_FETCH_AFTER_MS);
 
-export function afterSuccess(s: { date_end: Date | null; fetch_count: number }, now: Date): Progress {
+export function afterSuccess(s: { date_end: Date; fetch_count: number }, now: Date): Progress {
   const done = { fetch_count: s.fetch_count + 1, fail_count: 0, last_error: null };
-  // Only `refetch` reaches a session without date_end: fetched, and due again once a sync fills it in.
-  if (s.date_end === null) return { ...done, ingest_state: 'fetched', next_fetch_at: null };
+  // Only `refetch` gets here this early: the first fetch after the paid window still happens.
+  if (now < firstFetchAt(s.date_end))
+    return { ...done, ingest_state: 'scheduled', next_fetch_at: firstFetchAt(s.date_end) };
   const end = s.date_end.getTime();
   const next = REFETCH_AFTER_MS.map((ms) => end + ms).find((at) => at > now.getTime());
   return next === undefined
@@ -68,6 +61,8 @@ export function errorCode(error: OpenF1Error | ShapeError): ErrorCode {
 /**
  * D9: croner's `protect` only skips a tick that fires while the job runs. This
  * remembers it instead: when the run ends it runs once more (missed ticks run once).
+ * Precondition: `fn` never rejects (the caller catches and logs); a rejection would
+ * end the run and reject the promise every waiting caller holds.
  */
 export function busyGuard(fn: () => Promise<void>) {
   let running: Promise<void> | undefined;
