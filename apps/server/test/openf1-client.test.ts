@@ -4,7 +4,9 @@ import { server } from '../../../test/msw.setup.ts';
 import {
   createClient,
   createLimiter,
+  DEADLINE_MS,
   MAX_ATTEMPTS,
+  MAX_BODY_BYTES,
   OPENF1,
   PER_MINUTE,
   PER_SECOND,
@@ -117,6 +119,72 @@ describe('client (msw, fake timers)', () => {
       ok: false,
       error: { code: 'json' },
     });
+  });
+
+  it('ends a slow drip at the total deadline, as a timeout', async () => {
+    // One byte at 30, 60 and 90 s (never idle for undici's 60 s), then a stall: bounded on purpose.
+    // (Not closed: msw's emulated socket would deliver the end after undici's abort.)
+    const drip = () => {
+      let sent = 0;
+      return new ReadableStream({
+        pull: (controller) =>
+          new Promise<void>((resolve) => {
+            if (sent++ < 3) setTimeout(() => resolve(controller.enqueue(new TextEncoder().encode('['))), 30_000);
+          }),
+      });
+    };
+    // A declared length the drip never reaches, as a real slow server would send it.
+    const seen = laps(() => new HttpResponse(drip(), { headers: { 'content-length': '1000' } }));
+    const result = await settle(createClient().get('laps', { session_key: 1 }));
+    expect(result).toEqual({ ok: false, error: { code: 'timeout' } });
+    // Each attempt ends at the 120 s deadline (not earlier), then backs off 1, 2, 4, 8 s.
+    expect(seen).toHaveLength(MAX_ATTEMPTS);
+    const gaps = seen.slice(1).map((t, i) => t - (seen[i] ?? 0));
+    for (const [i, gap] of gaps.entries()) {
+      expect(gap).toBeGreaterThanOrEqual(DEADLINE_MS + 1000 * 2 ** i);
+      expect(gap).toBeLessThan(DEADLINE_MS + 1000 * 2 ** i + 1000);
+    }
+  });
+
+  it('follows no redirect', async () => {
+    let followed = 0;
+    server.use(
+      http.get('https://elsewhere.example/v1/laps', () => {
+        followed++;
+        return HttpResponse.json([]);
+      }),
+    );
+    laps(() => new HttpResponse(null, { status: 302, headers: { Location: 'https://elsewhere.example/v1/laps' } }));
+    expect(await settle(createClient().get('laps', { session_key: 1 }))).toEqual({
+      ok: false,
+      error: { code: 'network' },
+    });
+    expect(followed).toBe(0);
+  });
+
+  it('stops reading a body past MAX_BODY_BYTES and does not retry it', async () => {
+    // Finite on purpose: msw tees the response, and the branch nobody reads buffers all of it.
+    const chunk = new Uint8Array(1024 * 1024).fill(32);
+    const chunks = MAX_BODY_BYTES / chunk.length + 4;
+    const seen = laps(
+      () =>
+        new HttpResponse(
+          new ReadableStream({
+            start(controller) {
+              // `[` + 68 MiB of spaces + `]` is valid JSON: only the cap turns it away.
+              controller.enqueue(new TextEncoder().encode('['));
+              for (let i = 0; i < chunks; i++) controller.enqueue(chunk);
+              controller.enqueue(new TextEncoder().encode(']'));
+              controller.close();
+            },
+          }),
+        ),
+    );
+    expect(await settle(createClient().get('laps', { session_key: 1 }))).toEqual({
+      ok: false,
+      error: { code: 'json' },
+    });
+    expect(seen).toHaveLength(1);
   });
 
   it('puts no URL or body in an error', async () => {

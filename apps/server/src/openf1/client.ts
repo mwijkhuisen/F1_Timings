@@ -15,6 +15,10 @@ const BACKOFF_BASE_MS = 1_000;
 const BACKOFF_CAP_MS = 30_000;
 const CONNECT_TIMEOUT_MS = 10_000;
 const READ_TIMEOUT_MS = 60_000;
+/** One attempt, headers and body, ends after this (a total deadline, not an idle timeout). */
+export const DEADLINE_MS = 120_000;
+/** A race's laps are ~1 MB; anything past this is not an OpenF1 answer we keep. */
+export const MAX_BODY_BYTES = 64 * 1024 * 1024;
 
 export type Query = Readonly<Record<string, string | number>>;
 export type Clock = { now(): number; sleep(ms: number): Promise<void> };
@@ -93,6 +97,24 @@ function parseJson(text: string): unknown {
 const noResults = (body: unknown) =>
   typeof body === 'object' && body !== null && 'detail' in body && body.detail === 'No results found.';
 
+/** The body as text, or undefined once it passes MAX_BODY_BYTES (it is never held whole). */
+async function readCapped(response: Response): Promise<string | undefined> {
+  if (response.body === null) return '';
+  const reader = response.body.getReader();
+  const parts: Uint8Array[] = [];
+  let size = 0;
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) return Buffer.concat(parts).toString('utf8');
+    size += value.byteLength;
+    if (size > MAX_BODY_BYTES) {
+      await reader.cancel();
+      return undefined;
+    }
+    parts.push(value);
+  }
+}
+
 const timedOut = (error: unknown) =>
   [error, error instanceof Error ? error.cause : undefined].some(
     (e) => typeof e === 'object' && e !== null && 'code' in e && /TIME(D?)OUT/.test(String(e.code)),
@@ -113,18 +135,31 @@ export function createClient({ clock = systemClock, dispatcher }: ClientOptions 
     })) as unknown as NonNullable<RequestInit['dispatcher']>;
 
   async function once(target: string): Promise<Result<Fetched, OpenF1Error>> {
+    // A total deadline: undici's timeouts are idle timeouts, so a slow drip would never end.
+    const deadline = new AbortController();
+    const timer = setTimeout(() => deadline.abort(), DEADLINE_MS);
     try {
-      const response = await fetch(target, { dispatcher: agent, headers: { accept: 'application/json' } });
+      const response = await fetch(target, {
+        dispatcher: agent,
+        headers: { accept: 'application/json' },
+        redirect: 'error', // never to another host
+        signal: deadline.signal,
+      });
       const { status } = response;
       if (status === 429) limiter.pause(retryAfterMs(response.headers.get('retry-after'), clock.now()));
-      const body = parseJson(await response.text());
+      const text = await readCapped(response);
+      // Too large to be a body we accept: `json` (D5 `schema`), not retried.
+      if (text === undefined) return { ok: false, error: { code: 'json' } };
+      const body = parseJson(text);
       if (status >= 200 && status < 300) {
         return body === undefined ? { ok: false, error: { code: 'json' } } : { ok: true, value: { status, body } };
       }
       if (status === 404 && noResults(body)) return { ok: true, value: { status, body: [] } };
       return { ok: false, error: { code: 'http', status } };
     } catch (cause) {
-      return { ok: false, error: { code: timedOut(cause) ? 'timeout' : 'network' } };
+      return { ok: false, error: { code: deadline.signal.aborted || timedOut(cause) ? 'timeout' : 'network' } };
+    } finally {
+      clearTimeout(timer);
     }
   }
 
