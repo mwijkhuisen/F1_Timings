@@ -13,6 +13,11 @@ const array = (values: (number | null)[] | null) => values as number[] | null;
 // A race gives one number, qualifying Q1–Q3; a non-numeric gap ("+1 LAP") becomes a null element.
 const perPhase = (v: number | string | (number | null)[] | null) =>
   v === null ? null : array(typeof v === 'string' ? [null] : Array.isArray(v) ? v.map(ms) : [ms(v)]);
+// A number, or a string: "3" is kept as 3; anything else ("DQ", "NC") is null, and dnf/dns/dsq say why.
+const place = (v: number | string | null) => {
+  const n = typeof v === 'string' && /^\d{1,5}$/.test(v.trim()) ? Number(v) : v;
+  return typeof n === 'number' && Number.isInteger(n) && n >= 0 && n <= 32_767 ? n : null;
+};
 
 export const meetingRow = (m: Meeting): Insertable<DB['meeting']> => ({
   meeting_key: m.meeting_key,
@@ -26,7 +31,7 @@ export const meetingRow = (m: Meeting): Insertable<DB['meeting']> => ({
   gmt_offset: m.gmt_offset,
   date_start: m.date_start,
   date_end: m.date_end,
-  is_cancelled: m.is_cancelled,
+  is_cancelled: m.is_cancelled ?? false,
 });
 
 export const sessionRow = (s: Session) => ({
@@ -37,7 +42,7 @@ export const sessionRow = (s: Session) => ({
   name: s.session_name,
   date_start: s.date_start,
   date_end: s.date_end,
-  is_cancelled: s.is_cancelled,
+  is_cancelled: s.is_cancelled ?? false,
 });
 
 export type SessionData = {
@@ -164,7 +169,7 @@ export function normaliseSession(key: number, data: SessionData): { rows: Sessio
         session_key: key,
         source,
         driver_number: r.driver_number,
-        position: r.position,
+        position: place(r.position),
         laps: r.number_of_laps,
         dnf: r.dnf,
         dns: r.dns,
