@@ -403,6 +403,27 @@ describe('ingest (fixtures through msw, f1_ingest login)', { timeout: 120_000 },
     expect(await session(11396)).toMatchObject({ date_end: new Date('2026-10-25T22:00:00Z') });
   });
 
+  it('a sync skips and counts the sessions of a meeting OpenF1 left out', async () => {
+    const meetings = (raw('meetings-year') as { meeting_key: number }[]).filter((m) => m.meeting_key !== 1296);
+    const sessions = (raw('sessions-year') as Session[]).map((s) =>
+      s.session_key === 11384 ? { ...s, date_end: '2026-10-11T00:00:00+00:00' } : s,
+    );
+    openf1((endpoint, key) =>
+      Number.isNaN(key) ? HttpResponse.json(endpoint === 'meetings' ? meetings : sessions) : undefined,
+    );
+    const before = await session(11384);
+    expect(await syncSchedule(deps, [2026])).toBe(true);
+    // Marina Bay (1296): 11378, 11379, 11383, 11384 and 11388.
+    expect(JSON.parse(lines.at(-1) ?? '{}')).toMatchObject({
+      year: 2026,
+      meetings: 26,
+      sessions: 126,
+      skipped: 5,
+      msg: 'sync',
+    });
+    expect(await session(11384)).toEqual(before);
+  });
+
   it('a failed refetch leaves a final session, its counters and its rows as they were', async () => {
     const before = await session(11388);
     openf1(status500);
