@@ -5,8 +5,19 @@
   "files": [
     "dist"
   ],
+  "scripts": {
+    "db:types": "kysely-codegen --dialect postgres --exclude-pattern public.schema_migrations --out-file src/db/types.ts"
+  },
   "dependencies": {
+    "croner": "10.0.1",
+    "kysely": "0.29.7",
+    "pg": "8.23.1",
+    "pino": "10.4.0",
     "undici": "8.12.2",
     "zod": "4.6.7"
+  },
+  "devDependencies": {
+    "@types/pg": "8.23.1",
+    "kysely-codegen": "0.20.0"
   }
 }

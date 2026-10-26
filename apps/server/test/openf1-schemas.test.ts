@@ -2,6 +2,7 @@ import { readdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import fc from 'fast-check';
 import { describe, expect, it } from 'vitest';
+import { normaliseSession } from '../src/ingest/normalise.ts';
 import { ENDPOINTS, type Endpoint, type Lap, type Pit, parse, schemas } from '../src/openf1/schemas.ts';
 
 const FIXTURES = join(import.meta.dirname, '../src/openf1/fixtures');
@@ -53,6 +54,54 @@ describe('parse', () => {
       ok: false,
       error: { code: 'shape', issues: [{ path: '[0].lap_duration', code: 'invalid_type' }] },
     });
+  });
+});
+
+// Values the P1b backfill met in real 2023–2026 data, outside the four scanned sessions:
+// 11384 a string position, 11246/11342 a null compound, 11275 a null number_of_laps.
+describe('real-data values beyond the scan (synthetic rows from the fixtures)', () => {
+  const value = <T>(result: { ok: true; value: T } | { ok: false; error: unknown }): T => {
+    if (!result.ok) throw new Error(JSON.stringify(result.error));
+    return result.value;
+  };
+  const rows = (file: string) => read(file) as Record<string, unknown>[];
+
+  it('a string position, a null or missing number_of_laps and a null compound parse and normalise', () => {
+    const [p1, p2, p3, p4] = rows('session_result-normal.raw');
+    const { number_of_laps: _, ...p4WithoutLaps } = p4 ?? {};
+    const results = value(
+      parse('session_result', [
+        { ...p1, position: '1' },
+        { ...p2, position: 'DQ', number_of_laps: null },
+        { ...p3, position: null },
+        p4WithoutLaps,
+      ]),
+    );
+    const stints = value(parse('stints', [{ ...rows('stints-normal.raw')[0], compound: null }]));
+    const none = { drivers: [], laps: [], pit: [], race_control: [] };
+    const { rows: out } = normaliseSession(11388, { ...none, stints, session_result: results });
+    expect(out.result.map((r) => [r.driver_number, r.position, r.laps])).toEqual([
+      [3, 1, 62],
+      [16, null, null],
+      [12, null, 62],
+      [1, 4, null],
+    ]);
+    expect(out.stint).toEqual([expect.objectContaining({ driver_number: 23, stint_number: 1, compound: null })]);
+  });
+
+  it('rejects, by path, a value its column could not hold', () => {
+    const [lap] = rows('laps-normal.raw');
+    const issues = (body: unknown) => {
+      const result = parse('laps', body);
+      return result.ok ? [] : result.error.issues.map((i) => i.path);
+    };
+    expect(issues([{ ...lap, lap_number: 1.5 }])).toEqual(['[0].lap_number']); // smallint
+    expect(issues([{ ...lap, i1_speed: 40_000 }])).toEqual(['[0].i1_speed']); // smallint km/h
+    expect(issues([{ ...lap, lap_duration: 3e6 }])).toEqual(['[0].lap_duration']); // int ms
+    expect(issues([{ ...lap, session_key: null }])).toEqual(['[0].session_key']); // a key
+    const [driver] = rows('drivers-normal.raw');
+    const nul = parse('drivers', [{ ...driver, full_name: 'a\u0000b' }]);
+    expect(nul.ok ? [] : nul.error.issues.map((i) => i.path)).toEqual(['[0].full_name']); // text without NUL
   });
 });
 
