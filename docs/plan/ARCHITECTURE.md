@@ -102,11 +102,19 @@ Checked against the live APIs on 2026-10-25 (Austin quali `11392`, Marina Bay ra
 - Free, no auth, 2023+. Paid only within "live", which runs from 30 min before a session starts until 30 min after it ends. Free limit: 3 req/s and 30 req/min. `meetings`/`sessions` refresh daily at 00:00 UTC.
 - Sessions per year: 2023: 118, 2024: 123, 2025: 123, 2026: 131 (including testing days and future sessions). Session names: `Practice 1–3`, `Sprint Qualifying`, `Sprint`, `Qualifying`, `Race`, `Day 1–3`.
 - Known issues (open on `br-g/openf1`): null pit `stop_duration` (#484), sessions needing re-ingest (#483), wrong `tyre_age_at_start` for used sets (#473), slowness right after a session becomes free (#474).
+- **During a live session every free request fails, past sessions included** (P1a, 2026-10-25 20:03 UTC, Austin race): HTTP 401 `{"detail":"Live F1 session in progress. Global API access (including past sessions) is restricted to authenticated users until the session ends. …"}`, with a link to buy a paid API key (the plan uses none). It lifted between 22:26:45 and 22:31:46 UTC, at the end of the live window (scheduled end 22:00 + 30 min), not at the chequered flag. The client reports it as `http 401` without retrying. P1b keeps the schedule sync, refetches and the backfill out of live windows.
+- **A query without rows answers 404 `{"detail":"No results found."}`**, not `[]` (P1a). The client turns exactly that answer into an empty list; any other 404 is an error. Bahrain 2023 race `7953` has no `pit` rows at all.
+- **Nulls** (P1a scan, 2026-10-25: the full responses of 11388, 11392, 11383 and 7953, plus `meetings`/`sessions` 2023–2026; the zod schemas in `apps/server/src/openf1/schemas.ts` follow it):
+  - `laps` (2,898 rows): `date_start` 2, `lap_duration` 42, S1 102, S2 11, S3 20, `i1_speed` 618, `i2_speed` 11, `st_speed` 502, each `segments_sector_n` array 6–8, and single `null` elements inside the arrays.
+  - `pit` (169): `pit_duration` and `lane_duration` 22, `stop_duration` all 169.
+  - `race_control` (428): `driver_number` 336, `flag` and `scope` 191, `sector` 298, `lap_number` 39, `qualifying_phase` 408.
+  - `session_result` (86): `position` 14, `duration` 30, `gap_to_leader` 16 (a number, a string such as `+1 LAP`, or Q1–Q3 in qualifying). `points` is missing from qualifying results.
+  - Never null in the scan: `meetings`, `sessions`, `stints`, and the `drivers` fields A§7 stores (`country_code`, not stored, is null in 66 of 86).
 
 | View | Endpoints → fields | Known gaps → UI |
 |---|---|---|
 | Session header | `meetings` (name, circuit, `gmt_offset`), `sessions` (type, name, start/end), `session_result` (position, laps, dnf/dns/dsq, `duration` (an array of Q1/Q2/Q3 in qualifying), `gap_to_leader`) | — |
-| Lap table | `laps`: `lap_number`, `lap_duration`, `duration_sector_1..3`, `is_pit_out_lap`, `date_start` (approximate). `drivers`: `name_acronym`, `team_name`, `team_colour`. `pit.lap_number` → in-lap **[U]**. `race_control` → deleted laps (A§9) | Null `lap_duration` or sectors on out-laps and some flying laps (11392: 84 of 280 S1 null, 25 laps without a time) → `—` with "not timed" |
+| Lap table | `laps`: `lap_number`, `lap_duration`, `duration_sector_1..3`, `is_pit_out_lap`, `date_start` (approximate). `drivers`: `name_acronym`, `team_name`, `team_colour`. In-lap = the lap before an out-lap (A§9); `pit.lap_number` is the in-lap only in races and sprints. `race_control` → deleted laps (A§9) | Null `lap_duration` or sectors on out-laps and some flying laps (11392: 84 of 280 S1 null, 25 laps without a time) → `—` with "not timed" |
 | Comparison | Same as the lap table | Gaps break the line, never interpolated |
 | Mini-sectors | `laps.segments_sector_1..3` codes: 0 = n/a, 2048 = yellow, 2049 = green, 2051 = purple, 2064 = pit lane. 2050/2052/2068 meaning unknown → grey | OpenF1 says segments are "not available during races" and race data is mostly 2048 → race tab shows a banner: "mini-sector colours unreliable in races" |
 | Speed traps | `laps.i1_speed`, `i2_speed`, `st_speed` (km/h) | `i1_speed` null on ~25% and `st_speed` on ~20% of race laps → `—` |
@@ -149,7 +157,7 @@ Roles (owner, 2026-10-25; built in P1b): `deploy/postgres/roles.sql`, a PostgreS
 
 - **Schedule sync:** daily at 00:30 UTC, plus at start: `meetings` and `sessions` for the current year (and every year from 2023 on the first run). Upserts `meeting`/`session`.
 - **Per-session pipeline:** `due` at `date_end + 35 min` (after the paid window). Fetch `drivers`, `laps`, `stints`, `pit`, `race_control`, `session_result` → store raw → normalise in one transaction → `fetched`. Fetch again at +3 h and +24 h for OpenF1 corrections → `final`. Failures back off exponentially (5 min … 6 h), then `failed`, shown in the status panel.
-- **Rate budget:** a token bucket at 25 req/min and 2 req/s, below the 30/3 limit. On a 429, honour `Retry-After` or wait 60 s. 6 requests per session.
+- **Rate budget:** at most 25 requests in any 60 s and 2 in any 1 s (sliding windows, shared by every call of the client), below the 30/3 limit. On a 429, honour `Retry-After` or wait 60 s. 6 requests per session. Free requests fail with 401 during any live session (A§6.1), so the sync, refetches and backfill wait for the live window to end.
 - **First backfill:** every past session from 2023 that isn't `final`, newest first: ~470 × 6 ≈ 2,800 requests ≈ **1 h 55 min**. It's resumable, because state lives in the DB.
 - **Manual:** `refetch <session_key>` for OpenF1 re-ingests (as in #483).
 - **Scheduling pattern:** in-process croner (UTC) with its own busy guard. Missed ticks run once (the Waterheight pattern).
@@ -158,7 +166,12 @@ Roles (owner, 2026-10-25; built in P1b): `deploy/postgres/roles.sql`, a PostgreS
 
 - **Deleted laps:** parse `race_control.message`. The car is taken from the text, because `driver_number` is null in the data. Two known forms: `CAR 87 (BEA) TIME 1:40.294 DELETED - TRACK LIMITS AT TURN 2 LAP 3 20:07:17` and `CAR 11 (PER) LAP DELETED - DOUBLE YELLOW AT TURN 12 LAP 2 21:32:22`. Also handle `… REINSTATED` (format **[U]**: none in the sample). The `LAP n` in the text is the driver's lap. A deleted lap keeps its values and is excluded from all bests.
 - **Colours in the historical view (final semantics):** purple = the fastest valid value of that sector or lap in the session; green = the driver's own fastest valid value; yellow = the rest. Out-laps and in-laps are never purple or green. Live (P2) uses progressive semantics: purple/green at that moment, as on the F1 tower.
-- **In/out laps:** out = `is_pit_out_lap`; in = the lap matching a `pit` row **[U]**.
+- **In/out laps** (owner, 2026-10-25): out = `is_pit_out_lap`; in = lap n when the same driver's lap n+1 is an out-lap. A last lap that ends in the pits (a retirement, a qualifying in-lap after the flag) has no out-lap after it and is not marked.
+  - `pit.lap_number` is not used for this. The **[U]** "`pit.lap_number` = in-lap" held only in races and sprints. P1a checked every pit row against the out-laps of 7 full sessions:
+    - The out-lap is `pit.lap_number + 1` in race 11388 (25 of 25 rows) and sprint 11383 (54 of 54).
+    - A pit row is not always a stop. In sprint 11383, race control sent "ALL CARS THROUGH THE PIT LANE" under the safety car (laps 2–4). Each pass is a pit row (`lane_duration` ≈ 18–19 s), and the next lap is an out-lap, so the rule above still holds.
+    - The out-lap is `pit.lap_number` itself in qualifying 11392 (90/90) and 11384 (103/103), sprint qualifying 11379 (74/74) and practice 11378 (76/76) and 11391 (92/92). Lap-1 rows with null durations there are garage exits.
+  - The test `[U] pit.lap_number against the out-laps` in `apps/server/test/openf1-schemas.test.ts` pins both meanings on the fixtures.
 - **Sector deltas (comparison):** per lap, `driverB − driverA` per sector. Shown only when both values exist and neither lap is deleted.
 
 ## 10. API surface (`/api/v1`, JSON, zod contracts in `packages/contracts`)

@@ -1,0 +1,16 @@
+[
+{"session_key":11383,"driver_number":11,"stint_number":1,"lap_start":1,"lap_end":1,"compound":"INTERMEDIATE","tyre_age_at_start":0},
+{"session_key":11383,"driver_number":3,"stint_number":1,"lap_start":1,"lap_end":2,"compound":"INTERMEDIATE","tyre_age_at_start":0},
+{"session_key":11383,"driver_number":81,"stint_number":1,"lap_start":1,"lap_end":2,"compound":"INTERMEDIATE","tyre_age_at_start":0},
+{"session_key":11383,"driver_number":23,"stint_number":1,"lap_start":1,"lap_end":2,"compound":"INTERMEDIATE","tyre_age_at_start":0},
+{"session_key":11383,"driver_number":3,"stint_number":2,"lap_start":3,"lap_end":3,"compound":"INTERMEDIATE","tyre_age_at_start":2},
+{"session_key":11383,"driver_number":81,"stint_number":2,"lap_start":3,"lap_end":3,"compound":"INTERMEDIATE","tyre_age_at_start":2},
+{"session_key":11383,"driver_number":23,"stint_number":2,"lap_start":3,"lap_end":3,"compound":"INTERMEDIATE","tyre_age_at_start":2},
+{"session_key":11383,"driver_number":3,"stint_number":3,"lap_start":4,"lap_end":4,"compound":"INTERMEDIATE","tyre_age_at_start":0},
+{"session_key":11383,"driver_number":81,"stint_number":3,"lap_start":4,"lap_end":4,"compound":"INTERMEDIATE","tyre_age_at_start":3},
+{"session_key":11383,"driver_number":23,"stint_number":3,"lap_start":4,"lap_end":4,"compound":"INTERMEDIATE","tyre_age_at_start":0},
+{"session_key":11383,"driver_number":23,"stint_number":4,"lap_start":5,"lap_end":6,"compound":"INTERMEDIATE","tyre_age_at_start":4},
+{"session_key":11383,"driver_number":23,"stint_number":5,"lap_start":7,"lap_end":14,"compound":"INTERMEDIATE","tyre_age_at_start":0},
+{"session_key":11383,"driver_number":81,"stint_number":4,"lap_start":5,"lap_end":19,"compound":"INTERMEDIATE","tyre_age_at_start":4},
+{"session_key":11383,"driver_number":3,"stint_number":4,"lap_start":5,"lap_end":20,"compound":"INTERMEDIATE","tyre_age_at_start":4}
+]

@@ -1,0 +1,12 @@
+[
+{"session_key":11383,"driver_number":3,"lap_number":2,"date":"2026-10-10T09:40:57.185000+00:00","pit_duration":18.5,"lane_duration":18.5,"stop_duration":null},
+{"session_key":11383,"driver_number":81,"lap_number":2,"date":"2026-10-10T09:41:04.607000+00:00","pit_duration":18.3,"lane_duration":18.3,"stop_duration":null},
+{"session_key":11383,"driver_number":23,"lap_number":2,"date":"2026-10-10T09:41:29.640000+00:00","pit_duration":18.3,"lane_duration":18.3,"stop_duration":null},
+{"session_key":11383,"driver_number":3,"lap_number":3,"date":"2026-10-10T09:43:40.534000+00:00","pit_duration":19.2,"lane_duration":19.2,"stop_duration":null},
+{"session_key":11383,"driver_number":81,"lap_number":3,"date":"2026-10-10T09:43:46.573000+00:00","pit_duration":19.4,"lane_duration":19.4,"stop_duration":null},
+{"session_key":11383,"driver_number":23,"lap_number":3,"date":"2026-10-10T09:44:07.952000+00:00","pit_duration":18.3,"lane_duration":18.3,"stop_duration":null},
+{"session_key":11383,"driver_number":3,"lap_number":4,"date":"2026-10-10T09:46:28.557000+00:00","pit_duration":22.9,"lane_duration":22.9,"stop_duration":null},
+{"session_key":11383,"driver_number":81,"lap_number":4,"date":"2026-10-10T09:46:34.614000+00:00","pit_duration":23.7,"lane_duration":23.7,"stop_duration":null},
+{"session_key":11383,"driver_number":23,"lap_number":4,"date":"2026-10-10T09:47:01.506000+00:00","pit_duration":34.7,"lane_duration":34.7,"stop_duration":null},
+{"session_key":11383,"driver_number":23,"lap_number":6,"date":"2026-10-10T09:52:24.616000+00:00","pit_duration":45.8,"lane_duration":45.8,"stop_duration":null}
+]
