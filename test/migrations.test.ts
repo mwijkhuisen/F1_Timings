@@ -7,8 +7,8 @@ import { expect, it } from 'vitest';
 // fails here. A new migration adds its own line.
 const PINNED: Record<string, string> = {
   '20261025000001_init.sql': '0ab7b74d1c62b643e9a172e36e7f4e9f7b59282997c44322757436b3587e78ad',
-  '20261026000001_timing_tables.sql': 'a9d992a08b028b063eed6887de36ed35e1ca0fd2bc68657aa9b40e4fae41150a',
-  '20261026000002_grants.sql': '3e177dad760a4c13000a3392534a7aec881ece10d78d2dac118eec6355481e39',
+  '20261026000001_timing_tables.sql': '1264005e782e801b16c4e082c67cf73c6e46bea0e5346d8afee5b9481dd5042f',
+  '20261026000002_grants.sql': '302ff6e6ec279a31b5b26a62034912f670b175b882ca1cbac205075acd56ed48',
 };
 
 it('every migration matches its pinned sha256, and no file is added or removed', () => {

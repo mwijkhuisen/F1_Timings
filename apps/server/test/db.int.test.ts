@@ -42,13 +42,20 @@ it('every table is owned by f1_migrator', async () => {
   expect(new Set(rows.map((r) => r.tableowner))).toEqual(new Set(['f1_migrator']));
 });
 
-it('f1_ingest writes data but cannot create tables', async () => {
+it('f1_ingest writes data but cannot create tables or delete meetings and sessions (the cascade)', async () => {
   const c = await connect(db.urls.f1_ingest);
   await c.query("INSERT INTO meeting (meeting_key, source, year) VALUES (1, 'openf1', 2026)");
-  await c.query("INSERT INTO session (session_key, source, meeting_key) VALUES (10, 'openf1', 1)");
+  await c.query(
+    "INSERT INTO session (session_key, source, meeting_key, date_start, date_end) VALUES (10, 'openf1', 1, now(), now())",
+  );
   await c.query("INSERT INTO race_control (session_key, source, message) VALUES (10, 'openf1', 'x')");
   await c.query("INSERT INTO raw_response VALUES (10, 'openf1', 'laps', now(), 200, '[]')");
+  await c.query("INSERT INTO lap (session_key, source, driver_number, lap_number) VALUES (10, 'openf1', 1, 1)");
+  await c.query('DELETE FROM lap WHERE session_key = 10');
+  await c.query("UPDATE session SET ingest_state = 'due' WHERE session_key = 10");
   expect(await code(c.query('CREATE TABLE nope (a int)'))).toBe('42501');
+  expect(await code(c.query('DELETE FROM session'))).toBe('42501');
+  expect(await code(c.query('DELETE FROM meeting'))).toBe('42501');
 });
 
 it('f1_api reads but cannot write, and cannot read raw_response', async () => {

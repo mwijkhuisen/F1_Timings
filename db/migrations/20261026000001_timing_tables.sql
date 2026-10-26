@@ -12,7 +12,8 @@ CREATE TABLE meeting (
   circuit_short_name text,
   gmt_offset text,
   date_start timestamptz,
-  date_end timestamptz
+  date_end timestamptz,
+  is_cancelled boolean NOT NULL DEFAULT false
 );
 
 CREATE TABLE session (
@@ -21,8 +22,9 @@ CREATE TABLE session (
   meeting_key int NOT NULL REFERENCES meeting ON DELETE CASCADE,
   type text,
   name text,
-  date_start timestamptz,
-  date_end timestamptz,
+  date_start timestamptz NOT NULL,
+  date_end timestamptz NOT NULL,
+  is_cancelled boolean NOT NULL DEFAULT false,
   ingest_state text NOT NULL DEFAULT 'scheduled'
     CHECK (ingest_state IN ('scheduled', 'due', 'fetched', 'final', 'failed')),
   next_fetch_at timestamptz,

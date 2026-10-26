@@ -64,6 +64,7 @@ export interface Meeting {
   date_end: Timestamp | null;
   date_start: Timestamp | null;
   gmt_offset: string | null;
+  is_cancelled: Generated<boolean>;
   location: string | null;
   meeting_key: number;
   name: string | null;
@@ -121,11 +122,12 @@ export interface Result {
 }
 
 export interface Session {
-  date_end: Timestamp | null;
-  date_start: Timestamp | null;
+  date_end: Timestamp;
+  date_start: Timestamp;
   fail_count: Generated<number>;
   fetch_count: Generated<number>;
   ingest_state: Generated<string>;
+  is_cancelled: Generated<boolean>;
   last_error: string | null;
   meeting_key: number;
   name: string | null;

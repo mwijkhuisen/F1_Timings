@@ -1,8 +1,11 @@
 -- The three database logins (A§7). Runs once as the superuser from
 -- /docker-entrypoint-initdb.d/ on a new volume, and in the integration tests.
--- Passwords are read server-side from the file secrets (prefix + login), so they
--- never appear in SQL text or statement logs. Idempotent. After rotating a db_*
--- secret, run this file again by hand.
+-- Passwords are read server-side from the file secrets (prefix + login), so in
+-- production they never appear in SQL text or statement logs (dev-db.ts, for
+-- development and tests only, writes its throw-away passwords with a COPY).
+-- Idempotent. After rotating a db_* secret, run this file again by hand. It
+-- changes cluster-wide state (roles; CONNECT on postgres and template1): one
+-- database per cluster.
 DO $$
 DECLARE
   prefix text := coalesce(nullif(current_setting('f1.secret_prefix', true), ''), '/run/secrets/db_');
@@ -14,7 +17,8 @@ BEGIN
       pw := btrim(pg_read_file(prefix || login), E' \t\r\n');
       IF pw !~ '^[A-Za-z0-9_-]{24,}$' THEN RAISE EXCEPTION USING ERRCODE = '22023'; END IF;
       IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = login) THEN EXECUTE format('CREATE ROLE %I', login); END IF;
-      EXECUTE format('ALTER ROLE %I LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE PASSWORD %L', login, pw);
+      EXECUTE format(
+        'ALTER ROLE %I LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS PASSWORD %L', login, pw);
     EXCEPTION WHEN OTHERS THEN
       -- fixed text: the original error's context could quote the password
       RAISE EXCEPTION 'roles.sql: cannot set up login % (SQLSTATE %)', login, SQLSTATE;
