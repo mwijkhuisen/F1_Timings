@@ -120,10 +120,12 @@ const timedOut = (error: unknown) =>
     (e) => typeof e === 'object' && e !== null && 'code' in e && /TIME(D?)OUT/.test(String(e.code)),
   );
 
-export type ClientOptions = { clock?: Clock; dispatcher?: Dispatcher };
+/** `onAttempt` runs as each attempt starts (after the limiter): the ingest heartbeat, so a slow but
+ * progressing call never goes stale while DEADLINE_MS stays within its 120 s limit. */
+export type ClientOptions = { clock?: Clock; dispatcher?: Dispatcher; onAttempt?: () => void };
 
 /** One client per process: every call shares its limiter. */
-export function createClient({ clock = systemClock, dispatcher }: ClientOptions = {}) {
+export function createClient({ clock = systemClock, dispatcher, onAttempt = () => {} }: ClientOptions = {}) {
   const limiter = createLimiter(clock);
   // The cast: undici 8.12's Dispatcher type and @types/node's undici-types 8.9
   // differ in a compose() overload; at run time Node 26.10's fetch (undici 8.10) takes it.
@@ -168,6 +170,7 @@ export function createClient({ clock = systemClock, dispatcher }: ClientOptions 
     const target = url(endpoint, query);
     for (let attempt = 1; ; attempt++) {
       await limiter.take();
+      onAttempt();
       const result = await once(target);
       if (result.ok || attempt === MAX_ATTEMPTS) return result;
       const { error } = result;

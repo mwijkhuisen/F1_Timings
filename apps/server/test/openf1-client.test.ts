@@ -1,6 +1,7 @@
 import { HttpResponse, http } from 'msw';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { server } from '../../../test/msw.setup.ts';
+import { HEARTBEAT_MAX_AGE_MS } from '../src/heartbeat.ts';
 import {
   createClient,
   createLimiter,
@@ -69,10 +70,13 @@ describe('client (msw, fake timers)', () => {
 
   it('backs off exponentially on 5xx and gives up after MAX_ATTEMPTS', async () => {
     const seen = laps(() => new HttpResponse(null, { status: 503 }));
-    const result = await settle(createClient().get('laps', { session_key: 1 }));
+    let attempts = 0;
+    const result = await settle(createClient({ onAttempt: () => attempts++ }).get('laps', { session_key: 1 }));
     expect(result).toEqual({ ok: false, error: { code: 'http', status: 503 } });
     expect(seen).toEqual([0, 1_000, 3_000, 7_000, 15_000]);
     expect(seen).toHaveLength(MAX_ATTEMPTS);
+    expect(attempts).toBe(MAX_ATTEMPTS); // the heartbeat follows every attempt
+    expect(DEADLINE_MS).toBeLessThanOrEqual(HEARTBEAT_MAX_AGE_MS); // so a progressing attempt never goes stale
   });
 
   it('recovers when a 5xx is followed by a 200', async () => {

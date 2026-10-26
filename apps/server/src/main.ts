@@ -50,7 +50,8 @@ async function runIngest(role: 'ingest' | 'backfill' | 'refetch', key: number, e
   const logger = pino({ base: { role } });
   // An idle-connection error must not crash the process; the pool reconnects.
   const db = createDb(url, (err) => logger.error({ cause: codeOf(err) }, 'database pool error'));
-  const deps = { db, client: createClient(), now: () => new Date(), log: logger, beat: () => touch() };
+  const beat = () => touch();
+  const deps = { db, client: createClient({ onAttempt: beat }), now: () => new Date(), log: logger, beat };
   try {
     if (role === 'ingest') {
       await startIngest(deps);
