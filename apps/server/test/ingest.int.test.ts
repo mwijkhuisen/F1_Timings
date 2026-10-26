@@ -176,7 +176,7 @@ describe('ingest (fixtures through msw, f1_ingest login)', { timeout: 120_000 },
     const before = beats;
     at = new Date('2026-10-25T12:00:00Z');
     expect(await tick(deps)).toBe(95);
-    expect(beats - before).toBe(96); // after each session and at the end
+    expect(beats - before).toBe(94 * 6 + 2 + 95 + 1); // after each OpenF1 call (11388 fails at its 2nd), each session, the tick
     expect(logged('live session: over')).toBe(1);
     expect(await states()).toEqual({ final: 92, fetched: 2, due: 1, scheduled: 36 });
     expect(await session(11388)).toMatchObject({
@@ -409,6 +409,18 @@ describe('ingest (fixtures through msw, f1_ingest login)', { timeout: 120_000 },
     expect(await processSession(deps, 11388, true)).toEqual({ ok: false, error: 'http_500' });
     openf1((endpoint, key) => (endpoint === 'laps' && key === 11388 ? fixture('laps-empty') : undefined));
     expect(await processSession(deps, 11388, true)).toEqual({ ok: false, error: 'empty' });
+    // A schema failure names the endpoint and zod's paths and codes, never the value.
+    const stints = raw('stints-normal') as Record<string, unknown>[];
+    const bad = [{ ...stints[0], compound: 'SECRET-VALUE'.length }, ...stints.slice(1)];
+    openf1((endpoint, key) => (endpoint === 'stints' && key === 11388 ? HttpResponse.json(bad) : undefined));
+    expect(await processSession(deps, 11388, true)).toEqual({ ok: false, error: 'schema' });
+    expect(JSON.parse(lines.at(-1) ?? '{}')).toMatchObject({
+      session_key: 11388,
+      state: 'unchanged',
+      last_error: 'schema',
+      endpoint: 'stints',
+      issues: [{ path: '[0].compound', code: 'invalid_type' }],
+    });
     expect(await session(11388)).toEqual(before);
     expect((await rowCounts(11388)).lap).toBe(62);
     expect(await processSession(deps, 999_999, true)).toEqual({ ok: false, error: 'unknown_session' });

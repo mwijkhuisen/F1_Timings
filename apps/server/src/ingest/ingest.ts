@@ -3,7 +3,7 @@ import { type Insertable, type Kysely, sql, type Transaction } from 'kysely';
 import type { Logger } from 'pino';
 import type { DB } from '../db/db.ts';
 import type { createClient, Query } from '../openf1/client.ts';
-import { type Endpoint, parse, type Result, type Rows } from '../openf1/schemas.ts';
+import { type Endpoint, parse, type Result, type Rows, type ShapeError } from '../openf1/schemas.ts';
 import { meetingRow, normaliseSession, type SessionData, type SessionRows, sessionRow } from './normalise.ts';
 import {
   afterFailure,
@@ -44,15 +44,21 @@ export const codeOf = (err: unknown) =>
 const chunks = <T>(rows: readonly T[]) =>
   Array.from({ length: Math.ceil(rows.length / CHUNK) }, (_, i) => rows.slice(i * CHUNK, (i + 1) * CHUNK));
 
+/** Log-ready: the code, the endpoint and, for a schema failure, zod's paths and codes (never a value). */
+type FetchError = { last_error: ErrorCode; endpoint: Endpoint; issues?: ShapeError['issues'] };
+
+/** One OpenF1 call, parsed. The heartbeat follows each call, so slow but progressing work never goes stale. */
 async function fetchRows<E extends Endpoint>(
-  client: Deps['client'],
+  { client, beat }: Deps,
   endpoint: E,
   query: Query,
-): Promise<Result<{ status: number; body: unknown; rows: Rows<E> }, ErrorCode>> {
+): Promise<Result<{ status: number; body: unknown; rows: Rows<E> }, FetchError>> {
   const fetched = await client.get(endpoint, query);
-  if (!fetched.ok) return { ok: false, error: errorCode(fetched.error) };
+  beat();
+  if (!fetched.ok) return { ok: false, error: { last_error: errorCode(fetched.error), endpoint } };
   const parsed = parse(endpoint, fetched.value.body);
-  if (!parsed.ok) return { ok: false, error: errorCode(parsed.error) };
+  if (!parsed.ok)
+    return { ok: false, error: { last_error: errorCode(parsed.error), endpoint, issues: parsed.error.issues } };
   return { ok: true, value: { ...fetched.value, rows: parsed.value } };
 }
 
@@ -61,18 +67,19 @@ async function fetchRows<E extends Endpoint>(
  * `scheduled`; a cancelled session gets none, and the tick and the backfill skip it. One bad
  * row fails that year (one parse).
  */
-export async function syncSchedule({ db, client, log }: Deps, years: readonly number[]): Promise<boolean> {
+export async function syncSchedule(deps: Deps, years: readonly number[]): Promise<boolean> {
+  const { db, log } = deps;
   let ok = true;
   for (const year of years) {
-    const meetings = await fetchRows(client, 'meetings', { year });
+    const meetings = await fetchRows(deps, 'meetings', { year });
     if (!meetings.ok) {
-      log.error({ year, last_error: meetings.error }, 'sync');
+      log.error({ year, ...meetings.error }, 'sync');
       ok = false;
       continue;
     }
-    const sessions = await fetchRows(client, 'sessions', { year });
+    const sessions = await fetchRows(deps, 'sessions', { year });
     if (!sessions.ok) {
-      log.error({ year, last_error: sessions.error }, 'sync');
+      log.error({ year, ...sessions.error }, 'sync');
       ok = false;
       continue;
     }
@@ -157,7 +164,7 @@ const setProgress = (trx: Transaction<DB>, key: number, p: Progress) =>
  * Never throws; logs one line per session.
  */
 export async function processSession(deps: Deps, key: number, refetch = false): Promise<Outcome> {
-  const { db, client, now, log } = deps;
+  const { db, now, log } = deps;
   const started = performance.now();
   const line = (fields: Record<string, unknown>) => ({
     session_key: key,
@@ -165,7 +172,7 @@ export async function processSession(deps: Deps, key: number, refetch = false): 
     ms: Math.round(performance.now() - started),
   });
 
-  const fail = async (code: ErrorCode, cause?: unknown): Promise<Outcome> => {
+  const fail = async (code: ErrorCode, detail: Record<string, unknown> = {}): Promise<Outcome> => {
     let state: IngestState | 'unchanged' = 'unchanged';
     let lost: string | undefined;
     if (!refetch) {
@@ -179,8 +186,7 @@ export async function processSession(deps: Deps, key: number, refetch = false): 
         lost = codeOf(err); // not recorded: the session stays as it was
       }
     }
-    const codes = { cause: cause === undefined ? undefined : codeOf(cause), unrecorded: lost };
-    log.error(line({ state, last_error: code, ...codes }), 'session');
+    log.error(line({ state, ...detail, last_error: code, unrecorded: lost }), 'session');
     return { ok: false, error: code };
   };
 
@@ -202,8 +208,8 @@ export async function processSession(deps: Deps, key: number, refetch = false): 
   const raw: Insertable<DB['raw_response']>[] = [];
   const data = {} as Record<(typeof SESSION_ENDPOINTS)[number], unknown[]>;
   for (const endpoint of SESSION_ENDPOINTS) {
-    const fetched = await fetchRows(client, endpoint, { session_key: key });
-    if (!fetched.ok) return fail(fetched.error);
+    const fetched = await fetchRows(deps, endpoint, { session_key: key });
+    if (!fetched.ok) return fail(fetched.error.last_error, fetched.error);
     data[endpoint] = fetched.value.rows;
     const { status, body } = fetched.value;
     // The JSON text: pg would turn a JS array into a PostgreSQL array, not jsonb.
@@ -220,7 +226,7 @@ export async function processSession(deps: Deps, key: number, refetch = false): 
   try {
     normalised = normaliseSession(key, data as SessionData);
   } catch (err) {
-    return fail('unknown', err); // a bug must not stop the tick at this session for good
+    return fail('unknown', { cause: codeOf(err) }); // a bug must not stop the tick at this session for good
   }
   const { rows, skipped } = normalised;
 
@@ -256,7 +262,7 @@ export async function processSession(deps: Deps, key: number, refetch = false): 
       return { next, empty: false };
     });
   } catch (err) {
-    return fail('db', err);
+    return fail('db', { cause: codeOf(err) });
   }
   if (done.empty) {
     log.error(line({ state: refetch ? 'unchanged' : done.next.ingest_state, last_error: 'empty' }), 'session');
