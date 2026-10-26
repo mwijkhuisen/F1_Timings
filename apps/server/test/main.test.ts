@@ -9,15 +9,32 @@ import { EXIT_NOT_IMPLEMENTED, EXIT_USAGE, run } from '../src/main.ts';
 const tmp = () => mkdtempSync(join(tmpdir(), 'f1-test-'));
 
 describe('run', () => {
-  it.each([[[]], [['nope']], [['ingest', 'extra']]])('%j is a usage error', async (argv) => {
+  it.each([
+    [[]],
+    [['nope']],
+    [['ingest', 'extra']],
+    [['backfill', 'extra']],
+    [['refetch']],
+    [['refetch', 'abc']],
+    [['refetch', '11388', '11392']],
+  ])('%j is a usage error', async (argv) => {
     const lines: string[] = [];
     expect(await run(argv, {}, (l) => lines.push(l))).toBe(EXIT_USAGE);
     expect(lines[0]).toMatch(/^usage: main\.js <api\|ingest\|/);
   });
 
-  it.each(['api', 'ingest', 'live', 'refetch', 'backfill', 'archive'])('%s is not implemented yet', async (role) => {
+  it.each(['api', 'live', 'archive'])('%s is not implemented yet', async (role) => {
     expect(await run([role], {}, () => {})).toBe(EXIT_NOT_IMPLEMENTED);
   });
+
+  it.each([[['ingest']], [['backfill']], [['refetch', '11388']]])(
+    '%j without a database setting is a config error',
+    async (argv) => {
+      const lines: string[] = [];
+      expect(await run(argv, { DATABASE_URL: 'mysql://x/y' }, (l) => lines.push(l))).toBe(EXIT_CONFIG);
+      expect(lines).toEqual([`${argv[0]}: DATABASE_URL is not a postgres URL`]);
+    },
+  );
 
   it('healthcheck exits 0 while the heartbeat is fresh', async () => {
     const stop = startHeartbeat();
