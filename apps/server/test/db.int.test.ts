@@ -1,3 +1,6 @@
+import { execFile } from 'node:child_process';
+import { fileURLToPath } from 'node:url';
+import { promisify } from 'node:util';
 import pg from 'pg';
 import { afterAll, beforeAll, expect, it } from 'vitest';
 import { run } from '../src/main.ts';
@@ -55,6 +58,15 @@ it('f1_api reads but cannot write, and cannot read raw_response', async () => {
     '42501',
   );
   expect(await code(c.query('SELECT * FROM raw_response'))).toBe('42501');
+});
+
+it('the committed Kysely types match the migrated schema (kysely-codegen --verify)', async () => {
+  // The URL goes in the child's environment, never on argv.
+  const verify = promisify(execFile)('pnpm', ['run', 'db:types', '--verify'], {
+    cwd: fileURLToPath(new URL('..', import.meta.url)),
+    env: { PATH: process.env.PATH, DATABASE_URL: db.urls.admin },
+  });
+  await expect(verify).resolves.toBeDefined();
 });
 
 it('no login reaches another database', async () => {

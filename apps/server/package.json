@@ -5,6 +5,9 @@
   "files": [
     "dist"
   ],
+  "scripts": {
+    "db:types": "kysely-codegen --dialect postgres --exclude-pattern public.schema_migrations --out-file src/db/types.ts"
+  },
   "dependencies": {
     "croner": "10.0.1",
     "kysely": "0.29.7",
