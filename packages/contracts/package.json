@@ -3,6 +3,9 @@
   "private": true,
   "type": "module",
   "sideEffects": false,
+  "dependencies": {
+    "zod": "4.6.7"
+  },
   "files": [
     "dist"
   ],

@@ -1,6 +1,7 @@
 import type { Insertable } from 'kysely';
 import type { DB } from '../db/db.ts';
 import type { Driver, Lap, Meeting, Pit, RaceControl, Session, SessionResult, Stint } from '../openf1/schemas.ts';
+import { markLaps, type RuleCounts } from '../timing/rules.ts';
 
 // OpenF1 rows → A§7 rows. Pure. Seconds become integer ms, nulls stay null, source is 'openf1'.
 
@@ -66,9 +67,14 @@ export type SessionRows = {
 /**
  * The child rows of one session. A row of another session is skipped (replace-per-session
  * must own every row it writes); of duplicate keys in one response the last wins. Both count
- * as `skipped`.
+ * as `skipped`. The timing rules mark the laps (A§9); the session `type` decides which lap a
+ * race-control `LAP n` names.
  */
-export function normaliseSession(key: number, data: SessionData): { rows: SessionRows; skipped: number } {
+export function normaliseSession(
+  key: number,
+  data: SessionData,
+  type: string | null,
+): { rows: SessionRows; skipped: number; rules: RuleCounts } {
   const keyed = <T extends { session_key: number }, R>(rows: T[], id: (r: T) => string, row: (r: T) => R): R[] => {
     const out = new Map<string, R>();
     for (const r of rows) if (r.session_key === key) out.set(id(r), row(r));
@@ -97,11 +103,20 @@ export function normaliseSession(key: number, data: SessionData): { rows: Sessio
       seg1: array(l.segments_sector_1),
       seg2: array(l.segments_sector_2),
       seg3: array(l.segments_sector_3),
+      deleted: false,
+      deleted_reason: null as string | null,
+      quali_phase: null as number | null,
     }),
   );
   // A§9: lap n is an in-lap when the same driver's lap n + 1 is an out-lap (not from `pit`).
   const outLaps = new Set(lap.filter((l) => l.is_pit_out).map((l) => perDriver(l, l.lap_number)));
   for (const l of lap) l.is_pit_in = outLaps.has(perDriver(l, l.lap_number + 1));
+  // A§9: deleted laps and the qualifying phase, from this session's race-control messages.
+  const rules = markLaps(
+    lap,
+    data.race_control.filter((r) => r.session_key === key),
+    type,
+  );
 
   const rows: SessionRows = {
     driver: keyed(
@@ -181,5 +196,5 @@ export function normaliseSession(key: number, data: SessionData): { rows: Sessio
   };
   const fetched = Object.values(data).reduce((n, list) => n + list.length, 0);
   const kept = Object.values(rows).reduce((n, list) => n + list.length, 0);
-  return { rows, skipped: fetched - kept };
+  return { rows, skipped: fetched - kept, rules };
 }

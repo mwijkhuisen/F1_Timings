@@ -1,0 +1,13 @@
+{
+  "url": "https://api.openf1.org/v1/laps?session_key=11392",
+  "fetchedAt": "2026-10-26T08:57:20.739Z",
+  "status": 200,
+  "trim": {
+    "drivers": "1,3,6,10,55,87",
+    "laps": null
+  },
+  "rows": {
+    "fetched": 280,
+    "kept": 75
+  }
+}

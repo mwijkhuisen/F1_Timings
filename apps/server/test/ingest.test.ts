@@ -110,7 +110,7 @@ describe('normaliseSession', () => {
       lap({ lap_number: 2 }),
       lap({ session_key: 2, lap_number: 3 }),
     ];
-    const { rows, skipped } = normaliseSession(1, { ...none, laps });
+    const { rows, skipped } = normaliseSession(1, { ...none, laps }, null);
     expect(rows.lap.map((l) => [l.lap_number, l.lap_ms])).toEqual([
       [1, 91_000],
       [2, null],
@@ -123,8 +123,8 @@ describe('normaliseSession', () => {
     expect(ms(0.0004)).toBe(0);
     expect(ms(0.0005)).toBe(1);
     expect(ms(null)).toBeNull();
-    const [row] = normaliseSession(1, { ...none, laps: [lap({ duration_sector_1: 33.0985, i1_speed: 294.6 })] }).rows
-      .lap;
+    const [row] = normaliseSession(1, { ...none, laps: [lap({ duration_sector_1: 33.0985, i1_speed: 294.6 })] }, null)
+      .rows.lap;
     expect(row).toMatchObject({ s1_ms: 33_099, s2_ms: null, i1_kph: 295, i2_kph: null });
   });
 });

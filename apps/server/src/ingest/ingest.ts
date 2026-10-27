@@ -1,7 +1,7 @@
 import { Cron } from 'croner';
 import { type Insertable, type Kysely, sql, type Transaction } from 'kysely';
 import type { Logger } from 'pino';
-import type { DB } from '../db/db.ts';
+import { codeOf, type DB } from '../db/db.ts';
 import type { createClient, Query } from '../openf1/client.ts';
 import { type Endpoint, parse, type Result, type Rows, type ShapeError } from '../openf1/schemas.ts';
 import { meetingRow, normaliseSession, type SessionData, type SessionRows, sessionRow } from './normalise.ts';
@@ -36,10 +36,6 @@ export type Deps = {
   beat: () => void;
 };
 export type Outcome = Result<IngestState, ErrorCode | 'unknown_session' | 'live_session'>;
-
-/** A thrown value's code (a SQLSTATE or a Node errno), never its message. */
-export const codeOf = (err: unknown) =>
-  typeof err === 'object' && err !== null && 'code' in err ? String(err.code) : 'unknown';
 
 const chunks = <T>(rows: readonly T[]) =>
   Array.from({ length: Math.ceil(rows.length / CHUNK) }, (_, i) => rows.slice(i * CHUNK, (i + 1) * CHUNK));
@@ -190,11 +186,14 @@ export async function processSession(deps: Deps, key: number, refetch = false): 
     return { ok: false, error: code };
   };
 
+  let type: string | null;
   try {
-    if (!(await db.selectFrom('session').select('session_key').where('session_key', '=', key).executeTakeFirst())) {
+    const found = await db.selectFrom('session').select('type').where('session_key', '=', key).executeTakeFirst();
+    if (!found) {
       log.error(line({ error: 'unknown_session' }), 'session');
       return { ok: false, error: 'unknown_session' };
     }
+    type = found.type;
     // A manual refetch waits for the live window too (A§8): it writes nothing and fails.
     if (refetch && (await live(deps))) {
       log.error(line({ state: 'unchanged', error: 'live_session' }), 'session');
@@ -224,11 +223,11 @@ export async function processSession(deps: Deps, key: number, refetch = false): 
   }
   let normalised: ReturnType<typeof normaliseSession>;
   try {
-    normalised = normaliseSession(key, data as SessionData);
+    normalised = normaliseSession(key, data as SessionData, type);
   } catch (err) {
     return fail('unknown', { cause: codeOf(err) }); // a bug must not stop the tick at this session for good
   }
-  const { rows, skipped } = normalised;
+  const { rows, skipped, rules } = normalised;
 
   let done: { next: Progress; empty: boolean };
   try {
@@ -256,7 +255,6 @@ export async function processSession(deps: Deps, key: number, refetch = false): 
             .values(chunk as never)
             .execute();
       }
-      // P1c: the timing rules (deleted laps, quali phase) run here, inside this transaction (D12).
       const next = afterSuccess(row, now());
       await setProgress(trx, key, next);
       return { next, empty: false };
@@ -269,7 +267,7 @@ export async function processSession(deps: Deps, key: number, refetch = false): 
     return { ok: false, error: 'empty' };
   }
   const counts = Object.fromEntries(Object.entries(rows).map(([table, list]) => [table, list.length]));
-  log.info(line({ state: done.next.ingest_state, rows: counts, skipped }), 'session');
+  log.info(line({ state: done.next.ingest_state, rows: counts, skipped, rules }), 'session');
   return { ok: true, value: done.next.ingest_state };
 }
 
