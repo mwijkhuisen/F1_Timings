@@ -9,7 +9,10 @@
     "db:types": "kysely-codegen --dialect postgres --exclude-pattern public.schema_migrations --out-file src/db/types.ts"
   },
   "dependencies": {
+    "@f1/contracts": "workspace:*",
+    "@hono/node-server": "2.1.5",
     "croner": "10.0.1",
+    "hono": "4.13.13",
     "kysely": "0.29.7",
     "pg": "8.23.1",
     "pino": "10.4.0",
