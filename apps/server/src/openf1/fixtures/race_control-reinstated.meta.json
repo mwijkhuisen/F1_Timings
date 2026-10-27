@@ -1,0 +1,13 @@
+{
+  "url": "https://api.openf1.org/v1/race_control?session_key=9832",
+  "fetchedAt": "2026-10-26T08:57:21.174Z",
+  "status": 200,
+  "trim": {
+    "drivers": null,
+    "laps": null
+  },
+  "rows": {
+    "fetched": 17,
+    "kept": 17
+  }
+}
