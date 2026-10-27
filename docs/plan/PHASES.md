@@ -141,7 +141,7 @@ Remaining 2026 weekends (OpenF1 schedule): Austin (race 25 Oct) · Mexico City 3
   - CI `release` job (GHCR `:main` + `:sha-*`)
   - `docs/runbooks/{install,update,cloudflare}.md`
   - healthchecks ping for ingest
-  - a non-internal network for the `api`, so it can reach tcp/443 on Cloudflare's published ranges (the Access certs), plus that nftables set (A§14.3, owner 2026-10-26; a P1c follow-up)
+  - the `api`'s own egress-only network, shared with no other service, so it can reach tcp/443 on Cloudflare's published ranges (the Access certs), plus that nftables set (A§14.3, owner 2026-10-26; a P1c follow-up). Port 8080 is never published, and Caddy↔api stays on the internal `f1-edge`
 - **Acceptance:**
   - [CI] `hardening` test: every service is read_only, `cap_drop: ALL`, no-new-privileges, non-root and has limits; only `127.0.0.1:8180` is published; no `rws` names, subnets or GIDs.
   - [CI] the nftables file passes `nft -c` in a container.
