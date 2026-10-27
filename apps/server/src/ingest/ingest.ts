@@ -1,7 +1,7 @@
 import { Cron } from 'croner';
 import { type Insertable, type Kysely, sql, type Transaction } from 'kysely';
 import type { Logger } from 'pino';
-import type { DB } from '../db/db.ts';
+import { codeOf, type DB } from '../db/db.ts';
 import type { createClient, Query } from '../openf1/client.ts';
 import { type Endpoint, parse, type Result, type Rows, type ShapeError } from '../openf1/schemas.ts';
 import { meetingRow, normaliseSession, type SessionData, type SessionRows, sessionRow } from './normalise.ts';
@@ -36,10 +36,6 @@ export type Deps = {
   beat: () => void;
 };
 export type Outcome = Result<IngestState, ErrorCode | 'unknown_session' | 'live_session'>;
-
-/** A thrown value's code (a SQLSTATE or a Node errno), never its message. */
-export const codeOf = (err: unknown) =>
-  typeof err === 'object' && err !== null && 'code' in err ? String(err.code) : 'unknown';
 
 const chunks = <T>(rows: readonly T[]) =>
   Array.from({ length: Math.ceil(rows.length / CHUNK) }, (_, i) => rows.slice(i * CHUNK, (i + 1) * CHUNK));

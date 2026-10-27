@@ -2,10 +2,10 @@ import { serve } from '@hono/node-server';
 import pino from 'pino';
 import { access, accessConfig } from './api/access.ts';
 import { createApp } from './api/app.ts';
-import { createDb } from './db/db.ts';
+import { codeOf, createDb } from './db/db.ts';
 import { dbUrl, EXIT_CONFIG, runMigrate } from './db/migrate.ts';
 import { healthy, startHeartbeat, touch } from './heartbeat.ts';
-import { backfill, codeOf, processSession, startIngest } from './ingest/ingest.ts';
+import { backfill, processSession, startIngest } from './ingest/ingest.ts';
 import { createClient } from './openf1/client.ts';
 
 /** Roles of the single server image (A§4); the first argument picks one. */
@@ -21,11 +21,15 @@ type Env = Readonly<Record<string, string | undefined>>;
 
 const USAGE = `usage: main.js <${ROLES.join('|')}> (refetch takes a session_key)`;
 
-/** Resolves with the exit code. Roles without a phase yet exit EXIT_NOT_IMPLEMENTED. */
+/**
+ * Resolves with the exit code. Roles without a phase yet exit EXIT_NOT_IMPLEMENTED. `apiPort` is a
+ * test seam only (not configurable in production: Caddy proxies to api:8080).
+ */
 export async function run(
   argv: readonly string[],
   env: Env,
   log: (line: string) => void = (line) => console.error(line),
+  apiPort = API_PORT,
 ): Promise<number> {
   const [role, ...rest] = argv;
   const args = role === 'refetch' ? 1 : 0;
@@ -40,7 +44,7 @@ export async function run(
   }
   if (role === 'healthcheck') return healthy() ? 0 : 1;
   if (role === 'migrate') return runMigrate(env, log);
-  if (role === 'api') return runApi(env, log);
+  if (role === 'api') return runApi(env, log, apiPort);
   if (role === 'ingest' || role === 'backfill' || role === 'refetch') return runIngest(role, Number(rest[0]), env, log);
   log(`role ${role} is not implemented yet`);
   return EXIT_NOT_IMPLEMENTED;
@@ -74,7 +78,7 @@ async function runIngest(role: 'ingest' | 'backfill' | 'refetch', key: number, e
 }
 
 /** The api daemon (A§10): read-only as f1_api, behind the Access JWT. Resolves after SIGTERM/SIGINT. */
-async function runApi(env: Env, log: (line: string) => void): Promise<number> {
+async function runApi(env: Env, log: (line: string) => void, port: number): Promise<number> {
   const config = accessConfig(env);
   if (typeof config === 'string') {
     log(`api: ${config} is missing or malformed`);
@@ -88,7 +92,7 @@ async function runApi(env: Env, log: (line: string) => void): Promise<number> {
   const logger = pino({ base: { role: 'api' } });
   const db = createDb(url, (err) => logger.error({ cause: codeOf(err) }, 'database pool error'));
   const app = createApp({ db, access: access(config, logger), log: logger });
-  const server = serve({ fetch: app.fetch, port: API_PORT, hostname: '0.0.0.0' });
+  const server = serve({ fetch: app.fetch, port, hostname: '0.0.0.0' });
   const listening = await new Promise<boolean>((resolve) => {
     server.once('listening', () => resolve(true));
     server.once('error', (err) => {
@@ -101,10 +105,15 @@ async function runApi(env: Env, log: (line: string) => void): Promise<number> {
     return 1;
   }
   const stopHeartbeat = startHeartbeat();
-  logger.info({ port: API_PORT }, 'listening');
+  logger.info({ port }, 'listening');
   await new Promise<void>((resolve) => {
-    process.once('SIGTERM', resolve);
-    process.once('SIGINT', resolve);
+    const stop = () => {
+      process.off('SIGTERM', stop);
+      process.off('SIGINT', stop);
+      resolve();
+    };
+    process.once('SIGTERM', stop);
+    process.once('SIGINT', stop);
   });
   logger.info({}, 'stopping');
   stopHeartbeat();

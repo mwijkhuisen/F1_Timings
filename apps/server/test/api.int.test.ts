@@ -1,9 +1,10 @@
 import { readFileSync } from 'node:fs';
+import { createServer } from 'node:net';
 import { join } from 'node:path';
 import { Laps, Pits, RaceControl, Season, Seasons, SessionDetail, Status, Stints } from '@f1/contracts';
 import type { Hono } from 'hono';
 import type { Kysely } from 'kysely';
-import { HttpResponse, http } from 'msw';
+import { HttpResponse, http, passthrough } from 'msw';
 import pino from 'pino';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import type { z } from 'zod';
@@ -303,6 +304,37 @@ describe('api (f1_api login, Access JWT)', { timeout: 120_000 }, () => {
         },
       ],
     });
+  });
+
+  it('the api role on @hono/node-server: a taken port exits 1; it listens, answers and exits 0 on SIGTERM', async () => {
+    const env = { CF_ACCESS_TEAM: TEAM, CF_ACCESS_AUD: AUD, DATABASE_URL: testDb.urls.f1_api };
+    const blocker = createServer();
+    const port = await new Promise<number>((resolve) =>
+      blocker.listen(0, '0.0.0.0', () => resolve((blocker.address() as { port: number }).port)),
+    );
+    expect(await run(['api'], env, () => {}, port)).toBe(1); // EADDRINUSE
+    await new Promise((resolve) => blocker.close(resolve));
+
+    const base = `http://127.0.0.1:${port}`;
+    server.use(http.all(`${base}/*`, () => passthrough())); // the real server, not msw
+    const signals = process.listenerCount('SIGTERM');
+    const interrupts = process.listenerCount('SIGINT');
+    const exit = run(['api'], env, () => {}, port);
+    let health: Response | undefined;
+    for (let i = 0; i < 100 && !health; i++)
+      health = await fetch(`${base}/healthz`).catch(
+        () => new Promise<undefined>((r) => setTimeout(() => r(undefined), 50)),
+      );
+    expect(health?.status).toBe(200);
+    expect(await health?.text()).toBe('{"ok":true}');
+    const seasons = await fetch(`${base}/api/v1/seasons`);
+    expect(seasons.status).toBe(401);
+    expect(await seasons.text()).toBe('{"error":"unauthorized"}');
+    expect(process.listenerCount('SIGTERM')).toBe(signals + 1);
+    process.emit('SIGTERM', 'SIGTERM'); // the listener only: no real signal reaches the worker
+    expect(await exit).toBe(0);
+    expect([process.listenerCount('SIGTERM'), process.listenerCount('SIGINT')]).toEqual([signals, interrupts]);
+    await expect(fetch(`${base}/healthz`)).rejects.toThrow();
   });
 
   it('logs no token, header or password', () => {

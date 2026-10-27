@@ -4,6 +4,10 @@ import type { DB } from './types.ts';
 
 export type { DB };
 
+/** A thrown value's code (a SQLSTATE or a Node errno), never its message: logs carry this only. */
+export const codeOf = (err: unknown) =>
+  typeof err === 'object' && err !== null && 'code' in err ? String(err.code) : 'unknown';
+
 /**
  * A Kysely instance on a pool of at most 2 connections. An idle-connection error
  * must not crash the process: `onPoolError` logs it and the pool reconnects.

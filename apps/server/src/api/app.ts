@@ -2,8 +2,7 @@ import type { Seasons, Status, Stints } from '@f1/contracts';
 import { type Context, Hono, type MiddlewareHandler } from 'hono';
 import { type Kysely, sql } from 'kysely';
 import type { Logger } from 'pino';
-import type { DB } from '../db/db.ts';
-import { codeOf } from '../ingest/ingest.ts';
+import { codeOf, type DB } from '../db/db.ts';
 import { colours } from '../timing/colours.ts';
 
 // The api role's routes (A§10). JSON uses the A§7 column names; answers match the zod contracts in
