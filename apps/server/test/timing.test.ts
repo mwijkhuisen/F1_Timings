@@ -363,6 +363,7 @@ describe('colours', () => {
       { lap: 'green', s1: 'purple', s2: null, s3: null },
       { lap: 'yellow', s1: null, s2: null, s3: null },
     ]);
+    expectOwnBests(laps, colours(laps));
   });
 
   it('a deleted lap is never purple or green, and neither is an out-lap or an in-lap', () => {
@@ -430,6 +431,17 @@ describe('colours', () => {
   const eligible = (l: ColourLap, field: (typeof KEYS)[number][1]) =>
     l[field] !== null && !l.deleted && !l.is_pit_out && !l.is_pit_in;
   const time = (l: ColourLap) => l.date_start?.getTime() ?? Number.POSITIVE_INFINITY;
+  /** Every green or purple value is its driver's own minimum eligible value. */
+  const expectOwnBests = (laps: ColourLap[], out: ReturnType<typeof colours>) => {
+    for (const [key, field] of KEYS) {
+      laps.forEach((l, i) => {
+        const c = out[i]?.[key];
+        if (c !== 'green' && c !== 'purple') return;
+        const own = laps.filter((x) => x.driver_number === l.driver_number && eligible(x, field));
+        expect(l[field]).toBe(Math.min(...own.map((x) => x[field] as number)));
+      });
+    }
+  };
 
   it('exactly one purple per field per session (none without an eligible value), at the minimum', () => {
     fc.assert(
@@ -455,6 +467,7 @@ describe('colours', () => {
             const best = own.filter(([, c]) => c === 'purple' || c === 'green');
             expect(best.length).toBe(own.some(([l]) => eligible(l, field)) ? 1 : 0);
           }
+          expectOwnBests(laps, out);
           laps.forEach((l, i) => {
             const c = out[i]?.[key];
             if (l[field] === null) expect(c).toBeNull();
