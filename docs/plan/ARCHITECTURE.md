@@ -64,7 +64,7 @@ One server image (`ghcr.io/mwijkhuisen/f1-server`) whose first argument picks th
 
 | Role | Kind | Does |
 |---|---|---|
-| `api` | daemon | Hono: REST `/api/v1/*` and SSE playback streams. Verifies the Cloudflare Access JWT on `/api` |
+| `api` | daemon | Hono on `:8080`: REST `/api/v1/*` (P1c) and SSE playback streams (P2d). Verifies the Cloudflare Access JWT on `/api`; reads as `f1_api` |
 | `ingest` | daemon | croner scheduler: OpenF1 schedule sync, per-session fetch pipeline, first backfill (A§8) |
 | `live` (P2) | daemon | Logs in to F1 TV, connects to the SignalR feed around each scheduled session, appends raw messages to disk and writes snapshots (A§11) |
 | `migrate` | job | dbmate up as the `f1_migrator` role |
@@ -111,6 +111,7 @@ Checked against the live APIs on 2026-10-25 (Austin quali `11392`, Marina Bay ra
   - `race_control` (428): `driver_number` 336, `flag` and `scope` 191, `sector` 298, `lap_number` 39, `qualifying_phase` 408.
   - `session_result` (86): `position` 14, `duration` 30, `gap_to_leader` 16 (a number, a string such as `+1 LAP`, or Q1–Q3 in qualifying). `points` is missing from qualifying results.
   - Never null in the scan: `meetings`, `sessions`, `stints`, and the `drivers` fields A§7 stores (`country_code`, not stored, is null in 66 of 86).
+  - **Deleted and reinstated laps in `race_control`** (P1c, 2026-10-26: the 454 final sessions 2023–2026 of the dev backfill, through the real rules): 3,677 DELETED messages, 3,672 in a known form (A§9), and 3,555 of those name a lap of the session: 2,983 by a unique time within 1 ms, 42 by the one exact time among several laps within 1 ms (never a different lap than `LAP n` names), 19 by `LAP n` among several, 8 by `LAP n` when no lap has the time, 503 in the LAP form. 117 name no lap: 80 carry neither a time nor `LAP n` (`… (NEXT LAP PIT)`), 29 name a car without laps in the session (support-series messages in 9223), 5 a `LAP n` OpenF1 does not have, 3 a time no lap has. 5 are in no known form (`CAR 243 TIME 0:00.000 DELETED - DOUBLE YELLOW`, `CAR LEC TIME 1:36.518 DELETED - … (Q1)`). All 26 REINSTATED messages parse and each restores the lap a DELETED message had deleted.
   - **The scan was too small** (P1b [box] backfill, 2026-10-26): about 5% of real sessions failed the P1a schemas with `schema`. Seen: a string `session_result.position` (11384), a null `stints.compound` (11246, 11342), a null `session_result.number_of_laps` (11275). Since then every field outside a row key, `meeting.year` and the session dates may be null or missing (it parses to null), a position string is kept only when it is a number ("DQ" → null; `dnf`/`dns`/`dsq` say why), and each field is bounded by its column (integers that fit smallint/int, seconds that fit int ms, text without NUL), so a value the schema accepts never fails an INSERT.
 
 | View | Endpoints → fields | Known gaps → UI |
@@ -121,7 +122,7 @@ Checked against the live APIs on 2026-10-25 (Austin quali `11392`, Marina Bay ra
 | Mini-sectors | `laps.segments_sector_1..3` codes: 0 = n/a, 2048 = yellow, 2049 = green, 2051 = purple, 2064 = pit lane. 2050/2052/2068 meaning unknown → grey | OpenF1 says segments are "not available during races" and race data is mostly 2048 → race tab shows a banner: "mini-sector colours unreliable in races" |
 | Speed traps | `laps.i1_speed`, `i2_speed`, `st_speed` (km/h) | `i1_speed` null on ~25% and `st_speed` on ~20% of race laps → `—` |
 | Tyres/stints | `stints`: `stint_number`, `lap_start`, `lap_end`, `compound`, `tyre_age_at_start`. `pit`: `pit_duration`, `lane_duration`, `stop_duration` | Tyre age may be wrong for used sets (#473), `stop_duration` often null (#484) → caveat icon |
-| Qualifying phase per lap | No field. Derive from `race_control.qualifying_phase` timestamps against `laps.date_start` **[U]** | Unknown phase → lap shown without a Q badge |
+| Qualifying phase per lap | No field. P1c derives it (A§9): the phase of the last `race_control` row with a `qualifying_phase` dated at or before the lap's `date_start`. Checked against `session_result.duration[p]` over the 112 qualifying sessions of the dev backfill: per driver and phase, the fastest valid lap (not deleted, out or in) equals the official time in 4,972 cases and differs in 7; 41 official times have no lap at all (OpenF1 has no laps for 9900). The 7 are documented exceptions, not rule errors: two last laps that end in the pits after the flag (not in-laps, A§9; 9112, 9298; owner 2026-10-27: no rule change), two deletions race control never sent as DELETED (9983: only `LAP TIME OF CAR 87 (BEA) - UNDER REVIEW`; 11271 car 23 in SQ1: only a stewards' track-limits investigation after the session), three laps missing from OpenF1 (11379). In five 2026 sessions (11230, 11271, 11276, 11282, 11287) Q1's race-control rows carry no `qualifying_phase`; the Q1 inference (A§9) recovers their 103 Q1 times | Unknown phase → lap shown without a Q badge |
 
 ### 6.2 Official F1 archive (`livetiming.formula1.com/static`), P3 source
 
@@ -153,7 +154,7 @@ All times are `timestamptz` in UTC, durations are integer milliseconds, and spee
 
 Size: 2023–2026 is about 470 sessions, under 2 GB including raw JSON **[U]** (measured after the backfill).
 
-Built in P1b: `db/migrations/20261026000001_timing_tables.sql`. Every child table references `session` and `session` references `meeting` (`ON DELETE CASCADE`); nothing references `driver`, because OpenF1 can list a lap for a driver missing from `drivers`. `deleted`, `deleted_reason` and `quali_phase` exist but stay default/null until P1c (A§8).
+Built in P1b: `db/migrations/20261026000001_timing_tables.sql`. Every child table references `session` and `session` references `meeting` (`ON DELETE CASCADE`); nothing references `driver`, because OpenF1 can list a lap for a driver missing from `drivers`. The ingest fills `deleted`, `deleted_reason` and `quali_phase` since P1c (A§8, A§9); a session ingested before P1c keeps the defaults until it is fetched again.
 
 Roles (owner, 2026-10-25; built in P1b): `deploy/postgres/roles.sql`, a PostgreSQL init script that runs once when the volume is created, makes the logins `f1_migrator` (owns every object), `f1_ingest` (writes) and `f1_api` (reads). Each login's password is a file secret `db_<login>`.
 
@@ -175,10 +176,10 @@ Roles (owner, 2026-10-25; built in P1b): `deploy/postgres/roles.sql`, a PostgreS
   - **One transaction:** all six endpoints (`drivers`, `laps`, `stints`, `pit`, `race_control`, `session_result`) are fetched first, and any fetch or schema error writes nothing but the failure. Then one transaction locks the session row (`FOR UPDATE`), decides the transition from that locked row, replaces the six `raw_response` rows and all the session's child rows (delete, then insert in chunks of 1,000 rows), and sets the state. Replace-per-session is idempotent and drops rows OpenF1 removed; the lock serialises a `refetch` against the daemon.
   - **Raw is stored in that same transaction, not first** (a P1b decision, against the PHASES wording "store raw → normalise"): the empty guard compares a new reply with the stored raw, so storing a transient `[]` first would replace the good raw and the next normalise would wipe good rows. The cost: a reply that fails the schema is not kept (only its `schema` code is).
   - **Empty guard:** an endpoint that answers `[]` where its stored `raw_response` had rows is a failure with code `empty`, and the stored data stays.
-  - **Contract for P1c:** the timing rules (deleted laps, `quali_phase`) run inside that transaction, after the insert, so replace-per-session never wipes them.
+  - **Timing rules (P1c):** the normaliser applies them (deleted laps, `quali_phase`, A§9) to the lap rows before the insert, so the same transaction writes them with the rows and replace-per-session never wipes them. It takes the session's `type` from the `session` row.
   - The app clock is injected: no state decision uses SQL `now()`, so unit and integration tests run on a fake clock.
   - **In/out laps:** `is_pit_out` is OpenF1's `is_pit_out_lap`; `is_pit_in` is derived (A§9). Seconds become integer ms (rounded), and nulls stay null.
-  - One log line per session: key, new state, rows per table, skipped rows (another session's rows, or duplicate keys: the last wins), duration and `last_error`; a failure adds the endpoint and, for `schema`, zod's paths and codes (at most 10). Never a value, a URL, a password or a response body.
+  - One log line per session: key, new state, rows per table, skipped rows (another session's rows, or duplicate keys: the last wins), the timing rules' message counts (`rules`: `deleted`, `reinstated`, `unmatched`, `unparsed`), duration and `last_error`; a failure adds the endpoint and, for `schema`, zod's paths and codes (at most 10). Never a value, a URL, a password or a response body.
 - **Rate budget:** at most 25 requests in any 60 s and 2 in any 1 s (sliding windows, shared by every call of the client), below the 30/3 limit. On a 429, honour `Retry-After` or wait 60 s. Each attempt refuses redirects, ends after 120 s in all (headers and body: `timeout`) and stops reading past 64 MiB (`schema`, not retried); a race's `laps` is about 1 MB. 6 requests per session. Free requests fail with 401 during any live session (A§6.1), so the sync, the tick, the backfill and a refetch wait for the live window to end.
 - **First backfill** (`backfill` role): syncs every year from 2023, then processes every session that is neither `final` nor cancelled and ended more than 35 min ago, newest first, each once per run, with the same transitions as the tick. Exit 0 when nothing failed, else 1. A live window stops it (exit 1); run it again later. ~470 × 6 ≈ 2,800 requests ≈ **1 h 55 min** **[U]** (measured after the [box] backfill). It's resumable, because state lives in the DB. Don't run it next to a running `ingest` daemon: each process has its own rate limiter.
 - **[box] backfill** (WSL, home IP, a throw-away PostgreSQL 18). The superuser login is used because the grants are proven in CI (handoff §12):
@@ -203,31 +204,51 @@ Roles (owner, 2026-10-25; built in P1b): `deploy/postgres/roles.sql`, a PostgreS
 
 ## 9. Timing rules (pure TS in `apps/server/src/timing/`, unit- and property-tested)
 
-- **Deleted laps:** parse `race_control.message`. The car is taken from the text, because `driver_number` is null in the data. Two known forms: `CAR 87 (BEA) TIME 1:40.294 DELETED - TRACK LIMITS AT TURN 2 LAP 3 20:07:17` and `CAR 11 (PER) LAP DELETED - DOUBLE YELLOW AT TURN 12 LAP 2 21:32:22`. Also handle `… REINSTATED` (format **[U]**: none in the sample). The `LAP n` in the text is the driver's lap. A deleted lap keeps its values and is excluded from all bests.
-- **Colours in the historical view (final semantics):** purple = the fastest valid value of that sector or lap in the session; green = the driver's own fastest valid value; yellow = the rest. Out-laps and in-laps are never purple or green. Live (P2) uses progressive semantics: purple/green at that moment, as on the F1 tower.
+- **Deleted laps** (`rules.ts`; the lap rule amended by the owner 2026-10-26 after the full-data check, A§6.1): parse `race_control.message` after collapsing whitespace. The car is taken from the text, because `driver_number` is null in the data. `CAR n (ABC)`, then `TIME m:ss.mmm` or `LAP`, then `DELETED - <reason>`, then optionally `LAP n hh:mm:ss` and ` (PIT)`:
+  - `CAR 87 (BEA) TIME 1:40.294 DELETED - TRACK LIMITS AT TURN 2 LAP 3 20:07:17`
+  - `CAR 11 (PER) LAP DELETED - DOUBLE YELLOW AT TURN 12 LAP 2 21:32:22`, `CAR 5 (BOR) LAP DELETED - TRACK LIMITS AT TURN 11 LAP 9 16:29:31 (PIT)`
+  - without `LAP n`: `CAR 87 (BEA) TIME 1:15.197 DELETED - TRACK LIMITS AT TURN 8 (NEXT LAP)`, `CAR 12 (ANT) LAP DELETED - TRACK LIMITS AT TURN 20 (NEXT LAP PIT)`
+  - The reason is the text after ` - `, without the `LAP n …` part.
+  - **Which lap:** a TIME matches the car's laps within 1 ms: one → that lap; several → the one lap with exactly that time (owner 2026-10-27), else the expected lap if it is one of them, else none; none → `LAP n`. **`LAP n` is the driver's lap n in a `Race`-type session (race, sprint) and lap n − 1 everywhere else** (practice, qualifying, sprint qualifying): of the 2,784 TIME + `LAP n` messages whose time one lap has, 2,773 sit there; the 11 others are OpenF1 numbering gaps that the time already resolves. A message that names no lap is counted, never applied.
+  - **REINSTATED** (26 in 2023–2026): `CAR 63 (RUS) TIME 1:27.168 WILL BE REINSTATED` and `CAR 43 (COL) LAP 13 WILL BE REINSTATED`. The same rule, among the car's laps deleted at that moment, clears the lap.
+  - **Order:** the messages in date order (dates compared parsed: they mix `+00:00` and `.095000+00:00`; ties keep their order). A lap deleted twice keeps the first reason; a REINSTATED before its DELETED clears nothing.
+  - A message containing DELETED or REINSTATED in no known form is counted as `unparsed`. The per-session log line carries the counts, never a message (A§8).
+  - A deleted lap keeps its values and is excluded from all bests.
+- **Qualifying phase** (`rules.ts`): the phase of the last `race_control` row with a non-null `qualifying_phase` dated at or before the lap's `date_start` (a lap starting exactly on a row takes the new phase; same dates keep their order). Null without such a row or without a `date_start`. Sessions without phase rows (practice, races) get null; a lap started after the chequered flag keeps that phase. **Q1 inference** (owner 2026-10-27): in a session of type `Qualifying` (sprint qualifying included) whose first phase row is phase 2, a lap that starts before that row is Q1, because OpenF1 sent that session's Q1 rows without a phase (five 2026 sessions). Checked in A§6.1.
+- **Colours in the historical view (final semantics)** (`colours.ts`, per request in the `api`; no column stores them): purple = the fastest valid value of that sector or lap in the session; green = the driver's own fastest valid value; yellow = the rest; null = no value. Out-laps and in-laps are never purple or green. Live (P2) uses progressive semantics: purple/green at that moment, as on the F1 tower.
+  - Valid = not deleted, not an out-lap (`is_pit_out` null counts as false) and not an in-lap. A non-valid value is yellow.
+  - Each driver's own best is one lap: the minimum valid value; on a tie the earlier `date_start` (nulls last), then the lower lap number. Purple is the best own best by value, `date_start`, lap number, then driver number: the first to set it holds it. Exactly one purple per field per session, or none without a valid value (a fast-check property).
 - **In/out laps** (owner, 2026-10-25): out = `is_pit_out_lap`; in = lap n when the same driver's lap n+1 is an out-lap. A last lap that ends in the pits (a retirement, a qualifying in-lap after the flag) has no out-lap after it and is not marked.
   - `pit.lap_number` is not used for this. The **[U]** "`pit.lap_number` = in-lap" held only in races and sprints. P1a checked every pit row against the out-laps of 7 full sessions:
     - The out-lap is `pit.lap_number + 1` in race 11388 (25 of 25 rows) and sprint 11383 (54 of 54).
     - A pit row is not always a stop. In sprint 11383, race control sent "ALL CARS THROUGH THE PIT LANE" under the safety car (laps 2–4). Each pass is a pit row (`lane_duration` ≈ 18–19 s), and the next lap is an out-lap, so the rule above still holds.
     - The out-lap is `pit.lap_number` itself in qualifying 11392 (90/90) and 11384 (103/103), sprint qualifying 11379 (74/74) and practice 11378 (76/76) and 11391 (92/92). Lap-1 rows with null durations there are garage exits.
   - The test `[U] pit.lap_number against the out-laps` in `apps/server/test/openf1-schemas.test.ts` pins both meanings on the fixtures.
-- **Sector deltas (comparison):** per lap, `driverB − driverA` per sector. Shown only when both values exist and neither lap is deleted.
+- **Sector deltas (comparison):** per lap, `driverB − driverA` per sector. Shown only when both values exist and neither lap is deleted. `sectorDeltas(a, b)` lives in `packages/contracts` (owner, P1c), where the web (P1e) imports it.
 
 ## 10. API surface (`/api/v1`, JSON, zod contracts in `packages/contracts`)
 
 | Route | Returns |
 |---|---|
-| `GET /seasons` | years with counts |
-| `GET /seasons/:year` | meetings with their sessions and `ingest_state` |
+| `GET /seasons` | years with counts of meetings and sessions (not cancelled), newest first |
+| `GET /seasons/:year` | meetings with their sessions, `ingest_state` and `is_cancelled`, by `date_start` |
 | `GET /sessions/:key` | session, meeting, drivers, results |
-| `GET /sessions/:key/laps` | all laps with colours, deleted flags and stint compound, computed server-side (a race is ~1,240 rows, ~20 KB gzipped) |
+| `GET /sessions/:key/laps` | all laps with colours, deleted flags, `quali_phase` and stint compound, computed server-side (a race is ~1,240 rows, ~20 KB gzipped; one query) |
 | `GET /sessions/:key/stints` · `/pits` · `/race-control` | as named |
-| `GET /status` | ingest progress, failed sessions, F1 TV token expiry, recorder state |
+| `GET /status` | session counts per `ingest_state` (not cancelled), the cancelled count, and every session whose last fetch failed (`fail_count` > 0: retrying or `failed`). F1 TV token expiry and recorder state arrive in P2c |
 | `GET /live` (P2) | current or next session and its recording id |
 | `GET /playback/:recording/stream?at=<ms>\|live&delay=<s>&speed=1` (P2) | SSE: one `snapshot` event, then `delta` events (A§11.3) |
 
-- `Cache-Control: private, max-age=86400` for `final` sessions and `no-store` otherwise. TanStack Query caches on the client.
-- An Access JWT middleware (`hono/jwk` against `https://<team>.cloudflareaccess.com/cdn-cgi/access/certs`) checks `aud` and `iss` on every `/api` request (ADR-0004). `/healthz` is the only route without the JWT check. The local update smoke test uses it, and through the tunnel it still sits behind Access.
+- JSON uses the A§7 column names (snake_case, no mapping layer), times as ISO-8601 UTC strings and durations as integer ms. Every answer has a strict zod contract in `packages/contracts` (P1c); an integration test parses each route against it.
+- `Cache-Control: private, max-age=86400` on a per-session route of a `final` session and `no-store` on everything else under `/api`: a session that is not final, `/seasons*`, `/status`, and every 4xx/5xx. TanStack Query caches on the client.
+- Errors are fixed: a bad `key` (`^\d{1,9}$`) or `year` (`^\d{4}$`) → 400 `{"error":"bad request"}`, an unknown one → 404 `{"error":"not found"}`, anything else → 500 `{"error":"internal"}`, logged as a code. No answer or log echoes input, a header, the token or a database message.
+- **The Access JWT** (P1c, `apps/server/src/api/access.ts`; ADR-0004 amended) is checked on every `/api` request, every method and unknown paths included, by our own middleware on hono's `verifyWithJwks`, not the `hono/jwk` middleware (that one wants `Bearer <token>`, and Cloudflare sends the bare JWT):
+  - The token is the `Cf-Access-Jwt-Assertion` header; `Authorization` and cookies are ignored. A header with whitespace, or a token whose header is not RS256 with a `kid`, is refused before any certs fetch.
+  - Then the signature against the team's certs, the `kid`, `iss` = `https://<team>.cloudflareaccess.com`, `aud` (a string or an array holding the AUD tag), `exp` (required; hono skips an absent one) and `nbf` (≤ now + 60 s). `iat` is not checked: hono has no leeway for it, and `exp`/`nbf` cover freshness. The keys are passed in, so a token's `jku`/`x5u` is never followed.
+  - Every refusal is the same 401 `{"error":"unauthorized"}`, with no reason in the answer or the log.
+  - The certs (`https://<team>.cloudflareaccess.com/cdn-cgi/access/certs`, 5 s timeout, no redirects, parsed non-strictly) are cached per process for 5 min, as one promise that concurrent requests share. A failed fetch is not cached → 503 `{"error":"unavailable"}`, logged as `access_certs`. An unknown `kid` is a 401 without a refetch, so a key rotation can refuse logins for up to 5 min (a `ponytail:` note in the code names the fix).
+  - Config: `CF_ACCESS_TEAM` (`^[a-z0-9][a-z0-9-]{0,62}$`, which keeps the certs URL on `cloudflareaccess.com`) and `CF_ACCESS_AUD` (`^[0-9a-f]{64}$`) from `/etc/f1/f1.env`, a Compose `env_file` (P1f). They are not secrets. Missing or malformed → the `api` role logs the variable's name and exits 78 before listening.
+- `/healthz` (`select 1` → 200 `{"ok":true}`, else 503 `{"ok":false}`, `no-store`) is the only route without the JWT check. The local update smoke test uses it, and through the tunnel it still sits behind Access.
 
 ## 11. Live and replay (phase 2)
 
@@ -334,6 +355,7 @@ Roles (owner, 2026-10-25; built in P1b): `deploy/postgres/roles.sql`, a PostgreS
   - DNS to the host resolvers
   - tcp/443 from `f1-egress`
   - tcp+udp/7844 from `f1-tunnel` to Cloudflare's tunnel ranges
+  - tcp/443 from the `api` to Cloudflare's published IP ranges only, for the Access certs (owner, 2026-10-26, P1c). The `api`'s networks are internal today, so P1f gives it a route out and builds the nftables set of ranges
   - drop everything else, plus host-input drops for `f1-*`
 - Without this table a second project's egress is unrestricted, because Waterheight's table only matches `rws-*` and `docker0`.
 

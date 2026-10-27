@@ -141,11 +141,12 @@ Remaining 2026 weekends (OpenF1 schedule): Austin (race 25 Oct) · Mexico City 3
   - CI `release` job (GHCR `:main` + `:sha-*`)
   - `docs/runbooks/{install,update,cloudflare}.md`
   - healthchecks ping for ingest
+  - a non-internal network for the `api`, so it can reach tcp/443 on Cloudflare's published ranges (the Access certs), plus that nftables set (A§14.3, owner 2026-10-26; a P1c follow-up)
 - **Acceptance:**
   - [CI] `hardening` test: every service is read_only, `cap_drop: ALL`, no-new-privileges, non-root and has limits; only `127.0.0.1:8180` is published; no `rws` names, subnets or GIDs.
   - [CI] the nftables file passes `nft -c` in a container.
   - [box] `f1-install` is idempotent (a second run changes nothing) and leaves `docker compose -p rws ps` unchanged.
-  - [box] from inside `ingest`, port 80 to the internet is dropped and 443 works. From `api`, any egress is dropped.
+  - [box] from inside `ingest`, port 80 to the internet is dropped and 443 works. From `api`, only tcp/443 to Cloudflare's published ranges works (the Access certs, A§14.3, owner 2026-10-26); any other egress is dropped.
   - [box] `f1-update` with a broken image rolls back automatically.
   - [owner] the hostname without login → Cloudflare Access page; with the owner's email OTP → the site; another email → denied.
   - [owner] the Waterheight site still works.
