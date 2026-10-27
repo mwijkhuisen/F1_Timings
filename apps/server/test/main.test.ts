@@ -23,7 +23,7 @@ describe('run', () => {
     expect(lines[0]).toMatch(/^usage: main\.js <api\|ingest\|/);
   });
 
-  it.each(['api', 'live', 'archive'])('%s is not implemented yet', async (role) => {
+  it.each(['live', 'archive'])('%s is not implemented yet', async (role) => {
     expect(await run([role], {}, () => {})).toBe(EXIT_NOT_IMPLEMENTED);
   });
 
@@ -35,6 +35,25 @@ describe('run', () => {
       expect(lines).toEqual([`${argv[0]}: DATABASE_URL is not a postgres URL`]);
     },
   );
+
+  it.each([
+    [{}, 'CF_ACCESS_TEAM'],
+    [{ CF_ACCESS_TEAM: 'test-team' }, 'CF_ACCESS_AUD'],
+    [{ CF_ACCESS_TEAM: 'test-team.evil.example', CF_ACCESS_AUD: 'a'.repeat(64) }, 'CF_ACCESS_TEAM'],
+    [{ CF_ACCESS_TEAM: 'test-team', CF_ACCESS_AUD: 'not-an-aud' }, 'CF_ACCESS_AUD'],
+  ])('api with %j is a config error, before any database or listening', async (access, name) => {
+    const lines: string[] = [];
+    const env = { ...access, DATABASE_URL: 'postgres://u@127.0.0.1:1/x' };
+    expect(await run(['api'], env, (l) => lines.push(l))).toBe(EXIT_CONFIG);
+    expect(lines).toEqual([`api: ${name} is missing or malformed`]);
+  });
+
+  it('api without a database setting is a config error', async () => {
+    const lines: string[] = [];
+    const env = { CF_ACCESS_TEAM: 'test-team', CF_ACCESS_AUD: 'a'.repeat(64), DATABASE_URL: 'mysql://x/y' };
+    expect(await run(['api'], env, (l) => lines.push(l))).toBe(EXIT_CONFIG);
+    expect(lines).toEqual(['api: DATABASE_URL is not a postgres URL']);
+  });
 
   it('healthcheck exits 0 while the heartbeat is fresh', async () => {
     const stop = startHeartbeat();
