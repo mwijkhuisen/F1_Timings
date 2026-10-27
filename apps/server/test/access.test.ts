@@ -158,6 +158,44 @@ describe('access', () => {
     expect([fetches.n, again.n]).toEqual([1, 1]);
   });
 
+  it('certs entries that are not RSA keys with a kid are skipped; none left → 503', async () => {
+    const ec = { kty: 'EC', kid: 'ec-kid', crv: 'P-256', x: 'AAAA', y: 'AAAA' };
+    const { kid: _, ...noKid } = stranger.pub;
+    const mixed = [ec, noKid, 'not a key', key.pub];
+    serveCerts([], () => HttpResponse.json({ keys: mixed }));
+    expect((await get(appWith(), assertion(await jwt(key.priv)))).status).toBe(200);
+    serveCerts([], () => HttpResponse.json({ keys: [ec, noKid] }));
+    expect((await get(appWith(), assertion(await jwt(key.priv)))).status).toBe(503);
+  });
+
+  it('a failed refresh after 5 min keeps the last keys for up to 1 h, then 503; a good fetch recovers', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    const at = (time: string) => vi.setSystemTime(new Date(`2026-10-26T${time}Z`));
+    let up = true;
+    const fetches = serveCerts([key.pub], () =>
+      up ? HttpResponse.json({ keys: [key.pub] }) : new HttpResponse(null, { status: 502 }),
+    );
+    const app = appWith();
+    const status = async () => (await get(app, assertion(await jwt(key.priv)))).status;
+    at('12:00:00');
+    expect(await status()).toBe(200);
+    up = false;
+    lines.length = 0;
+    at('12:05:00');
+    expect(await status()).toBe(200);
+    at('12:59:59');
+    expect(await status()).toBe(200);
+    expect(lines.map((l) => JSON.parse(l))).toEqual([
+      expect.objectContaining({ code: 'access_certs', stale: true }),
+      expect.objectContaining({ code: 'access_certs', stale: true }),
+    ]);
+    at('13:00:00');
+    expect(await status()).toBe(503);
+    up = true;
+    expect(await status()).toBe(200);
+    expect(fetches.n).toBe(5); // one per request past the TTL: no negative cache (ponytail)
+  });
+
   it('certs that take over 5 s time out → 503', { timeout: 15_000 }, async () => {
     serveCerts([key.pub], async () => {
       await delay(5_500);
