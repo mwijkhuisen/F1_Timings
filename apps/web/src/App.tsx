@@ -43,7 +43,7 @@ function Page({ route }: { route: Route | null }) {
     case 'year':
       return <Picker year={route.year} />;
     case 'session':
-      return route.view === null ? null : <Session session={route.session} view={route.view} />;
+      return route.view === null ? null : <Session key={route.session} session={route.session} view={route.view} />;
     case 'status':
       return <Status />;
     default:

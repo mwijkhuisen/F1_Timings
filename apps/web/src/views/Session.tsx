@@ -4,7 +4,9 @@ import { useLaps, useSession } from '../lib/api.ts';
 import { Link, replace, sessionPath, type View } from '../lib/routes.ts';
 import { fmtInstant } from '../lib/time.ts';
 import { Pending } from '../ui/ErrorView.tsx';
+import { Compare } from './Compare.tsx';
 import { LapTable } from './LapTable.tsx';
+import { MiniSectors } from './MiniSectors.tsx';
 import { StintsTab } from './Stints.tsx';
 
 const pathOf = (d: SessionDetail, view: View) =>
@@ -15,7 +17,7 @@ const pathOf = (d: SessionDetail, view: View) =>
     view,
   );
 
-// One session: its header, the tabs Laps | Stints, and the view (D1, D11).
+// One session: its header, the tabs Laps | Compare | Mini-sectors | Stints, and the view (D1, D11).
 export function Session({ session, view }: { session: number; view: View }) {
   const detail = useSession(session);
   const laps = useLaps(session);
@@ -43,12 +45,18 @@ export function Session({ session, view }: { session: number; view: View }) {
       </p>
       <nav className="tabs">
         {tab('laps', 'Laps')}
+        {tab('compare', 'Compare')}
+        {tab('minisectors', 'Mini-sectors')}
         {tab('stints', 'Stints')}
       </nav>
       {!laps.data ? (
         <Pending error={laps.error} />
       ) : view === 'laps' ? (
         <LapTable detail={d} laps={laps.data} />
+      ) : view === 'compare' ? (
+        <Compare />
+      ) : view === 'minisectors' ? (
+        <MiniSectors />
       ) : (
         <StintsTab session={session} detail={d} laps={laps.data} />
       )}
