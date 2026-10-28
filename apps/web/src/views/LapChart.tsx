@@ -1,14 +1,16 @@
-import type { EChartsCoreOption } from 'echarts/core';
+import type { Laps } from '@f1/contracts';
 import { useEffect, useRef, useState } from 'react';
+import type { Driver } from '../lib/session.ts';
 import { Pending } from '../ui/ErrorView.tsx';
+import { type ChartTokens, lapChartOption } from './lap-chart-option.ts';
 
 type Chart = ReturnType<typeof import('../lib/echarts.ts')['init']>;
 
 /** An ECharts line chart on a canvas. The library is a lazy chunk, loaded on first render (D3). */
-export function LapChart({ option, label }: { option: EChartsCoreOption; label: string }) {
+export function LapChart({ drivers, laps }: { drivers: readonly Driver[]; laps: Laps }) {
   const box = useRef<HTMLDivElement>(null);
   const chart = useRef<Chart | null>(null);
-  const [state, setState] = useState<'loading' | 'ready' | 'failed'>('loading');
+  const [state, setState] = useState<'loading' | 'failed' | ChartTokens>('loading');
 
   useEffect(() => {
     const el = box.current;
@@ -22,7 +24,10 @@ export function LapChart({ option, label }: { option: EChartsCoreOption; label: 
         chart.current = c;
         observer = new ResizeObserver(() => c.resize());
         observer.observe(el);
-        setState('ready');
+        // ponytail: the theme is read once; a live prefers-color-scheme switch needs a reload (A§13 follow-up).
+        const css = getComputedStyle(el);
+        const token = (name: string) => css.getPropertyValue(`--${name}`).trim();
+        setState({ fg: token('fg'), muted: token('muted'), line: token('line'), bg: token('bg') });
       },
       () => !gone && setState('failed'),
     );
@@ -35,14 +40,20 @@ export function LapChart({ option, label }: { option: EChartsCoreOption; label: 
   }, []);
 
   useEffect(() => {
-    if (state === 'ready') chart.current?.setOption(option, { notMerge: true });
-  }, [state, option]);
+    if (typeof state === 'object') chart.current?.setOption(lapChartOption(drivers, laps, state), { notMerge: true });
+  }, [state, drivers, laps]);
 
   return (
     <>
       {state === 'loading' && <Pending error={null} />}
       {state === 'failed' && <p role="alert">Chart failed to load: reload the page.</p>}
-      <div ref={box} className="chart" role="img" aria-label={label} hidden={state === 'failed'} />
+      <div
+        ref={box}
+        className="chart"
+        role="img"
+        aria-label={`Lap times: ${drivers.map((d) => d.acronym).join(', ')}`}
+        hidden={state === 'failed'}
+      />
     </>
   );
 }

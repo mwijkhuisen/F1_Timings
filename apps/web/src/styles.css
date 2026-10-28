@@ -15,6 +15,8 @@
   --purple: #c48cff;
   --green: #3ccf6e;
   --yellow: #ffd23f;
+  /* The mini-sector pit-lane fill (D7); the other fills reuse the timing colours and --muted. */
+  --pit: #4da6ff;
   /* Compounds: a fill with --on-cmp text, the same in both themes (contrast-tested). */
   --on-cmp: #000000;
   --soft: #ff5050;
@@ -35,6 +37,7 @@
     --purple: #7d2fc2;
     --green: #18803a;
     --yellow: #8a6400;
+    --pit: #1f5fbf;
   }
 }
 
@@ -403,4 +406,88 @@ td.deleted {
 .chart {
   width: 100%;
   height: 20rem;
+}
+
+/* The driver picker (D2): toggle chips with the team bar of .drv, 44 px like every button. */
+.picker {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: 0 0 12px;
+  padding: 0;
+  border: 0;
+}
+
+.picker legend {
+  padding: 0;
+  margin-bottom: 4px;
+  color: var(--muted);
+}
+
+/* The sector deltas have two header rows: the whole thead sticks instead of each cell. */
+.deltas thead {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+}
+
+.deltas thead th {
+  position: static;
+}
+
+.deltas thead tr:first-child th:first-child {
+  position: sticky;
+  left: 0;
+}
+
+/* Mini-sectors (D6): one box per segment. Colour is never the only cue: each box has a
+   title, purple is also boxed, and "no data" is an empty outline. */
+.ms {
+  display: inline-block;
+  width: 12px;
+  height: 20px;
+  margin-right: 2px;
+  border-radius: 2px;
+  vertical-align: middle;
+  background: var(--ms);
+}
+
+.legend .ms {
+  padding: 0;
+}
+
+.ms-purple {
+  --ms: var(--purple);
+  box-shadow: inset 0 0 0 2px var(--fg);
+}
+
+.ms-green {
+  --ms: var(--green);
+}
+
+.ms-yellow {
+  --ms: var(--yellow);
+}
+
+.ms-pit {
+  --ms: var(--pit);
+}
+
+.ms-grey {
+  --ms: var(--muted);
+}
+
+.ms-none {
+  --ms: transparent;
+  box-shadow: inset 0 0 0 1px var(--muted);
+}
+
+.minisectors td.segs {
+  text-align: left;
+}
+
+.banner {
+  padding: 8px 12px;
+  border: 1px solid var(--yellow);
+  border-radius: 6px;
 }
