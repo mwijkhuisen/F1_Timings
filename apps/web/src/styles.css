@@ -424,6 +424,16 @@ td.deleted {
   color: var(--muted);
 }
 
+/* Tighter cells, so two drivers (the lap column plus one Δ group) fit 390 px without scrolling. */
+.deltas th,
+.deltas td {
+  padding: 0 6px;
+}
+
+.deltas .drv {
+  padding-left: 10px;
+}
+
 /* The sector deltas have two header rows: the whole thead sticks instead of each cell. */
 .deltas thead {
   position: sticky;

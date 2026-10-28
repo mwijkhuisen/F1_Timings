@@ -50,18 +50,24 @@ const laps = [
 const render = (drivers: Driver[], type: string | null = 'Qualifying') =>
   renderToStaticMarkup(<MiniSectors sessionType={type} laps={laps} drivers={drivers} />);
 
-/** Per lap row: the lap cell, then per sector the [class, title] of each box, then the speeds. */
+/** Per lap row: the lap cell, per sector the [class, title] of each box and the cell's label, then the speeds. */
 const lapRows = (html: string) =>
   [...html.matchAll(/<tr><th scope="row"[^>]*>([\s\S]*?)<\/th>([\s\S]*?)<\/tr>/g)].map(([, head = '', rest = '']) => {
-    const tds = [...rest.matchAll(/<td[^>]*>([\s\S]*?)<\/td>/g)].map(([, td = '']) => td);
-    const boxes = (td: string) =>
-      [...td.matchAll(/<span class="ms (ms-\w+)" role="img" aria-label="([^"]*)" title="([^"]*)">/g)].map(
-        ([, cls, label, title]) => {
-          expect(label).toBe(title);
-          return [cls, title];
-        },
+    const tds = [...rest.matchAll(/<td([^>]*)>([\s\S]*?)<\/td>/g)].map(([, attrs = '', body = '']) => ({
+      attrs,
+      body,
+    }));
+    const boxes = ({ body }: { body: string }) =>
+      [...body.matchAll(/<span class="ms (ms-\w+)" title="([^"]*)" aria-hidden="true"><\/span>/g)].map(
+        ([, cls, title]) => [cls, title],
       );
-    return { head, sectors: tds.slice(0, 3).map(boxes), speeds: tds.slice(3) };
+    const sectors = tds.slice(0, 3);
+    return {
+      head,
+      sectors: sectors.map(boxes),
+      labels: sectors.map(({ attrs }) => /aria-label="([^"]*)"/.exec(attrs)?.[1]),
+      speeds: tds.slice(3).map(({ body }) => body),
+    };
   });
 
 describe('segClass', () => {
@@ -118,6 +124,17 @@ describe('the mini-sector grid', () => {
       ['ms-yellow', 'other'],
     ]);
     expect(nor1?.sectors.map((s) => s.length)).toEqual([4, 2, 1]);
+  });
+
+  it('gives each sector cell one short text for a screen reader and hides the boxes', () => {
+    expect(ver1?.labels).toEqual([
+      'S1: 1 personal best, 1 unknown, 2 no data',
+      'S2: 1 overall best, 1 no data',
+      'S3: 1 no data',
+    ]);
+    expect(ver2?.labels[0]).toBe('S1: 2 other, 1 pit lane, 1 unknown');
+    expect(html).not.toContain('role="img"');
+    expect(html.match(/<span class="ms ms-\w+" title="/g)).toHaveLength(3 * 7);
   });
 
   it('shows the speed traps in km/h, — for a null speed', () => {

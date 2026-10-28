@@ -75,14 +75,20 @@ describe('lapChartOption', () => {
 
   it('plots every lap on a category axis, with null for a missing lap or a lap without a time', () => {
     expect(option.xAxis).toMatchObject({ type: 'category', data: [1, 2, 3, 4, 5] });
-    expect(series('VER')?.data).toEqual([100000, 80500, null, { value: 80000, symbol: 'emptyCircle' }, null]);
+    expect(series('VER')?.data).toEqual([
+      100000,
+      80500,
+      null,
+      { value: 80000, symbol: 'emptyCircle', symbolSize: 8 },
+      null,
+    ]);
     expect(series('PER')?.data).toEqual([null, 81500, null, null, null]);
     for (const s of option.series) expect(s).toMatchObject({ connectNulls: false, clip: true, symbol: 'circle' });
   });
 
   it('marks a deleted lap with a hollow symbol', () => {
-    expect(series('VER')?.data[3]).toEqual({ value: 80000, symbol: 'emptyCircle' });
-    expect(series('NOR')?.data[2]).toEqual({ value: 81200, symbol: 'emptyCircle' });
+    expect(series('VER')?.data[3]).toEqual({ value: 80000, symbol: 'emptyCircle', symbolSize: 8 });
+    expect(series('NOR')?.data[2]).toEqual({ value: 81200, symbol: 'emptyCircle', symbolSize: 8 });
   });
 
   it('windows the y-axis from the best valid lap − 1 s to 107 %, in whole seconds', () => {
@@ -101,6 +107,22 @@ describe('lapChartOption', () => {
       ['PER', '#3671C6', 'dashed'],
     ]);
     expect(lapChartOption([driver(9, 'XXX', null)], laps, tokens).series[0]?.color).toBe(tokens.muted);
+  });
+
+  it('cycles solid, dashed, dotted per repeated colour, drivers without a team colour included', () => {
+    const plain = [1, 2, 3, 4].map((n) => driver(n, `D${n}`, null));
+    expect(lapChartOption([...plain, NOR], laps, tokens).series.map((s) => [s.color, s.lineStyle.type])).toEqual([
+      [tokens.muted, 'solid'],
+      [tokens.muted, 'dashed'],
+      [tokens.muted, 'dotted'],
+      [tokens.muted, 'solid'],
+      ['#FF8000', 'solid'],
+    ]);
+  });
+
+  it('labels the y-axis in whole milliseconds, also on a fractional tick', () => {
+    expect(option.yAxis.axisLabel.formatter(80499.6)).toBe('1:20.500');
+    expect(option.yAxis.axisLabel.formatter(79000)).toBe('1:19.000');
   });
 
   it('uses a rich-text tooltip with a plain-text formatter, and no HTML anywhere', () => {
@@ -150,7 +172,7 @@ describe('the delta table', () => {
 
   it('heads the table with the best laps (green or purple) of each driver', () => {
     // VER lap 2 (purple) against NOR lap 5 (green): 28050 − 28000, 30150 − 30000, 22700 − 22500.
-    expect(body[0]).toEqual(['Best lap (L2 vs L5)', '+0.050', '+0.150', '+0.200']);
+    expect(body[0]).toEqual(['Best lap<br/>L2 vs L5', '+0.050', '+0.150', '+0.200']);
   });
 
   it('signs a delta as the other driver − the reference, per lap', () => {
@@ -171,15 +193,30 @@ describe('the delta table', () => {
   it('makes the first selected the reference', () => {
     const swapped = rows(table([NOR, VER]));
     expect(swapped[0]).toEqual(['Lap', 'VER Δ vs NOR']);
-    expect(swapped[2]).toEqual(['Best lap (L5 vs L2)', '−0.050', '−0.150', '−0.200']);
+    expect(swapped[2]).toEqual(['Best lap<br/>L5 vs L2', '−0.050', '−0.150', '−0.200']);
     expect(swapped[3]).toEqual(['1', '+5.000', '+0.000', '+0.000']);
+  });
+
+  it('keeps the Best-lap row with — where a driver has no best lap', () => {
+    // Without NOR lap 5 (its only green lap), NOR has no best lap.
+    const noBest = laps.filter((l) => !(l.driver_number === 4 && l.lap_number === 5));
+    const r = rows(renderToStaticMarkup(<DeltaTable drivers={[VER, NOR]} laps={noBest} />));
+    expect(r[2]).toEqual(['Best lap<br/>L2 vs L—', '—', '—', '—']);
+    expect(r[3]?.[0]).toBe('1');
+  });
+
+  it('says so when the reference has no laps, and still shows the Best-lap row', () => {
+    const html = table([driver(99, 'ZZZ', null), VER]);
+    expect(html).toMatch(/^<p class="muted">ZZZ has no laps in this session: no deltas.<\/p><div class="scroll">/);
+    expect(rows(html).slice(2)).toEqual([['Best lap<br/>L— vs L2', '—', '—', '—']]);
+    expect(table([VER, NOR])).toMatch(/^<div class="scroll">/);
   });
 
   it('gives every other driver its own column group', () => {
     const three = rows(table([VER, NOR, PER]));
     expect(three[0]).toEqual(['Lap', 'NOR Δ vs VER', 'PER Δ vs VER']);
     expect(three[1]).toEqual(['S1', 'S2', 'S3', 'S1', 'S2', 'S3']);
-    expect(three[2]).toEqual(['Best lap (L2 vs L5, L2)', '+0.050', '+0.150', '+0.200', '+0.300', '+0.300', '+0.400']);
+    expect(three[2]).toEqual(['Best lap<br/>L2 vs L5, L2', '+0.050', '+0.150', '+0.200', '+0.300', '+0.300', '+0.400']);
     // Lap 1: PER has none.
     expect(three[3]).toEqual(['1', '−5.000', '+0.000', '+0.000', '—', '—', '—']);
   });

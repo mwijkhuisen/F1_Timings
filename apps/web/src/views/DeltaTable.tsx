@@ -41,50 +41,54 @@ export function DeltaTable({ drivers, laps }: { drivers: readonly Driver[]; laps
   const num = (l: DeltaLap | undefined) => (l ? `L${l.lap_number}` : 'L—');
 
   return (
-    <div className="scroll">
-      <table className="laps deltas" aria-label="Sector deltas">
-        <thead>
-          <tr>
-            <th scope="col" rowSpan={2}>
-              Lap
-            </th>
-            {groups.map(({ driver }) => (
-              <th key={driver.number} scope="colgroup" colSpan={3} className="drv" style={teamStyle(driver)}>
-                {driver.acronym} Δ vs {ref.acronym}
+    <>
+      {refLaps.length === 0 && <p className="muted">{ref.acronym} has no laps in this session: no deltas.</p>}
+      <div className="scroll">
+        <table className="laps deltas" aria-label="Sector deltas">
+          <thead>
+            <tr>
+              <th scope="col" rowSpan={2}>
+                Lap
               </th>
-            ))}
-          </tr>
-          <tr>
-            {groups.flatMap(({ driver }) =>
-              ['S1', 'S2', 'S3'].map((s) => (
-                <th key={`${driver.number}-${s}`} scope="col">
-                  {s}
+              {groups.map(({ driver }) => (
+                <th key={driver.number} scope="colgroup" colSpan={3} className="drv" style={teamStyle(driver)}>
+                  {driver.acronym} Δ vs {ref.acronym}
                 </th>
-              )),
-            )}
-          </tr>
-        </thead>
-        <tbody>
-          {refBest && (
+              ))}
+            </tr>
+            <tr>
+              {groups.flatMap(({ driver }) =>
+                ['S1', 'S2', 'S3'].map((s) => (
+                  <th key={`${driver.number}-${s}`} scope="col">
+                    {s}
+                  </th>
+                )),
+              )}
+            </tr>
+          </thead>
+          <tbody>
+            {/* Always there: a missing best lap shows L— and — cells. Two lines, so two drivers fit 390 px. */}
             <tr>
               <th scope="row">
-                Best lap ({num(refBest)} vs {groups.map((g) => num(g.best)).join(', ')})
+                Best lap
+                <br />
+                {num(refBest)} vs {groups.map((g) => num(g.best)).join(', ')}
               </th>
               {groups.map((g) => (
                 <Cells key={g.driver.number} delta={g.bestDelta} />
               ))}
             </tr>
-          )}
-          {lapNumbers.map((n) => (
-            <tr key={n}>
-              <th scope="row">{n}</th>
-              {groups.map((g) => (
-                <Cells key={g.driver.number} delta={g.byLap.get(n)} />
-              ))}
-            </tr>
-          ))}
-        </tbody>
-      </table>
-    </div>
+            {lapNumbers.map((n) => (
+              <tr key={n}>
+                <th scope="row">{n}</th>
+                {groups.map((g) => (
+                  <Cells key={g.driver.number} delta={g.byLap.get(n)} />
+                ))}
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </>
   );
 }

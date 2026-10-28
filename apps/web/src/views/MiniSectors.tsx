@@ -34,9 +34,22 @@ const titleOf = (code: number | null) => TITLE[segClass(code)] ?? `unknown code 
 const SECTORS = ['seg1', 'seg2', 'seg3'] as const;
 const SPEEDS = ['i1_kph', 'i2_kph', 'st_kph'] as const;
 
-const Seg = ({ code }: { code: number | null }) => (
-  <span className={`ms ${segClass(code)}`} role="img" aria-label={titleOf(code)} title={titleOf(code)} />
-);
+const LEGEND = ['ms-purple', 'ms-green', 'ms-yellow', 'ms-pit', 'ms-grey', 'ms-none'];
+
+/** One sector cell: boxes with a hover title each, and one short text for a screen reader, such as "S1: 4 personal best, 2 other". */
+function Sector({ name, codes }: { name: string; codes: (number | null)[] }) {
+  const count = new Map<string, number>();
+  for (const c of codes) count.set(segClass(c), (count.get(segClass(c)) ?? 0) + 1);
+  const parts = LEGEND.flatMap((c) => (count.has(c) ? [`${count.get(c)} ${TITLE[c] ?? 'unknown'}`] : []));
+  return (
+    <td className="segs" aria-label={`${name}: ${parts.join(', ') || 'no segments'}`}>
+      {codes.map((code, j) => (
+        // biome-ignore lint/suspicious/noArrayIndexKey: a fixed-length row of positions
+        <span key={j} className={`ms ${segClass(code)}`} title={titleOf(code)} aria-hidden="true" />
+      ))}
+    </td>
+  );
+}
 
 export function MiniSectors({
   sessionType,
@@ -58,7 +71,7 @@ export function MiniSectors({
         </p>
       )}
       <p className="legend">
-        {['ms-purple', 'ms-green', 'ms-yellow', 'ms-pit', 'ms-grey', 'ms-none'].map((c) => (
+        {LEGEND.map((c) => (
           <span key={c}>
             <span className={`ms ${c}`} /> {TITLE[c] ?? 'unknown code'}
           </span>
@@ -96,12 +109,11 @@ export function MiniSectors({
                       {l.is_pit_out && <span className="badge">OUT</span>}
                     </th>
                     {SECTORS.map((s, i) => (
-                      <td key={s} className="segs">
-                        {Array.from({ length: width[i] ?? 0 }, (_, j) => (
-                          // biome-ignore lint/suspicious/noArrayIndexKey: a fixed-length row of positions
-                          <Seg key={j} code={l[s]?.[j] ?? null} />
-                        ))}
-                      </td>
+                      <Sector
+                        key={s}
+                        name={`S${i + 1}`}
+                        codes={Array.from({ length: width[i] ?? 0 }, (_, j) => l[s]?.[j] ?? null)}
+                      />
                     ))}
                     {SPEEDS.map((s) => (
                       <td key={s}>{l[s] ?? '—'}</td>

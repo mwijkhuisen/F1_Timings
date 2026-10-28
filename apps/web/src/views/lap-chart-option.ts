@@ -10,6 +10,8 @@ export type ChartTokens = { fg: string; muted: string; line: string; bg: string 
 /** Rich-text markup (`{style|text}`) out of a data string: the tooltip and legend render rich text. */
 const plain = (s: string) => s.replace(/[{|}]/g, '');
 
+const LINE_TYPES = ['solid', 'dashed', 'dotted'] as const;
+
 type ChartLap = Pick<Lap, 'driver_number' | 'lap_number' | 'lap_ms' | 'deleted' | 'colour'>;
 
 export function lapChartOption(drivers: readonly Driver[], laps: readonly ChartLap[], tokens: ChartTokens) {
@@ -28,23 +30,25 @@ export function lapChartOption(drivers: readonly Driver[], laps: readonly ChartL
     ? { min: Math.floor((best - 1000) / 1000) * 1000, max: Math.ceil((best * 1.07) / 1000) * 1000 }
     : {};
 
-  // Teammates share a team colour; the second line of a colour is dashed.
-  const seen = new Set<string>();
+  // Teammates share a team colour, and drivers without one share --muted: each repeat of a
+  // colour takes the next line type, solid, dashed, dotted, then round again.
+  const seen = new Map<string, number>();
   const series = drivers.map((d) => {
     const colour = d.team ?? tokens.muted;
-    const dashed = seen.has(colour);
-    seen.add(colour);
+    const repeat = seen.get(colour) ?? 0;
+    seen.set(colour, repeat + 1);
     return {
       type: 'line' as const,
       name: plain(d.acronym),
       color: colour,
-      lineStyle: { type: dashed ? ('dashed' as const) : ('solid' as const) },
+      lineStyle: { type: LINE_TYPES[repeat % LINE_TYPES.length] },
       symbol: 'circle',
       // Dense: a missing lap or a lap without a time is null, so the line breaks.
+      // A deleted lap is hollow and larger than the default 4 px, so the hole reads.
       data: lapNumbers.map((n) => {
         const l = at(d, n);
         if (l?.lap_ms == null) return null;
-        return l.deleted ? { value: l.lap_ms, symbol: 'emptyCircle' } : l.lap_ms;
+        return l.deleted ? { value: l.lap_ms, symbol: 'emptyCircle', symbolSize: 8 } : l.lap_ms;
       }),
       connectNulls: false,
       clip: true,
@@ -73,7 +77,7 @@ export function lapChartOption(drivers: readonly Driver[], laps: readonly ChartL
       type: 'value' as const,
       scale: true,
       ...range,
-      axisLabel: { color: tokens.muted, formatter: (v: number) => fmtLap(v) },
+      axisLabel: { color: tokens.muted, formatter: (v: number) => fmtLap(Math.round(v)) },
       splitLine: { lineStyle: { color: tokens.line } },
     },
     tooltip: {

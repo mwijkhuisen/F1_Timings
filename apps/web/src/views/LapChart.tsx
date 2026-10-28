@@ -17,8 +17,9 @@ export function LapChart({ drivers, laps }: { drivers: readonly Driver[]; laps: 
     if (!el) return;
     let gone = false;
     let observer: ResizeObserver | undefined;
-    import('../lib/echarts.ts').then(
-      ({ init }) => {
+    // Any failure, the import or the set-up after it, shows the failure line instead of "Loading…".
+    import('../lib/echarts.ts')
+      .then(({ init }) => {
         if (gone) return;
         const c = init(el, undefined, { renderer: 'canvas' });
         chart.current = c;
@@ -28,9 +29,10 @@ export function LapChart({ drivers, laps }: { drivers: readonly Driver[]; laps: 
         const css = getComputedStyle(el);
         const token = (name: string) => css.getPropertyValue(`--${name}`).trim();
         setState({ fg: token('fg'), muted: token('muted'), line: token('line'), bg: token('bg') });
-      },
-      () => !gone && setState('failed'),
-    );
+      })
+      .catch(() => {
+        if (!gone) setState('failed');
+      });
     return () => {
       gone = true;
       observer?.disconnect();
