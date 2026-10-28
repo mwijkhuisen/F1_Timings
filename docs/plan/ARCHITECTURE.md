@@ -30,7 +30,7 @@ Same versions as Waterheight at P0 time. Re-check each pin against the 7-day rel
 | Tests | Vitest 5.0.4 (`unit` + `integration` projects), msw 3.0.3, fast-check 4.10.2 | Integration tests run on real PostgreSQL 18, not testcontainers |
 | Server | Hono 4.13.13 + @hono/node-server 2.1.5, undici 8.12.2, pino 10.4.0, croner 10.0.1, zod 4.6.7 | One image with roles (A§4) |
 | Database | PostgreSQL 18.6 (own container), Kysely 0.29.6 + pg 8.23.1, kysely-codegen 0.20.0, dbmate 2.36.0 | Immutable migrations |
-| Web | React 19.3.0, Vite 8.3.4, TanStack Query 5.104.2, ECharts 6.1.0 (lazy chunk), temporal-polyfill 1.0.6 | English only, no i18n library |
+| Web | React 19.3.0, Vite 8.3.4 + @vitejs/plugin-react 6.1.2, TanStack Query 5.104.2, ECharts 6.1.0 (lazy chunk) | English only, no i18n library. Times through `Intl.DateTimeFormat` in Europe/Amsterdam, no Temporal polyfill (owner, 2026-10-28) |
 | Live feed (P2) | SignalR Core client: `@microsoft/signalr` or a ~150-line native client on undici's WebSocket | P2a decides, with an ADR-lite line either way |
 | Edge | Caddy 2.11.7, cloudflared 2026.10.x, Cloudflare Access (free plan) | Own tunnel |
 | Images | Build: `node:26.11.1-trixie-slim`. Runtime: `gcr.io/distroless/nodejs26-debian13:nonroot`. All pinned by digest | |
@@ -314,16 +314,27 @@ Roles (owner, 2026-10-25; built in P1b): `deploy/postgres/roles.sql`, a PostgreS
 
 ## 13. Frontend
 
-- **Routes** (no router library; `routeOf(location.pathname)` plus `history.pushState`, as in Waterheight): `/` (latest session) · `/:year` · `/:year/:meeting/:session/{laps|compare|minisectors|stints}` · `/live` · `/replay/:recording`.
+- **Routes** (no router library; `routeOf(location.pathname)` plus `history.pushState`, as in Waterheight; `apps/web/src/lib/routes.ts`): `/` (latest session) · `/:year` · `/:year/:meeting/:session/{laps|compare|minisectors|stints}` · `/status` · `/live` · `/replay/:recording`.
+  - A meeting or session segment is `<key>-<name>`, such as `/2026/1290-singapore/9965-race/laps`, and parses as `^(\d{1,9})(?:-[a-z0-9-]*)?$`. The key decides; the name is decoration (lower case, diacritics stripped, other runs → `-`; meetings drop a trailing ` Grand Prix`). Once the session is loaded, a wrong or missing name, year or meeting key is replaced by the canonical URL (`history.replaceState`). `/:year/:meeting/:session` goes to `…/laps`.
+  - `/` goes to the newest season's last session that has started and is not cancelled, else to `/:year`. The header holds a season `<select>` and a link to `/status`.
+  - Until P1e and P2, `compare`, `minisectors`, `/live` and `/replay/*` are not found.
+  - Links are real `<a href>`s; only a plain left click navigates in place, so a modified or middle click opens a new tab.
 - **Views:**
-  - **Lap table:** drivers as rows or columns (toggle), sticky driver column, S1/S2/S3/lap with purple/green/yellow, struck-through deleted laps with the reason in a tooltip, PIT IN/OUT badges, compound dot.
+  - **Season** (`/:year`): the meetings with their sessions and start times; a cancelled session is struck through and not linked.
+  - **Lap table** (owner, 2026-10-28): a drivers × laps matrix with one time per cell. A segmented control `Lap | S1 | S2 | S3` picks the metric, and a toggle puts the drivers in rows (default: a sticky driver column with a 4 px team-colour bar, lap numbers as the header row) or in columns (a sticky lap column, drivers as the sticky header row). Both are component state, not URL state.
+    - The colour is the cell's text colour, and its `title` names it (overall best, personal best, slower than personal best).
+    - A deleted lap is struck through in every metric; a missing value shows `—`. The reason sits behind the cell in a tap popover (`ui/Note.tsx`: a `<button popovertarget>` plus a native `popover`, so a tap works on a phone with no JS state; the `title` serves a hover). It is the deletion reason, or why the value is missing: an out-lap (S1, and the lap time on lap 1), an in-lap, race lap 1 from the grid, else "No time in the OpenF1 data". These are the cases the P1d null probe over every session since 2025 shows to be real.
+    - PIT IN/OUT badges. The compound dot (S/M/H/I/W) marks the first lap of each run per driver (a new compound, or new tyres out of the pits), not every cell.
+    - Drivers by result position (nulls last), then number; drivers without laps are left out. A session without laps says "No laps yet".
   - **Comparison:** pick 2+ drivers → ECharts lap-time lines plus a sector-delta table.
   - **Mini-sectors + speed traps:** a grid of coloured cells per lap, with the speed trap columns.
-  - **Stints:** horizontal compound bars per driver.
+  - **Stints:** horizontal compound bars per driver, in the lap-table order, fitted to the full width (a stint is its laps over the session's highest lap number wide). A stint shows its compound letter, its lap range where it fits, and a `title` with the compound, the laps and the tyre age.
+  - **Status** (`/status`): session counts per `ingest_state` plus the cancelled count, and a table of the sessions whose last fetch failed.
   - **Live/replay** (P2): a timing tower (position, gap, interval, last/best lap, live sectors and mini-sectors, tyre, pits), the delay slider, play/pause/seek, and session-clock markers (start, red flags, chequered flag).
-- **Look:** dark F1 timing-screen style by default, plus a light theme following `prefers-color-scheme`. Team colours come from `drivers.team_colour`. Purple/green/yellow are chosen to pass contrast checks on both themes.
-- **Mobile:** must work on a phone. Tables scroll horizontally inside their container (never the page), tap targets are ≥ 44 px, and charts are full width.
-- **Times:** shown in Europe/Amsterdam (`Temporal`, with the polyfill where the browser lacks it).
+- **Look:** dark F1 timing-screen style by default, plus a light theme following `prefers-color-scheme` (tokens on `:root` in `apps/web/src/styles.css`). Team colours come from `drivers.team_colour`, used only when it is six hex digits (else `--muted`). Purple, green, yellow, the text and the muted text are text on the background and reach WCAG AA 4.5:1 in both themes (a unit test). Colour is never the only cue. No font or icon files: the system font stack with tabular numbers.
+- **CSP** (A§12.1 invariant 6): the build has no inline script or style and no `data:`/`blob:` URL (`build.assetsInlineLimit: 0`, plain CSS imported from the entry). React `style` props carry only custom properties (`--team`, `--x`, `--w`): a client render sets them through CSSOM, which `style-src 'self'` does not block; only `style=` attributes in markup and `<style>` elements are blocked.
+- **Mobile:** must work on a phone (`width=device-width` viewport). Tables scroll inside their container (`.scroll`, never the page; it also bounds the height, so the sticky header row holds), links, buttons, selects and table rows are ≥ 44 px, and charts are full width.
+- **Times** (owner, 2026-10-28): shown in Europe/Amsterdam through `Intl.DateTimeFormat`, not Temporal, with no polyfill. All formatting lives in `apps/web/src/lib/time.ts`: instants as "Sun 11 Oct 2026, 14:00", lap times as `m:ss.SSS`, sectors as `ss.SSS` (`m:ss.SSS` from 60 s).
 
 ## 14. Deployment
 
@@ -384,7 +395,7 @@ Roles (owner, 2026-10-25; built in P1b): `deploy/postgres/roles.sql`, a PostgreS
 - **Unit:** parsers, timing rules, the rate limiter (fake timers), and live delta merging (a fast-check property: merging snapshot + deltas equals merging the deltas from empty).
 - **Integration:** real PostgreSQL 18 as a CI service container. Each file creates its own DB, applies `roles.sql` (`apps/server/test/db.ts`) and runs dbmate up → tests; the ingest tests log in as `f1_ingest`, never as the superuser. `db-check` is P0's up → down → up test (`apps/server/test/migrate.int.test.ts`) plus `kysely-codegen --verify` against a freshly migrated database (`apps/server/test/db.int.test.ts`: the committed `types.ts` matches the migrations). A unit test pins the sha256 of every migration (`test/migrations.test.ts`).
 - **Fixtures:** `apps/server/src/openf1/fixtures/` holds trimmed real OpenF1 responses (public, no auth). Live/archive parser fixtures are synthetic in the repo. Real recordings stay in `fixtures-private/` (gitignored) and are used locally only. `scripts/record-fixture.ts` refuses to run when `CI` is set.
-- **Web:** component tests for the lap table colouring and deleted rendering. No browser matrix in CI.
+- **Web:** component tests render statically with `react-dom/server` in Vitest's node environment, with data as props: no DOM environment (owner, 2026-10-28; happy-dom arrives with the first interaction test). They cover the lap table (colours per metric, deleted laps, missing values and their reasons, IN/OUT, compound dots, both orientations, driver order), the season picker, the stints and the status panel. `apps/web/test/build.test.ts` runs a production `vite build` and scans `dist` for inline scripts, styles and handlers, `data:`/`blob:` URLs and third-party references; `contrast.test.ts` checks the theme tokens for 4.5:1 in both themes. No browser matrix in CI.
 
 ## 16. Risks
 
