@@ -1,3 +1,4 @@
+import { Component, type ReactNode } from 'react';
 import { ZodError } from 'zod';
 import { HttpError } from '../lib/api.ts';
 
@@ -18,3 +19,19 @@ export const Pending = ({ error }: { error: unknown }) =>
   error ? <ErrorView error={error} /> : <p className="muted">Loading…</p>;
 
 export const NotFound = () => <p>Page not found.</p>;
+
+/**
+ * A render exception shows a line instead of a blank page. Not errorText: a render bug is
+ * usually a TypeError, which errorText would call an expired Access session.
+ */
+export class ErrorBoundary extends Component<{ children: ReactNode }, { failed: boolean }> {
+  override state = { failed: false };
+
+  static getDerivedStateFromError() {
+    return { failed: true };
+  }
+
+  override render() {
+    return this.state.failed ? <p role="alert">Something went wrong: reload the page.</p> : this.props.children;
+  }
+}

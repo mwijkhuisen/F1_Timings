@@ -4,6 +4,6 @@
     "types": ["node", "vite/client"],
     "tsBuildInfoFile": "../node_modules/.cache/tsc/web-test.tsbuildinfo"
   },
-  "include": [".", "../src"],
+  "include": [".", "../src", "../../../test/msw.setup.ts"],
   "references": [{ "path": "../../../packages/contracts" }]
 }
