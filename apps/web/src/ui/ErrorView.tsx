@@ -13,4 +13,8 @@ export function errorText(error: unknown): string {
 
 export const ErrorView = ({ error }: { error: unknown }) => <p role="alert">{errorText(error)}</p>;
 
+/** A query without data yet: its error, or a loading line. */
+export const Pending = ({ error }: { error: unknown }) =>
+  error ? <ErrorView error={error} /> : <p className="muted">Loading…</p>;
+
 export const NotFound = () => <p>Page not found.</p>;

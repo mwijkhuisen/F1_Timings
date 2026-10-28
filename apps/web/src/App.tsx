@@ -2,7 +2,7 @@ import { useEffect } from 'react';
 import { useSeasons } from './lib/api.ts';
 import { Link, navigate, type Route, replace, useRoute } from './lib/routes.ts';
 import { NotFound } from './ui/ErrorView.tsx';
-import { Picker } from './views/Picker.tsx';
+import { Latest, Picker } from './views/Picker.tsx';
 import { Session } from './views/Session.tsx';
 import { Status } from './views/Status.tsx';
 
@@ -18,7 +18,7 @@ function Header({ year }: { year: number | null }) {
         value={year ?? ''}
         onChange={(e) => e.target.value !== '' && navigate(`/${e.target.value}`)}
       >
-        {year === null && <option value="" />}
+        {year === null && <option value="">Season</option>}
         {seasons.data?.map((s) => (
           <option key={s.year} value={s.year}>
             {s.year}
@@ -39,7 +39,7 @@ function Page({ route }: { route: Route | null }) {
 
   switch (route?.id) {
     case 'latest':
-      return <Picker year={null} />;
+      return <Latest />;
     case 'year':
       return <Picker year={route.year} />;
     case 'session':
