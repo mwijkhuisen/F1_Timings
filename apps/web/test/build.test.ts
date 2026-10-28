@@ -2,8 +2,10 @@ import { mkdtempSync, readdirSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { build } from 'vite';
+import { build, type Rolldown } from 'vite';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
+
+type Chunk = Rolldown.OutputChunk;
 
 // The CSP allows no inline script or style, no data: or blob: URL and no eval (A§12.2).
 // This builds the real app and scans what would be served.
@@ -40,12 +42,15 @@ describe('the scan patterns', () => {
 describe('web build', () => {
   const out = join(tmp, 'dist');
   const page = (p: string) => readFileSync(join(out, p), 'utf8');
+  let chunks: Chunk[] = [];
 
   beforeAll(async () => {
     // Vitest sets NODE_ENV=test, which makes Vite bundle React's development build: build as the CLI does.
     vi.stubEnv('NODE_ENV', 'production');
     try {
-      await build({ root: webDir, logLevel: 'silent', build: { outDir: out, emptyOutDir: true } });
+      const result = await build({ root: webDir, logLevel: 'silent', build: { outDir: out, emptyOutDir: true } });
+      if (!('output' in result)) throw new Error('expected a single bundle output');
+      chunks = result.output.filter((o): o is Chunk => o.type === 'chunk');
     } finally {
       vi.unstubAllEnvs();
     }
@@ -83,5 +88,34 @@ describe('web build', () => {
       expect(text, path).not.toMatch(BLOB_URL);
       expect(text, path).not.toContain('createObjectURL');
     }
+  });
+
+  it('ECharts stays out of the initial bundle: only the lazy chunk from lib/echarts.ts holds it', () => {
+    // Rolldown chunks carry isEntry, isDynamicEntry, facadeModuleId, moduleIds, and imports (static) and
+    // dynamicImports by file name. pnpm resolves modules to .../.pnpm/echarts@x/node_modules/echarts/....
+    const LIB = /[\\/]node_modules[\\/](?:echarts|zrender)[\\/]/;
+    const holdsLib = (c: Chunk) => c.moduleIds.some((id) => LIB.test(id));
+    const byName = new Map(chunks.map((c) => [c.fileName, c]));
+    const entries = chunks.filter((c) => c.isEntry);
+    expect(entries).toHaveLength(1);
+    // The initial bundle: the entry chunk and every chunk it imports statically, transitively.
+    const initial = new Set<string>();
+    const walk = (c: Chunk) => {
+      if (initial.has(c.fileName)) return;
+      initial.add(c.fileName);
+      for (const f of c.imports) {
+        const next = byName.get(f);
+        if (next) walk(next);
+      }
+    };
+    for (const c of entries) walk(c);
+    expect(initial.size).toBeGreaterThan(0);
+    for (const f of initial) expect(holdsLib(byName.get(f) as Chunk), f).toBe(false);
+
+    const lazy = chunks.filter(holdsLib);
+    expect(lazy).toHaveLength(1);
+    expect(lazy[0]?.isDynamicEntry).toBe(true);
+    expect(lazy[0]?.facadeModuleId).toMatch(/src[\\/]lib[\\/]echarts\.ts$/);
+    expect(entries.some((c) => c.dynamicImports.includes(lazy[0]?.fileName ?? ''))).toBe(true);
   });
 });
