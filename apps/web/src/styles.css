@@ -398,3 +398,9 @@ td.deleted {
 .counts dt {
   color: var(--muted);
 }
+
+/* The lap-time chart (D3): its size comes from here, never from a style attribute. */
+.chart {
+  width: 100%;
+  height: 20rem;
+}
