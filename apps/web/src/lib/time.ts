@@ -24,3 +24,6 @@ export const fmtLap = (ms: number): string =>
 /** A sector time as `ss.SSS`, or `m:ss.SSS` from 60 s up. */
 export const fmtSector = (ms: number): string =>
   ms < 60_000 ? `${pad(Math.floor(ms / 1000), 2)}.${pad(ms % 1000, 3)}` : fmtLap(ms);
+
+/** A time difference as signed seconds: `+0.123`, `−0.045` (a minus sign, not a hyphen), `+0.000`. */
+export const fmtDelta = (ms: number): string => `${ms < 0 ? '−' : '+'}${(Math.abs(ms) / 1000).toFixed(3)}`;

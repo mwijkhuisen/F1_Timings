@@ -43,7 +43,8 @@ describe.each([
     expect(dark.bg).not.toBe(light.bg);
   });
 
-  it.each(['purple', 'green', 'yellow', 'fg', 'muted'])('--%s reaches 4.5:1 on --bg', (token) => {
+  // The mini-sector fills (D7) are these tokens too, plus --pit for the pit lane.
+  it.each(['purple', 'green', 'yellow', 'fg', 'muted', 'pit'])('--%s reaches 4.5:1 on --bg', (token) => {
     const fg = theme[token];
     expect(fg, token).toMatch(/^#/);
     expect(contrast(fg ?? '', theme.bg ?? '')).toBeGreaterThanOrEqual(4.5);

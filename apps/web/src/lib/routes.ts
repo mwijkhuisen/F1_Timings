@@ -5,7 +5,7 @@ import { type ComponentProps, createElement, type MouseEvent, useMemo, useSyncEx
 // canonicalised once the session is loaded). Importable in Node: `window` is
 // touched only inside functions.
 
-export type View = 'laps' | 'stints';
+export type View = 'laps' | 'compare' | 'minisectors' | 'stints';
 
 export type Route =
   | { id: 'latest' }
@@ -41,7 +41,9 @@ export function routeOf(pathname: string): Route | null {
   const session = c === undefined ? null : keyOf(c);
   if (meeting === null || session === null) return null;
   if (d === undefined) return { id: 'session', year, meeting, session, view: null };
-  return d === 'laps' || d === 'stints' ? { id: 'session', year, meeting, session, view: d } : null;
+  return d === 'laps' || d === 'compare' || d === 'minisectors' || d === 'stints'
+    ? { id: 'session', year, meeting, session, view: d }
+    : null;
 }
 
 /** Lower case, diacritics stripped, every run of other characters one `-`, trimmed. */

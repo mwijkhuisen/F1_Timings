@@ -12,6 +12,14 @@ describe('routeOf', () => {
       '/2026/1290-singapore/9965-race/stints',
       { id: 'session', year: 2026, meeting: 1290, session: 9965, view: 'stints' },
     ],
+    [
+      '/2026/1290-singapore/9965-race/compare',
+      { id: 'session', year: 2026, meeting: 1290, session: 9965, view: 'compare' },
+    ],
+    [
+      '/2026/1290-singapore/9965-race/minisectors',
+      { id: 'session', year: 2026, meeting: 1290, session: 9965, view: 'minisectors' },
+    ],
     // The key decides; the name is decoration.
     ['/2026/1290-wrong-name/9965-/laps', { id: 'session', year: 2026, meeting: 1290, session: 9965, view: 'laps' }],
     ['/2026/%31290-singapore/9965/laps', { id: 'session', year: 2026, meeting: 1290, session: 9965, view: 'laps' }],
@@ -27,8 +35,6 @@ describe('routeOf', () => {
     '/2026/1290',
     '/2026/1290/9965/laps/extra',
     '/2026/1290/9965/',
-    '/2026/1290/9965/compare',
-    '/2026/1290/9965/minisectors',
     '/2026/abc/9965/laps',
     '/2026/1290-Singapore/9965/laps',
     '/2026/1290_x/9965/laps',
