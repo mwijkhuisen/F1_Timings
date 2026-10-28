@@ -1,0 +1,9 @@
+{
+  "extends": "../tsconfig.json",
+  "compilerOptions": {
+    "types": ["node", "vite/client"],
+    "tsBuildInfoFile": "../node_modules/.cache/tsc/web-test.tsbuildinfo"
+  },
+  "include": [".", "../src"],
+  "references": [{ "path": "../../../packages/contracts" }]
+}
