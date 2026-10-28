@@ -4,6 +4,7 @@
     { "path": "packages/contracts" },
     { "path": "apps/server" },
     { "path": "apps/web" },
+    { "path": "apps/web/test" },
     { "path": "tsconfig.tooling.json" }
   ]
 }

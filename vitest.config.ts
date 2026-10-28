@@ -3,6 +3,8 @@ import { defineConfig } from 'vitest/config';
 // Anchored to the workspace, so nested checkouts (.claude/worktrees/*) are never picked up.
 const testFiles = ['test/**/*.test.ts', 'apps/*/test/**/*.test.ts', 'packages/*/test/**/*.test.ts'];
 const integrationFiles = testFiles.map((glob) => glob.replace(/\.test\.ts$/, '.int.test.ts'));
+// Component tests (react-dom/server in the node environment, no DOM) are unit tests only.
+const componentFiles = ['apps/*/test/**/*.test.tsx'];
 
 export default defineConfig({
   test: {
@@ -15,7 +17,11 @@ export default defineConfig({
     projects: [
       {
         extends: true,
-        test: { name: 'unit', include: testFiles, exclude: ['**/*.int.test.ts', '**/node_modules/**'] },
+        test: {
+          name: 'unit',
+          include: [...testFiles, ...componentFiles],
+          exclude: ['**/*.int.test.ts', '**/node_modules/**'],
+        },
       },
       {
         extends: true,

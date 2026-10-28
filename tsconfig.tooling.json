@@ -15,5 +15,7 @@
     "apps/*/test/**/*.ts",
     "packages/*/test/**/*.ts"
   ],
+  // The web tests have their own project (browser libs, JSX).
+  "exclude": ["apps/web/test"],
   "references": [{ "path": "packages/contracts" }, { "path": "apps/server" }]
 }
