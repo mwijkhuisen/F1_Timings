@@ -8,14 +8,10 @@ import { Note } from '../ui/Note.tsx';
 
 export type Metric = 'lap' | 's1' | 's2' | 's3';
 
-const METRICS: [Metric, string][] = [
-  ['lap', 'Lap'],
-  ['s1', 'S1'],
-  ['s2', 'S2'],
-  ['s3', 'S3'],
-];
+const LABEL: Record<Metric, string> = { lap: 'Lap', s1: 'S1', s2: 'S2', s3: 'S3' };
 const FIELD = { lap: 'lap_ms', s1: 's1_ms', s2: 's2_ms', s3: 's3_ms' } as const;
-// Colour is never the only cue (D9).
+// The colour's meaning as a title. Colour is never the only cue (D9): styles.css also boxes
+// purple and bolds green, and the legend says so.
 const COLOUR_TITLE = { purple: 'overall best', green: 'personal best', yellow: 'slower than personal best' } as const;
 
 /**
@@ -84,10 +80,12 @@ function Cell({
       ? missingReason(lap, metric, sessionType)
       : null;
   const shown = lap.deleted ? <s>{text}</s> : text;
+  // The server makes every value of a deleted, in- or out-lap yellow (A§9): it is not ranked, so no title.
+  const ranked = !lap.deleted && !lap.is_pit_in && !lap.is_pit_out;
   return (
     <td
       className={classes(colour && `t-${colour}`, lap.deleted && 'deleted')}
-      title={colour ? COLOUR_TITLE[colour] : undefined}
+      title={colour && ranked ? COLOUR_TITLE[colour] : undefined}
     >
       {dot && (
         <span className={`cmp cmp-${dot}`} title={lap.compound ?? undefined}>
@@ -139,7 +137,7 @@ export function LapGrid({
   );
   return (
     <div className="scroll">
-      <table className={columns ? 'laps cols' : 'laps'}>
+      <table className={columns ? 'laps cols' : 'laps'} aria-label={`${LABEL[metric]} times`}>
         {columns ? (
           <>
             <thead>
@@ -195,8 +193,8 @@ export function LapTable({ detail, laps }: { detail: SessionDetail; laps: Laps }
     <>
       <div className="controls">
         <fieldset className="segmented" aria-label="Metric">
-          {METRICS.map(([id, label]) => (
-            <button key={id} type="button" aria-pressed={metric === id} onClick={() => setMetric(id)}>
+          {Object.entries(LABEL).map(([id, label]) => (
+            <button key={id} type="button" aria-pressed={metric === id} onClick={() => setMetric(id as Metric)}>
               {label}
             </button>
           ))}
@@ -205,6 +203,10 @@ export function LapTable({ detail, laps }: { detail: SessionDetail; laps: Laps }
           Drivers as columns
         </button>
       </div>
+      <p className="legend">
+        <span className="t-purple">overall best</span> <span className="t-green">personal best</span>{' '}
+        <span className="t-yellow">other</span>
+      </p>
       <LapGrid detail={detail} laps={laps} metric={metric} columns={columns} />
     </>
   );

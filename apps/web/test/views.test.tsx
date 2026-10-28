@@ -1,7 +1,7 @@
 import { Laps, Season, SessionDetail, Status, Stints } from '@f1/contracts';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, expect, it } from 'vitest';
-import { latestPath, Meetings } from '../src/views/Picker.tsx';
+import { findLatest, latestPath, Meetings } from '../src/views/Picker.tsx';
 import { StatusPanel } from '../src/views/Status.tsx';
 import { StintBars } from '../src/views/Stints.tsx';
 
@@ -52,12 +52,40 @@ describe('the season picker', () => {
     expect(html).not.toContain('9964');
   });
 
-  it('sends / to the last started session that is not cancelled, else to the season', () => {
+  it('finds the last started session that is not cancelled', () => {
     expect(latestPath(2026, season, Date.parse('2026-10-11T12:00:00Z'))).toBe('/2026/1290-singapore/9965-race/laps');
     expect(latestPath(2026, season, Date.parse('2026-10-11T11:59:59Z'))).toBe(
       '/2026/1290-singapore/9963-qualifying/laps',
     );
-    expect(latestPath(2026, season, Date.parse('2026-10-10T12:00:00Z'))).toBe('/2026');
+    expect(latestPath(2026, season, Date.parse('2026-10-10T12:00:00Z'))).toBeNull();
+  });
+
+  it('sends / to the newest season with a started session, else to the newest season', async () => {
+    // 2027 is listed before its first session.
+    const next = Season.parse([
+      {
+        ...meeting,
+        meeting_key: 1400,
+        name: 'Australian Grand Prix',
+        sessions: [session(9999, 'Race', '2027-03-07T05:00:00.000Z')],
+      },
+    ]);
+    const loaded: number[] = [];
+    const load = async (year: number) => {
+      loaded.push(year);
+      return year === 2027 ? next : season;
+    };
+    expect(await findLatest([2027, 2026], load, Date.parse('2026-10-28T00:00:00Z'))).toBe(
+      '/2026/1290-singapore/9965-race/laps',
+    );
+    expect(loaded).toEqual([2027, 2026]);
+    // A season that has one is the last one loaded.
+    loaded.length = 0;
+    expect(await findLatest([2026, 2025], load, Date.parse('2026-10-28T00:00:00Z'))).toBe(
+      '/2026/1290-singapore/9965-race/laps',
+    );
+    expect(loaded).toEqual([2026]);
+    expect(await findLatest([2027, 2026], load, Date.parse('2026-01-01T00:00:00Z'))).toBe('/2027');
   });
 });
 
@@ -116,9 +144,11 @@ describe('the stints bars', () => {
 
   it('sizes each stint by its laps over the session laps', () => {
     expect(html).toContain(
-      '<span class="seg cmp-medium" style="--x:0.000%;--w:25.000%" title="MEDIUM, laps 1–10, tyre age 0 at start"><b>M</b> <span class="range">1–10</span></span>',
+      '<span class="seg cmp-medium" style="--x:0.000%;--w:25.000%" title="MEDIUM, laps 1–10, tyre age 0 at start (may be wrong for a used set)"><b>M</b> <span class="range">1–10</span></span>',
     );
-    expect(html).toContain('style="--x:25.000%;--w:75.000%" title="HARD, laps 11–40, tyre age 0 at start"><b>H</b>');
+    expect(html).toContain(
+      'style="--x:25.000%;--w:75.000%" title="HARD, laps 11–40, tyre age 0 at start (may be wrong for a used set)"><b>H</b>',
+    );
   });
 
   it('marks an unknown compound and orders the drivers as the lap table does', () => {

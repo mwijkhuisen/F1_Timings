@@ -161,15 +161,19 @@ const COLOURS: Record<Metric, (string | null)[]> = {
   s3: ['green', 'yellow', null, 'purple', 'yellow', 'yellow'],
 };
 const TITLES = { purple: 'overall best', green: 'personal best', yellow: 'slower than personal best' };
+// HAM 3 (in), NOR 2 (deleted, in) and NOR 3 (out) are not ranked: the server colours them yellow, with no title.
+const UNRANKED = new Set([2, 4, 5]);
 
 describe('the lap grid', () => {
   it.each(Object.entries(COLOURS))('colours %s by its own colour field, none for null', (metric, colours) => {
     const got = cells(grid(metric as Metric));
     expect(got.map(colourOf)).toEqual(colours);
-    for (const c of got) {
+    got.forEach((c, i) => {
       const colour = colourOf(c);
-      expect(c.title).toBe(colour === null ? null : TITLES[colour as keyof typeof TITLES]);
-    }
+      expect(c.title, `cell ${i}`).toBe(
+        colour === null || UNRANKED.has(i) ? null : TITLES[colour as keyof typeof TITLES],
+      );
+    });
   });
 
   it('formats lap and sector times', () => {
@@ -186,7 +190,7 @@ describe('the lap grid', () => {
       expect(nor2?.body).toMatch(
         new RegExp(`<div popover="auto" id="n-1-2-${metric}"[^>]*>Deleted: TRACK LIMITS AT TURN 16</div>`),
       );
-      expect(nor2?.body).toContain(`popoverTarget="n-1-2-${metric}"`);
+      expect(nor2?.body).toContain(`popoverTarget="n-1-2-${metric}" aria-describedby="n-1-2-${metric}"`);
     }
     expect(cells(grid('lap')).filter((c) => c.cls.includes('deleted'))).toHaveLength(1);
   });
@@ -255,7 +259,11 @@ describe('the lap grid', () => {
     const html = renderToStaticMarkup(<LapTable detail={detail} laps={laps} />);
     expect(html).toMatch(/<button type="button" aria-pressed="true">Lap<\/button>/);
     expect(html).toMatch(/aria-pressed="false">Drivers as columns</);
-    expect(html).toContain('class="laps"');
+    expect(html).toContain('<table class="laps" aria-label="Lap times">');
+    // The non-colour cue is explained next to the switch (styles.css boxes purple and bolds green).
+    expect(html).toContain(
+      '<p class="legend"><span class="t-purple">overall best</span> <span class="t-green">personal best</span> <span class="t-yellow">other</span></p>',
+    );
     expect(renderToStaticMarkup(<LapTable detail={detail} laps={[]} />)).toBe('<p>No laps yet.</p>');
   });
 });

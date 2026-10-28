@@ -25,7 +25,10 @@ export function StintBars({ detail, laps, stints }: { detail: SessionDetail; lap
               if (s.driver_number !== d.number || s.lap_start === null || s.lap_end === null) return null;
               const compound = compoundOf(s.compound);
               const range = `${s.lap_start}–${s.lap_end}`;
-              const age = s.tyre_age_at_start === null ? '' : `, tyre age ${s.tyre_age_at_start} at start`;
+              const age =
+                s.tyre_age_at_start === null
+                  ? ''
+                  : `, tyre age ${s.tyre_age_at_start} at start (may be wrong for a used set)`;
               const style = {
                 '--x': pct((s.lap_start - 1) / total),
                 '--w': pct((s.lap_end - s.lap_start + 1) / total),

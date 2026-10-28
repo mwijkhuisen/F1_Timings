@@ -1,14 +1,15 @@
 import type { Season } from '@f1/contracts';
-import { useEffect } from 'react';
-import { useSeason, useSeasons } from '../lib/api.ts';
+import { useQueryClient } from '@tanstack/react-query';
+import { useEffect, useState } from 'react';
+import { seasonQuery, useSeason, useSeasons } from '../lib/api.ts';
 import { Link, replace, sessionPath } from '../lib/routes.ts';
 import { fmtInstant } from '../lib/time.ts';
 import { Pending } from '../ui/ErrorView.tsx';
 
 // The season picker (D13): `/:year` lists the meetings and their sessions; `/` goes to the latest session.
 
-/** The laps URL of the season's last started session that is not cancelled, or the season page without one. */
-export function latestPath(year: number, season: Season, now: number): string {
+/** The laps URL of the season's last started session that is not cancelled, or null without one. */
+export function latestPath(year: number, season: Season, now: number): string | null {
   let latest: { meeting: Season[number]; start: number; key: number; name: string | null } | null = null;
   for (const meeting of season)
     for (const s of meeting.sessions) {
@@ -17,7 +18,7 @@ export function latestPath(year: number, season: Season, now: number): string {
         latest = { meeting, start, key: s.session_key, name: s.name };
     }
   return latest === null
-    ? `/${year}`
+    ? null
     : sessionPath(year, { key: latest.meeting.meeting_key, name: latest.meeting.name }, latest, 'laps');
 }
 
@@ -63,19 +64,43 @@ export function Picker({ year }: { year: number }) {
   return <Meetings year={year} season={season.data} />;
 }
 
-function LatestIn({ year }: { year: number }) {
-  const season = useSeason(year);
-  const path = season.data && latestPath(year, season.data, Date.now());
-  useEffect(() => {
-    if (path) replace(path);
-  }, [path]);
-  return path ? null : <Pending error={season.error} />;
+/** `/`: the newest season with a started session (seasons come newest first), else the newest season's page (D13). */
+export async function findLatest(
+  years: number[],
+  load: (year: number) => Promise<Season>,
+  now: number,
+): Promise<string> {
+  for (const year of years) {
+    const path = latestPath(year, await load(year), now);
+    if (path !== null) return path;
+  }
+  return `/${years[0]}`;
 }
 
-/** `/`: the newest season's latest session (the API lists seasons newest first). */
 export function Latest() {
   const seasons = useSeasons();
-  if (!seasons.data) return <Pending error={seasons.error} />;
-  const newest = seasons.data[0];
-  return newest ? <LatestIn year={newest.year} /> : <p>No seasons yet.</p>;
+  const client = useQueryClient();
+  const [error, setError] = useState<unknown>(null);
+  const data = seasons.data;
+  useEffect(() => {
+    if (!data?.length) return;
+    let live = true;
+    findLatest(
+      data.map((s) => s.year),
+      (year) => client.fetchQuery(seasonQuery(year)),
+      Date.now(),
+    ).then(
+      (path) => {
+        if (live) replace(path);
+      },
+      (e: unknown) => {
+        if (live) setError(e);
+      },
+    );
+    return () => {
+      live = false;
+    };
+  }, [data, client]);
+  if (data?.length === 0) return <p>No seasons yet.</p>;
+  return <Pending error={seasons.error ?? error} />;
 }

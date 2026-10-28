@@ -7,7 +7,7 @@ import type { ReactNode } from 'react';
  */
 export const Note = ({ id, text, children }: { id: string; text: string; children: ReactNode }) => (
   <>
-    <button type="button" className="note" popoverTarget={id} title={text}>
+    <button type="button" className="note" popoverTarget={id} aria-describedby={id} title={text}>
       {children}
     </button>
     <div popover="auto" id={id} className="pop">

@@ -3,7 +3,8 @@ import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 
 // A§13/D9: the timing colours, the text and the muted text (deleted laps) are text on --bg,
-// so each needs WCAG AA 4.5:1 in the dark and the light theme.
+// and compound letters are text on their fill, so each needs WCAG AA 4.5:1 in the dark and
+// the light theme.
 
 const css = readFileSync(fileURLToPath(new URL('../src/styles.css', import.meta.url)), 'utf8');
 
@@ -47,4 +48,19 @@ describe.each([
     expect(fg, token).toMatch(/^#/);
     expect(contrast(fg ?? '', theme.bg ?? '')).toBeGreaterThanOrEqual(4.5);
   });
+
+  // The compound dot and the stint bars put --on-cmp text on a compound fill; an unknown compound gets --unknown.
+  it.each(['soft', 'medium', 'hard', 'intermediate', 'wet', 'unknown'])('--on-cmp reaches 4.5:1 on --%s', (token) => {
+    const fill = theme[token];
+    expect(fill, token).toMatch(/^#/);
+    expect(contrast(theme['on-cmp'] ?? '', fill ?? '')).toBeGreaterThanOrEqual(4.5);
+  });
+});
+
+it('draws compound text and fills only from those tokens', () => {
+  const rule = /\.cmp,\s*\.seg\s*\{([^}]*)\}/.exec(css)?.[1] ?? '';
+  expect(rule).toContain('color: var(--on-cmp);');
+  expect(rule).toContain('background: var(--cmp, var(--unknown));');
+  for (const [, name, value] of css.matchAll(/\.cmp-([\w-]+)\s*\{\s*--cmp:\s*([^;]+);/g))
+    expect(value, name).toBe(`var(--${name})`);
 });
