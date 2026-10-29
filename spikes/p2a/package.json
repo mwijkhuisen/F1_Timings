@@ -1,0 +1,8 @@
+{
+  "name": "f1-spike-p2a",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "@microsoft/signalr": "10.0.11"
+  }
+}
