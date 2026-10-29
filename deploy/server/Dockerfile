@@ -3,7 +3,7 @@
 # digest. Build context: the repository root, through the allowlist in
 # /.dockerignore:
 #   docker build -f deploy/server/Dockerfile --build-arg F1_REVISION=<sha> .
-FROM node:26.11.1-trixie-slim@sha256:193fe51b64e77981119c98c2002c9e32a70e2f006fb4d25068ce0558998917f0 AS build
+FROM node:26.12.0-trixie-slim@sha256:e556a144463cc8dc53afe8de6d2fa0db5c132fd39ffa232c17641bd40df2bf11 AS build
 # The `migrate` role runs the dbmate release binary, checked against its pinned
 # sha256 (the same pin as .github/workflows/ci.yml).
 ARG DBMATE_VERSION=2.36.0
@@ -31,7 +31,7 @@ RUN pnpm install --frozen-lockfile \
 # Layout: node runs /app/apps/server/dist/main.js; migrate.ts resolves
 # ../../../../db/migrations from dist/db/migrate.js to /app/db/migrations; the
 # dbmate binary is on the distroless PATH (/usr/local/bin is in it).
-FROM gcr.io/distroless/nodejs26-debian13:nonroot@sha256:3a6f4e6fd37efe00042667d06fd52240f2589ed09b0694fbb3b1bf860030a839
+FROM gcr.io/distroless/nodejs26-debian13:nonroot@sha256:a51c5d631b90e1b298e17a88a307b77f0b959b47de942d033acce0c96be3fb83
 WORKDIR /app
 COPY --from=build /out /app
 COPY --from=build --chmod=0755 /tmp/dbmate /usr/local/bin/dbmate
