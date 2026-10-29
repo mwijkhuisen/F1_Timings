@@ -26,3 +26,27 @@ updates:
       actions:
         patterns: ['*']
     open-pull-requests-limit: 5
+
+  # The image bases of deploy/{server,web}/Dockerfile (pinned by digest).
+  - package-ecosystem: docker
+    directories: [/deploy/server, /deploy/web]
+    schedule:
+      interval: weekly
+    cooldown:
+      default-days: 7
+    groups:
+      images:
+        patterns: ['*']
+    open-pull-requests-limit: 5
+
+  # postgres and cloudflared in deploy/compose.yaml.
+  - package-ecosystem: docker-compose
+    directory: /deploy
+    schedule:
+      interval: weekly
+    cooldown:
+      default-days: 7
+    groups:
+      compose-images:
+        patterns: ['*']
+    open-pull-requests-limit: 5

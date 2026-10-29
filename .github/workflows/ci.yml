@@ -122,16 +122,47 @@ jobs:
             "https://github.com/koalaman/shellcheck/releases/download/$SHELLCHECK_VERSION/$tarball"
           echo "$SHELLCHECK_SHA256  $RUNNER_TEMP/$tarball" | sha256sum -c -
           tar -xzf "$RUNNER_TEMP/$tarball" -C "$RUNNER_TEMP"
-      - name: shellcheck every shell script
+      - name: shellcheck every shell script (deploy/bin has no extensions; '*.sh' covers deploy/tests)
         run: |
-          mapfile -t files < <(git ls-files '*.sh')
+          mapfile -t files < <(git ls-files '*.sh' 'deploy/bin/*' 'deploy/tests/*.sh')
           "$RUNNER_TEMP/shellcheck-$SHELLCHECK_VERSION/shellcheck" --version
           "$RUNNER_TEMP/shellcheck-$SHELLCHECK_VERSION/shellcheck" "${files[@]}"
+
+  # P1f: build both images, then the compose hardening check, the nft table check and the
+  # end-to-end install/update/rollback run on the runner's Docker (nothing leaves the runner).
+  deploy:
+    name: deploy
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    env:
+      F1_REVISION: ${{ github.sha }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: docker version
+        run: docker version
+      - name: Install nftables (the e2e run needs the nft binary)
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq nftables >/dev/null
+      - name: Build f1-server:ci
+        run: docker build -f deploy/server/Dockerfile --build-arg "F1_REVISION=$F1_REVISION" -t f1-server:ci .
+      - name: Build f1-web:ci
+        run: docker build -f deploy/web/Dockerfile --build-arg "F1_REVISION=$F1_REVISION" -t f1-web:ci .
+      - name: hardening
+        run: bash deploy/tests/hardening.sh
+      - name: nft-check
+        run: bash deploy/tests/nft-check.sh
+      - name: e2e
+        run: sudo bash deploy/tests/e2e.sh
 
   ci:
     name: ci
     if: always()
-    needs: [check, integration, shellcheck]
+    needs: [check, integration, shellcheck, deploy]
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     permissions: {}
@@ -142,3 +173,51 @@ jobs:
         run: |
           echo "$NEEDS" | jq -r 'to_entries[] | "\(.key): \(.value.result)"'
           echo "$NEEDS" | jq -e 'all(.[]; .result == "success")' >/dev/null
+
+  # Push to main only, after the aggregate is green. The one job with packages: write.
+  # Runs queue (never cancelled) so :main ends on the newest commit. No cosign/attest/SBOM.
+  release:
+    name: release
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    needs: [ci]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      packages: write
+    concurrency:
+      group: release
+      cancel-in-progress: false
+    env:
+      F1_REVISION: ${{ github.sha }}
+      REGISTRY_PREFIX: ghcr.io/mwijkhuisen
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Build f1-server and f1-web with their tags
+        run: |
+          for img in server web; do
+            docker build -f "deploy/$img/Dockerfile" --build-arg "F1_REVISION=$F1_REVISION" \
+              -t "$REGISTRY_PREFIX/f1-$img:sha-$F1_REVISION" -t "$REGISTRY_PREFIX/f1-$img:main" .
+          done
+      - name: Log in to ghcr.io and push all four tags
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          printf '%s' "$GH_TOKEN" | docker login ghcr.io -u "$GITHUB_ACTOR" --password-stdin
+          for img in server web; do
+            docker push "$REGISTRY_PREFIX/f1-$img:sha-$F1_REVISION"
+            docker push "$REGISTRY_PREFIX/f1-$img:main"
+          done
+      - name: Record the pushed digests
+        run: |
+          {
+            echo '### Pushed images (RepoDigests)'
+            for img in server web; do
+              docker image inspect --format '{{range .RepoDigests}}- `{{.}}`{{"\n"}}{{end}}' "$REGISTRY_PREFIX/f1-$img:main"
+            done
+          } >>"$GITHUB_STEP_SUMMARY"
+      - name: Log out of ghcr.io
+        if: always()
+        run: docker logout ghcr.io
