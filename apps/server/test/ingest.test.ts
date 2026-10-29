@@ -1,6 +1,10 @@
+import { DummyDriver, Kysely, PostgresAdapter, PostgresIntrospector, PostgresQueryCompiler } from 'kysely';
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import type { DB } from '../src/db/db.ts';
+import { scheduleSync } from '../src/ingest/ingest.ts';
 import { ms, normaliseSession } from '../src/ingest/normalise.ts';
 import { afterFailure, afterSuccess, busyGuard, errorCode, firstFetchAt, type Progress } from '../src/ingest/state.ts';
+import type { createClient } from '../src/openf1/client.ts';
 import type { Lap } from '../src/openf1/schemas.ts';
 
 const MIN = 60_000;
@@ -154,5 +158,34 @@ describe('busyGuard (fake timers)', () => {
     await vi.advanceTimersByTimeAsync(1_000);
     await third;
     expect(runs).toBe(3);
+  });
+});
+
+describe('scheduleSync pings healthchecks', () => {
+  // Kysely's dummy driver: every query answers with no rows, transactions are no-ops.
+  const db = new Kysely<DB>({
+    dialect: {
+      createAdapter: () => new PostgresAdapter(),
+      createDriver: () => new DummyDriver(),
+      createIntrospector: (k) => new PostgresIntrospector(k),
+      createQueryCompiler: () => new PostgresQueryCompiler(),
+    },
+  });
+  const run = async (reply: Awaited<ReturnType<ReturnType<typeof createClient>['get']>>) => {
+    const ping = vi.fn(async (_slug: string) => {});
+    const client = { get: async () => reply } as unknown as ReturnType<typeof createClient>;
+    const log = { info: vi.fn(), error: vi.fn() };
+    await scheduleSync({ db, client, now: () => end, log, beat: () => {}, ping }).run();
+    return ping;
+  };
+
+  it('pings f1-ingest once after a successful sync', async () => {
+    const ping = await run({ ok: true, value: { status: 200, body: [] } });
+    expect(ping.mock.calls).toEqual([['f1-ingest']]);
+  });
+
+  it('does not ping after a failed sync', async () => {
+    const ping = await run({ ok: false, error: { code: 'network' } });
+    expect(ping).not.toHaveBeenCalled();
   });
 });

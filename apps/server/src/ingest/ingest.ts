@@ -34,6 +34,8 @@ export type Deps = {
   log: Pick<Logger, 'info' | 'error'>;
   /** Touches the heartbeat: the work proves it is alive, not a free-running timer (A§4). */
   beat: () => void;
+  /** The healthchecks.io ping (never throws); only the daemon's scheduleSync calls it. */
+  ping?: (slug: string) => Promise<void>;
 };
 export type Outcome = Result<IngestState, ErrorCode | 'unknown_session' | 'live_session'>;
 
@@ -389,7 +391,10 @@ export function scheduleSync(deps: Deps) {
       );
       const current = deps.now().getUTCFullYear();
       const years = yearRange(FIRST_YEAR, current).filter((y) => y === current || !seen.has(y));
-      if (await syncSchedule(deps, years)) next = undefined;
+      if (await syncSchedule(deps, years)) {
+        next = undefined;
+        await deps.ping?.('f1-ingest');
+      }
     },
   };
 }
