@@ -1,0 +1,238 @@
+#!/usr/bin/env bash
+# f1-install (A§14.4, D10): sets up, and later re-checks, the f1 host files on the Waterheight VM.
+# Run it as root from a checkout of this repository on the VM: sudo deploy/bin/f1-install.
+# Idempotent: every step checks first and changes only what differs; the last line is
+# "f1-install: N change(s)", so a second run reports 0 changes.
+#
+# It installs compose.yaml, roles.sql and the firewall into /etc/f1, the host scripts into
+# /usr/local/bin (root-owned copies: the timers never run a file of the checkout) and the units
+# into /etc/systemd/system; it creates the secret files (the four db_* filled with random hex,
+# cf_tunnel_token and hc_ping_key left empty for the owner) and the f1.env template; it enables
+# and (re)starts f1-firewall.service. It never enables the timers: the owner does that after
+# filling the secrets and f1.env (install runbook). When compose.yaml changed under a running
+# deploy, it recreates the stack with the current images and smoke-tests it.
+# It never touches /etc/rws, /srv/rws, the rws project, daemon.json, sysctl, apt,
+# nftables.service or docker.service (ADR-0003), and never prints a secret.
+#
+# Usage: sudo deploy/bin/f1-install
+set -euo pipefail
+
+repo=$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/../.." && pwd)
+# shellcheck source=deploy/bin/f1-lib.sh
+. "$repo/deploy/bin/f1-lib.sh"
+umask 022
+
+if (($#)); then
+  echo "usage: f1-install" >&2
+  exit 64
+fi
+
+changes=0
+ok() { printf 'ok       %s\n' "$*"; }
+# fix <what> <command…>: runs the command and counts a change.
+fix() {
+  local what=$1
+  shift
+  changes=$((changes + 1))
+  "$@"
+  printf 'changed  %s\n' "$what"
+}
+# install_file <src> <dest> <mode>: root:root <mode>; returns 0 when it changed the file.
+install_file() {
+  local src=$1 dest=$2 mode=$3
+  if [[ -f $dest ]] && cmp -s "$src" "$dest" && [[ $(stat -c '%a %u %g' "$dest") == "${mode#0} 0 0" ]]; then
+    ok "$dest"
+    return 1
+  fi
+  fix "$dest" install -D -m "$mode" -o 0 -g 0 "$src" "$dest"
+}
+ensure_dir() {
+  local dir=$1 mode=$2
+  if [[ -d $dir && $(stat -c '%a %u %g' "$dir") == "${mode#0} 0 0" ]]; then
+    ok "$dir"
+  else
+    fix "$dir (root $mode)" install -d -m "$mode" -o 0 -g 0 "$dir"
+  fi
+}
+
+# ------------------------------------------------------------------ preflight
+((EUID == 0)) || die "run as root (sudo)"
+[[ -f $repo/deploy/compose.yaml && -f $repo/deploy/host/nftables-f1.conf && -f $repo/deploy/postgres/roles.sql ]] ||
+  die "not a checkout of this repository: $repo"
+for cmd in docker nft curl flock ip systemctl getent od cmp install; do
+  command -v "$cmd" >/dev/null || die "$cmd is missing"
+done
+docker compose version >/dev/null 2>&1 || die "the Docker Compose plugin (docker compose) is missing"
+docker info >/dev/null 2>&1 || die "the Docker daemon does not answer"
+# Never install a table that does not load.
+nft -c -f "$repo/deploy/host/nftables-f1.conf" || die "deploy/host/nftables-f1.conf does not pass nft -c: nothing installed"
+echo "f1-install from $repo"
+
+# No deploy while the files change under it (f1-update takes the same lock).
+exec 9>"$(lockfile update)"
+flock -n 9 || die "f1-update is running: try again in a minute"
+
+# O1: f1's subnets (from compose.yaml) must not overlap a route of the host (other than on its
+# own f1-* bridges) or a Docker network that is not f1's. Integer math on IPv4 CIDRs.
+mapfile -t subnets < <(grep -oE 'subnet: [0-9./]+' "$repo/deploy/compose.yaml" | cut -d' ' -f2)
+((${#subnets[@]} == 7)) || die "expected 7 subnets in deploy/compose.yaml, found ${#subnets[@]}"
+readonly CIDR_RE='^([0-9]{1,3}\.){3}[0-9]{1,3}(/([0-9]|[12][0-9]|3[0-2]))?$'
+ip4() {
+  local IFS=. o
+  read -r -a o <<<"$1"
+  echo $(((10#${o[0]} << 24) | (10#${o[1]} << 16) | (10#${o[2]} << 8) | 10#${o[3]}))
+}
+# overlap <cidr> <cidr>: true when the two ranges share an address (a bare address is a /32).
+overlap() {
+  local m=32 n=32 p mask a b
+  [[ $1 != */* ]] || m=${1#*/}
+  [[ $2 != */* ]] || n=${2#*/}
+  p=$((10#$m < 10#$n ? 10#$m : 10#$n))
+  mask=$((p == 0 ? 0 : (0xFFFFFFFF << (32 - p)) & 0xFFFFFFFF))
+  a=$(ip4 "${1%/*}") b=$(ip4 "${2%/*}")
+  (((a & mask) == (b & mask)))
+}
+taken=() # "<cidr>|<what>"
+while read -r -a f; do
+  ((${#f[@]})) || continue
+  i=0
+  case ${f[0]} in unicast | local | broadcast | multicast | anycast | blackhole | unreachable | prohibit | throw | nat) i=1 ;; esac
+  dest=${f[i]:-} dev=''
+  for ((j = i + 1; j + 1 < ${#f[@]}; j++)); do
+    if [[ ${f[j]} == dev ]]; then dev=${f[j + 1]}; fi
+  done
+  [[ $dest == default || $dev == f1-* ]] || taken+=("$dest|the route $dest dev ${dev:-none}")
+done < <(ip -4 route show table all)
+mapfile -t networks < <(docker network ls -q)
+while read -r -a f; do
+  [[ ${f[0]:-f1-} != f1-* ]] || continue
+  for s in "${f[@]:1}"; do taken+=("$s|the Docker network ${f[0]}"); done
+done < <(docker network inspect --format '{{.Name}}{{range .IPAM.Config}} {{.Subnet}}{{end}}' "${networks[@]}")
+conflict=0
+for want in "${subnets[@]}"; do
+  [[ $want =~ $CIDR_RE ]] || die "deploy/compose.yaml: malformed subnet $want"
+  for entry in "${taken[@]}"; do
+    [[ ${entry%%|*} =~ $CIDR_RE ]] || continue # IPv6, or not an address
+    if overlap "$want" "${entry%%|*}"; then
+      echo "conflict: $want overlaps ${entry#*|}" >&2
+      conflict=1
+    fi
+  done
+done
+((conflict == 0)) || die "f1's subnets overlap the host's routes or Docker networks (O1): nothing installed; pick other subnets in a PR"
+ok "subnets ${subnets[*]} (no overlap with ${#taken[@]} routes and Docker networks)"
+
+# The GID guard: F1's secret GIDs and its container uid/gid are its own (invariant 5). A host
+# group with one of them could read the secrets; a host user 62532 could read the database files.
+for entry in "${F1_SECRETS[@]}" container:62532; do
+  if grp=$(getent group "${entry##*:}"); then die "gid ${entry##*:} is already the host group ${grp%%:*}: nothing installed"; fi
+done
+if usr=$(getent passwd 62532); then die "uid 62532 is already the host user ${usr%%:*}: nothing installed"; fi
+ok "gids 62001-62006 and uid/gid 62532 are not used on the host"
+
+# ------------------------------------------------------------------ directories
+ensure_dir "$F1_ETC" 0755
+ensure_dir "$F1_ETC/secrets" 0700
+ensure_dir "$F1_ETC/postgres" 0755
+ensure_dir /srv/f1 0755
+ensure_dir "$F1_STATE" 0700
+
+# ------------------------------------------------------------------ secrets
+set_group() { chown "0:$2" "$1" && chmod 0440 "$1"; }
+for entry in "${F1_SECRETS[@]}"; do
+  name=${entry%%:*} gid=${entry##*:}
+  file=$F1_ETC/secrets/$name
+  if [[ ! -e $file ]]; then
+    fix "$file (empty, root:$gid 0440)" install -m 0440 -o 0 -g "$gid" /dev/null "$file"
+  elif [[ ! -f $file ]]; then
+    die "$file is not a regular file"
+  elif [[ $(stat -c '%a %u %g' "$file") != "440 0 $gid" ]]; then
+    fix "$file (root:$gid 0440)" set_group "$file" "$gid"
+  else
+    ok "$file (root:$gid 0440)"
+  fi
+done
+# The database passwords: 32 bytes of the kernel CSPRNG as 64 hex characters (migrate.ts and
+# roles.sql accept ^[A-Za-z0-9_-]{24,}$), written in place (the file keeps root:<gid> 0440) only
+# while the file is empty; never overwritten, never printed.
+gen_password() {
+  local hex
+  hex=$(od -An -tx1 -N32 /dev/urandom | tr -d ' \n')
+  [[ $hex =~ ^[0-9a-f]{64}$ ]] || die "could not read 32 random bytes"
+  printf '%s\n' "$hex" >"$1"
+}
+for name in db_postgres db_f1_migrator db_f1_ingest db_f1_api; do
+  file=$F1_ETC/secrets/$name
+  if [[ ! -s $file ]]; then
+    fix "$name generated" gen_password "$file"
+  elif secret_matches "$name" '^[A-Za-z0-9_-]{24,}$'; then
+    ok "$name present"
+  else
+    die "$file is not 24 or more characters of A-Z a-z 0-9 _ -: empty it (: >$file) and run f1-install again (install runbook)"
+  fi
+done
+fill=()
+for name in cf_tunnel_token hc_ping_key; do
+  secret_matches "$name" '[^[:space:]]' || fill+=("$F1_ETC/secrets/$name")
+done
+
+# ------------------------------------------------------------------ settings
+write_env() {
+  printf '%s\n' '# Non-secret settings of the f1 stack (A§12.2), read by the api and checked by f1-update.' \
+    '# Only these two lines, no quotes: the Access team name and the AUD tag of the application.' \
+    'CF_ACCESS_TEAM=' 'CF_ACCESS_AUD=' | write_atomic "$F1_ETC/f1.env" 0644
+}
+if [[ -f $F1_ETC/f1.env ]]; then
+  ok "$F1_ETC/f1.env (the owner's settings are never overwritten)"
+else
+  fix "$F1_ETC/f1.env (template)" write_env
+fi
+env_ready || fill+=("$F1_ETC/f1.env (CF_ACCESS_TEAM, CF_ACCESS_AUD)")
+
+# ------------------------------------------------------------------ files
+install_file "$repo/deploy/postgres/roles.sql" "$F1_ETC/postgres/roles.sql" 0644 || true
+compose_changed=0
+install_file "$repo/deploy/compose.yaml" "$F1_ETC/compose.yaml" 0644 && compose_changed=1
+install_file "$repo/deploy/bin/f1-lib.sh" /usr/local/bin/f1-lib.sh 0644 || true
+for script in f1-update f1-tick f1-resolvers; do
+  install_file "$repo/deploy/bin/$script" "/usr/local/bin/$script" 0755 || true
+done
+fw_changed=0 units_changed=0
+install_file "$repo/deploy/host/nftables-f1.conf" "$F1_ETC/nftables-f1.conf" 0644 && fw_changed=1
+install_file "$repo/deploy/host/f1-firewall.service" /etc/systemd/system/f1-firewall.service 0644 &&
+  fw_changed=1 units_changed=1
+for unit in "$repo"/deploy/systemd/f1-*; do
+  install_file "$unit" "/etc/systemd/system/${unit##*/}" 0644 && units_changed=1
+done
+if ((units_changed)); then systemctl daemon-reload; fi
+
+# ------------------------------------------------------------------ firewall
+if systemctl is-enabled --quiet f1-firewall.service 2>/dev/null; then
+  ok "f1-firewall.service enabled"
+else
+  fix "f1-firewall.service enabled" systemctl enable --quiet f1-firewall.service
+fi
+if ! systemctl is-active --quiet f1-firewall.service; then
+  fix "f1-firewall.service started (table inet f1)" systemctl start f1-firewall.service
+elif ((fw_changed)) || ! nft list table inet f1 >/dev/null 2>&1; then
+  fix "f1-firewall.service restarted (table inet f1 reloaded)" systemctl restart f1-firewall.service
+else
+  ok "f1-firewall.service active"
+fi
+
+# ------------------------------------------------------------------ a running deploy
+# The images stay those of current.env; a failed smoke test leaves the stack as it is.
+apply_compose() {
+  if ! { f1_compose "$F1_STATE/current.env" up -d --remove-orphans && smoke; }; then
+    die "the stack did not come back with the new compose.yaml: check 'docker compose -p f1 ps' and the update runbook"
+  fi
+}
+if ((compose_changed)) && [[ -f $F1_STATE/current.env ]]; then
+  fix "the f1 stack recreated with the new compose.yaml" apply_compose
+fi
+
+if ((${#fill[@]})); then
+  echo "fill these, then run 'systemctl enable --now f1-update.timer f1-tick.timer' (install runbook):"
+  printf '  %s\n' "${fill[@]}"
+fi
+echo "f1-install: $changes change(s)"

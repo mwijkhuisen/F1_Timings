@@ -1,0 +1,12 @@
+# Enabled by the owner after the secrets and /etc/f1/f1.env are filled (install runbook), never
+# by f1-install.
+[Unit]
+Description=f1: deploy the newest images, every 10 minutes
+
+[Timer]
+OnCalendar=*:0/10
+Persistent=true
+RandomizedDelaySec=20
+
+[Install]
+WantedBy=timers.target
