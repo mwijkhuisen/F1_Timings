@@ -7,7 +7,8 @@
 #   1. f1-install twice: the second run makes 0 changes; systemd-analyze verify on the units.
 #   2. Dummy cf_tunnel_token and hc_ping_key, and f1.env with CF_ACCESS_TEAM=ci and a 64-hex AUD.
 #   3. f1-update --server f1-server:ci --web f1-web:ci: exit 0, current.env, /healthz 200 on
-#      127.0.0.1:8180 (caddy, api and db as 62532; the publish through f1-publish; local tags).
+#      127.0.0.1:8180 (caddy, api and db as 62532; the publish through f1-publish; local tags),
+#      every container healthy when it returns (the smoke test waits for that).
 #   4. Egress from api to a non-Cloudflare host is blocked.
 #   5. f1-update --server f1-server:broken (migrate passes, api exits): exit 1, "rolled back",
 #      current.env unchanged, failed.env written, /healthz 200 again; the same pair again is
@@ -15,6 +16,12 @@
 #   6. docker inspect of db, api and caddy: read-only root, CapDrop ALL, user 62532:62532,
 #      no-new-privileges; caddy's 127.0.0.1:8180 is the only published port.
 #   7. f1-tick restores a deleted table inet f1 and writes the disk file.
+#   8. A local tag with a registry host (localhost/f1-server:ci) is pulled, never recorded as given.
+#   9. f1-tick skips the container restarts while the update lock is held.
+#  10. Without its firewall (table deleted, conf moved away) f1-tick stops the stack and f1-update
+#      refuses to deploy; with the conf back, f1-tick reloads the table and starts the stack.
+# Not here: f1-update's revision check (server and web :main from different commits) runs on the
+# default ghcr.io refs only, which CI cannot pull.
 # Usage: sudo bash deploy/tests/e2e.sh
 set -euo pipefail
 
@@ -98,7 +105,9 @@ grep -q 'deployed server f1-server:ci web f1-web:ci' "$tmp/update1" || fail "f1-
 curl -fsS --max-time 5 -o /dev/null "$URL" || fail "$URL is not 200"
 services=$(docker ps -a --filter label=com.docker.compose.project=f1 --format '{{.Label "com.docker.compose.service"}}' | sort | tr '\n' ' ')
 [[ $services == 'api caddy db ' ]] || fail "the f1 containers are '$services', not 'api caddy db'"
-proof "f1-update deployed the local tags f1-server:ci and f1-web:ci (exit 0, current.env written); $URL answers 200 through caddy, api and db (db as 62532 on a new f1_pgdata, roles.sql through initdb, migrate as f1_migrator) with table inet f1 loaded; containers: ${services% } (no ingest, no cloudflared)"
+mapfile -t health < <(docker ps --filter label=com.docker.compose.project=f1 --format '{{.Names}} {{.Status}}')
+for h in "${health[@]}"; do [[ $h == *'(healthy)' ]] || fail "not healthy when f1-update returned: $h"; done
+proof "f1-update deployed the local tags f1-server:ci and f1-web:ci (exit 0, current.env written); $URL answers 200 through caddy, api and db (db as 62532 on a new f1_pgdata, roles.sql through initdb, migrate as f1_migrator) with table inet f1 loaded; containers: ${services% } (no ingest, no cloudflared), each healthy when f1-update returned"
 
 # ------------------------------------------------------------------ 4
 step "4. Egress from api to a non-Cloudflare host is blocked"
@@ -113,7 +122,8 @@ printf '%s\n' 'FROM f1-server:ci' \
   "ENTRYPOINT [\"/nodejs/bin/node\",\"-e\",\"process.exit(process.argv[1]==='migrate'?0:1)\"]" |
   docker build -q -t f1-server:broken - >/dev/null
 cp "$STATE/current.env" "$tmp/current.before"
-run "$tmp/update2" env F1_SMOKE_TIMEOUT=30 "$BIN/f1-update" --server f1-server:broken
+# 60: the rollback's smoke test waits for the new api container's first healthcheck (interval 30 s).
+run "$tmp/update2" env F1_SMOKE_TIMEOUT=60 "$BIN/f1-update" --server f1-server:broken
 broken_rc=$rc
 ((broken_rc != 0)) || fail "f1-update with the broken image exited 0"
 grep -q 'rolled back' "$tmp/update2" || fail "f1-update did not log 'rolled back'"
@@ -147,6 +157,51 @@ nft list table inet f1 >/dev/null || fail "f1-tick did not restore table inet f1
 [[ $(cat "$STATE/disk") =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9:]{8}Z\ [0-9]{1,3}$ ]] || fail "disk: $(cat "$STATE/disk")"
 curl -fsS --max-time 5 -o /dev/null "$URL" || fail "$URL is not 200 after the reload"
 proof "f1-tick reloaded the deleted table inet f1 and wrote $STATE/disk ($(cat "$STATE/disk")); $URL still 200"
+
+# ------------------------------------------------------------------ 8
+step "8. A local tag with a registry host is pulled and recorded by digest, never as given"
+docker tag f1-server:ci localhost/f1-server:ci
+run "$tmp/update-host" "$BIN/f1-update" --server localhost/f1-server:ci
+((rc == 1)) || fail "f1-update --server localhost/f1-server:ci exited $rc, not 1"
+grep -q 'cannot resolve the images' "$tmp/update-host" || fail "f1-update did not log 'cannot resolve the images'"
+cmp -s "$tmp/current.before" "$STATE/current.env" || fail "current.env changed"
+proof "f1-update --server localhost/f1-server:ci (a local tag, no registry): exit 1, '$(grep -o 'cannot resolve the images.*' "$tmp/update-host")', current.env unchanged"
+
+# ------------------------------------------------------------------ 9
+step "9. f1-tick skips the container restarts while the update lock is held"
+exec 8>/run/f1/update.lock
+flock -n 8 || fail "cannot take /run/f1/update.lock"
+run "$tmp/tick-busy" "$BIN/f1-tick"
+exec 8>&-
+((rc == 0)) || fail "f1-tick exited $rc while the lock was held"
+grep -q 'no container restarts this round' "$tmp/tick-busy" || fail "f1-tick did not skip the restarts"
+grep -q 'disk use of /srv/f1' "$tmp/tick-busy" || fail "f1-tick skipped the disk record"
+proof "f1-tick with /run/f1/update.lock held: exit 0, '$(grep -o 'f1-update or f1-install is running.*' "$tmp/tick-busy")', disk still recorded"
+
+# ------------------------------------------------------------------ 10
+step "10. Fail closed: no f1 container runs, and no deploy starts, without table inet f1"
+mv /etc/f1/nftables-f1.conf "$tmp/nftables-f1.conf"
+nft delete table inet f1
+run "$tmp/tick-closed" "$BIN/f1-tick"
+((rc == 1)) || fail "f1-tick exited $rc without its firewall, not 1"
+grep -q 'the f1 stack is stopped until the firewall loads' "$tmp/tick-closed" || fail "f1-tick did not log the stop"
+[[ -z $(docker ps -q --filter label=com.docker.compose.project=f1) ]] || fail "f1 containers run without table inet f1"
+run "$tmp/update-closed" "$BIN/f1-update" --server f1-server:ci --web f1-web:ci
+((rc == 1)) || fail "f1-update exited $rc without table inet f1, not 1"
+grep -q 'no deploy without the f1 firewall' "$tmp/update-closed" || fail "f1-update did not refuse the deploy"
+[[ -z $(docker ps -q --filter label=com.docker.compose.project=f1) ]] || fail "f1-update started containers without table inet f1"
+mv "$tmp/nftables-f1.conf" /etc/f1/nftables-f1.conf
+run "$tmp/tick-open" "$BIN/f1-tick"
+((rc == 0)) || fail "f1-tick exited $rc with the conf back"
+nft list table inet f1 >/dev/null || fail "f1-tick did not reload table inet f1"
+grep -q 'table inet f1 is loaded again: starting the f1 stack' "$tmp/tick-open" || fail "f1-tick did not start the stack"
+for _ in $(seq 30); do
+  curl -fsS --max-time 5 -o /dev/null "$URL" 2>/dev/null && break
+  sleep 3
+done
+curl -fsS --max-time 5 -o /dev/null "$URL" || fail "$URL is not 200 after the stack started again"
+[[ ! -e $STATE/firewall-stopped ]] || fail "$STATE/firewall-stopped is left"
+proof "table deleted and conf moved away: f1-tick exit 1, '$(grep -o 'error: loading.*' "$tmp/tick-closed")', no f1 container runs; f1-update exit 1, '$(grep -o 'table inet f1 is not loaded.*' "$tmp/update-closed")'; conf back: f1-tick exit 0, table reloaded, '$(grep -o 'table inet f1 is loaded again.*' "$tmp/tick-open")', $URL 200"
 
 # ------------------------------------------------------------------ invariant 4
 for t in f1-update.timer f1-tick.timer; do
