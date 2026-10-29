@@ -1,0 +1,146 @@
+# The site (A§12.1, A§14; P1f). Cloudflare terminates TLS and Access; cloudflared
+# reaches this :80 over the internal f1-tunnel-edge network, and the only
+# published port is 127.0.0.1:8180 -> :80 for the update smoke test. So no TLS
+# and no ACME here, and no admin endpoint. Browser-facing: strict CSP, no
+# third-party origin, no CORS headers.
+{
+	admin off
+	auto_https off
+}
+
+# Every response carries these, including /healthz, the 404s and (through
+# handle_errors, because Caddy's own error responses skip the header block) the
+# 405, 413 and 502 that Caddy builds itself.
+(site_headers) {
+	header {
+		Content-Security-Policy "default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self' data:; font-src 'self'; connect-src 'self'; manifest-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'; object-src 'none'"
+		Strict-Transport-Security "max-age=31536000; includeSubDomains"
+		X-Content-Type-Options "nosniff"
+		Referrer-Policy "strict-origin-when-cross-origin"
+		Permissions-Policy "geolocation=(), camera=(), microphone=()"
+		Cross-Origin-Opener-Policy "same-origin"
+		Cross-Origin-Resource-Policy "same-origin"
+		X-Robots-Tag "noindex"
+		-Server
+	}
+}
+
+# The api (:8080 on f1-edge, never published). Caddy sets X-Forwarded-For
+# itself; a client's Forwarded and X-Real-IP are dropped. The Access JWT header
+# (Cf-Access-Jwt-Assertion) passes on: the api verifies it itself (A§12.1). The
+# api reads no request body: at most 1 KB is accepted.
+(to_api) {
+	request_body {
+		max_size 1KB
+	}
+	# Deferred like the site block: nothing names the upstream software.
+	header -Via
+	reverse_proxy api:8080 {
+		header_up -Forwarded
+		header_up -X-Real-IP
+		header_down -Server
+	}
+}
+
+:80 {
+	import site_headers
+
+	handle_errors {
+		import site_headers
+		respond "{err.status_code} {err.status_text}"
+	}
+
+	encode zstd gzip
+
+	# Only GET and HEAD, on every route: any other method is this 405 with the
+	# site headers (file_server's own 405 would carry none and name the server).
+	@write not method GET HEAD
+	handle @write {
+		header Allow "GET, HEAD"
+		respond 405
+	}
+
+	# The api answers its own /healthz (select 1), so the update smoke test
+	# covers caddy, api and the database.
+	handle /healthz {
+		import to_api
+	}
+
+	# /api/v1/*: the expression compares the path as sent (the path matcher
+	# would fold case, merge slashes and resolve dot segments), and no dot
+	# segment is passed on. Any other /api path is a 404 from Caddy. The two
+	# matchers exclude each other, so their order does not matter.
+	@api_v1 expression `{path}.startsWith('/api/v1/') && !{path}.contains('/.')`
+	handle @api_v1 {
+		import to_api
+	}
+	@api_other {
+		path /api /api/*
+		not expression `{path}.startsWith('/api/v1/') && !{path}.contains('/.')`
+	}
+	handle @api_other {
+		respond 404
+	}
+
+	# No dotfile anywhere. A regexp, not a path matcher: Caddy re-sorts
+	# path-only matchers but keeps the order of the others.
+	@dotfiles path_regexp /\.
+	handle @dotfiles {
+		respond 404
+	}
+
+	# Vite's hashed assets are immutable, for a file that exists. The file
+	# matcher matters: Caddy keeps the headers set before file_server on its own
+	# 404, so an immutable route without it would cache a miss for a year. Any
+	# other /assets path is a 404 from Caddy, never the app below (an HTML 200
+	# under an asset path would be cached as that asset).
+	@assets {
+		path /assets/*
+		not path */
+		file {
+			root /srv/www
+			try_files {path}
+		}
+	}
+	handle @assets {
+		header Cache-Control "public, max-age=31536000, immutable"
+		root * /srv/www
+		file_server
+	}
+	@assets_miss path_regexp ^/assets(/|$)
+	handle @assets_miss {
+		respond 404
+	}
+
+	# A missing file with an extension (favicon.ico, robots.txt) is a 404, not
+	# the app. Answered here so that it keeps the site headers.
+	@missing_file {
+		path_regexp \.[^/]*$
+		not {
+			file {
+				root /srv/www
+				try_files {path}
+			}
+		}
+	}
+	handle @missing_file {
+		respond 404
+	}
+
+	# The SPA: a file as it is, else the app (there is no router; the app shows
+	# its own "not found"). Revalidated on every use: Vite's asset names are
+	# hashed, so a page a browser kept past a deploy would ask for files the new
+	# image no longer has.
+	handle {
+		header Cache-Control "no-cache"
+		root * /srv/www
+		try_files {path} /index.html
+		file_server
+	}
+}
+
+# Container healthcheck only: loopback inside the container, never published.
+http://127.0.0.1:8081 {
+	bind 127.0.0.1
+	respond /healthz 200
+}
