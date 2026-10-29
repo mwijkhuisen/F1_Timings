@@ -169,6 +169,7 @@ export function connect(token: string | undefined, onFeed: OnFeed, onStep: OnSte
       finish({ ...serverClose, code: ev.code, reason: ev.reason || serverClose.reason, error: socketError }),
     );
     socket.addEventListener('message', (ev) => {
+      if (done) return; // after finish(): no feed lines past the close event, no re-armed idle timer
       const receivedAt = Date.now();
       resetIdle();
       buf += typeof ev.data === 'string' ? ev.data : Buffer.from(ev.data as ArrayBuffer).toString();

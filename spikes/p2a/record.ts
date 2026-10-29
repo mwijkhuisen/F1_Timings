@@ -1,3 +1,4 @@
+import { execFileSync } from 'node:child_process';
 import { createWriteStream, mkdirSync, readFileSync, type WriteStream } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { setTimeout as sleep } from 'node:timers/promises';
@@ -40,9 +41,22 @@ if (!/^[a-z0-9-]+$/.test(label)) usage('bad --label');
 const startAt = values.start === undefined ? Date.now() : Date.parse(values.start);
 const stopAt = Date.parse(values.stop ?? '');
 if (Number.isNaN(startAt) || Number.isNaN(stopAt) || stopAt <= startAt) usage('bad --start/--stop');
+// Node clamps a timer past 24.8 days to 1 ms, which would start the run at once.
+if (stopAt - Date.now() > 7 * 86_400_000) usage('--stop is more than 7 days ahead');
 const out = resolve(values.out ?? '');
-// Invariant 3: F1 feed data lives only in the gitignored fixtures-private/.
-if (!`${out}/`.includes('/fixtures-private/')) usage('--out must be under fixtures-private/');
+// Invariant 3: F1 feed data lives only in a git-ignored fixtures-private/, in whichever checkout (the main one keeps
+// the recordings when the worktree goes). `git check-ignore` exits 0 only for an ignored path inside a repository.
+const ignored = () => {
+  try {
+    mkdirSync(out, { recursive: true });
+    execFileSync('git', ['-C', out, 'check-ignore', '-q', '.']);
+    return true;
+  } catch {
+    return false;
+  }
+};
+if (!`${out}/`.includes('/fixtures-private/') || !ignored())
+  usage('--out must be a git-ignored fixtures-private/ path');
 const specs: Spec[] = (values.conn ?? []).map((c) => {
   const m = /^(native|lib):(token|anon)(?::drop=(\d+))?$/.exec(c);
   if (!m) usage(`bad --conn ${c}`);
@@ -67,7 +81,7 @@ let token: Token | undefined;
 let relogin: (() => Promise<void>) | undefined;
 if (specs.some((s) => s.auth === 'token')) {
   const { credentials, login } = await import('./login.ts');
-  const creds = await credentials();
+  const creds = credentials();
   if (!creds) {
     log('missing file secrets f1tv_username/f1tv_password');
     process.exit(78);
@@ -90,6 +104,7 @@ if (specs.some((s) => s.auth === 'token')) {
 
 if (Date.now() < startAt) log(`waiting until ${new Date(startAt).toISOString()}`);
 await nap(Math.max(0, startAt - Date.now()));
+if (stopAc.signal.aborted) process.exit(0); // stopped while waiting: no login, nothing written
 // The login runs at --start, not at launch: a run launched days ahead gets a fresh token (A§12.3).
 if (relogin) {
   try {

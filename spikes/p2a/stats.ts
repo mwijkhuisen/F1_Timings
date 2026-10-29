@@ -17,6 +17,7 @@ type Dir = {
   perMinute: Map<number, number>;
   maxGapMs: number;
   latencies: number[];
+  noZone: number;
   feedBytes: number;
   gzipBytes: number;
   keys: Set<string>;
@@ -41,9 +42,11 @@ async function read(dir: string): Promise<Dir> {
     perMinute: new Map(),
     maxGapMs: 0,
     latencies: [],
+    noZone: 0,
     feedBytes: statSync(file).size,
     // ponytail: whole file in memory, fine for a session's ~100+ MB; stream it through createGzip if that hurts.
     gzipBytes: gzipSync(readFileSync(file)).length,
+    // ponytail: one sha1 key per message held per dir, ~100 B each: a race is ~1M messages, fine for 3 dirs.
     keys: new Set(),
     duplicates: 0,
   };
@@ -60,7 +63,7 @@ async function read(dir: string): Promise<Dir> {
     const [at, name, payload, ts] = JSON.parse(l) as [number, string, unknown, string?];
     if (name === '_subscribe') {
       if (firstState)
-        for (const [k, v] of Object.entries(payload ?? {})) topic(k).stateBytes = JSON.stringify(v).length;
+        for (const [k, v] of Object.entries(payload ?? {})) topic(k).stateBytes = Buffer.byteLength(JSON.stringify(v));
       firstState = false;
       last = undefined; // a reconnect window is not a feed gap
       continue;
@@ -72,8 +75,10 @@ async function read(dir: string): Promise<Dir> {
     d.perMinute.set(minute, (d.perMinute.get(minute) ?? 0) + 1);
     if (last !== undefined) d.maxGapMs = Math.max(d.maxGapMs, at - last);
     last = at;
-    const sent = Date.parse(ts ?? '');
-    if (!Number.isNaN(sent)) d.latencies.push(at - sent);
+    // A timestamp without a zone would parse as local time and pass an offset off as latency: count those apart.
+    const sent = /(Z|[+-]\d\d:?\d\d)$/.test(ts ?? '') ? Date.parse(ts ?? '') : Number.NaN;
+    if (Number.isNaN(sent)) d.noZone++;
+    else d.latencies.push(at - sent);
     const key = `${name}|${ts}|${createHash('sha1').update(JSON.stringify(payload)).digest('hex')}`;
     if (d.keys.has(key)) d.duplicates++;
     else d.keys.add(key);
@@ -101,7 +106,7 @@ for (const d of dirs) {
     `- ${msgs} feed messages, ${(msgs / (d.wallMs / 1000)).toFixed(2)} msg/s mean, peak ${Math.max(0, ...d.perMinute.values())} in one minute`,
     `- ${kb(d.feedBytes / hours)}/h raw, ${kb(d.gzipBytes / hours)}/h gzip (feed.jsonl ${kb(d.feedBytes)}, gzip ${kb(d.gzipBytes)})`,
     `- largest feed gap outside reconnects ${(d.maxGapMs / 1000).toFixed(1)} s; ${d.duplicates} duplicates`,
-    `- latency receivedAt − ts: median ${pct(lat, 0.5)} ms, p95 ${pct(lat, 0.95)} ms (${lat.length} samples)`,
+    `- latency receivedAt − ts: median ${pct(lat, 0.5)} ms, p95 ${pct(lat, 0.95)} ms (${lat.length} samples, ${d.noZone} without a zone)`,
     '',
     '| topic | in first state | state bytes | feed msgs | feed bytes |',
     '| --- | --- | --- | --- | --- |',
