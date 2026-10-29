@@ -2,12 +2,16 @@
 # f1-tick (f1-tick.timer, every 10 min; A§14.5, D9).
 # 1. Reloads the f1 firewall when table inet f1 is missing (first, so no later step can skip it):
 #    stopping f1-firewall keeps the table, but a `nft delete table inet f1` by hand, or Debian's
-#    nftables.service flushing the ruleset, removes it while the containers keep running.
+#    nftables.service flushing the ruleset, removes it while the containers keep running. When
+#    the reload fails, it stops every f1 container (fail closed) until a tick or f1-update finds
+#    the table loaded again and starts current.env (resume_stack).
 # 2. Refreshes the DNS allowlist (f1-resolvers).
-# 3. Restarts every f1 container that Docker reports unhealthy: Docker itself restarts only a
-#    container that exited, never an unhealthy one.
+# 3. Under f1-update's lock (skipped this round while a deploy or f1-install holds it): starts the
+#    stack that step 1 stopped, once the table is back, and restarts every f1 container that
+#    Docker reports unhealthy: Docker itself restarts only a container that exited.
 # 4. Writes "<UTC time> <disk use %>" of /srv/f1 to /srv/f1/state/disk.
-# Exits 1 when the firewall could not be restored or the disk use could not be read.
+# Exits 1 when the firewall could not be restored, the stack could not be started again, or the
+# disk use could not be read.
 #
 # Usage: f1-tick
 set -euo pipefail
@@ -19,25 +23,38 @@ if (($#)); then
   exit 64
 fi
 here=$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")
-rc=0
+rc=0 fw=1
 
 if ! nft list table inet f1 >/dev/null 2>&1; then
   log "error: the f1 firewall (table inet f1) is missing: loading $F1_ETC/nftables-f1.conf"
   if ! nft -f "$F1_ETC/nftables-f1.conf"; then
-    log "error: loading $F1_ETC/nftables-f1.conf failed: the f1 containers run without their firewall"
-    rc=1
+    fw=0 rc=1
+    # By label, not compose: also the containers of a failed first deploy, which has no current.env.
+    mapfile -t running < <(docker ps -q --filter label=com.docker.compose.project=f1 2>/dev/null || true)
+    if ((${#running[@]})); then
+      : >"$F1_FW_STOPPED"
+      docker stop "${running[@]}" >/dev/null || log "error: stopping the f1 containers failed"
+    fi
+    log "error: loading $F1_ETC/nftables-f1.conf failed: the f1 stack is stopped until the firewall loads"
   fi
 fi
 
 "$here/f1-resolvers" --quiet || log "error: f1-resolvers failed"
 
-mapfile -t sick < <(docker ps --filter label=com.docker.compose.project=f1 --filter health=unhealthy \
-  --format '{{.Names}}' 2>/dev/null || true)
-for name in "${sick[@]}"; do
-  [[ $name =~ ^f1-[a-z0-9_.-]+$ ]] || continue
-  log "restarting unhealthy container $name"
-  docker restart "$name" >/dev/null || log "error: restart of $name failed"
-done
+exec 9>"$(lockfile update)"
+if ! flock -n 9; then
+  log "f1-update or f1-install is running: no container restarts this round"
+else
+  if ((fw)); then resume_stack || rc=1; fi
+  mapfile -t sick < <(docker ps --filter label=com.docker.compose.project=f1 --filter health=unhealthy \
+    --format '{{.Names}}' 2>/dev/null || true)
+  for name in "${sick[@]}"; do
+    [[ $name =~ ^f1-[a-z0-9_.-]+$ ]] || continue
+    log "restarting unhealthy container $name"
+    docker restart "$name" >/dev/null || log "error: restart of $name failed"
+  done
+  exec 9>&-
+fi
 
 pct=$(df --output=pcent /srv/f1 | tail -n 1 | tr -dc '0-9') || pct=''
 if [[ $pct =~ ^[0-9]{1,3}$ ]]; then
