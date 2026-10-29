@@ -1,0 +1,308 @@
+# The production stack (A§14.2, ADR-0003), compose project "f1".
+#
+# Installed by deploy/bin/f1-install as /etc/f1/compose.yaml and run only by f1-update:
+#   docker compose -p f1 -f /etc/f1/compose.yaml --env-file /srv/f1/state/current.env …
+# - images: F1_SERVER_IMAGE and F1_WEB_IMAGE come from that env file (digests that f1-update
+#   resolved); postgres and cloudflared are pinned here by digest.
+# - secrets: files under /etc/f1/secrets, never environment variables. Compose bind-mounts a
+#   file secret with its host owner and mode (uid/gid/mode are ignored), so each file is
+#   root:<gid> 0440 and only its consumers get that gid through group_add (A§12.1).
+# - settings: /etc/f1/f1.env (CF_ACCESS_TEAM, CF_ACCESS_AUD; no secret) for the api only.
+# - Compose never sets DATABASE_URL (A§12.4): every login reads its own file secret.
+# - Only caddy publishes, 127.0.0.1:8180, for the f1-update smoke test (invariant 2).
+# deploy/tests/hardening.sh checks all of this on `compose config` in CI.
+name: f1
+
+x-hardening: &hardening
+  read_only: true
+  tmpfs:
+    - /tmp:size=16m,mode=1777
+  cap_drop: [ALL]
+  security_opt:
+    - no-new-privileges:true
+  restart: unless-stopped
+
+x-node-healthcheck: &node-healthcheck
+  # The contract heartbeat (A§4): exit 0 iff /tmp/f1-heartbeat is < 120 s old. No shell in distroless.
+  test: ["CMD", "/nodejs/bin/node", "/app/apps/server/dist/main.js", "healthcheck"]
+  interval: 30s
+  timeout: 10s
+  retries: 3
+  start_period: 60s
+
+services:
+  # PostgreSQL 18 as 62532 (not the image's 999): a new named volume copies the image's
+  # /var/lib/postgresql (mode 1777), so initdb runs as any uid. roles.sql runs once on a new
+  # volume and reads the three login passwords with pg_read_file, so db holds their gids too.
+  db:
+    <<: *hardening
+    image: postgres:18.6-trixie@sha256:5a5a84b19854a9ffaa54082c166ff4ec27473a361e496e5ea167f298f2da9722
+    user: "62532:62532"
+    group_add: ["62001", "62002", "62003", "62004"]
+    environment:
+      POSTGRES_DB: f1
+      # Read by initdb only.
+      POSTGRES_PASSWORD_FILE: /run/secrets/db_postgres
+      # Local socket: trust (a tmpfs inside this container only; peer cannot map uid 62532 once
+      # the entrypoint drops nss_wrapper after initdb). TCP: scram-sha-256.
+      POSTGRES_INITDB_ARGS: --locale-provider=builtin --builtin-locale=C.UTF-8 --locale=C.UTF-8 --encoding=UTF8 --auth-local=trust --auth-host=scram-sha-256
+    command:
+      - postgres
+      - -c
+      - shared_buffers=256MB
+      - -c
+      - max_connections=20
+      # 512 kB of LISTEN/NOTIFY queue instead of 8 GB on the data volume: nothing uses it, and
+      # any login could fill it (Waterheight review N2).
+      - -c
+      - max_notify_queue_pages=64
+    secrets: [db_postgres, db_f1_migrator, db_f1_ingest, db_f1_api]
+    tmpfs:
+      - /tmp:size=16m,mode=1777
+      - /var/run/postgresql:size=1m,uid=62532,gid=62532,mode=0775
+    shm_size: 256m
+    volumes:
+      # The PG 18 image's VOLUME: PGDATA is /var/lib/postgresql/18/docker.
+      - type: volume
+        source: pgdata
+        target: /var/lib/postgresql
+      - type: bind
+        source: /etc/f1/postgres/roles.sql
+        target: /docker-entrypoint-initdb.d/10-roles.sql
+        read_only: true
+        bind:
+          create_host_path: false
+    networks: [f1-db]
+    mem_limit: 1g
+    cpus: 1.0
+    pids_limit: 128
+    stop_grace_period: 60s
+    healthcheck:
+      # PID 1 is postgres only once the entrypoint's first-run set-up (initdb, roles.sql) is
+      # done; its temporary socket-only server must not count. -U: uid 62532 has no passwd
+      # entry, and libpq refuses to guess a user name without one.
+      test: ["CMD-SHELL", "grep -qx postgres /proc/1/comm && pg_isready -q -U postgres"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 120s
+      start_interval: 2s
+
+  # A job: f1-update runs it with `compose --profile jobs run --rm migrate` before `up`.
+  migrate:
+    <<: *hardening
+    image: ${F1_SERVER_IMAGE:?}
+    command: [migrate]
+    profiles: [jobs]
+    restart: "no"
+    user: "62532:62532"
+    group_add: ["62002"]
+    secrets: [db_f1_migrator]
+    networks: [f1-db]
+    depends_on:
+      db:
+        condition: service_healthy
+    mem_limit: 128m
+    cpus: 0.5
+    pids_limit: 64
+    healthcheck:
+      disable: true
+
+  # The API (A§10) on :8080, never published: caddy reaches it on f1-edge. Its only way out is
+  # f1-api-egress: tcp/443 to Cloudflare's ranges for the Access certs (nftables, A§14.3).
+  api:
+    <<: *hardening
+    image: ${F1_SERVER_IMAGE:?}
+    command: [api]
+    user: "62532:62532"
+    group_add: ["62004"]
+    # Optional so that `compose config` runs in CI; the api still exits 78 without valid values,
+    # and f1-update deploys nothing until they are valid.
+    env_file:
+      - path: /etc/f1/f1.env
+        required: false
+    secrets: [db_f1_api]
+    networks: [f1-edge, f1-db, f1-api-egress]
+    depends_on:
+      db:
+        condition: service_healthy
+    mem_limit: 384m
+    cpus: 1.0
+    pids_limit: 64
+    healthcheck: *node-healthcheck
+
+  # OpenF1 ingestion (A§8): tcp/443 and DNS out through f1-egress.
+  ingest:
+    <<: *hardening
+    image: ${F1_SERVER_IMAGE:?}
+    command: [ingest]
+    user: "62532:62532"
+    group_add: ["62003", "62006"]
+    secrets: [db_f1_ingest, hc_ping_key]
+    networks: [f1-egress, f1-db]
+    depends_on:
+      db:
+        condition: service_healthy
+    mem_limit: 256m
+    cpus: 0.5
+    pids_limit: 64
+    healthcheck: *node-healthcheck
+
+  # The site on :80 for cloudflared (f1-tunnel-edge) and for the smoke test (f1-publish, the only
+  # publish: Docker does not publish for a container on internal networks only). No capability:
+  # the image strips caddy's file capability, and this namespaced sysctl lets a non-root process
+  # bind :80. tmpfs /data and /config: otherwise the image's VOLUMEs leak an anonymous volume on
+  # every recreate.
+  caddy:
+    <<: *hardening
+    image: ${F1_WEB_IMAGE:?}
+    user: "62532:62532"
+    sysctls:
+      net.ipv4.ip_unprivileged_port_start: 80
+    tmpfs:
+      - /tmp:size=16m,mode=1777
+      - /data:size=8m,uid=62532,gid=62532,mode=0700
+      - /config:size=8m,uid=62532,gid=62532,mode=0700
+    ports:
+      - "127.0.0.1:8180:80/tcp"
+    networks: [f1-edge, f1-tunnel-edge, f1-publish]
+    mem_limit: 128m
+    cpus: 0.5
+    pids_limit: 64
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://127.0.0.1:8081/healthz"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+
+  # The tunnel (ADR-0004): dials out to Cloudflare on 7844 (f1-tunnel) and carries requests to
+  # caddy:80 over f1-tunnel-edge. The token is a file secret read with --token-file; --token and
+  # TUNNEL_TOKEN would take precedence over it, so neither is ever set. --metrics on loopback:
+  # the image binds 0.0.0.0:20241 by default, which caddy could then reach. The image's own
+  # `tunnel ready` asks that endpoint (200 once a connection is up); f1-tick restarts it when
+  # unhealthy. cloudflare/cloudflared 2026.10.3 (2026-10-21), multi-arch index digest.
+  cloudflared:
+    <<: *hardening
+    image: cloudflare/cloudflared:2026.10.3@sha256:faa8e0a1475f137c910be6025f43c8e4092fdd35461b31e19fd1390657a1ff39
+    entrypoint: [cloudflared, --no-autoupdate]
+    command:
+      - tunnel
+      - --loglevel
+      - info
+      - --edge-ip-version
+      - "4"
+      - --metrics
+      - 127.0.0.1:20241
+      - run
+      - --token-file
+      - /run/secrets/cf_tunnel_token
+    user: "62532:62532"
+    group_add: ["62005"]
+    environment:
+      # The Go heap's soft limit, 90 % of mem_limit.
+      GOMEMLIMIT: 230MiB
+    secrets: [cf_tunnel_token]
+    networks: [f1-tunnel, f1-tunnel-edge]
+    mem_limit: 256m
+    cpus: 0.5
+    pids_limit: 128
+    healthcheck:
+      test: ["CMD", "cloudflared", "--no-autoupdate", "tunnel", "--metrics", "127.0.0.1:20241", "ready"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+
+# One bridge per network, named f1-* (the nftables table matches "f1-*"), IPv4 only, fixed
+# subnets 10.62.1–7.0/24 (O1: f1-install refuses one that overlaps a route or another Docker
+# network). icc off on every non-internal network. Each container has at most one non-internal
+# network, so its default route is unambiguous.
+networks:
+  f1-db:
+    name: f1-db
+    internal: true
+    enable_ipv6: false
+    driver_opts:
+      com.docker.network.bridge.name: f1-db
+    ipam:
+      config:
+        - subnet: 10.62.1.0/24
+  f1-edge:
+    name: f1-edge
+    internal: true
+    enable_ipv6: false
+    driver_opts:
+      com.docker.network.bridge.name: f1-edge
+    ipam:
+      config:
+        - subnet: 10.62.2.0/24
+  # ingest (live in P2): tcp/443 anywhere public, DNS to the host's resolvers.
+  f1-egress:
+    name: f1-egress
+    enable_ipv6: false
+    driver_opts:
+      com.docker.network.bridge.name: f1-egress
+      com.docker.network.bridge.enable_icc: "false"
+    ipam:
+      config:
+        - subnet: 10.62.3.0/24
+  # api only: tcp/443 to Cloudflare's ranges (cf4), DNS to the host's resolvers.
+  f1-api-egress:
+    name: f1-api-egress
+    enable_ipv6: false
+    driver_opts:
+      com.docker.network.bridge.name: f1-api-egress
+      com.docker.network.bridge.enable_icc: "false"
+    ipam:
+      config:
+        - subnet: 10.62.4.0/24
+  # cloudflared: tcp+udp/7844 to Cloudflare's tunnel ranges (cf_tunnel4), DNS.
+  f1-tunnel:
+    name: f1-tunnel
+    enable_ipv6: false
+    driver_opts:
+      com.docker.network.bridge.name: f1-tunnel
+      com.docker.network.bridge.enable_icc: "false"
+    ipam:
+      config:
+        - subnet: 10.62.5.0/24
+  f1-tunnel-edge:
+    name: f1-tunnel-edge
+    internal: true
+    enable_ipv6: false
+    driver_opts:
+      com.docker.network.bridge.name: f1-tunnel-edge
+    ipam:
+      config:
+        - subnet: 10.62.6.0/24
+  # caddy only: carries the 127.0.0.1:8180 publish; the firewall drops all its egress.
+  f1-publish:
+    name: f1-publish
+    enable_ipv6: false
+    driver_opts:
+      com.docker.network.bridge.name: f1-publish
+      com.docker.network.bridge.enable_icc: "false"
+    ipam:
+      config:
+        - subnet: 10.62.7.0/24
+
+# GIDs (A§14.2): 62001 db_postgres, 62002 db_f1_migrator, 62003 db_f1_ingest, 62004 db_f1_api,
+# 62005 cf_tunnel_token, 62006 hc_ping_key; 62007 and up are P2c's (f1tv_*).
+secrets:
+  db_postgres:
+    file: /etc/f1/secrets/db_postgres
+  db_f1_migrator:
+    file: /etc/f1/secrets/db_f1_migrator
+  db_f1_ingest:
+    file: /etc/f1/secrets/db_f1_ingest
+  db_f1_api:
+    file: /etc/f1/secrets/db_f1_api
+  cf_tunnel_token:
+    file: /etc/f1/secrets/cf_tunnel_token
+  hc_ping_key:
+    file: /etc/f1/secrets/hc_ping_key
+
+volumes:
+  pgdata:
+    name: f1_pgdata
