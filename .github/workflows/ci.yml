@@ -185,6 +185,7 @@ jobs:
     permissions:
       contents: read
       packages: write
+    environment: production
     concurrency:
       group: release
       cancel-in-progress: false
