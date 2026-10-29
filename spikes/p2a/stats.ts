@@ -18,17 +18,27 @@ type Dir = {
   maxGapMs: number;
   latencies: number[];
   noZone: number;
+  badLines: number;
   feedBytes: number;
   gzipBytes: number;
   keys: Set<string>;
   duplicates: number;
 };
 
+// A truncated last line (a killed run) must not throw: a SyntaxError quotes the line, which is F1 TV data.
+const tryParse = (l: string): unknown => {
+  try {
+    return JSON.parse(l);
+  } catch {
+    return undefined;
+  }
+};
+
 async function read(dir: string): Promise<Dir> {
   const events = readFileSync(join(dir, 'events.jsonl'), 'utf8')
     .split('\n')
-    .filter(Boolean)
-    .map((l) => JSON.parse(l) as { t: number; ev: string; code?: number; ageMs: number; error?: { step: string } });
+    .map((l) => tryParse(l) as { t: number; ev: string; code?: number; ageMs: number; error?: { step: string } })
+    .filter((e) => e !== undefined);
   const closes = events
     .filter((e) => e.ev === 'close')
     .map((e) => `${e.code ?? e.error?.step ?? 'client'} at ${Math.round(e.ageMs / 1000)} s`);
@@ -43,6 +53,7 @@ async function read(dir: string): Promise<Dir> {
     maxGapMs: 0,
     latencies: [],
     noZone: 0,
+    badLines: 0,
     feedBytes: statSync(file).size,
     // ponytail: whole file in memory, fine for a session's ~100+ MB; stream it through createGzip if that hurts.
     gzipBytes: gzipSync(readFileSync(file)).length,
@@ -60,7 +71,12 @@ async function read(dir: string): Promise<Dir> {
   let last: number | undefined;
   for await (const l of createInterface({ input: createReadStream(file), crlfDelay: Infinity })) {
     if (!l) continue;
-    const [at, name, payload, ts] = JSON.parse(l) as [number, string, unknown, string?];
+    const row = tryParse(l) as [number, string, unknown, string?] | undefined;
+    if (!Array.isArray(row)) {
+      d.badLines++;
+      continue;
+    }
+    const [at, name, payload, ts] = row;
     if (name === '_subscribe') {
       if (firstState)
         for (const [k, v] of Object.entries(payload ?? {})) topic(k).stateBytes = Buffer.byteLength(JSON.stringify(v));
@@ -105,7 +121,7 @@ for (const d of dirs) {
     `- wall time ${(d.wallMs / 1000).toFixed(0)} s, ${d.connects} connects, closes: ${d.closes.join('; ') || 'none'}`,
     `- ${msgs} feed messages, ${(msgs / (d.wallMs / 1000)).toFixed(2)} msg/s mean, peak ${Math.max(0, ...d.perMinute.values())} in one minute`,
     `- ${kb(d.feedBytes / hours)}/h raw, ${kb(d.gzipBytes / hours)}/h gzip (feed.jsonl ${kb(d.feedBytes)}, gzip ${kb(d.gzipBytes)})`,
-    `- largest feed gap outside reconnects ${(d.maxGapMs / 1000).toFixed(1)} s; ${d.duplicates} duplicates`,
+    `- largest feed gap outside reconnects ${(d.maxGapMs / 1000).toFixed(1)} s; ${d.duplicates} duplicates; ${d.badLines} unparsable lines`,
     `- latency receivedAt − ts: median ${pct(lat, 0.5)} ms, p95 ${pct(lat, 0.95)} ms (${lat.length} samples, ${d.noZone} without a zone)`,
     '',
     '| topic | in first state | state bytes | feed msgs | feed bytes |',

@@ -88,13 +88,27 @@ if (specs.some((s) => s.auth === 'token')) {
   }
   secrets.push(...Object.values(creds).filter((v): v is string => typeof v === 'string'));
   let pending: Promise<void> | undefined;
+  let lastTry = 0;
+  let failures = 0;
   relogin = () => {
-    pending ??= login(creds)
-      .then((t: Token) => {
-        token = t;
-        secrets.push(t.value);
-        log(`login ok, expires ${new Date(t.expiresAt).toISOString()}`);
-      })
+    // Security review L2: a persistent 401 must not turn into a sign-in every backoff step (a flagged or locked
+    // account). At most one login per 10 min, and none after 3 failures in a row; the conns keep the old token.
+    if (pending) return pending;
+    if (failures >= 3 || Date.now() - lastTry < 10 * 60_000) return Promise.resolve();
+    lastTry = Date.now();
+    pending = login(creds)
+      .then(
+        (t: Token) => {
+          token = t;
+          failures = 0;
+          secrets.push(t.value);
+          log(`login ok, expires ${new Date(t.expiresAt).toISOString()}`);
+        },
+        (err: unknown) => {
+          failures++;
+          throw err;
+        },
+      )
       .finally(() => {
         pending = undefined;
       });
