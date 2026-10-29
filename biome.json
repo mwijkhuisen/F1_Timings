@@ -1,7 +1,9 @@
 {
   "$schema": "./node_modules/@biomejs/biome/configuration_schema.json",
   "vcs": { "enabled": true, "clientKind": "git", "useIgnoreFile": true },
-  "files": { "includes": ["**", "!**/openf1/fixtures", "!apps/server/src/db/types.ts"] },
+  "files": {
+    "includes": ["**", "!**/openf1/fixtures", "!apps/server/src/db/types.ts", "!**/*.md", "!**/*.yaml", "!**/*.yml"]
+  },
   "formatter": { "indentStyle": "space", "indentWidth": 2, "lineWidth": 120 },
   "javascript": { "formatter": { "quoteStyle": "single" } },
   "linter": { "rules": { "preset": "recommended" } }
