@@ -11,6 +11,7 @@ The plan is binding: `docs/plan/ARCHITECTURE.md` (cited A§x), `docs/plan/PHASES
 - `pnpm test:integration` needs `DATABASE_URL` (a superuser of a throw-away PostgreSQL 18 **cluster**; CI uses a service container) and `dbmate` 2.36.0 on `PATH`. Each test file creates its own database and applies `deploy/postgres/roles.sql` through `createTestDb()` (`apps/server/test/db.ts`); tests log in as `f1_migrator`/`f1_ingest`/`f1_api`, not as the superuser. `roles.sql` changes cluster-wide state (the three roles and their passwords, `CONNECT` on `postgres` and `template1`), so never point it at a shared server.
 - `apps/server/scripts/dev-db.ts` is the roles step of that test helper. As a CLI (`DATABASE_URL=<superuser URL of a throw-away database> node apps/server/scripts/dev-db.ts`) it sets up the three logins for a manual run such as the [box] backfill (A§8); their random passwords are never printed, so such a run keeps the superuser `DATABASE_URL`.
 - Kysely types: `DATABASE_URL=<a freshly migrated database> pnpm --filter @f1/server db:types` regenerates `apps/server/src/db/types.ts` (generated, excluded from Biome); an integration test runs it with `--verify`.
+- Deploy checks: `deploy/tests/hardening.sh` (compose invariants on `compose config`), `deploy/tests/nft-check.sh` (`nft -c` and a double load in a container) and `sudo deploy/tests/e2e.sh` (install, deploy, egress, rollback; needs the images `f1-server:ci` and `f1-web:ci`). They need Docker, nft and root, so they run in CI only (job `ci / deploy`), never on the WSL dev box.
 - Tests: `*.test.ts` is unit, `*.int.test.ts` is integration, under `test/`, `apps/*/test/` or `packages/*/test/`. Web component tests are `apps/*/test/**/*.test.tsx` (unit only): `react-dom/server` `renderToStaticMarkup` in the node environment, no DOM environment, data passed as props. msw fails any request or WebSocket without a handler (`test/msw.setup.ts`).
 - Migrations: `db/migrations/YYYYMMDDHHMMSS_name.sql` (dbmate, `-- migrate:up` / `-- migrate:down`). An applied migration never changes.
 - Server roles: `node apps/server/src/main.ts <role>` (A§4). Implemented: `healthcheck`, `migrate` (P0), `ingest` (daemon), `backfill` and `refetch <session_key>` (P1b, A§8; they log in as `f1_ingest`, `DATABASE_URL` wins in development), `api` (P1c, A§10: `:8080`, logs in as `f1_api`); the others exit 2 until their phase. Never run `backfill` next to a running `ingest` daemon (two rate limiters).
@@ -55,6 +56,9 @@ From Waterheight's list, the ones that apply here:
   - Compose bind-mounts a **file** secret with its host owner and mode (`uid`/`gid`/`mode` are ignored), so secrets are `root:<gid> 0440` plus `group_add`.
   - Published ports are DNATed in `nat PREROUTING` and never reach INPUT: filter them on the forward hook, and **never `flush ruleset`** (it deletes Docker's tables, and Waterheight's).
   - Debian's `nftables.service` flushes everything on stop; F1 loads its own `table inet f1` from `f1-firewall.service` only.
+  - Docker does not publish a port for a container that is only on internal networks: caddy also sits on the non-internal `f1-publish`.
+  - `pg_isready` needs `-U postgres` when the container UID has no passwd entry (62532).
+  - cloudflared's metrics bind to `0.0.0.0:20241` by default: pass `--metrics 127.0.0.1:20241`.
   - Docker never restarts an *unhealthy* container (only an exited one), so `f1-tick` does.
   - The stock caddy image's file capability breaks exec under `cap_drop: ALL`: the web image strips it.
 - **Caddy 2.11:**

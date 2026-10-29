@@ -1,0 +1,11 @@
+# Enabled by the owner with f1-update.timer (install runbook), never by f1-install. Five minutes
+# after each f1-update run, so a restart never lands in the middle of a deploy's smoke test.
+[Unit]
+Description=f1: firewall, DNS allowlist, unhealthy containers and disk use, every 10 minutes
+
+[Timer]
+OnCalendar=*:5/10
+Persistent=true
+
+[Install]
+WantedBy=timers.target

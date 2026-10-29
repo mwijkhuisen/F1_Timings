@@ -1,0 +1,21 @@
+# The f1 firewall (A§14.3): loads /etc/f1/nftables-f1.conf (table inet f1 only, never
+# `flush ruleset`) before Docker starts the f1 containers, then the DNS allowlist.
+# No ExecStop: a stop keeps the table (Docker's live-restore keeps the containers running, so a
+# stop must never open them). Debian's nftables.service and docker.service are never touched
+# (ADR-0003). f1-tick restores a deleted table within 10 minutes.
+[Unit]
+Description=f1 firewall (nftables table inet f1)
+Wants=network-online.target
+After=network-online.target
+Before=docker.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/sbin/nft -c -f /etc/f1/nftables-f1.conf
+ExecStart=/usr/sbin/nft -f /etc/f1/nftables-f1.conf
+# No resolver yet is no reason to fail the firewall; f1-tick fills the set again every 10 minutes.
+ExecStartPost=-/usr/local/bin/f1-resolvers
+
+[Install]
+WantedBy=multi-user.target

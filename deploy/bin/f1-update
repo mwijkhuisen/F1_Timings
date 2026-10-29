@@ -1,0 +1,175 @@
+#!/usr/bin/env bash
+# f1-update (f1-update.timer, every 10 min; A§14.4, D8).
+#
+# Deploys the newest images: lock; readiness (f1.env and the secrets); table inet f1 loaded (else
+# exit 1; a stack that f1-tick stopped without it starts again); resolve
+# ghcr.io/mwijkhuisen/f1-{server,web}:main to their digests; wait while their revision labels
+# differ (a release half pushed); skip an unchanged or known-bad pair; otherwise migrate, `up -d`
+# and smoke-test (/healthz 200, then every f1 container healthy). Success moves candidate.env to
+# current.env. A failure keeps the pair in failed.env (never retried automatically) and rolls back
+# to current.env. Migrations are never undone (expand/contract).
+#
+# State (/srv/f1/state, root only): current.env, the pair that last passed its smoke test;
+# failed.env, the pair that last failed (rm it to retry); candidate.env, while a deploy runs.
+#
+# --server/--web deploy the given reference instead (a drill, or CI with f1-server:ci), without
+# the revision check. A local image without a registry host (f1-server:ci) is recorded as given;
+# anything else, a local tag of ghcr.io/… too, is pulled and recorded by digest, so current.env
+# (the rollback target) never names a tag that can move. The image not named stays as
+# current.env has it (no pull of :main during a drill).
+#
+# Exit: 0 deployed, up to date, known-bad skipped, release half pushed, not configured, busy, or
+# the default pull failed (transient); 1 no firewall, or the deploy failed (rolled back, or the
+# first deploy failed); 64 usage.
+#
+# Usage: f1-update [--server <ref>] [--web <ref>]
+set -euo pipefail
+# shellcheck source=deploy/bin/f1-lib.sh
+. "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/f1-lib.sh"
+
+readonly DEFAULT_SERVER=ghcr.io/mwijkhuisen/f1-server:main
+readonly DEFAULT_WEB=ghcr.io/mwijkhuisen/f1-web:main
+readonly CURRENT=$F1_STATE/current.env FAILED=$F1_STATE/failed.env CANDIDATE=$F1_STATE/candidate.env
+
+usage() {
+  echo "usage: f1-update [--server <ref>] [--web <ref>]" >&2
+  exit 64
+}
+server='' web=''
+while (($#)); do
+  case $1 in
+    --server | --web)
+      (($# >= 2)) && [[ $2 =~ $F1_REF_RE ]] || usage
+      if [[ $1 == --server ]]; then server=$2; else web=$2; fi
+      shift 2
+      ;;
+    *) usage ;;
+  esac
+done
+drill=0
+[[ -z $server && -z $web ]] || drill=1
+[[ ${F1_SMOKE_TIMEOUT:-120} =~ ^[0-9]{1,4}$ ]] || usage
+
+exec 9>"$(lockfile update)"
+if ! flock -n 9; then
+  log "another f1-update or f1-install is running"
+  exit 0
+fi
+
+ready() {
+  local entry
+  [[ -d $F1_STATE && -f $F1_ETC/compose.yaml ]] || return 1
+  env_ready || return 1
+  for entry in "${F1_SECRETS[@]}"; do secret_matches "${entry%%:*}" '[^[:space:]]' || return 1; done
+}
+if ! ready; then
+  log "not configured: run f1-install, then fill /etc/f1/f1.env and every secret in /etc/f1/secrets (install runbook); nothing to do"
+  exit 0
+fi
+nft list table inet f1 >/dev/null 2>&1 ||
+  die "table inet f1 is not loaded: no deploy without the f1 firewall (systemctl restart f1-firewall)"
+resume_stack
+
+# env_value <file> <key>: the value of KEY=… in one of our env files (empty when absent).
+env_value() {
+  local line
+  [[ -f $1 ]] || return 0
+  while IFS= read -r line; do
+    if [[ $line == "$2="* ]]; then
+      printf '%s' "${line#*=}"
+      return 0
+    fi
+  done <"$1"
+}
+
+# repo_digest <ref>: the pulled image's <repository>@sha256:<digest> for the ref's repository.
+repo_digest() {
+  local name=${1%@*} d
+  [[ ${name##*/} != *:* ]] || name=${name%:*}
+  while IFS= read -r d; do
+    if [[ $d == "$name"@sha256:* ]]; then
+      printf '%s' "$d"
+      return 0
+    fi
+  done < <(docker image inspect --format '{{range .RepoDigests}}{{println .}}{{end}}' "$1")
+  return 1
+}
+
+# pick <given> <default> <current>: the reference to deploy; fails when the pull fails.
+pick() {
+  local given=$1 def=$2 cur=$3 host=${1%%/*}
+  if [[ -z $given && $drill == 1 && -n $cur ]]; then
+    printf '%s' "$cur" # a drill keeps the image it does not name
+    return 0
+  fi
+  # A given local image without a registry host (a local build: f1-server:ci, f1-server:broken)
+  # is recorded as given. Not "no RepoDigests": the containerd image store gives local builds one.
+  # A registry host is a first path component with "." or ":", or localhost: always pulled.
+  if [[ -n $given && ($given != */* || ($host != *[.:]* && $host != localhost)) ]] &&
+    docker image inspect "$given" >/dev/null 2>&1; then
+    printf '%s' "$given"
+    return 0
+  fi
+  docker pull --quiet "${given:-$def}" >/dev/null 2>&1 || return 1
+  repo_digest "${given:-$def}"
+}
+
+# revision <ref>: the image's org.opencontainers.image.revision label (the release's commit).
+revision() {
+  docker image inspect --format '{{index .Config.Labels "org.opencontainers.image.revision"}}' "$1"
+}
+
+if ! new_server=$(pick "$server" "$DEFAULT_SERVER" "$(env_value "$CURRENT" F1_SERVER_IMAGE)") ||
+  ! new_web=$(pick "$web" "$DEFAULT_WEB" "$(env_value "$CURRENT" F1_WEB_IMAGE)"); then
+  ((drill)) || {
+    log "pulling $DEFAULT_SERVER or $DEFAULT_WEB failed: trying again next run"
+    exit 0
+  }
+  die "cannot resolve the images (--server ${server:-as deployed}, --web ${web:-as deployed})"
+fi
+[[ $new_server =~ $F1_REF_RE && $new_web =~ $F1_REF_RE ]] || die "a resolved image reference is malformed"
+pair="server $new_server web $new_web"
+# The release pushes f1-server:main, then f1-web:main: in between, :main is a mixed pair.
+if ((!drill)); then
+  rev_server=$(revision "$new_server")
+  rev_web=$(revision "$new_web")
+  if [[ $rev_server != "$rev_web" ]]; then
+    log "server revision $rev_server and web revision $rev_web differ; waiting for the release to finish"
+    exit 0
+  fi
+fi
+
+printf 'F1_SERVER_IMAGE=%s\nF1_WEB_IMAGE=%s\n' "$new_server" "$new_web" | write_atomic "$CANDIDATE" 0600
+if [[ -f $CURRENT ]] && cmp -s "$CANDIDATE" "$CURRENT"; then
+  rm -f -- "$CANDIDATE"
+  log "up to date ($pair)"
+  exit 0
+fi
+if [[ -f $FAILED ]] && cmp -s "$CANDIDATE" "$FAILED"; then
+  rm -f -- "$CANDIDATE"
+  log "skipping known-bad $pair; rm $FAILED to retry"
+  exit 0
+fi
+
+log "deploying $pair"
+if f1_compose "$CANDIDATE" --profile jobs run --rm -T migrate &&
+  f1_compose "$CANDIDATE" up -d --remove-orphans &&
+  smoke; then
+  mv -f -- "$CANDIDATE" "$CURRENT"
+  rm -f -- "$FAILED"
+  log "deployed $pair"
+  exit 0
+fi
+
+mv -f -- "$CANDIDATE" "$FAILED"
+if [[ ! -f $CURRENT ]]; then
+  log "first deploy failed: $pair is in $FAILED and is not retried automatically (fix the cause, then rm $FAILED); the containers are left as they are"
+  exit 1
+fi
+log "deploy of $pair failed: rolling back to $CURRENT"
+if f1_compose "$CURRENT" up -d --remove-orphans && smoke; then
+  log "rolled back to $CURRENT; $pair is in $FAILED and is not retried automatically (rm $FAILED to retry)"
+  exit 1
+fi
+log "error: the rollback to $CURRENT failed its smoke test too: the site is down"
+exit 1

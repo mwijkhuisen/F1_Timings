@@ -1,6 +1,10 @@
+import { DummyDriver, Kysely, PostgresAdapter, PostgresIntrospector, PostgresQueryCompiler } from 'kysely';
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import type { DB } from '../src/db/db.ts';
+import { SYNC_RETRY_MS, scheduleSync } from '../src/ingest/ingest.ts';
 import { ms, normaliseSession } from '../src/ingest/normalise.ts';
 import { afterFailure, afterSuccess, busyGuard, errorCode, firstFetchAt, type Progress } from '../src/ingest/state.ts';
+import type { createClient } from '../src/openf1/client.ts';
 import type { Lap } from '../src/openf1/schemas.ts';
 
 const MIN = 60_000;
@@ -154,5 +158,57 @@ describe('busyGuard (fake timers)', () => {
     await vi.advanceTimersByTimeAsync(1_000);
     await third;
     expect(runs).toBe(3);
+  });
+});
+
+describe('scheduleSync pings healthchecks', () => {
+  // Kysely's dummy driver: every query answers with no rows, transactions are no-ops.
+  const db = new Kysely<DB>({
+    dialect: {
+      createAdapter: () => new PostgresAdapter(),
+      createDriver: () => new DummyDriver(),
+      createIntrospector: (k) => new PostgresIntrospector(k),
+      createQueryCompiler: () => new PostgresQueryCompiler(),
+    },
+  });
+  type Reply = Awaited<ReturnType<ReturnType<typeof createClient>['get']>>;
+  const good: Reply = { ok: true, value: { status: 200, body: [] } };
+  const bad: Reply = { ok: false, error: { code: 'network' } };
+  /** A sync with a settable OpenF1 reply and clock; `ping` counts the healthchecks calls. */
+  const setup = () => {
+    const state: { reply: Reply; at: number } = { reply: good, at: end.getTime() };
+    const ping = vi.fn(async (_slug: string) => {});
+    const client = { get: async () => state.reply } as unknown as ReturnType<typeof createClient>;
+    const log = { info: vi.fn(), error: vi.fn() };
+    const sync = scheduleSync({ db, client, now: () => new Date(state.at), log, beat: () => {}, ping });
+    return { state, ping, sync };
+  };
+
+  it('does not ping after the startup sync', async () => {
+    const { ping, sync } = setup();
+    await sync.run();
+    expect(ping).not.toHaveBeenCalled();
+  });
+
+  it('pings f1-ingest once after a successful sync the Cron requested', async () => {
+    const { ping, sync } = setup();
+    await sync.run(); // startup
+    sync.request();
+    await sync.run();
+    await sync.run(); // synced: nothing more to do
+    expect(ping.mock.calls).toEqual([['f1-ingest']]);
+  });
+
+  it('pings only on the retry that succeeds after a failed Cron sync', async () => {
+    const { state, ping, sync } = setup();
+    await sync.run(); // startup
+    sync.request();
+    state.reply = bad;
+    await sync.run();
+    expect(ping).not.toHaveBeenCalled();
+    state.reply = good;
+    state.at += SYNC_RETRY_MS;
+    await sync.run();
+    expect(ping.mock.calls).toEqual([['f1-ingest']]);
   });
 });

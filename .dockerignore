@@ -1,0 +1,29 @@
+# Build context allowlist for deploy/server/Dockerfile and deploy/web/Dockerfile
+# (P1f, A§3). Only what the two builds read is sent to the builder: nothing from
+# git history, .claude, tests, fixtures (fixtures-private/ holds real F1 TV
+# recordings, invariant 3) or a developer's node_modules and dist.
+*
+!package.json
+!pnpm-lock.yaml
+!pnpm-workspace.yaml
+!tsconfig.base.json
+!scripts/install-pnpm.sh
+!apps/*/package.json
+!apps/*/tsconfig.json
+!apps/*/src
+!apps/web/index.html
+!apps/web/vite.config.ts
+!packages/*/package.json
+!packages/*/tsconfig.json
+!packages/*/src
+# The migrations only; the server image runs dbmate on them.
+!db/migrations
+!deploy/web/Caddyfile
+
+# Never, even inside an allowed directory.
+**/node_modules
+**/dist
+**/*.tsbuildinfo
+**/test
+**/fixtures
+**/.env*

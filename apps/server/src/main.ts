@@ -4,6 +4,7 @@ import { access, accessConfig } from './api/access.ts';
 import { createApp } from './api/app.ts';
 import { codeOf, createDb } from './db/db.ts';
 import { dbUrl, EXIT_CONFIG, runMigrate } from './db/migrate.ts';
+import { pingHealthchecks } from './healthchecks.ts';
 import { healthy, startHeartbeat, touch } from './heartbeat.ts';
 import { backfill, processSession, startIngest } from './ingest/ingest.ts';
 import { createClient } from './openf1/client.ts';
@@ -61,7 +62,9 @@ async function runIngest(role: 'ingest' | 'backfill' | 'refetch', key: number, e
   // An idle-connection error must not crash the process; the pool reconnects.
   const db = createDb(url, (err) => logger.error({ cause: codeOf(err) }, 'database pool error'));
   const beat = () => touch();
-  const deps = { db, client: createClient({ onAttempt: beat }), now: () => new Date(), log: logger, beat };
+  // Only the daemon's scheduleSync pings; the backfill and refetch jobs never reach it.
+  const ping = (slug: string) => pingHealthchecks(slug, logger);
+  const deps = { db, client: createClient({ onAttempt: beat }), now: () => new Date(), log: logger, beat, ping };
   try {
     if (role === 'ingest') {
       await startIngest(deps);

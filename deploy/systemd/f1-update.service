@@ -1,0 +1,17 @@
+# f1-update (A§14.4): deploys the newest :main images, with migrate, smoke test and rollback.
+# Runs as root: it drives docker and checks /etc/f1/secrets.
+[Unit]
+Description=f1: deploy the newest f1-server and f1-web images
+Wants=network-online.target
+After=network-online.target docker.service f1-firewall.service
+Requires=docker.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/f1-update
+TimeoutStartSec=20min
+UMask=0077
+PrivateTmp=yes
+ProtectHome=read-only
+ProtectSystem=full
+NoNewPrivileges=yes

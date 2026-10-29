@@ -1,0 +1,17 @@
+# f1-tick (A§14.5): restores the f1 firewall table, refreshes the DNS allowlist, restarts
+# unhealthy f1 containers and records the disk use. Runs as root: it drives docker and nft.
+[Unit]
+Description=f1: firewall table, DNS allowlist, unhealthy containers, disk use
+Wants=network-online.target
+After=network-online.target docker.service f1-firewall.service
+Requires=docker.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/f1-tick
+TimeoutStartSec=5min
+UMask=0077
+PrivateTmp=yes
+ProtectHome=read-only
+ProtectSystem=full
+NoNewPrivileges=yes
