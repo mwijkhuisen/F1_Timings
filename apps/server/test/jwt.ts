@@ -50,12 +50,12 @@ export async function rawJwt(header: unknown, payload: unknown, key?: Jwk) {
 }
 
 /** Serves the certs (Cloudflare's shape, extra fields included) and counts the fetches. */
-export function serveCerts(keys: Jwk[], answer?: () => Response | Promise<Response>) {
+export function serveCerts(keys: Jwk[], answer?: (request: Request) => Response | Promise<Response>) {
   const fetches = { n: 0 };
   server.use(
-    http.get(CERTS, () => {
+    http.get(CERTS, ({ request }) => {
       fetches.n++;
-      return answer?.() ?? HttpResponse.json({ keys, public_cert: { kid: 'x', cert: 'PEM' }, public_certs: [] });
+      return answer?.(request) ?? HttpResponse.json({ keys, public_cert: { kid: 'x', cert: 'PEM' }, public_certs: [] });
     }),
   );
   return fetches;

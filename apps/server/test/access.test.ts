@@ -1,6 +1,6 @@
 import { Hono } from 'hono';
 import { sign } from 'hono/jwt';
-import { delay, HttpResponse } from 'msw';
+import { HttpResponse } from 'msw';
 import pino from 'pino';
 import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 import { access, accessConfig } from '../src/api/access.ts';
@@ -197,10 +197,12 @@ describe('access', () => {
   });
 
   it('certs that take over 5 s time out → 503', { timeout: 15_000 }, async () => {
-    serveCerts([key.pub], async () => {
-      await delay(5_500);
-      return HttpResponse.json({ keys: [key.pub] });
-    });
+    // Held until the client aborts and the interceptor aborts the request, never answered later: a
+    // handler still sleeping (msw `delay`) would answer a destroyed socket after the test is over.
+    serveCerts(
+      [key.pub],
+      ({ signal }) => new Promise((resolve) => signal.addEventListener('abort', () => resolve(HttpResponse.error()))),
+    );
     const started = Date.now();
     const res = await get(appWith(), assertion(await jwt(key.priv)));
     expect(res.status).toBe(503);
