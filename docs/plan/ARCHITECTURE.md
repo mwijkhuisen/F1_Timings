@@ -318,6 +318,14 @@ Roles (owner, 2026-10-25; built in P1b): `deploy/postgres/roles.sql`, a PostgreS
   - `npm`, `yarn` and `bunx`, `git push --prune` and `git -c … push` are not denied.
   - GitHub does not itself enforce SHA-pinned or allow-listed actions; `scripts/check-workflows.sh` and zizmor do, in files a PR can change.
 
+### 12.5 Deploy path (P1f security review, 2026-10-29)
+
+- **GHCR write access is code execution on the box:** `f1-update` runs whatever `:main` is, as containers with the db and its secrets. Hence the `production` environment on the `release` job (required reviewer: the owner; deployment branches: `main`), and the A8 agent token without Workflows. The `release` job holds `packages: write` behind that gate. Agents cannot merge: branch protection, the deny rules in `.claude/settings.json` (`gh api …/merge`, `gh api graphql`, `gh auth token`) and the environment approval.
+- **`cf4`** lets the `api` reach any Cloudflare-fronted host on 443. Accepted: the api only fetches the team's certs.
+- **`127.0.0.1:8180`** is reachable by local VM users: it serves the static site and `/healthz`; the api still checks the Access JWT.
+- **New secrets:** `cf_tunnel_token` and `hc_ping_key`. **New egress:** hc-ping.com (`ingest`, tcp/443) and tcp+udp/7844 to the tunnel ranges (`cloudflared`).
+- **Root:** three systemd units drive Docker as root: `f1-firewall`, `f1-update` and `f1-tick`. Their scripts are root-owned copies in `/usr/local/bin`; the timers never run a file of the checkout.
+
 ## 13. Frontend
 
 - **Routes** (no router library; `routeOf(location.pathname)` plus `history.pushState`, as in Waterheight; `apps/web/src/lib/routes.ts`): `/` (latest session) · `/:year` · `/:year/:meeting/:session/{laps|compare|minisectors|stints}` · `/status` · `/live` · `/replay/:recording`.
@@ -397,23 +405,23 @@ Roles (owner, 2026-10-25; built in P1b): `deploy/postgres/roles.sql`, a PostgreS
 
 ### 14.4 Updates
 
-- CI on `main` (the `release` job) builds both images, pushes `ghcr.io/mwijkhuisen/f1-server` and `f1-web` as `:main` and `:sha-<git>` (public, no secrets inside), and records the digests. The job's `concurrency` group queues runs without cancelling, so `:main` stays on the newest commit.
+- CI on `main` (the `release` job, in the GitHub environment `production`: it waits for the owner's approval before it touches GHCR, owner 2026-10-29) builds both images, pushes `ghcr.io/mwijkhuisen/f1-server` and `f1-web` as `:main` and `:sha-<git>` (public, no secrets inside), and records the digests. The job's `concurrency` group queues runs without cancelling, so `:main` stays on the newest commit.
 - `f1-update.timer` (every 10 min) runs `deploy/bin/f1-update`:
-  1. take a flock
-  2. `docker pull` `:main` and stop if the digest equals `current.env`; stop with a loud log line if the pair equals `failed.env` (a known-bad pair is never retried automatically; `rm /srv/f1/state/failed.env` to retry)
+  1. take a flock; refuse (exit 1) when `table inet f1` is not loaded
+  2. `docker pull` `:main`; wait (exit 0) while the two images' `org.opencontainers.image.revision` labels differ (a release half pushed); stop if the digest equals `current.env`; stop with a loud log line if the pair equals `failed.env` (a known-bad pair is never retried automatically; `rm /srv/f1/state/failed.env` to retry)
   3. run `migrate`
   4. `up -d`
-  5. smoke-test `http://127.0.0.1:8180/healthz`
+  5. smoke-test `http://127.0.0.1:8180/healthz`, then require every f1 container healthy (an unhealthy `ingest` or `cloudflared` fails the deploy)
   6. on failure, write the pair to `failed.env` and roll back to the previous digests in `/srv/f1/state/current.env`
 - State lives in `/srv/f1/state`: `current.env` (the last pair that passed), `candidate.env` (during a run), `failed.env`.
-- `f1-update --server <ref> --web <ref>` deploys the given images instead (drills, CI); the flag not given keeps the image of `current.env`.
+- `f1-update --server <ref> --web <ref>` deploys the given images instead (drills, CI); the flag not given keeps the image of `current.env`, and the revision check is skipped. A ref with a registry host is always pulled and recorded by digest, so `current.env` never names a movable tag; only a host-less local ref (`f1-server:ci`) is recorded as given.
 - GitHub has no server credentials.
 - Compose, Caddyfile, nftables and units change rarely. The owner applies them with `deploy/bin/f1-install` from a checkout on the VM. It is idempotent, re-applies a changed compose file to a running deploy, and does not enable the timers: the owner does that once the secrets and `f1.env` are filled (`docs/runbooks/install.md`).
 
 ### 14.5 Operations
 
-- **`f1-tick.timer`** (every 10 min, at :05): reloads `table inet f1` if it is missing, refreshes `resolvers4`, restarts unhealthy `f1` containers (Docker doesn't) and records disk usage in `/srv/f1/state/disk`.
-- **healthchecks.io:** uses the 2 free checks left on the account: `f1-ingest` (daily success) and `f1-live` (each scheduled recording completed, from P2).
+- **`f1-tick.timer`** (every 10 min, at :05): reloads `table inet f1` if it is missing, refreshes `resolvers4`, restarts unhealthy `f1` containers (Docker doesn't) and records disk usage in `/srv/f1/state/disk`. Fail closed: when the table cannot be loaded, it stops every `f1` container and writes `/srv/f1/state/firewall-stopped`; once the table loads again, `f1-tick` or `f1-update` starts `current.env` again. Restarts and the restart of a stopped stack run under `f1-update`'s lock and are skipped for that round while a deploy or `f1-install` holds it.
+- **healthchecks.io:** uses the 2 free checks left on the account: `f1-ingest` (pinged once the sync requested by the daily `30 0 * * *` Cron, or its 15-minute retry, has succeeded; not after the startup sync, so a crash loop does not stay green; period 1 day, grace 1 h) and `f1-live` (each scheduled recording completed, from P2).
 - **Logs:** pino JSON to Docker's `local` driver (host daemon defaults). Fixed codes only, never URLs with tokens.
 
 ## 15. Testing

@@ -9,7 +9,11 @@ Debian 13, Docker 29, the Waterheight VM (A§14.1). Every [box] command runs as 
 | A1 | The VM is 6 vCPU / 12 GB (Hyper-V, VM off). |
 | A2, A3 | Tunnel, token file and Access application: `docs/runbooks/cloudflare.md`. You need the tunnel token, the Access team name and the AUD tag. |
 | A5 | After the first release run on `main`: GitHub, Packages, `f1-server` and `f1-web` → Package settings → Change visibility → Public (both). Dependabot is on (Settings → Code security). Branch protection on `main` stays as it is (A§12.4). |
+| A5b | Before merging P1f: Settings → Environments → New environment `production`. Required reviewers = the owner, "Prevent self-review" unchecked, Deployment branches and tags = Selected branches and tags → `main`. From then on every merge to `main` waits in the Actions run for your approval before the `release` job touches GHCR; after you approve, `f1-update` picks the images up within 10 minutes. The environment must exist before the job first runs: otherwise GitHub creates it without protection. |
 | A6 | healthchecks.io: see "A6" below. |
+| A8 | **Hard precondition for step 6.** The fine-grained agent token, see "A8" below. |
+
+Agents also cannot merge through `gh`: `.claude/settings.json` denies `gh api …/merge`, `gh api graphql` and `gh auth token`, on top of the branch protection and the environment approval.
 
 Without A5 the first `docker pull` in `f1-update` fails and the timer retries quietly every 10 minutes.
 
@@ -100,6 +104,8 @@ Expected: `f1-install: 0 change(s)` (the list of files to fill is gone once they
 
 ## 6. Enable the timers and run the first deploy [box]
 
+**Do not enable the timers before A8: agents must use the fine-grained token without the Workflows permission; check `gh auth status` shows `github_pat_`.**
+
 `f1-install` never enables the timers. Enable them once the secrets and `f1.env` are filled (until then `f1-update` logs `not configured … nothing to do` and exits 0).
 
 ```bash
@@ -113,7 +119,7 @@ Expected journal:
 
 ```
 f1-update: deploying server ghcr.io/mwijkhuisen/f1-server@sha256:… web ghcr.io/mwijkhuisen/f1-web@sha256:…
-f1-update: smoke test passed: http://127.0.0.1:8180/healthz 200
+f1-update: smoke test passed: http://127.0.0.1:8180/healthz 200, no f1 container unhealthy, starting or restarting
 f1-update: deployed server ghcr.io/mwijkhuisen/f1-server@sha256:… web ghcr.io/mwijkhuisen/f1-web@sha256:…
 ```
 
@@ -161,7 +167,7 @@ Expected (the web image stays the one in `current.env`):
 f1-update: deploying server f1-server:broken web ghcr.io/mwijkhuisen/f1-web@sha256:…
 f1-update: smoke test failed: no 200 from http://127.0.0.1:8180/healthz within 60 s
 f1-update: deploy of server f1-server:broken web … failed: rolling back to /srv/f1/state/current.env
-f1-update: smoke test passed: http://127.0.0.1:8180/healthz 200
+f1-update: smoke test passed: http://127.0.0.1:8180/healthz 200, no f1 container unhealthy, starting or restarting
 f1-update: rolled back to /srv/f1/state/current.env; server f1-server:broken web … is in /srv/f1/state/failed.env and is not retried automatically (rm /srv/f1/state/failed.env to retry)
 exit 1
 ```
@@ -197,7 +203,7 @@ Invariant 5: F1 shares no healthchecks group with Waterheight.
 3. Create a check with slug `f1-ingest`, period 1 day, grace 1 hour.
 4. Put the ping key in the secret file (a shell line is fine; the value is not logged):
    `sudo nano /etc/f1/secrets/hc_ping_key`
-5. `ingest` pings `https://hc-ping.com/<ping key>/f1-ingest` after each successful schedule sync (the startup sync and the daily 00:30 one). The check turns up after the first deploy.
+5. `ingest` pings `https://hc-ping.com/<ping key>/f1-ingest` once the schedule sync requested by the daily `30 0 * * *` (UTC) Cron, or by its 15-minute retry, has succeeded. The startup sync does not ping, so a crash-looping ingest cannot stay green. The check turns up after the first deploy and the first 00:30 UTC; period 1 day and grace 1 hour still fit.
 
 `f1-live` is created by P2c.
 

@@ -30,16 +30,26 @@ sudo cat /srv/f1/state/current.env
 | Log line | Meaning | Exit |
 |---|---|---|
 | `up to date (server … web …)` | the pulled digests equal `current.env` | 0 |
-| `deploying …`, `smoke test passed: … 200`, `deployed …` | success; `candidate.env` became `current.env`, `failed.env` was removed | 0 |
+| `deploying …`, `smoke test passed: http://127.0.0.1:8180/healthz 200, no f1 container unhealthy, starting or restarting`, `deployed …` | success; `candidate.env` became `current.env`, `failed.env` was removed | 0 |
 | `not configured: run f1-install, then fill …` | `f1.env` or a secret is empty or malformed; nothing deployed | 0 |
 | `pulling … failed: trying again next run` | GHCR unreachable, or the packages are private | 0 |
 | `another f1-update or f1-install is running` | the lock is held | 0 |
+| `server revision <a> and web revision <b> differ; waiting for the release to finish` | the two `:main` images come from different commits (the release is half pushed); drills skip this check | 0 |
 | `skipping known-bad … ; rm /srv/f1/state/failed.env to retry` | this pair already failed | 0 |
-| `deploy of … failed: rolling back to …`, `rolled back to …` | the new pair failed migrate, `up` or the smoke test; the old pair runs again | 1 |
+| `error: table inet f1 is not loaded: no deploy without the f1 firewall (systemctl restart f1-firewall)` | the firewall table is missing; nothing deployed | 1 |
+| `error: cannot resolve the images (--server …, --web …)` | a drill ref could not be pulled (a ref with a registry host is always pulled and recorded by digest) | 1 |
+| `smoke test failed: …` (two forms, below), `deploy of … failed: rolling back to …`, `rolled back to …` | the new pair failed migrate, `up` or the smoke test; the old pair runs again | 1 |
 | `first deploy failed: … (fix the cause, then rm …)` | no previous deploy to go back to; containers left as they are | 1 |
 | `error: the rollback to … failed its smoke test too: the site is down` | the old pair does not answer either | 1 |
 
-The smoke test is `curl http://127.0.0.1:8180/healthz` through caddy, api and db, for up to `F1_SMOKE_TIMEOUT` seconds (default 120).
+The smoke test is `curl http://127.0.0.1:8180/healthz` through caddy, api and db, then every f1 container must be healthy (none unhealthy, starting or restarting), for up to `F1_SMOKE_TIMEOUT` seconds (default 120). Two failure lines:
+
+- `smoke test failed: no 200 from http://127.0.0.1:8180/healthz within <N> s`
+- `smoke test failed: http://127.0.0.1:8180/healthz 200, but within <N> s not every f1 container is healthy: <name>: <status>, …`
+
+So an unhealthy `ingest` or `cloudflared` fails a deploy and rolls it back too.
+
+A `--server`/`--web` ref with a registry host (`ghcr.io/…`) is always pulled and recorded by digest in `current.env`; only a ref without a host (`f1-server:ci`, `f1-server:broken`) is recorded as given.
 
 ## A deploy failed
 
@@ -101,9 +111,10 @@ Expected: the changed files as `changed  <path>`, `ok` for the rest, and `f1-ins
 
 Every 10 minutes (`:05 :15 …`). It runs, in this order:
 
-1. `nft list table inet f1`; if it is missing: `error: the f1 firewall (table inet f1) is missing: loading /etc/f1/nftables-f1.conf`, then the table is loaded again.
+1. `nft list table inet f1`; if it is missing: `error: the f1 firewall (table inet f1) is missing: loading /etc/f1/nftables-f1.conf`, then the table is loaded again. If loading fails, f1-tick fails closed: it stops every f1 container, writes the marker `/srv/f1/state/firewall-stopped`, logs `error: loading /etc/f1/nftables-f1.conf failed: the f1 stack is stopped until the firewall loads` and exits 1. Once the table loads again (fix the cause, `sudo systemctl restart f1-firewall`), the next `f1-tick` or `f1-update` logs `table inet f1 is loaded again: starting the f1 stack (/srv/f1/state/current.env)` and starts the stack.
 2. `f1-resolvers --quiet`: refreshes the DNS allowlist (`inet f1 resolvers4`) from `/etc/resolv.conf`.
-3. `restarting unhealthy container f1-<service>-1` for every f1 container Docker reports unhealthy (Docker only restarts a container that exited).
+3. Under `f1-update`'s lock: `restarting unhealthy container f1-<service>-1` for every f1 container Docker reports unhealthy (Docker only restarts a container that exited).
+   While `f1-update` or `f1-install` holds the lock, f1-tick logs `f1-update or f1-install is running: no container restarts this round` and skips this step.
 4. `disk use of /srv/f1: N%` and the file `/srv/f1/state/disk`.
 
 ```bash
@@ -115,7 +126,7 @@ sudo f1-resolvers
 
 Expected: `disk` holds one line such as `2026-10-29T10:05:03Z 7`; `f1-resolvers` logs `f1 container DNS allowed to N IPv4 resolver(s) from /etc/resolv.conf` (or the systemd-resolved file when `/etc/resolv.conf` has only a loopback stub). A line `warning: no IPv4 resolver … f1 containers have no DNS until the next f1-tick` means the set is empty.
 
-`f1-tick` exits 1 when it could not load the firewall or read the disk use; the unit then shows as failed in `systemctl --failed`.
+`f1-tick` exits 1 when it could not load the firewall, could not start the stack again, or could not read the disk use; the unit then shows as failed in `systemctl --failed`.
 
 ## Cloudflare ranges
 
