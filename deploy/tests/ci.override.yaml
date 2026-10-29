@@ -1,0 +1,8 @@
+# CI only: deploy/tests/e2e.sh passes it to f1-update as F1_COMPOSE_OVERRIDE. Never installed on
+# the VM. ingest and cloudflared get a profile that nothing activates, so `up` never starts them:
+# CI never calls OpenF1 or Cloudflare (invariant 4).
+services:
+  ingest:
+    profiles: ["off"]
+  cloudflared:
+    profiles: ["off"]
