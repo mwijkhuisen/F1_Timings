@@ -1,21 +1,26 @@
 #!/usr/bin/env bash
 # f1-update (f1-update.timer, every 10 min; A§14.4, D8).
 #
-# Deploys the newest images: lock; readiness (f1.env and the secrets); resolve
-# ghcr.io/mwijkhuisen/f1-{server,web}:main to their digests; skip an unchanged or known-bad pair;
-# otherwise migrate, `up -d` and smoke-test http://127.0.0.1:8180/healthz. Success moves
-# candidate.env to current.env. A failure keeps the pair in failed.env (never retried
-# automatically) and rolls back to current.env. Migrations are never undone (expand/contract).
+# Deploys the newest images: lock; readiness (f1.env and the secrets); table inet f1 loaded (else
+# exit 1; a stack that f1-tick stopped without it starts again); resolve
+# ghcr.io/mwijkhuisen/f1-{server,web}:main to their digests; wait while their revision labels
+# differ (a release half pushed); skip an unchanged or known-bad pair; otherwise migrate, `up -d`
+# and smoke-test (/healthz 200, then every f1 container healthy). Success moves candidate.env to
+# current.env. A failure keeps the pair in failed.env (never retried automatically) and rolls back
+# to current.env. Migrations are never undone (expand/contract).
 #
 # State (/srv/f1/state, root only): current.env, the pair that last passed its smoke test;
 # failed.env, the pair that last failed (rm it to retry); candidate.env, while a deploy runs.
 #
-# --server/--web deploy the given reference instead (a drill, or CI with f1-server:ci). An image
-# that is already local is recorded as given; anything else is pulled and recorded by digest.
-# The image not named stays as current.env has it (no pull of :main during a drill).
+# --server/--web deploy the given reference instead (a drill, or CI with f1-server:ci), without
+# the revision check. A local image without a registry host (f1-server:ci) is recorded as given;
+# anything else, a local tag of ghcr.io/… too, is pulled and recorded by digest, so current.env
+# (the rollback target) never names a tag that can move. The image not named stays as
+# current.env has it (no pull of :main during a drill).
 #
-# Exit: 0 deployed, up to date, known-bad skipped, not configured, busy, or the default pull failed
-# (transient); 1 the deploy failed (rolled back, or the first deploy failed); 64 usage.
+# Exit: 0 deployed, up to date, known-bad skipped, release half pushed, not configured, busy, or
+# the default pull failed (transient); 1 no firewall, or the deploy failed (rolled back, or the
+# first deploy failed); 64 usage.
 #
 # Usage: f1-update [--server <ref>] [--web <ref>]
 set -euo pipefail
@@ -61,6 +66,9 @@ if ! ready; then
   log "not configured: run f1-install, then fill /etc/f1/f1.env and every secret in /etc/f1/secrets (install runbook); nothing to do"
   exit 0
 fi
+nft list table inet f1 >/dev/null 2>&1 ||
+  die "table inet f1 is not loaded: no deploy without the f1 firewall (systemctl restart f1-firewall)"
+resume_stack
 
 # env_value <file> <key>: the value of KEY=… in one of our env files (empty when absent).
 env_value() {
@@ -89,19 +97,26 @@ repo_digest() {
 
 # pick <given> <default> <current>: the reference to deploy; fails when the pull fails.
 pick() {
-  local given=$1 def=$2 cur=$3
+  local given=$1 def=$2 cur=$3 host=${1%%/*}
   if [[ -z $given && $drill == 1 && -n $cur ]]; then
     printf '%s' "$cur" # a drill keeps the image it does not name
     return 0
   fi
-  # A given image that is already local (a local build: f1-server:ci, f1-server:broken) is
-  # recorded as given. Not "no RepoDigests": the containerd image store gives local builds one.
-  if [[ -n $given ]] && docker image inspect "$given" >/dev/null 2>&1; then
+  # A given local image without a registry host (a local build: f1-server:ci, f1-server:broken)
+  # is recorded as given. Not "no RepoDigests": the containerd image store gives local builds one.
+  # A registry host is a first path component with "." or ":", or localhost: always pulled.
+  if [[ -n $given && ($given != */* || ($host != *[.:]* && $host != localhost)) ]] &&
+    docker image inspect "$given" >/dev/null 2>&1; then
     printf '%s' "$given"
     return 0
   fi
   docker pull --quiet "${given:-$def}" >/dev/null 2>&1 || return 1
   repo_digest "${given:-$def}"
+}
+
+# revision <ref>: the image's org.opencontainers.image.revision label (the release's commit).
+revision() {
+  docker image inspect --format '{{index .Config.Labels "org.opencontainers.image.revision"}}' "$1"
 }
 
 if ! new_server=$(pick "$server" "$DEFAULT_SERVER" "$(env_value "$CURRENT" F1_SERVER_IMAGE)") ||
@@ -114,6 +129,15 @@ if ! new_server=$(pick "$server" "$DEFAULT_SERVER" "$(env_value "$CURRENT" F1_SE
 fi
 [[ $new_server =~ $F1_REF_RE && $new_web =~ $F1_REF_RE ]] || die "a resolved image reference is malformed"
 pair="server $new_server web $new_web"
+# The release pushes f1-server:main, then f1-web:main: in between, :main is a mixed pair.
+if ((!drill)); then
+  rev_server=$(revision "$new_server")
+  rev_web=$(revision "$new_web")
+  if [[ $rev_server != "$rev_web" ]]; then
+    log "server revision $rev_server and web revision $rev_web differ; waiting for the release to finish"
+    exit 0
+  fi
+fi
 
 printf 'F1_SERVER_IMAGE=%s\nF1_WEB_IMAGE=%s\n' "$new_server" "$new_web" | write_atomic "$CANDIDATE" 0600
 if [[ -f $CURRENT ]] && cmp -s "$CANDIDATE" "$CURRENT"; then

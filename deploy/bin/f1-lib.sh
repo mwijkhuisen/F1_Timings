@@ -79,19 +79,56 @@ f1_compose() {
     docker compose -p f1 "${files[@]}" --env-file "$env_file" "$@"
 }
 
-# smoke: /healthz through caddy (so caddy, api and db) answers 200 on the published port within
-# F1_SMOKE_TIMEOUT seconds (default 120).
+# unready: the f1 containers that are unhealthy, still starting or restarting, as
+# "<name>: <status>, …" (empty when none). Exited ones, such as a finished job, do not count.
+unready() {
+  local name state status list=''
+  while read -r name state status; do
+    if [[ $state == restarting || $status == *'(unhealthy)'* || $status == *'(health: starting)'* ]]; then
+      list+="${list:+, }$name: $status"
+    fi
+  done < <(docker ps -a --filter label=com.docker.compose.project=f1 --format '{{.Names}} {{.State}} {{.Status}}')
+  printf '%s' "$list"
+}
+
+# smoke: /healthz through caddy (so caddy, api and db) answers 200 on the published port, and then
+# no f1 container is unready (every one that runs is healthy), within F1_SMOKE_TIMEOUT seconds
+# (default 120).
 smoke() {
-  local limit=${F1_SMOKE_TIMEOUT:-120} deadline
+  local limit=${F1_SMOKE_TIMEOUT:-120} deadline up=0 sick=''
   [[ $limit =~ ^[0-9]{1,4}$ ]] || die "F1_SMOKE_TIMEOUT must be a number of seconds"
   deadline=$((SECONDS + 10#$limit))
   while ((SECONDS < deadline)); do
-    if curl -fsS -o /dev/null --max-time 5 "$F1_SMOKE_URL" 2>/dev/null; then
-      log "smoke test passed: $F1_SMOKE_URL 200"
-      return 0
+    if ((up)) || curl -fsS -o /dev/null --max-time 5 "$F1_SMOKE_URL" 2>/dev/null; then
+      up=1
+      sick=$(unready)
+      if [[ -z $sick ]]; then
+        log "smoke test passed: $F1_SMOKE_URL 200, no f1 container unhealthy, starting or restarting"
+        return 0
+      fi
     fi
     sleep 3
   done
-  log "smoke test failed: no 200 from $F1_SMOKE_URL within $limit s"
+  if ((up)); then
+    log "smoke test failed: $F1_SMOKE_URL 200, but within $limit s not every f1 container is healthy: $sick"
+  else
+    log "smoke test failed: no 200 from $F1_SMOKE_URL within $limit s"
+  fi
   return 1
+}
+
+# Fail closed (A§14.5): f1-tick stops the f1 containers when table inet f1 is missing and will not
+# load, and leaves this marker. resume_stack, run by f1-tick and f1-update under the update lock
+# once the table is loaded, starts current.env again and removes it.
+readonly F1_FW_STOPPED=$F1_STATE/firewall-stopped
+resume_stack() {
+  [[ -f $F1_FW_STOPPED ]] || return 0
+  if [[ -f $F1_STATE/current.env ]]; then
+    log "table inet f1 is loaded again: starting the f1 stack ($F1_STATE/current.env)"
+    if ! f1_compose "$F1_STATE/current.env" up -d --remove-orphans; then
+      log "error: starting the f1 stack failed: trying again next run"
+      return 1
+    fi
+  fi
+  rm -f -- "$F1_FW_STOPPED"
 }
