@@ -34,7 +34,7 @@ export type Deps = {
   log: Pick<Logger, 'info' | 'error'>;
   /** Touches the heartbeat: the work proves it is alive, not a free-running timer (A§4). */
   beat: () => void;
-  /** The healthchecks.io ping (never throws); only the daemon's scheduleSync calls it. */
+  /** The healthchecks.io ping (never throws); the daemon pings once a sync the daily Cron requested has succeeded, not after the startup sync. */
   ping?: (slug: string) => Promise<void>;
 };
 export type Outcome = Result<IngestState, ErrorCode | 'unknown_session' | 'live_session'>;
@@ -374,9 +374,12 @@ export const SYNC_RETRY_MS = 15 * 60_000;
  */
 export function scheduleSync(deps: Deps) {
   let next: number | undefined = 0; // epoch ms of the next try; undefined once synced
+  // Set by a request (the daily Cron), not by the startup sync: a crash loop must not stay green.
+  let daily = false;
   return {
     request: () => {
       next = 0;
+      daily = true;
     },
     async run(): Promise<void> {
       const at = deps.now().getTime();
@@ -393,7 +396,8 @@ export function scheduleSync(deps: Deps) {
       const years = yearRange(FIRST_YEAR, current).filter((y) => y === current || !seen.has(y));
       if (await syncSchedule(deps, years)) {
         next = undefined;
-        await deps.ping?.('f1-ingest');
+        if (daily) await deps.ping?.('f1-ingest');
+        daily = false;
       }
     },
   };
