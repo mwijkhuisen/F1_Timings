@@ -32,8 +32,8 @@ Same versions as Waterheight at P0 time. Re-check each pin against the 7-day rel
 | Database | PostgreSQL 18.6 (own container), Kysely 0.29.6 + pg 8.23.1, kysely-codegen 0.20.0, dbmate 2.36.0 | Immutable migrations |
 | Web | React 19.3.0, Vite 8.3.4 + @vitejs/plugin-react 6.1.2, TanStack Query 5.104.2, ECharts 6.1.0 (lazy chunk) | English only, no i18n library. Times through `Intl.DateTimeFormat` in Europe/Amsterdam, no Temporal polyfill (owner, 2026-10-28) |
 | Live feed (P2) | SignalR Core client: `@microsoft/signalr` or a ~150-line native client on undici's WebSocket | P2a decides, with an ADR-lite line either way |
-| Edge | Caddy 2.11.7, cloudflared 2026.10.x, Cloudflare Access (free plan) | Own tunnel |
-| Images | Build: `node:26.11.1-trixie-slim`. Runtime: `gcr.io/distroless/nodejs26-debian13:nonroot`. All pinned by digest | |
+| Edge | Caddy 2.11.7, cloudflared 2026.10.3, Cloudflare Access (free plan) | Own tunnel |
+| Images | Build: `node:26.11.1-trixie-slim`. Runtime: `gcr.io/distroless/nodejs26-debian13:nonroot`. Web: `caddy:2.11.7-alpine`. Also `postgres:18.6-trixie`, `cloudflare/cloudflared:2026.10.3`, dbmate 2.36.0 (release binary, sha256-checked) and, in the CI nft check only, `debian:trixie-slim`. All pinned by digest | |
 
 ### Reused from Waterheight / dropped
 
@@ -309,9 +309,10 @@ Roles (owner, 2026-10-25; built in P1b): `deploy/postgres/roles.sql`, a PostgreS
 
 - **Trust anchors:** the lockfile, the hand-maintained sha256 pins of the CI binaries (Dependabot does not bump them), and the required checks, which the PR itself defines. A diff under `.github/`, `scripts/`, `pnpm-workspace.yaml` or `.claude/` gets a line-by-line owner read.
 - **`main`:** branch protection requires `ci` and `security`, enforced for admins, with no force-push or deletion, and a pull request before merging (0 approvals). Merge commits only.
-- **Agent identity:** agents use the owner's admin OAuth token until P1f, when they move to their own fine-grained token without the Administration permission (A8). Until then "agents never merge" rests on the deny rules in `.claude/settings.json` and on the branch protection.
-- **Secrets:** `db_f1_migrator` is the first one. It lives in the `migrate` process and in the dbmate child's environment (readable through `/proc/<pid>/environ` by the same UID in the one-shot container). `DATABASE_URL` overrides it in dev and test; P1f checks that Compose never sets it.
-- **CI egress (CI only):** GitHub release assets, registry.npmjs.org, Docker Hub, nodejs.org (setup-node), api.github.com (zizmor). Production gains no host.
+- **Agent identity:** agents use the owner's admin OAuth token until P1f, when they move to their own fine-grained token without the Administration permission (A8). Until then "agents never merge" rests on the deny rules in `.claude/settings.json` and on the branch protection. The A8 token has contents, pull requests and issues read/write and no Workflows permission, so the owner pushes any diff under `.github/workflows` (owner, 2026-10-28). Agents switch to it before the first deploy from `main`.
+- **Secrets:** `db_f1_migrator` is the first one. It lives in the `migrate` process and in the dbmate child's environment (readable through `/proc/<pid>/environ` by the same UID in the one-shot container). `DATABASE_URL` overrides it in dev and test; Compose never sets it, which the `hardening` check in `ci / deploy` enforces.
+- **CI egress (CI only):** GitHub release assets, registry.npmjs.org, Docker Hub, nodejs.org (setup-node), api.github.com (zizmor), gcr.io (distroless base image), ghcr.io (the `release` job pushes there), deb.debian.org and the Ubuntu archive (nftables in the nft-check container and on the runner). Production gains no host.
+- **CI deploy test (`ci / deploy`, e2e):** the runner has Docker 28.0.4 (client and server) and the nft-check container has nftables 1.1.3 (Debian trixie); the VM runs Docker 29, so the [box] commands in `docs/runbooks/install.md` confirm there. The run proved: a second `f1-install` makes `0 change(s)`, `systemd-analyze verify` passes on the units, local tags (`f1-server:ci`) work as image refs through `current.env`, `api` → `https://www.google.com` is blocked (`TimeoutError`) with the f1 table loaded, a broken image rolls back and the known-bad pair is skipped, and `f1-tick` reloads a deleted table.
 - **Accepted risks (owner, 2026-10-25):**
   - The `git diff *`, `git log *` and `git show *` allow rules stay, although `--output=<path>` lets them write a file without a prompt.
   - `npm`, `yarn` and `bunx`, `git push --prune` and `git -c … push` are not denied.
@@ -352,20 +353,33 @@ Roles (owner, 2026-10-25; built in P1b): `deploy/postgres/roles.sql`, a PostgreS
 - Under a separate compose project `f1`. Paths: `/etc/f1/{f1.env, secrets/}`, `/srv/f1/{state, live}`, a named volume `f1_pgdata`.
 
 ### 14.2 Services (limits **[U]**, tuned after the backfill and the first live weekend)
-
 | Service | Image | mem / cpus | Networks |
 |---|---|---|---|
 | `db` | postgres:18.6-trixie | 1g / 1.0 (`shared_buffers=256MB`, `max_connections=20`) | `f1-db` (internal) |
-| `api` | f1-server `api` | 384m / 1.0 | `f1-edge` (internal), `f1-db` |
+| `api` | f1-server `api` | 384m / 1.0 | `f1-edge` (internal), `f1-db`, `f1-api-egress` (api only) |
 | `ingest` | f1-server `ingest` | 256m / 0.5 | `f1-egress`, `f1-db` |
 | `live` (P2) | f1-server `live` | 384m / 1.0 | `f1-egress`, `f1-db` |
-| `caddy` | f1-web | 128m / 0.5 | `f1-edge`, `f1-tunnel-edge` |
+| `caddy` | f1-web | 128m / 0.5 | `f1-edge`, `f1-tunnel-edge`, `f1-publish` (caddy only) |
 | `cloudflared` | cloudflare/cloudflared | 256m / 0.5 | `f1-tunnel`, `f1-tunnel-edge` |
 | `migrate` | f1-server `migrate` (profile `jobs`) | 128m | `f1-db` |
 
 - Total limits are ~2.7 GB. Expected steady state is ~0.9 GB.
-- Bridges are named `f1-*`, with fixed subnets that must not overlap Waterheight's 172.30.0.0/16 or the LAN (P1f picks them after inspecting the host). `enable_icc: false`.
-- UIDs/GIDs: containers run as 62532 (not Waterheight's 65532/65533). Secret GIDs start at 62001 (Waterheight uses 61001–61012).
+- Bridges are named `f1-*`, IPv4 only, with fixed subnets 10.62.1–7.0/24 (owner, 2026-10-28) in this order: `f1-db`, `f1-edge`, `f1-egress`, `f1-api-egress`, `f1-tunnel`, `f1-tunnel-edge`, `f1-publish`. `f1-install` refuses to install when one overlaps a host route or a non-`f1` Docker network (Waterheight's 172.30.0.0/16, the LAN). `enable_icc: false` on the four non-internal networks. Every container has at most one non-internal network, so its default route is unambiguous.
+- `f1-publish` carries `caddy` only, for the `127.0.0.1:8180` publish (the f1-update smoke test): Docker does not publish a port for a container that is only on internal networks. The firewall drops all its egress. Proven in CI (`ci / deploy`, e2e): the only port binding is `/f1-caddy-1 80/tcp → 127.0.0.1:8180`.
+- `db` runs as 62532 on the volume `f1_pgdata`: the postgres image's `/var/lib/postgresql` is mode 1777, so a new volume lets an arbitrary UID run initdb. Proven in CI: initdb as 62532 on a fresh `f1_pgdata`, `roles.sql` through initdb, `migrate` as `f1_migrator`. The healthcheck is `pg_isready -U postgres` (62532 has no passwd entry). The local socket is `trust` inside the container only; TCP is `scram-sha-256`. `roles.sql` runs once, through `docker-entrypoint-initdb.d`, on a new volume. `migrate`, `api` and `ingest` start with `depends_on: db: service_healthy`.
+- `cloudflared` (2026.10.3, by digest) reads its token with `--token-file` (never `TUNNEL_TOKEN`), binds its metrics to `127.0.0.1:20241` and has the image's `tunnel ready` healthcheck. `caddy` sets the sysctl `net.ipv4.ip_unprivileged_port_start=80` and has tmpfs `/data` and `/config`. `migrate` is a `jobs`-profile job that `f1-update` runs before `up`.
+- UIDs/GIDs: containers run as 62532 (not Waterheight's 65532/65533). Secret GIDs start at 62001 (Waterheight uses 61001–61012). A consumer gets its secrets' GIDs through `group_add`; the files are `root:<gid> 0440`:
+
+  | Secret | GID | Consumers |
+  |---|---|---|
+  | `db_postgres` | 62001 | `db` |
+  | `db_f1_migrator` | 62002 | `db`, `migrate` |
+  | `db_f1_ingest` | 62003 | `db`, `ingest` |
+  | `db_f1_api` | 62004 | `db`, `api` |
+  | `cf_tunnel_token` | 62005 | `cloudflared` |
+  | `hc_ping_key` | 62006 | `ingest` |
+
+  62007 and up are reserved for P2c (`f1tv_*`). `db` holds the three login GIDs because `roles.sql` sets the passwords with `pg_read_file`.
 - The `migrate` contract (built in P0, owner 2026-10-25): host `db:5432`, database `f1`, login `f1_migrator`, and the password from the file secret `db_f1_migrator` (`/etc/f1/secrets/db_f1_migrator` on the host, `/run/secrets/db_f1_migrator` in the container). `DATABASE_URL` is a dev/test switch that Compose never sets. The server image has dbmate on its `PATH`.
 
 ### 14.3 Firewall
@@ -375,26 +389,30 @@ Roles (owner, 2026-10-25; built in P1b): `deploy/postgres/roles.sql`, a PostgreS
   - DNS to the host resolvers
   - tcp/443 from `f1-egress`
   - tcp+udp/7844 from `f1-tunnel` to Cloudflare's tunnel ranges
-  - tcp/443 from the `api` to Cloudflare's published IP ranges only, for the Access certs (owner, 2026-10-26, P1c). The `api`'s networks are internal today, so P1f gives it its own egress-only network, shared with no other service, and builds the nftables set of ranges. Port 8080 is never published, and Caddy↔api stays on the internal `f1-edge`
-  - drop everything else, plus host-input drops for `f1-*`
+  - tcp/443 from the `api` (`f1-api-egress`, shared with no other service) to Cloudflare's published IP ranges only, for the Access certs (owner, 2026-10-26, P1c). Port 8080 is never published, and Caddy↔api stays on the internal `f1-edge`
+  - drop everything else (all of `f1-publish`'s egress included), plus host-input drops for `f1-*` (only established/related replies pass: docker-proxy's path for 8180)
+- DNS is allowed only from the three egress networks (`f1-egress`, `f1-api-egress`, `f1-tunnel`), to the set `resolvers4`, and before the drop of private ranges (the resolvers may be on the LAN). The private ranges are dropped even on 443. Traffic from an `f1-*` bridge to another `f1-*` bridge is `return`ed to Docker's own internal and icc rules.
+- Sets (fetched 2026-10-29): `cf4` from `https://www.cloudflare.com/ips-v4`; `cf_tunnel4` = 198.41.192.0/24 and 198.41.200.0/24 from Cloudflare's "Tunnel with firewall" documentation; `resolvers4` is filled by `f1-resolvers` from the host's resolv.conf (an `ExecStartPost` of `f1-firewall.service` and every `f1-tick`). The owner refreshes `cf4` and `cf_tunnel4` by hand (`docs/runbooks/cloudflare.md`).
 - Without this table a second project's egress is unrestricted, because Waterheight's table only matches `rws-*` and `docker0`.
 
 ### 14.4 Updates
 
-- CI on `main` builds both images, pushes `:main` and `:sha-<git>` to GHCR (public, no secrets inside), and records the digests.
+- CI on `main` (the `release` job) builds both images, pushes `ghcr.io/mwijkhuisen/f1-server` and `f1-web` as `:main` and `:sha-<git>` (public, no secrets inside), and records the digests. The job's `concurrency` group queues runs without cancelling, so `:main` stays on the newest commit.
 - `f1-update.timer` (every 10 min) runs `deploy/bin/f1-update`:
   1. take a flock
-  2. `docker pull` `:main` and stop if the digest is unchanged
+  2. `docker pull` `:main` and stop if the digest equals `current.env`; stop with a loud log line if the pair equals `failed.env` (a known-bad pair is never retried automatically; `rm /srv/f1/state/failed.env` to retry)
   3. run `migrate`
   4. `up -d`
   5. smoke-test `http://127.0.0.1:8180/healthz`
-  6. on failure, roll back to the previous digests in `/srv/f1/state/current.env`
+  6. on failure, write the pair to `failed.env` and roll back to the previous digests in `/srv/f1/state/current.env`
+- State lives in `/srv/f1/state`: `current.env` (the last pair that passed), `candidate.env` (during a run), `failed.env`.
+- `f1-update --server <ref> --web <ref>` deploys the given images instead (drills, CI); the flag not given keeps the image of `current.env`.
 - GitHub has no server credentials.
-- Compose, Caddyfile, nftables and units change rarely. The owner applies them with `deploy/bin/f1-install` from a checkout on the VM.
+- Compose, Caddyfile, nftables and units change rarely. The owner applies them with `deploy/bin/f1-install` from a checkout on the VM. It is idempotent, re-applies a changed compose file to a running deploy, and does not enable the timers: the owner does that once the secrets and `f1.env` are filled (`docs/runbooks/install.md`).
 
 ### 14.5 Operations
 
-- **`f1-tick.timer`** (10 min): restarts unhealthy `f1` containers (Docker doesn't) and records disk usage.
+- **`f1-tick.timer`** (every 10 min, at :05): reloads `table inet f1` if it is missing, refreshes `resolvers4`, restarts unhealthy `f1` containers (Docker doesn't) and records disk usage in `/srv/f1/state/disk`.
 - **healthchecks.io:** uses the 2 free checks left on the account: `f1-ingest` (daily success) and `f1-live` (each scheduled recording completed, from P2).
 - **Logs:** pino JSON to Docker's `local` driver (host daemon defaults). Fixed codes only, never URLs with tokens.
 
