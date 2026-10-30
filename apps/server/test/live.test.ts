@@ -231,7 +231,11 @@ describe('read', () => {
     expect(parseFeedLine('[1000,"Position.z","abc=",null]')).toEqual([
       { t: 1000, topic: 'Position.z', payload: 'abc=' },
     ]);
-    expect(parseFeedLine('[2000,"_subscribe",{"Heartbeat":{"Utc":"x"},"CarData.z":"abc="}]')).toEqual([
+    // SessionInfo first, the rest in order.
+    expect(
+      parseFeedLine('[2000,"_subscribe",{"Heartbeat":{"Utc":"x"},"SessionInfo":{"Key":1},"CarData.z":"abc="}]'),
+    ).toEqual([
+      { t: 2000, topic: 'SessionInfo', payload: { Key: 1 }, full: true },
       { t: 2000, topic: 'Heartbeat', payload: { Utc: 'x' }, full: true },
       { t: 2000, topic: 'CarData.z', payload: 'abc=', full: true },
     ]);

@@ -218,6 +218,26 @@ describe('createLaps', () => {
     expect(build(read('practice-reconnect.jsonl'), 9001)).toEqual(PRACTICE);
   });
 
+  it('a feed joined before the session ignores the previous session and the next one', () => {
+    // practice-stale.jsonl: on joining, the full state of an earlier race (8999, laps, stints, a chequered flag); then
+    // F1's switch to 9001, a SessionInfo keyframe and reset lines with empty Stints and no NumberOfLaps.
+    const stale = read('practice-stale.jsonl');
+    const events = read('practice.jsonl');
+    const end = (events.at(-1) as FeedEvent).t;
+    const next: FeedEvent[] = [
+      { t: end + 60_000, topic: 'SessionInfo', payload: { Key: 9002, Type: 'Race', _kf: true } },
+      { t: end + 70_000, topic: 'TimingAppData', payload: { Lines: { 7: { Stints: { 2: { Compound: 'MEDIUM' } } } } } },
+      {
+        t: end + 80_000,
+        topic: 'TimingData',
+        payload: { Lines: { 7: { NumberOfLaps: 7, LastLapTime: { Value: '1:31.000' } } } },
+      },
+    ];
+    expect(build([...stale, ...events, ...next], 9001)).toEqual(PRACTICE);
+    // The way the recording has it: no full state after the switch.
+    expect(build([...stale, ...events.filter((ev) => !ev.full)], 9001)).toEqual(PRACTICE);
+  });
+
   it('a reconnect at any point k, with any m recent messages repeated, gives the clean rows', () => {
     const events = read('practice.jsonl');
     fc.assert(
@@ -269,6 +289,7 @@ describe('createLaps', () => {
     });
     const { laps } = build(
       [
+        { t: at, topic: 'SessionInfo', payload: { Key: 9001 } },
         { t: at, topic: 'TimingAppData', payload: { Lines: { 7: { Stints: [{ Compound: 'SOFT' }] } } } },
         timing(1, { NumberOfLaps: 1, PitOut: false }),
         timing(90, { NumberOfLaps: 2, PitOut: null }),
@@ -292,7 +313,8 @@ describe('createLaps', () => {
         },
       },
     };
-    expect(build([{ t: 0, topic: 'TimingAppData', payload }], 9001).stints).toEqual([
+    const info: FeedEvent = { t: 0, topic: 'SessionInfo', payload: { Key: 9001 } };
+    expect(build([info, { t: 0, topic: 'TimingAppData', payload }], 9001).stints).toEqual([
       practice.stint(7, 1, 1, 1, 'MEDIUM', 4),
     ]);
   });
@@ -302,7 +324,7 @@ describe('createLaps', () => {
     const ev = (s: number, topic: string, payload: Obj): FeedEvent => ({ t: at + s * 1000, topic, payload });
     const timing = (s: number, line: Obj) => ev(s, 'TimingData', { Lines: { 7: line } });
     const events = [
-      ev(-600, 'SessionInfo', { Type: 'Race' }),
+      ev(-600, 'SessionInfo', { Key: 9002, Type: 'Race' }),
       ev(-300, 'TimingAppData', { Lines: { 7: { Stints: [{ Compound: 'MEDIUM' }] } } }),
       timing(-60, { Sectors: { 0: { Segments: { 0: { Status: 2048 } } } } }),
       ev(0, 'SessionData', { StatusSeries: [{ Utc: '2026-01-11T14:00:00', SessionStatus: 'Started' }] }),
@@ -321,14 +343,14 @@ describe('createLaps', () => {
   const ev = (s: number, topic: string, payload: Obj): FeedEvent => ({ t: at + s * 1000, topic, payload });
   const timing = (s: number, line: Obj) => ev(s, 'TimingData', { Lines: { 7: line } });
   const opened = (type: string) => [
-    ev(-600, 'SessionInfo', { Type: type }),
+    ev(-600, 'SessionInfo', { Key: 9002, Type: type }),
     ev(-300, 'TimingAppData', { Lines: { 7: { Stints: [{ Compound: 'MEDIUM' }] } } }),
   ];
 
   it('a time outside the ISO range gives no start instead of a RangeError', () => {
     const { laps } = build(
       [...opened('Practice'), { t: 1e16, topic: 'TimingData', payload: { Lines: { 7: { NumberOfLaps: 1 } } } }],
-      9001,
+      9002,
     );
     expect(laps.map((l) => [l.lap_number, l.date_start])).toEqual([[1, null]]);
   });
