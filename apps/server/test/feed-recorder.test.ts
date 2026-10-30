@@ -13,7 +13,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { setTimeout as sleep } from 'node:timers/promises';
 import { gunzipSync } from 'node:zlib';
-import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest';
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { server } from '../../../test/msw.setup.ts';
 import { type Closed, connect, TOPICS } from '../src/live/feed-client.ts';
 import { createFeed } from '../src/live/merge.ts';
@@ -303,13 +303,17 @@ describe('feed client against the fake server', () => {
 
   it('gives feed_timeout for a silent socket, and the timers stop with it', async () => {
     fake.behaviour.silent = true;
-    const timers = () => process.getActiveResourcesInfo().filter((r) => r === 'Timeout').length;
-    const before = timers();
+    // By identity: a count of the process's active timers also sees undici's, which come and go.
+    const set = vi.spyOn(globalThis, 'setInterval');
+    const clear = vi.spyOn(globalThis, 'clearInterval');
+    const pingIndex = () => set.mock.calls.findIndex((call) => call[1] === 5);
     const conn = connect(TOKEN, () => {}, { base: fake.base, idleMs: 30, pingMs: 5 });
-    await until(() => timers() === before + 2); // the idle and ping timers run
+    await until(() => pingIndex() !== -1); // the socket is open and the ping timer runs
     await expect(conn.closed).resolves.toEqual({ error: 'feed_timeout' });
     await expect(conn.subscribed).rejects.toThrow('closed before the subscribe completed');
-    expect(timers()).toBe(before);
+    expect(clear).toHaveBeenCalledWith(set.mock.results[pingIndex()]?.value);
+    set.mockRestore();
+    clear.mockRestore();
   });
 
   it('gives feed_timeout for an upgrade that is never answered', async () => {
