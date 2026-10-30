@@ -64,6 +64,16 @@ export type SessionRows = {
   result: Insertable<DB['result']>[];
 };
 
+type PitLap = { driver_number: number; lap_number: number; is_pit_out: boolean | null; is_pit_in?: boolean };
+
+/** A§9: lap n is an in-lap when the same driver's lap n + 1 is an out-lap (not from `pit`). Mutates and returns `laps`. */
+export function markPitIn<T extends PitLap>(laps: T[]): T[] {
+  const key = (driver: number, lap: number) => `${driver}/${lap}`;
+  const outLaps = new Set(laps.filter((l) => l.is_pit_out).map((l) => key(l.driver_number, l.lap_number)));
+  for (const l of laps) l.is_pit_in = outLaps.has(key(l.driver_number, l.lap_number + 1));
+  return laps;
+}
+
 /**
  * The child rows of one session. A row of another session is skipped (replace-per-session
  * must own every row it writes); of duplicate keys in one response the last wins. Both count
@@ -108,9 +118,7 @@ export function normaliseSession(
       quali_phase: null as number | null,
     }),
   );
-  // A§9: lap n is an in-lap when the same driver's lap n + 1 is an out-lap (not from `pit`).
-  const outLaps = new Set(lap.filter((l) => l.is_pit_out).map((l) => perDriver(l, l.lap_number)));
-  for (const l of lap) l.is_pit_in = outLaps.has(perDriver(l, l.lap_number + 1));
+  markPitIn(lap);
   // A§9: deleted laps and the qualifying phase, from this session's race-control messages.
   const rules = markLaps(
     lap,
