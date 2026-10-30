@@ -23,11 +23,11 @@ describe('run', () => {
     expect(lines[0]).toMatch(/^usage: main\.js <api\|ingest\|/);
   });
 
-  it.each(['live', 'archive'])('%s is not implemented yet', async (role) => {
-    expect(await run([role], {}, () => {})).toBe(EXIT_NOT_IMPLEMENTED);
+  it('archive is not implemented yet', async () => {
+    expect(await run(['archive'], {}, () => {})).toBe(EXIT_NOT_IMPLEMENTED);
   });
 
-  it.each([[['ingest']], [['backfill']], [['refetch', '11388']]])(
+  it.each([[['ingest']], [['backfill']], [['refetch', '11388']], [['live']]])(
     '%j without a database setting is a config error',
     async (argv) => {
       const lines: string[] = [];
