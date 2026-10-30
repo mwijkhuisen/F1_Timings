@@ -4,7 +4,9 @@ import type { FeedEvent } from './read.ts';
 //
 // Objects merge key by key. An array in a delta is an index-keyed object ([a, b] ≡ {"0": a, "1": b}),
 // so the state holds no arrays and a full state equals the merged deltas. A leaf (string, number,
-// boolean, null) replaces, and so does an object replacing a leaf or the other way round. Merge input
+// boolean, null) replaces, and so does an object replacing a leaf or the other way round. `_deleted: [k…]`
+// removes those keys from the object it sits in (the archive's final .json states hold no `_deleted`), and
+// the effective delta carries the keys that were really removed. Merge input
 // is untrusted: the state's objects have no prototype, reads are own-property only, the keys
 // __proto__, constructor and prototype are dropped, and objects nested deeper than MAX_DEPTH are dropped.
 
@@ -22,6 +24,15 @@ function into(target: Obj, delta: object, depth: number): Obj | undefined {
   let effective: Obj | undefined;
   for (const [key, value] of Object.entries(delta)) {
     if (UNSAFE.has(key)) continue;
+    if (key === '_deleted' && Array.isArray(value)) {
+      const gone = value.map(String).filter((k) => Object.hasOwn(target, k));
+      for (const k of gone) delete target[k];
+      if (gone.length > 0) {
+        effective ??= empty();
+        effective[key] = gone;
+      }
+      continue;
+    }
     const old = Object.hasOwn(target, key) ? target[key] : undefined;
     let changed: unknown;
     if (isObj(value)) {

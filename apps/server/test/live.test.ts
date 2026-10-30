@@ -69,6 +69,15 @@ describe('merge', () => {
     expect(merge(state, 'raw')).toBeUndefined();
   });
 
+  it('removes the keys listed in _deleted, and the effective delta says which went', () => {
+    const state: Obj = {};
+    merge(state, { Lines: { '1': { BestLapTime: { Value: '1:30.000', Lap: 5 } } } });
+    const effective = merge(state, { Lines: { '1': { BestLapTime: { Value: '', _deleted: ['Lap', 'Missing'] } } } });
+    expect(state).toEqual({ Lines: { '1': { BestLapTime: { Value: '' } } } });
+    expect(effective).toEqual({ Lines: { '1': { BestLapTime: { Value: '', _deleted: ['Lap'] } } } });
+    expect(merge(state, { Lines: { '1': { BestLapTime: { _deleted: ['Lap'] } } } })).toBeUndefined();
+  });
+
   it('keeps a large index as an object key', () => {
     const state: Obj = {};
     merge(state, { Messages: { '4294967296': { Flag: 'GREEN' } } });
