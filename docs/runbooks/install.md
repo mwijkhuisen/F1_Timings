@@ -44,10 +44,12 @@ Expected on a new host (abridged; `ok` lines are checks that needed no change):
 ```
 f1-install from /home/<you>/F1_Timings
 ok       subnets 10.62.1.0/24 … 10.62.7.0/24 (no overlap with N routes and Docker networks)
-ok       gids 62001-62006 and uid/gid 62532 are not used on the host
+ok       gids 62001-62008 and uid/gid 62532 are not used on the host
 changed  /etc/f1 (root 0755)
 changed  /etc/f1/secrets (root 0700)
 …
+changed  /srv/f1/live (62532:62532 0700)
+changed  /srv/f1/state/live (62532:62532 0700)
 changed  /etc/f1/secrets/db_postgres (empty, root:62001 0440)
 changed  db_postgres generated
 …
@@ -62,11 +64,15 @@ changed  f1-firewall.service started (table inet f1)
 fill these, then run 'systemctl enable --now f1-update.timer f1-tick.timer' (install runbook):
   /etc/f1/secrets/cf_tunnel_token
   /etc/f1/secrets/hc_ping_key
+  /etc/f1/secrets/f1tv_username
+  /etc/f1/secrets/f1tv_password
   /etc/f1/f1.env (CF_ACCESS_TEAM, CF_ACCESS_AUD)
 f1-install: N change(s)
 ```
 
-Exit 1 with `error: …` means nothing was installed. The causes: a subnet overlaps a route or a non-`f1` Docker network (`conflict: …`), a host group or user has one of the GIDs 62001-62006 or 62532, `nft -c` rejects the table, or `f1-update` is running (try again in a minute).
+`/srv/f1/live` (the recordings) and `/srv/f1/state/live` (the F1 TV token) belong to `62532:62532`, the `live` container's user. `/srv/f1/state` itself stays root `0700`: it holds `current.env`, which decides what root deploys, so the container never sees it. A second run corrects a wrong owner or mode of either directory.
+
+Exit 1 with `error: …` means nothing was installed. The causes: a subnet overlaps a route or a non-`f1` Docker network (`conflict: …`), a host group or user has one of the GIDs 62001-62008 or 62532, `nft -c` rejects the table, or `f1-update` is running (try again in a minute).
 
 Check the firewall and the DNS allowlist:
 
@@ -84,11 +90,13 @@ The values never go in a command line that is logged. The files keep `root:<gid>
 ```bash
 sudo nano /etc/f1/secrets/cf_tunnel_token   # the tunnel token, one line (cloudflare.md, A2)
 sudo nano /etc/f1/secrets/hc_ping_key       # the healthchecks.io ping key, 22 characters (A6)
+sudo nano /etc/f1/secrets/f1tv_username     # the F1 TV email address, one line (A4)
+sudo nano /etc/f1/secrets/f1tv_password     # the F1 TV password, one line (A4)
 sudo nano /etc/f1/f1.env                    # CF_ACCESS_TEAM=<team>   CF_ACCESS_AUD=<64 hex>
 sudo ls -l /etc/f1/secrets
 ```
 
-Expected: six files, each `-r--r----- 1 root <gid>` with the groups `62001` to `62006` shown as numbers. `f1.env` holds exactly two lines (`CF_ACCESS_TEAM=…`, `CF_ACCESS_AUD=…`), no quotes, no other keys. The team is lowercase letters, digits and `-`; the AUD is 64 lowercase hex characters.
+Expected: eight files, each `-r--r----- 1 root <gid>` with the groups `62001` to `62008` shown as numbers. `f1tv_username` is group `62007` and `f1tv_password` `62008`; only `live` gets them. `f1.env` holds exactly two lines (`CF_ACCESS_TEAM=…`, `CF_ACCESS_AUD=…`), no quotes, no other keys. The team is lowercase letters, digits and `-`; the AUD is 64 lowercase hex characters.
 
 An editor that writes a new file (rather than in place) can reset the owner. Run `sudo deploy/bin/f1-install` again; it restores `root:<gid> 0440` and reports `changed`.
 
@@ -131,22 +139,24 @@ curl -fsS 127.0.0.1:8180/healthz
 sudo cat /srv/f1/state/current.env
 ```
 
-Expected: `db`, `api`, `ingest`, `caddy` and `cloudflared` running, and healthy after about a minute, the health body from `/healthz`, and `current.env` with `F1_SERVER_IMAGE=…@sha256:…` and `F1_WEB_IMAGE=…@sha256:…`.
+Expected: `db`, `api`, `ingest`, `live`, `caddy` and `cloudflared` running, and healthy after about a minute, the health body from `/healthz`, and `current.env` with `F1_SERVER_IMAGE=…@sha256:…` and `F1_WEB_IMAGE=…@sha256:…`.
 
 If the first deploy fails: `f1-update: first deploy failed: … is in /srv/f1/state/failed.env and is not retried automatically`, exit 1, containers left as they are. Read `journalctl -u f1-update`, `sudo docker compose -p f1 ps` and `sudo docker logs f1-db-1`; fix the cause; `sudo rm /srv/f1/state/failed.env`; start the service again. Common causes: the GHCR packages are private (A5), `cf_tunnel_token` empty (cloudflared restarts), a malformed `f1.env`.
 
 ## 7. Egress acceptance [box]
 
-`ingest` may go out on tcp/443 only; `api` only to Cloudflare's ranges on tcp/443. Use a host that is not Cloudflare for the "blocked" probes (`www.google.com`).
+`ingest` and `live` (both on `f1-egress`) may go out on tcp/443 only; `api` only to Cloudflare's ranges on tcp/443. Use a host that is not Cloudflare for the "blocked" probes (`www.google.com`).
 
 ```bash
 sudo docker exec f1-ingest-1 /nodejs/bin/node -e "fetch('http://www.google.com',{signal:AbortSignal.timeout(5000)}).then(r=>console.log('open',r.status),e=>console.log('blocked',e.name))"
 sudo docker exec f1-ingest-1 /nodejs/bin/node -e "fetch('https://www.google.com',{signal:AbortSignal.timeout(5000)}).then(r=>console.log('open',r.status),e=>console.log('blocked',e.name))"
+sudo docker exec f1-live-1 /nodejs/bin/node -e "fetch('http://www.google.com',{signal:AbortSignal.timeout(5000)}).then(r=>console.log('open',r.status),e=>console.log('blocked',e.name))"
+sudo docker exec f1-live-1 /nodejs/bin/node -e "fetch('https://www.google.com',{signal:AbortSignal.timeout(5000)}).then(r=>console.log('open',r.status),e=>console.log('blocked',e.name))"
 sudo docker exec f1-api-1 /nodejs/bin/node -e "fetch('https://www.google.com',{signal:AbortSignal.timeout(5000)}).then(r=>console.log('open',r.status),e=>console.log('blocked',e.name))"
 sudo docker exec f1-api-1 /nodejs/bin/node -e "fetch('https://<team>.cloudflareaccess.com/cdn-cgi/access/certs',{signal:AbortSignal.timeout(5000)}).then(r=>console.log('open',r.status),e=>console.log('blocked',e.name))"
 ```
 
-Expected, in order: `blocked TimeoutError`, `open 200`, `blocked TimeoutError`, `open 200`. (The error name can differ, e.g. `TypeError`; what counts is `blocked` against `open 200`.)
+Expected, in order: `blocked TimeoutError`, `open 200` (ingest), `blocked TimeoutError`, `open 200` (live), `blocked TimeoutError`, `open 200` (api). (The error name can differ, e.g. `TypeError`; what counts is `blocked` against `open 200`.)
 
 ## 8. Rollback drill [box]
 
@@ -194,6 +204,15 @@ sudo docker compose -p rws ps
 
 Expected: the same containers as in `/tmp/rws.before`, all healthy.
 
+## A4: F1 TV credentials [owner]
+
+`live` logs in to F1 TV itself (A§12.3) with the account's email and password, which are two file secrets: `/etc/f1/secrets/f1tv_username` and `/etc/f1/secrets/f1tv_password`, each one line, `root:62007 0440` and `root:62008 0440`. `f1-install` creates them empty (step 3) and you fill them in step 4 with `sudo nano`, as the other secrets, so the values never reach a command line.
+
+- Until both are filled, `f1-update` logs `not configured` and deploys nothing (deliberate: `docs/runbooks/update.md`, "Rolling out P2c"). On a host that already runs a deploy, fill them straight after `f1-install`.
+- The account has no 2FA; automatic login depends on that. The password is changed after the Mexico City race (Sun 1 Nov 2026); the new one goes only into the secret file.
+- `live` signs in only when a session starts within 48 h and the token it holds does not cover that session's end plus 1 h, so the first login can come days after you fill the files. The status panel shows the token's expiry once it has one.
+- If the login breaks, paste a token by hand: `docs/runbooks/update.md`, "F1 TV token by hand".
+
 ## A6: healthchecks.io [owner]
 
 Invariant 5: F1 shares no healthchecks group with Waterheight.
@@ -205,7 +224,7 @@ Invariant 5: F1 shares no healthchecks group with Waterheight.
    `sudo nano /etc/f1/secrets/hc_ping_key`
 5. `ingest` pings `https://hc-ping.com/<ping key>/f1-ingest` once the schedule sync requested by the daily `30 0 * * *` (UTC) Cron, or by its 15-minute retry, has succeeded. The startup sync does not ping, so a crash-looping ingest cannot stay green. The check turns up after the first deploy and the first 00:30 UTC; period 1 day and grace 1 hour still fit.
 
-`f1-live` is created by P2c.
+`f1-live` (P2c): create a second check in the same project with slug `f1-live`. `live` pings `https://hc-ping.com/<ping key>/f1-live` only when a recording ends complete (a normal stop, a token throughout, no disconnect over 60 s inside the session), so it is quiet between race weekends and for any incomplete recording. Pick a period and grace to suit that (the owner's choice; a long period such as 30 days keeps the summer break from alerting).
 
 ## A8: before the first deploy from main [owner]
 
