@@ -17,7 +17,7 @@ function Recorder({ recorder: r }: { recorder: StatusData['recorder'] }) {
   if (r === null) return <p>The recorder has not reported yet.</p>;
   const values: [string, string][] = [
     ['state', r.state],
-    ['session', r.state === 'recording' ? `${r.meeting_name ?? '—'} ${r.session_name ?? ''}`.trim() : '—'],
+    ['session', r.session_key !== null ? `${r.meeting_name ?? '—'} ${r.session_name ?? ''}`.trim() : '—'],
     ['token expires', at(r.token_expires_at)],
     ['last error', r.last_error ?? 'None'],
     ['last report', at(r.updated_at)],

@@ -217,6 +217,10 @@ describe('the status panel', () => {
     expect(r).not.toContain('role="alert"');
   });
 
+  it('the recorder: connecting names the session it waits for', () => {
+    expect(render({ state: 'connecting' })).toContain('<dt>session</dt><dd>Singapore Grand Prix Race</dd>');
+  });
+
   it('the recorder: idle without a session or token, and the last error code', () => {
     const r = render({
       state: 'idle',
