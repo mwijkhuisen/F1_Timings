@@ -1,4 +1,4 @@
-import { existsSync, statfsSync } from 'node:fs';
+import { statfsSync, statSync } from 'node:fs';
 import { join } from 'node:path';
 import { setTimeout as sleep } from 'node:timers/promises';
 import type { Insertable, Kysely } from 'kysely';
@@ -34,24 +34,29 @@ const HARD_STOP_MS = 3 * HOUR;
 // shorter gap turns out to miss laps.
 const MAX_GAP_MS = 60_000;
 const DISK_LOW_BYTES = 5 * 1024 ** 3;
+/** The disk may be shared with PostgreSQL: the recorder stops before a write would fail. */
+const DISK_FLOOR_BYTES = 1024 ** 3;
 const DISK_COOLDOWN_MS = 5 * MINUTE;
 const BACKOFF_RESET_MS = 60_000;
 
 export type SessionWindow = Session & { cancelled: boolean };
 export type Decision = 'continue' | 'stop' | 'abort';
 
+/**
+ * Once started, a recording waits for `Ends`, up to the hard stop: between qualifying segments the status is `Finished`
+ * and `Inactive`, and `Ends` comes once, at the very end (A§11.1). `endsAt` is set only after a `Started`.
+ */
 export function decide(a: {
   session: SessionWindow;
-  status: string | undefined;
   startedSeen: boolean;
   endsAt: number | undefined;
   now: number;
 }): Decision {
-  const { session, status, now } = a;
+  const { session, now } = a;
   if (session.cancelled || now < session.dateStart - LEAD_MS) return 'abort';
-  if (a.startedSeen && a.endsAt !== undefined && now >= a.endsAt + AFTER_MS) return 'stop';
+  if (a.endsAt !== undefined && now >= a.endsAt + AFTER_MS) return 'stop';
   if (now >= session.dateEnd + HARD_STOP_MS) return 'stop';
-  if (now >= session.dateEnd + AFTER_MS && status !== 'Started' && status !== 'Aborted') return 'stop';
+  if (now >= session.dateEnd + AFTER_MS && !a.startedSeen) return 'stop';
   return 'continue';
 }
 
@@ -121,9 +126,13 @@ const freeBytes = (path: string) => {
   return s.bavail * s.bsize;
 };
 
-/** A missing file is no token and no error. */
+/** A missing file is no token and no error; whatever else keeps it from being read is `token_file`. */
 function readToken(path: string, now: number): { token?: Token; error?: TokenCode } {
-  if (!existsSync(path)) return {};
+  try {
+    statSync(path);
+  } catch (err) {
+    if (codeOf(err) === 'ENOENT') return {};
+  }
   const file = readTokenFile(path);
   if (!file.ok) return { error: file.error };
   const checked = checkToken(file.value, now);
@@ -158,6 +167,10 @@ export async function startRecorder(deps: RecorderDeps): Promise<void> {
   let token: Token | undefined;
   /** The value the feed refused: no token until the file holds another one. */
   let rejected: string | undefined;
+  /** The value the last login returned: the feed refusing it makes that login a failed one. */
+  let issued: string | undefined;
+  /** A login's token that the file could not take: used for this process, and written again every tick. */
+  let unsaved: Token | undefined;
   let failures = 0;
   let lastLoginAt: number | undefined;
   let loginError: string | undefined;
@@ -166,6 +179,7 @@ export async function startRecorder(deps: RecorderDeps): Promise<void> {
   let feedError: FeedCode | undefined;
   let diskUntil = 0;
   let diskLow = false;
+  let diskFloor = false;
   /** Ended on `stop`: an early `Ends` must not start the same session again. An `abort` stays out: moved is recorded later. */
   const finished = new Set<number>();
   /** Closing writes that failed, retried on later ticks. */
@@ -190,7 +204,7 @@ export async function startRecorder(deps: RecorderDeps): Promise<void> {
   const dbStep = async <T>(work: () => Promise<T>): Promise<T | undefined> => {
     beat();
     try {
-      return await work();
+      return await whileBeating(work);
     } catch (err) {
       log.error({ last_error: 'db', cause: codeOf(err) }, 'database step failed');
       return undefined;
@@ -223,6 +237,16 @@ export async function startRecorder(deps: RecorderDeps): Promise<void> {
   const adopt = (t: Token | undefined) => {
     if (t && t.value !== rejected) rejected = undefined;
     token = t && t.value !== rejected ? t : undefined;
+  };
+
+  const save = (t: Token) => {
+    try {
+      writeToken(tokenPath, t.value);
+      unsaved = undefined;
+    } catch (err) {
+      if (!unsaved) log.error({ last_error: 'token_file', cause: codeOf(err) }, 'token not saved');
+      unsaved = t;
+    }
   };
 
   const writeStatus = () => {
@@ -281,24 +305,38 @@ export async function startRecorder(deps: RecorderDeps): Promise<void> {
   const attemptLogin = async (c: Credentials) => {
     lastLoginAt = ms();
     await writeStatus(); // before the attempt: a crash during it still counts against the limit
+    let t: Token;
     try {
-      const t = await whileBeating(() => signIn(c));
-      writeToken(tokenPath, t.value);
-      adopt(t);
-      failures = 0;
-      loginError = undefined;
-      tokenError = undefined;
-      log.info({ expires_at: new Date(t.expiresAt).toISOString() }, 'logged in');
+      t = await whileBeating(() => signIn(c));
     } catch (err) {
       failures++;
       loginError = err instanceof LoginError ? err.code : 'unknown';
       log.error({ last_error: loginError, cause: codeOf(err) }, 'login failed');
+      return;
+    }
+    // `failures` goes back to 0 only when a connection with a token subscribes. A token that is good for a while is
+    // still used, but a login that leaves one to be signed in for again counts against the limits.
+    const usable = checkToken(t.value, ms()).ok && t.value !== rejected;
+    if (usable) {
+      save(t);
+      adopt(t);
+      issued = t.value;
+      tokenError = unsaved ? 'token_file' : undefined;
+    }
+    if (usable && !needsLogin(t.expiresAt, active?.session ?? next, ms())) {
+      loginError = undefined;
+      log.info({ expires_at: new Date(t.expiresAt).toISOString() }, 'logged in');
+    } else {
+      failures++;
+      loginError = 'login_claims';
+      log.error({ last_error: loginError }, 'login failed');
     }
   };
 
   const connectionLoop = async (r: Run) => {
     while (!r.stop.signal.aborted) {
-      const carried = token?.value; // none is deliberate: most topics still flow, and `complete` stays false
+      const held = token; // none is deliberate: most topics still flow, and `complete` stays false
+      const carried = held?.value;
       const openedAt = ms();
       const link: Link = { from: openedAt, token: carried !== undefined };
       r.carried = carried;
@@ -310,6 +348,11 @@ export async function startRecorder(deps: RecorderDeps): Promise<void> {
           r.links.push(link);
           r.subscribed = true;
           feedError = undefined;
+          // Only here has a token proven itself, and only one that covers the session ends the login limits.
+          if (held && !needsLogin(held.expiresAt, r.session, ms())) {
+            failures = 0;
+            loginError = undefined;
+          }
         },
       });
       const closed = await r.conn.closed;
@@ -323,6 +366,7 @@ export async function startRecorder(deps: RecorderDeps): Promise<void> {
       if (closed.error === 'feed_unauthorized' && carried !== undefined) {
         rejected = carried;
         if (token?.value === carried) token = undefined;
+        if (carried === issued) failures++;
       }
       if (ms() - openedAt > BACKOFF_RESET_MS) r.backoff = backoffMs;
       const wait = r.backoff;
@@ -370,11 +414,12 @@ export async function startRecorder(deps: RecorderDeps): Promise<void> {
     feedError = undefined;
     if (reason === 'stop') finished.add(r.key);
     if (reason === 'disk') diskUntil = ms() + DISK_COOLDOWN_MS;
-    const complete = reason === 'stop' && isComplete(r.links, stoppedAt, r.session);
+    const complete = reason === 'stop' && r.startedSeen && isComplete(r.links, stoppedAt, r.session);
     const row = { ...rowOf(r), ended_at: new Date(ms()), complete };
     if (!(await saveRow(row))) unwritten.push(row);
     log.info({ session_key: r.key, reason, complete, bytes: r.rec.bytes }, 'recording ended');
     if (complete) await ping('f1-live');
+    else if (reason === 'stop' || reason === 'disk') await ping('f1-live/fail');
   };
 
   const supervise = async (r: Run) => {
@@ -383,7 +428,7 @@ export async function startRecorder(deps: RecorderDeps): Promise<void> {
       r.conn.close(); // the loop reconnects with it
     }
     noteGzip(r);
-    if (r.rec.failed === 'disk') {
+    if (r.rec.failed === 'disk' || diskFloor) {
       log.error({ last_error: 'disk' }, 'recording failed');
       return end(r, 'disk');
     }
@@ -391,7 +436,7 @@ export async function startRecorder(deps: RecorderDeps): Promise<void> {
     const status = view(r.rec.state, 'SessionStatus')?.Status;
     if (status === 'Started') r.startedSeen = true;
     else if (status === 'Ends' && r.startedSeen) r.endsAt ??= ms();
-    const decision = decide({ session: r.session, status, startedSeen: r.startedSeen, endsAt: r.endsAt, now: ms() });
+    const decision = decide({ session: r.session, startedSeen: r.startedSeen, endsAt: r.endsAt, now: ms() });
     if (decision !== 'continue') await end(r, decision);
   };
 
@@ -441,8 +486,13 @@ export async function startRecorder(deps: RecorderDeps): Promise<void> {
     for (const row of unwritten.splice(0)) if (!(await saveRow(row))) unwritten.push(row);
 
     const file = readToken(tokenPath, ms());
-    adopt(file.token);
-    tokenError = file.error;
+    // A refused or expired one goes, and so does one that a paste in the file outlasts.
+    if (unsaved && (unsaved.value === rejected || unsaved.expiresAt <= Math.max(ms(), file.token?.expiresAt ?? 0))) {
+      unsaved = undefined;
+    }
+    adopt(unsaved ?? file.token);
+    tokenError = unsaved ? 'token_file' : file.error;
+    if (unsaved) save(unsaved); // it heals once the directory is fixed
     noCredentials = false;
     if (needsLogin(token?.expiresAt, active?.session ?? next, ms())) {
       const creds = credentials(secretsDir);
@@ -451,11 +501,16 @@ export async function startRecorder(deps: RecorderDeps): Promise<void> {
     }
 
     try {
-      diskLow = statfs(liveDir) < DISK_LOW_BYTES;
+      const free = statfs(liveDir);
+      diskLow = free < DISK_LOW_BYTES;
+      diskFloor = free < DISK_FLOOR_BYTES;
     } catch (err) {
       diskLow = false;
+      diskFloor = false;
       log.error({ last_error: 'statfs', cause: codeOf(err) }, 'statfs failed');
     }
+    // Nothing starts, and the pause runs from the last tick under the floor.
+    if (diskFloor && !active) diskUntil = ms() + DISK_COOLDOWN_MS;
 
     if (!active && next && !signal.aborted && ms() >= next.dateStart - LEAD_MS && ms() >= diskUntil) start(next);
     if (active) await supervise(active);

@@ -5,30 +5,24 @@ const MIN = 60_000;
 const START = Date.parse('2026-11-08T12:00:00Z');
 const END = START + 60 * MIN;
 const session = { dateStart: START, dateEnd: END, cancelled: false };
-const idle = { session, status: undefined, startedSeen: false, endsAt: undefined };
+const idle = { session, startedSeen: false, endsAt: undefined };
 
 describe('decide', () => {
   it.each([
     ['cancelled', { session: { ...session, cancelled: true }, now: START }, 'abort'],
     ['moved later: before the new start − 60 min', { now: START - 60 * MIN - 1 }, 'abort'],
     ['at the start − 60 min', { now: START - 60 * MIN }, 'continue'],
-    ['during the session', { status: 'Started', startedSeen: true, now: START + 10 * MIN }, 'continue'],
-    ['the plain window end', { status: 'Finalised', now: END + 30 * MIN }, 'stop'],
-    ['the window end with no status at all', { now: END + 30 * MIN }, 'stop'],
-    ['just before the window end', { status: 'Finished', now: END + 30 * MIN - 1 }, 'continue'],
-    ['a red flag past the planned end', { status: 'Started', startedSeen: true, now: END + 31 * MIN }, 'continue'],
-    ['Aborted past the planned end', { status: 'Aborted', startedSeen: true, now: END + 90 * MIN }, 'continue'],
-    ['the hard stop ends a red flag', { status: 'Started', startedSeen: true, now: END + 180 * MIN }, 'stop'],
-    ['the hard stop ends Aborted', { status: 'Aborted', startedSeen: true, now: END + 180 * MIN }, 'stop'],
-    ['just before the hard stop', { status: 'Aborted', startedSeen: true, now: END + 180 * MIN - 1 }, 'continue'],
-    ['a stale Ends in the full state', { status: 'Ends', now: START - 30 * MIN }, 'continue'],
-    ['an Ends value without a Started seen', { status: 'Ends', endsAt: START, now: START + 40 * MIN }, 'continue'],
-    [
-      'Ends + 30 min, before the planned end',
-      { status: 'Ends', startedSeen: true, endsAt: START, now: START + 30 * MIN },
-      'stop',
-    ],
-    ['Ends + 29 min', { status: 'Ends', startedSeen: true, endsAt: START, now: START + 29 * MIN }, 'continue'],
+    ['during the session', { startedSeen: true, now: START + 10 * MIN }, 'continue'],
+    ['never started, at the window end', { now: END + 30 * MIN }, 'stop'],
+    ['never started, just before the window end', { now: END + 30 * MIN - 1 }, 'continue'],
+    ['a stale Ends sets no endsAt: never started, before the window end', { now: START + 40 * MIN }, 'continue'],
+    ['qualifying between segments, past the window end', { startedSeen: true, now: END + 31 * MIN }, 'continue'],
+    ['a red flag past the planned end', { startedSeen: true, now: END + 90 * MIN }, 'continue'],
+    ['the hard stop', { startedSeen: true, now: END + 180 * MIN }, 'stop'],
+    ['just before the hard stop', { startedSeen: true, now: END + 180 * MIN - 1 }, 'continue'],
+    ['Ends + 30 min, before the planned end', { startedSeen: true, endsAt: START, now: START + 30 * MIN }, 'stop'],
+    ['Ends + 29 min', { startedSeen: true, endsAt: START, now: START + 29 * MIN }, 'continue'],
+    ['a late Ends + 29 min', { startedSeen: true, endsAt: END + MIN, now: END + 30 * MIN }, 'continue'],
   ] as const)('%s', (_name, input, expected) => {
     expect(decide({ ...idle, ...input })).toBe(expected);
   });

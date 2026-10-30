@@ -35,6 +35,13 @@ describe('pingHealthchecks', () => {
     expect(log.error).not.toHaveBeenCalled();
   });
 
+  it('requests exactly https://hc-ping.com/<key>/f1-live/fail: the slug form of the fail signal', async () => {
+    key(KEY);
+    await pingHealthchecks('f1-live/fail', log, { secretsDir: dir });
+    expect(urls).toEqual([`https://hc-ping.com/${KEY}/f1-live/fail`]);
+    expect(log.error).not.toHaveBeenCalled();
+  });
+
   it('sends no request without the secret file', async () => {
     await pingHealthchecks('f1-ingest', log, { secretsDir: dir });
     expect(urls).toEqual([]);

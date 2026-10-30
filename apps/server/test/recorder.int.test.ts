@@ -23,13 +23,29 @@ import { type RecorderDeps, startRecorder } from '../src/live/recorder.ts';
 import { writeToken } from '../src/live/token.ts';
 import { run } from '../src/main.ts';
 import { createTestDb, type TestDb } from './db.ts';
-import { type FakeSignalR, startFakeSignalR } from './fake-signalr.ts';
+import {
+  type FakeSignalR,
+  numbered,
+  refuseNonLoopback,
+  replay,
+  segments,
+  seqCounts,
+  startFakeSignalR,
+} from './fake-signalr.ts';
 
 // The recorder against a real PostgreSQL 18, logged in as f1_ingest, and the fake SignalR server over real sockets.
 // msw would intercept those, so it is closed for this file (feed-recorder.test.ts says why it listens again in
-// afterAll). Time comes from `clock`; the ticks are short and real. Every stream is finite.
-beforeAll(() => server.close());
-afterAll(() => server.listen({ onUnhandledFrame: 'error' }));
+// afterAll) and refuseNonLoopback takes its place. Time comes from `clock`; the ticks are short and real. Every stream
+// is finite.
+let allowNetwork: () => void;
+beforeAll(() => {
+  server.close();
+  allowNetwork = refuseNonLoopback();
+});
+afterAll(() => {
+  allowNetwork();
+  server.listen({ onUnhandledFrame: 'error' });
+});
 
 const MIN = 60_000;
 const HOUR = 60 * MIN;
@@ -62,6 +78,8 @@ let secretsDir: string;
 let clock: number;
 let lines: string[];
 let pings: string[];
+/** Feed messages that reached the recorder. */
+let fed: number;
 let running: { stop: () => Promise<void> }[];
 const tickMs = 5;
 
@@ -94,12 +112,13 @@ const carried = (step: 'negotiate' | 'upgrade') => fake.seen.filter((s) => s.ste
 
 function start(overrides: Partial<RecorderDeps> = {}) {
   const stop = new AbortController();
-  let beats = 0;
+  const { statfs = () => 1e12, connect: open = connect } = overrides;
+  let statfsCalls = 0;
   const done = startRecorder({
     db,
     now: () => new Date(clock),
     log: pino({ base: null }, { write: (line: string) => void lines.push(line) }),
-    beat: () => void beats++,
+    beat: () => {},
     ping: async (slug) => void pings.push(slug),
     signal: stop.signal,
     liveDir,
@@ -109,16 +128,27 @@ function start(overrides: Partial<RecorderDeps> = {}) {
     feedOptions: { base: fake.base },
     backoffMs: 5,
     maxBackoffMs: 20,
-    statfs: () => 1e12,
     ...overrides,
+    statfs: (path) => {
+      statfsCalls++;
+      return statfs(path);
+    },
+    connect: (token, onFeed, options) =>
+      open(
+        token,
+        (...message) => {
+          fed++;
+          onFeed(...message);
+        },
+        options,
+      ),
   });
   const handle = {
     done,
-    beats: () => beats,
-    /** Lets at least `n` whole ticks run. A tick beats at most 5 times: at its start and before each database step. */
+    /** Lets at least `n` whole ticks run. A tick calls statfs exactly once, ahead of its decision. */
     ticks: async (n = 2) => {
-      const target = beats + (n + 1) * 5;
-      await until(() => beats >= target);
+      const target = statfsCalls + n + 2;
+      await until(() => statfsCalls >= target);
     },
     stop: async () => {
       stop.abort();
@@ -129,6 +159,13 @@ function start(overrides: Partial<RecorderDeps> = {}) {
   return handle;
 }
 const recording = () => until(async () => (await status())?.state === 'recording');
+/** Sends a SessionStatus on the open socket and returns once whole ticks have seen it. */
+const sendStatus = async (h: { ticks: () => Promise<void> }, s: string) => {
+  const target = fed + 1;
+  fake.feed([['SessionStatus', { Status: s }, STREAM_TS]]);
+  await until(() => fed >= target);
+  await h.ticks();
+};
 const lastRow = async () => (await rows()).at(-1);
 const endedRow = async () => {
   await until(async () => (await lastRow())?.ended_at != null);
@@ -160,6 +197,7 @@ describe('recorder (real PostgreSQL as f1_ingest, fake SignalR)', { timeout: 30_
     clock = T0 - HOUR;
     lines = [];
     pings = [];
+    fed = 0;
     running = [];
   });
   afterEach(async () => {
@@ -247,11 +285,13 @@ describe('recorder (real PostgreSQL as f1_ingest, fake SignalR)', { timeout: 30_
       await until(() => attempts === 4);
 
       // The session was still recorded, anonymously, and that is no complete recording.
-      fake.feed([['SessionInfo', { Name: 'Practice' }, STREAM_TS]]);
-      clock = T0 + 8 * HOUR + 30 * MIN;
+      await recording();
+      await sendStatus(third, 'Started');
+      clock = T0 + 11 * HOUR;
       const row = await endedRow();
       expect(row?.complete).toBe(false);
-      expect(pings).toEqual([]);
+      await until(() => pings.length > 0);
+      expect(pings).toEqual(['f1-live/fail']);
       expect(new Set(carried('upgrade'))).toEqual(new Set([undefined]));
       expect(fake.subscribes.length).toBeGreaterThanOrEqual(3);
     });
@@ -312,6 +352,7 @@ describe('recorder (real PostgreSQL as f1_ingest, fake SignalR)', { timeout: 30_
       clock += 10 * MIN;
       await until(() => carried('upgrade').includes(`Bearer ${TOKEN_1}`));
       await until(async () => (await status())?.last_error === null && (await status())?.state === 'recording');
+      await until(async () => (await status())?.login_failures === 0); // a connection with the token has subscribed
       expect(readFileSync(tokenPath, 'utf8')).toBe(`${TOKEN_1}\n`);
       expect(logged('"expires_at"')).toBe(true);
       fake.behaviour.fullState = { SessionInfo: { Name: 'Practice' } };
@@ -328,7 +369,7 @@ describe('recorder (real PostgreSQL as f1_ingest, fake SignalR)', { timeout: 30_
       await recording();
       await until(async () => (await status())?.last_error === 'feed_unauthorized');
       expect(carried('upgrade').at(-1)).toBeUndefined();
-      expect((await status())?.token_expires_at).toBeNull();
+      expect(await status()).toMatchObject({ token_expires_at: null, login_failures: 1, warning: 'login_failed' });
 
       // The tick's own path renews it.
       flow = { fail: false, token: TOKEN_2 };
@@ -382,7 +423,7 @@ describe('recorder (real PostgreSQL as f1_ingest, fake SignalR)', { timeout: 30_
         .insertInto('recording')
         .values({
           session_key: 3,
-          path: '3-old',
+          path: '3-1',
           started_at: new Date(clock),
           ended_at: new Date(clock),
           complete: true,
@@ -394,7 +435,7 @@ describe('recorder (real PostgreSQL as f1_ingest, fake SignalR)', { timeout: 30_
       await recording();
       expect((await status())?.session_key).toBe(4);
       expect(await lastRow()).toMatchObject({ session_key: 4, ended_at: null, complete: false });
-      expect((await rows()).filter((r) => r.path !== '3-old')).toHaveLength(1);
+      expect((await rows()).filter((r) => r.path !== '3-1')).toHaveLength(1);
     });
 
     it('stays idle until 60 min before the start, then connects', async () => {
@@ -426,15 +467,18 @@ describe('recorder (real PostgreSQL as f1_ingest, fake SignalR)', { timeout: 30_
       await recording();
       expect(await status()).toMatchObject({ session_key: KEY, last_error: null, warning: null });
       clock = T0;
-      fake.feed([['SessionStatus', { Status: 'Started' }, STREAM_TS]]);
-      fake.feed([['WeatherData', { AirTemp: '20' }, STREAM_TS]]);
-      await until(async () => Number((await lastRow())?.bytes) > 0);
-      await h.ticks();
+      await sendStatus(h, 'Started');
       expect(pings).toEqual([]);
 
-      fake.feed([['SessionStatus', { Status: 'Finished' }, STREAM_TS]]);
-      await h.ticks();
+      // Past the window end, between what could be two qualifying segments: once started, only Ends stops it.
+      await sendStatus(h, 'Finished');
       clock = END + 30 * MIN;
+      await h.ticks();
+      expect((await status())?.state).toBe('recording');
+      await sendStatus(h, 'Inactive');
+      await sendStatus(h, 'Ends');
+      expect((await status())?.state).toBe('recording');
+      clock += 30 * MIN;
       const row = await endedRow();
       expect(row).toMatchObject({ session_key: KEY, complete: true, source: 'f1-live' });
       expect(Number(row?.bytes)).toBeGreaterThan(0);
@@ -463,20 +507,36 @@ describe('recorder (real PostgreSQL as f1_ingest, fake SignalR)', { timeout: 30_
       cleared.mockRestore();
     });
 
-    it('an anonymous run ends incomplete, with no ping', async () => {
+    it('an anonymous run ends incomplete, with a fail ping', async () => {
       await seed(KEY);
+      fake.behaviour.fullState = { SessionStatus: { Status: 'Started' } };
       await start().ticks();
       await recording();
       expect(await status()).toMatchObject({ last_error: 'no_credentials', warning: 'token_expiring' });
-      clock = END + 30 * MIN;
+      clock = END + 3 * HOUR;
       expect(await endedRow()).toMatchObject({ complete: false });
       await until(async () => (await status())?.state === 'idle');
-      expect(pings).toEqual([]);
+      expect(pings).toEqual(['f1-live/fail']);
     });
 
-    it('a 61 s gap inside the window ends incomplete, with no ping', async () => {
+    it('a session that never starts (only a Heartbeat) ends incomplete, with a fail ping, though the token held', async () => {
       await seed(KEY);
       writeToken(tokenPath, tokenUntil(GOOD_UNTIL));
+      fake.behaviour.fullState = { SessionStatus: { Status: 'Inactive' } };
+      start();
+      await recording();
+      fake.feed([['Heartbeat', { Utc: STREAM_TS }, STREAM_TS]]);
+      await until(() => fed === 1);
+      clock = END + 30 * MIN;
+      expect(await endedRow()).toMatchObject({ complete: false });
+      await until(() => pings.length > 0);
+      expect(pings).toEqual(['f1-live/fail']);
+    });
+
+    it('a 61 s gap inside the window ends incomplete, with a fail ping', async () => {
+      await seed(KEY);
+      writeToken(tokenPath, tokenUntil(GOOD_UNTIL));
+      fake.behaviour.fullState = { SessionStatus: { Status: 'Started' } };
       const h = start();
       await recording();
       clock = T0 + 10 * MIN;
@@ -490,9 +550,61 @@ describe('recorder (real PostgreSQL as f1_ingest, fake SignalR)', { timeout: 30_
       await recording();
       expect((await status())?.last_error).toBeNull();
       await h.ticks();
-      clock = END + 30 * MIN;
+      clock = END + 3 * HOUR;
       expect(await endedRow()).toMatchObject({ complete: false });
-      expect(pings).toEqual([]);
+      await until(() => pings.length > 0);
+      expect(pings).toEqual(['f1-live/fail']);
+    });
+
+    it('a drop through the real loop: every number sent is on disk and the replay state is right', async () => {
+      await seed(KEY);
+      writeToken(tokenPath, tokenUntil(GOOD_UNTIL));
+      const started = { SessionStatus: { Status: 'Started' } };
+      fake.behaviour.fullState = { ...started, TimingData: { Seq: 0 } };
+      const h = start();
+      await recording();
+      const sent = new Map<number, number>();
+      let total = 0;
+      const send = (ns: number[]) => {
+        fake.feed(ns.map((n) => numbered(n)));
+        total += ns.length;
+        for (const n of ns) sent.set(n, (sent.get(n) ?? 0) + 1);
+      };
+
+      send([1, 2, 3]);
+      await until(() => fed === total);
+      await sleep(5); // the next segment's first receivedAt, its name, differs from this one's
+      clock = T0; // the segment is an hour old: the next line opens a new one
+      fake.behaviour.fullState = { ...started, TimingData: { Seq: 5 }, WeatherData: { Rain: 0 } };
+      send([4, 5]);
+      fake.drop(); // both lines still in flight when the socket ends
+
+      await until(() => fake.subscribes.length === 2);
+      expect(fed).toBe(total);
+      send([4, 5]); // the server replays its last messages with the same timestamps, then goes on
+      send([6, 7, 8]);
+      send([7]); // a late duplicate after a newer message: applied twice, Seq would go back to 7
+      await until(() => fed === total);
+
+      await sendStatus(h, 'Ends');
+      clock += 30 * MIN;
+      const row = await endedRow();
+      expect(row).toMatchObject({ complete: true });
+      await until(() => pings.length > 0);
+      expect(pings).toEqual(['f1-live']);
+
+      const dir = join(liveDir, row?.path ?? '');
+      expect(readdirSync(dir).filter((n) => n.endsWith('.jsonl'))).toEqual([]);
+      expect(readdirSync(dir).filter((n) => n.endsWith('.gz'))).toHaveLength(2);
+      const onDisk = segments(dir);
+      expect(seqCounts(onDisk)).toEqual([...sent].sort(([a], [b]) => a - b));
+      expect(onDisk.filter((l) => JSON.parse(l)[1] === '_subscribe')).toHaveLength(2);
+      expect(Number(row?.bytes)).toBe(Buffer.byteLength(onDisk.map((l) => `${l}\n`).join('')));
+      expect(replay(onDisk)).toEqual({
+        SessionStatus: { Status: 'Ends' },
+        TimingData: { Seq: 8, Lines: { 1: 1, 2: 2, 3: 3, 4: 4, 5: 5, 6: 6, 7: 7, 8: 8 } },
+        WeatherData: { Rain: 0 },
+      });
     });
 
     it('a stale Ends in the first full state stops nothing; an Ends after a Started stops 30 min on', async () => {
@@ -507,11 +619,9 @@ describe('recorder (real PostgreSQL as f1_ingest, fake SignalR)', { timeout: 30_
       expect((await status())?.state).toBe('recording');
 
       clock = T0;
-      fake.feed([['SessionStatus', { Status: 'Started' }, STREAM_TS]]);
-      await h.ticks();
+      await sendStatus(h, 'Started');
       clock = T0 + 10 * MIN;
-      fake.feed([['SessionStatus', { Status: 'Ends' }, STREAM_TS]]);
-      await h.ticks();
+      await sendStatus(h, 'Ends');
       clock += 30 * MIN - 1;
       await h.ticks();
       expect((await status())?.state).toBe('recording');
@@ -526,8 +636,7 @@ describe('recorder (real PostgreSQL as f1_ingest, fake SignalR)', { timeout: 30_
       await recording();
       await h.ticks();
       clock = T0 + 10 * MIN;
-      fake.feed([['SessionStatus', { Status: 'Ends' }, STREAM_TS]]);
-      await h.ticks();
+      await sendStatus(h, 'Ends');
       clock += 30 * MIN;
       expect(await endedRow()).toMatchObject({ complete: false });
       expect(clock).toBeLessThan(END + 30 * MIN);
@@ -575,6 +684,7 @@ describe('recorder (real PostgreSQL as f1_ingest, fake SignalR)', { timeout: 30_
       expect(await endedRow()).toMatchObject({ complete: false });
       await h.ticks(10);
       expect(await rows()).toHaveLength(1);
+      expect(pings).toEqual([]);
       clock = T0 + 23 * HOUR;
       await until(async () => (await rows()).length === 2);
       await recording();
@@ -584,20 +694,23 @@ describe('recorder (real PostgreSQL as f1_ingest, fake SignalR)', { timeout: 30_
       await seed(1, T0, END);
       await seed(2, T0 + 30 * MIN, END + 30 * MIN);
       writeToken(tokenPath, tokenUntil(GOOD_UNTIL));
+      fake.behaviour.fullState = { SessionStatus: { Status: 'Started' } };
       const h = start();
       await recording();
       clock = T0 + 30 * MIN; // session 2 is due as well
       await h.ticks(10);
       expect((await rows()).map((r) => r.session_key)).toEqual([1]);
+      await sendStatus(h, 'Ends');
       clock = END + 30 * MIN;
       await until(async () => (await rows()).length === 2);
       const [a, b] = await rows();
       expect(a).toMatchObject({ session_key: 1, complete: true });
       expect(b).toMatchObject({ session_key: 2, ended_at: null, started_at: a?.ended_at });
-      clock = END + 60 * MIN;
-      // Started 60 min late: this one has a gap, so no second ping.
+      clock = END + 30 * MIN + 3 * HOUR;
+      // Started 60 min late: this one has a gap, so its ping is a fail.
       expect((await endedRow())?.complete).toBe(false);
-      expect(pings).toEqual(['f1-live']);
+      await until(() => pings.length === 2);
+      expect(pings).toEqual(['f1-live', 'f1-live/fail']);
     });
 
     it('a mid-session restart closes the open row, gzips its leftover and starts a new row', async () => {
@@ -675,15 +788,129 @@ describe('recorder (real PostgreSQL as f1_ingest, fake SignalR)', { timeout: 30_
       await until(async () => (await status())?.last_error === null);
     });
 
-    it('a good paste ends the login failure warning', async () => {
+    it('a good paste ends the login failure warning, and the failures once a connection with it subscribes', async () => {
       await seed(KEY);
       secrets();
+      clock = T0 - 2 * HOUR; // due within 48 h, but no recording yet
       const h = start({ login: () => Promise.reject(new LoginError('login_token', 500)) });
       await until(async () => (await status())?.warning === 'login_failed');
       writeToken(tokenPath, tokenUntil(GOOD_UNTIL));
       await until(async () => (await status())?.warning === null);
-      expect(await status()).toMatchObject({ last_error: null, login_failures: 1 });
       await h.ticks();
+      expect(await status()).toMatchObject({ last_error: null, login_failures: 1, state: 'idle' });
+      clock = T0 - HOUR;
+      await recording();
+      await until(async () => (await status())?.login_failures === 0);
+    });
+
+    describe('a login that gives nothing usable counts against the limits', () => {
+      /** 2 h in 10 min steps, then the 6 h: at most 3 sign-ins, then one per 6 h. */
+      const expectLimits = async (h: { ticks: () => Promise<void> }, attempts: () => number) => {
+        await until(() => attempts() === 1);
+        for (let i = 0; i < 12; i++) {
+          await until(async () => (await status())?.login_failures === attempts()); // its outcome is in
+          clock += 10 * MIN;
+          await h.ticks();
+        }
+        expect(attempts()).toBe(3);
+        expect(await status()).toMatchObject({ login_failures: 3, warning: 'login_failed' });
+        clock = T0 - HOUR + 20 * MIN + 6 * HOUR - 1; // the third sign-in was 20 min in
+        await h.ticks();
+        expect(attempts()).toBe(3);
+        clock += 1;
+        await until(() => attempts() === 4);
+        await until(async () => (await status())?.login_failures === 4);
+        clock += 6 * HOUR - 1;
+        await h.ticks();
+        expect(attempts()).toBe(4);
+      };
+
+      it.each([
+        ['a new token each time', 'feed_unauthorized', (n: number) => tokenUntil(GOOD_UNTIL, `n${n}`)],
+        ['the same token', 'login_claims', () => tokenUntil(GOOD_UNTIL, 'same')],
+      ])('the feed answers 401 to every token: %s', async (_name, lastError, value) => {
+        await seed(KEY, T0, T0 + 24 * HOUR);
+        secrets();
+        fake.behaviour.negotiateStatus = 401;
+        let attempts = 0;
+        const login = async () => {
+          attempts++;
+          return { value: value(attempts), expiresAt: GOOD_UNTIL };
+        };
+        await expectLimits(start({ login }), () => attempts);
+        expect((await status())?.last_error).toBe(lastError);
+        expect(fake.subscribes).toEqual([]);
+      });
+
+      it('a token that does not cover the window: used, but no success', async () => {
+        await seed(KEY, T0, T0 + 24 * HOUR);
+        secrets();
+        const short = T0 + 24 * HOUR; // not end + 1 h
+        let attempts = 0;
+        const login = async () => {
+          attempts++;
+          return { value: tokenUntil(short, `n${attempts}`), expiresAt: short };
+        };
+        await expectLimits(start({ login }), () => attempts);
+        expect(await status()).toMatchObject({ last_error: 'login_claims', token_expires_at: new Date(short) });
+        expect(carried('upgrade')[0]).toBe(`Bearer ${tokenUntil(short, 'n1')}`);
+        expect(readFileSync(tokenPath, 'utf8')).toBe(`${tokenUntil(short, 'n4')}\n`);
+      });
+
+      it('a value that fails checkToken: not saved, not used', async () => {
+        await seed(KEY, T0, T0 + 24 * HOUR);
+        secrets();
+        let attempts = 0;
+        const login = async () => {
+          attempts++;
+          return { value: 'not a token', expiresAt: GOOD_UNTIL };
+        };
+        await expectLimits(start({ login }), () => attempts);
+        expect(await status()).toMatchObject({ last_error: 'login_claims', token_expires_at: null });
+        expect(existsSync(tokenPath)).toBe(false);
+        expect(new Set(carried('upgrade'))).toEqual(new Set([undefined]));
+      });
+    });
+
+    it('a token that cannot be saved: token_file, used for this process, no failed login, saved once it can be', async () => {
+      await seed(KEY);
+      secrets();
+      const dir = join(root, 'state');
+      const path = join(dir, 'f1tv-token');
+      const fresh = tokenUntil(GOOD_UNTIL, 'fresh');
+      let attempts = 0;
+      const login = async () => {
+        attempts++;
+        return { value: fresh, expiresAt: GOOD_UNTIL };
+      };
+      const h = start({ tokenPath: path, login });
+      await until(() => carried('upgrade').includes(`Bearer ${fresh}`));
+      await until(async () => (await status())?.last_error === 'token_file');
+      clock += 10 * MIN;
+      await h.ticks(5);
+      expect(attempts).toBe(1);
+      expect(fake.connections()).toBe(1);
+      expect(await status()).toMatchObject({
+        last_error: 'token_file',
+        warning: null,
+        login_failures: 0,
+        token_expires_at: new Date(GOOD_UNTIL),
+      });
+      expect(lines.filter((l) => l.includes('"last_error":"token_file"'))).toHaveLength(1);
+
+      mkdirSync(dir);
+      await until(() => existsSync(path));
+      expect(readFileSync(path, 'utf8')).toBe(`${fresh}\n`);
+      await until(async () => (await status())?.last_error === null);
+      expect(attempts).toBe(1);
+      expect(fake.connections()).toBe(1);
+    });
+
+    it('a token file that cannot be read for another reason than ENOENT is token_file, not no token', async () => {
+      await seed(KEY);
+      writeFileSync(join(root, 'not-a-directory'), '');
+      start({ tokenPath: join(root, 'not-a-directory', 'f1tv-token') }); // ENOTDIR, which existsSync hides
+      await until(async () => (await status())?.last_error === 'token_file');
     });
 
     it('a non-LoginError is unknown, and a missing, unreadable or malformed file only sets a code', async () => {
@@ -731,7 +958,7 @@ describe('recorder (real PostgreSQL as f1_ingest, fake SignalR)', { timeout: 30_
       expect(await lastRow()).toMatchObject({ complete: false });
       expect((await lastRow())?.ended_at).not.toBeNull();
       expect((await status())?.state).toBe('idle');
-      expect(pings).toEqual([]);
+      expect(pings).toEqual(['f1-live/fail']);
 
       clock += 5 * MIN - 1;
       await h.ticks(10);
@@ -759,6 +986,49 @@ describe('recorder (real PostgreSQL as f1_ingest, fake SignalR)', { timeout: 30_
       await h.ticks();
       expect((await status())?.state).toBe('recording');
       expect(lines.join('')).not.toContain('sentinel path');
+    });
+
+    it('below the 1 GiB floor: ends like a disk failure, starts nothing, then the 5 min pause', async () => {
+      await seed(KEY);
+      writeToken(tokenPath, tokenUntil(GOOD_UNTIL));
+      let free = 1024 ** 3;
+      const h = start({ statfs: () => free });
+      await recording();
+      await h.ticks();
+      expect(await status()).toMatchObject({ state: 'recording', last_error: 'disk_low', warning: 'disk_low' });
+
+      free -= 1;
+      expect(await endedRow()).toMatchObject({ complete: false });
+      await until(() => pings.length > 0);
+      expect(pings).toEqual(['f1-live/fail']);
+      await until(async () => (await status())?.state === 'idle');
+      expect((await status())?.last_error).toBe('disk');
+
+      // Still under it: no row, however long it stays, and the status says so.
+      clock += 10 * MIN;
+      await h.ticks(5);
+      expect(await rows()).toHaveLength(1);
+      expect(await status()).toMatchObject({ state: 'idle', last_error: 'disk' });
+
+      free = 1e12;
+      await h.ticks();
+      clock += 5 * MIN - 1;
+      await h.ticks();
+      expect(await rows()).toHaveLength(1);
+      clock += 1;
+      await recording();
+      expect(await rows()).toHaveLength(2);
+      expect(pings).toEqual(['f1-live/fail']);
+    });
+
+    it('does not start a recording below the floor', async () => {
+      await seed(KEY);
+      writeToken(tokenPath, tokenUntil(GOOD_UNTIL));
+      const h = start({ statfs: () => 1024 ** 3 - 1 });
+      await until(async () => (await status())?.last_error === 'disk');
+      await h.ticks(5);
+      expect(await rows()).toEqual([]);
+      expect(fake.connections()).toBe(0);
     });
 
     it('records anyway when the row cannot be written, and retries the insert', async () => {
