@@ -4,7 +4,7 @@ import fc from 'fast-check';
 import { describe, expect, it } from 'vitest';
 import { ms, normaliseSession } from '../src/ingest/normalise.ts';
 import type { Lap, RaceControl, Session, SessionResult } from '../src/openf1/schemas.ts';
-import { type ColourLap, colours } from '../src/timing/colours.ts';
+import { type ColourLap, colours, type ProgressiveLap, progressiveColours } from '../src/timing/colours.ts';
 import { markLaps, parseRuling, type RuleLap, type RuleMessage, resolve } from '../src/timing/rules.ts';
 
 const FIXTURES = join(import.meta.dirname, '../src/openf1/fixtures');
@@ -491,5 +491,129 @@ describe('colours', () => {
       }),
       { numRuns: 500 },
     );
+  });
+
+  describe('progressiveColours', () => {
+    // `at` from a small range so ties happen; null (unknown) is rare.
+    const atValue = fc.option(fc.integer({ min: 0, max: 20 }), { nil: null, freq: 6 });
+    const stamps = fc.record({ lap: atValue, s1: atValue, s2: atValue, s3: atValue });
+    const withAt = (laps: ColourLap[]) =>
+      fc
+        .array(stamps, { minLength: laps.length, maxLength: laps.length })
+        .map((ats) => laps.map((l, i): ProgressiveLap => ({ ...l, at: ats[i] as ProgressiveLap['at'] })));
+    const progressive = session.chain(withAt);
+    // The same order as the implementation: `at` (null last), then driver, then lap.
+    const sorted = (laps: ProgressiveLap[], key: (typeof KEYS)[number][0]) =>
+      laps.toSorted(
+        (a, b) =>
+          (a.at[key] ?? Number.POSITIVE_INFINITY) - (b.at[key] ?? Number.POSITIVE_INFINITY) ||
+          a.driver_number - b.driver_number ||
+          a.lap_number - b.lap_number,
+      );
+
+    it('purple iff strictly below every earlier eligible value; green iff strictly below the driver’s own and not purple; ineligible is yellow', () => {
+      fc.assert(
+        fc.property(progressive, (laps) => {
+          const out = progressiveColours(laps);
+          expect(out).toHaveLength(laps.length);
+          for (const [key, field] of KEYS) {
+            const order = sorted(
+              laps.filter((l) => l[field] !== null),
+              key,
+            );
+            order.forEach((l, n) => {
+              const c = out[laps.indexOf(l)]?.[key];
+              if (!eligible(l, field)) {
+                expect(c).toBe('yellow');
+                return;
+              }
+              const earlier = order.slice(0, n).filter((x) => eligible(x, field));
+              const v = l[field] as number;
+              const purple = earlier.every((x) => v < (x[field] as number));
+              const green = earlier
+                .filter((x) => x.driver_number === l.driver_number)
+                .every((x) => v < (x[field] as number));
+              expect(c).toBe(purple ? 'purple' : green ? 'green' : 'yellow');
+            });
+            laps.forEach((l, i) => {
+              if (l[field] === null) expect(out[i]?.[key]).toBeNull();
+            });
+          }
+        }),
+        { numRuns: 500 },
+      );
+    });
+
+    it('with unique values the last purple in at order is the eligible minimum, the lap colours() marks purple', () => {
+      const unique = session.map((laps) =>
+        laps.map((l, i) => ({
+          ...l,
+          lap_ms: l.lap_ms === null ? null : l.lap_ms * 1000 + i,
+          s1_ms: l.s1_ms === null ? null : l.s1_ms * 1000 + i,
+          s2_ms: l.s2_ms === null ? null : l.s2_ms * 1000 + i,
+          s3_ms: l.s3_ms === null ? null : l.s3_ms * 1000 + i,
+        })),
+      );
+      fc.assert(
+        fc.property(unique.chain(withAt), (laps) => {
+          const out = progressiveColours(laps);
+          const final = colours(laps);
+          for (const [key] of KEYS) {
+            const last = sorted(laps, key).findLast((l) => out[laps.indexOf(l)]?.[key] === 'purple');
+            expect(last ? laps.indexOf(last) : -1).toBe(final.findIndex((c) => c[key] === 'purple'));
+          }
+        }),
+        { numRuns: 300 },
+      );
+    });
+
+    const pl = (
+      over: Partial<ProgressiveLap> & Pick<ProgressiveLap, 'driver_number' | 'lap_number'>,
+    ): ProgressiveLap => ({
+      ...cl(over),
+      at: { lap: 1, s1: 1, s2: 1, s3: 1 },
+      ...over,
+    });
+    const times = (n: number | null) => ({ lap_ms: n, s1_ms: n, s2_ms: n, s3_ms: n });
+    const when = (n: number | null) => ({ at: { lap: n, s1: n, s2: n, s3: n } });
+
+    it('a tie keeps the earlier setter purple; the later equal time is not purple', () => {
+      const out = progressiveColours([
+        pl({ driver_number: 2, lap_number: 1, ...times(5), ...when(1) }),
+        pl({ driver_number: 1, lap_number: 1, ...times(5), ...when(2) }),
+        pl({ driver_number: 1, lap_number: 2, ...times(4), ...when(3) }),
+      ]);
+      // Driver 1's first 5 is its first value (green); its 4 then takes the session best.
+      expect(out.map((c) => c.lap)).toEqual(['purple', 'green', 'purple']);
+    });
+
+    it('the same at: ties go to the lower driver, then the lower lap', () => {
+      const out = progressiveColours([
+        pl({ driver_number: 2, lap_number: 1, ...times(5), ...when(1) }),
+        pl({ driver_number: 1, lap_number: 2, ...times(5), ...when(1) }),
+        pl({ driver_number: 1, lap_number: 1, ...times(5), ...when(1) }),
+      ]);
+      // d1 lap 1 is purple, d1 lap 2 equals its own, d2 lap 1 is its first value.
+      expect(out.map((c) => c.lap)).toEqual(['green', 'yellow', 'purple']);
+    });
+
+    it('a slower time is green when it beats the driver’s own earlier ones, and an in-lap is yellow', () => {
+      const out = progressiveColours([
+        pl({ driver_number: 1, lap_number: 1, ...times(5), ...when(1) }),
+        pl({ driver_number: 2, lap_number: 1, ...times(9), ...when(2) }),
+        pl({ driver_number: 2, lap_number: 2, ...times(7), ...when(3) }),
+        pl({ driver_number: 2, lap_number: 3, ...times(1), is_pit_in: true, ...when(4) }),
+        pl({ driver_number: 3, lap_number: 1, ...times(null), ...when(null) }),
+      ]);
+      expect(out.map((c) => c.lap)).toEqual(['purple', 'green', 'green', 'yellow', null]);
+    });
+
+    it('a value without an at is ordered after every dated one', () => {
+      const out = progressiveColours([
+        pl({ driver_number: 1, lap_number: 1, ...times(5), ...when(null) }),
+        pl({ driver_number: 2, lap_number: 1, ...times(6), ...when(1) }),
+      ]);
+      expect(out.map((c) => c.lap)).toEqual(['purple', 'purple']); // the undated 5 came last, so d2's 6 was purple when set
+    });
   });
 });
