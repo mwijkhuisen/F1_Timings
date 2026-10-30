@@ -1,0 +1,6 @@
+# The P2a spike's own workspace (deleted before merge): the root policy, copied.
+packages:
+  - .
+minimumReleaseAge: 10080
+strictDepBuilds: true
+blockExoticSubdeps: true
