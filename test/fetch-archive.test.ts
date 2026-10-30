@@ -3,18 +3,8 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { HttpResponse, http } from 'msw';
 import { describe, expect, it } from 'vitest';
-import {
-  checkToken,
-  extractToken,
-  fetchArchive,
-  indexSessions,
-  isArchivePath,
-  ORIGIN,
-  outDir,
-  readTokenFile,
-  TOPICS,
-  tokenExpiry,
-} from '../scripts/fetch-archive.ts';
+import { checkToken, extractToken, readTokenFile, tokenExpiry } from '../apps/server/src/live/token.ts';
+import { fetchArchive, indexSessions, isArchivePath, ORIGIN, outDir, TOPICS } from '../scripts/fetch-archive.ts';
 import { server } from './msw.setup.ts';
 
 const b64 = (o: unknown) => Buffer.from(JSON.stringify(o)).toString('base64url');
