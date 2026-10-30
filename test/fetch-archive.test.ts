@@ -120,7 +120,7 @@ describe('fetchArchive', () => {
     expect(lines).toEqual(['fetch-archive: token_expired', 'fetch-archive: token_file']);
   });
 
-  it('downloads every topic with the token only in the header, skips a 404, never logs the token', async () => {
+  it('downloads every topic with the token only in the header, skips a 404 or 403, never logs the token', async () => {
     const seen: (string | null)[] = [];
     server.use(
       http.get(`${ORIGIN}/static/2026/Index.json`, ({ request }) => {
@@ -129,9 +129,9 @@ describe('fetchArchive', () => {
       }),
       http.get(`${ORIGIN}/static/${PATH}:file`, ({ request, params }) => {
         seen.push(request.headers.get('authorization'));
-        return params.file === 'DriverList.jsonStream'
-          ? new HttpResponse('secret body', { status: 404 })
-          : new HttpResponse('data');
+        if (params.file === 'DriverList.jsonStream') return new HttpResponse('secret body', { status: 404 });
+        if (params.file === 'LapCount.jsonStream') return new HttpResponse('secret body', { status: 403 });
+        return new HttpResponse('data');
       }),
     );
     const [root, lines] = [tmp(), [] as string[]];
@@ -150,6 +150,7 @@ describe('fetchArchive', () => {
     expect(new Set(seen)).toEqual(new Set([`Bearer ${FRESH}`]));
     expect(lines).toContain('token: expires 2026-10-30T13:00:00.000Z');
     expect(lines).toContain('DriverList.jsonStream 404 skipped');
+    expect(lines).toContain('LapCount.jsonStream 403 skipped');
     expect(lines).toContain('Heartbeat.json 200 4 bytes');
     expect(lines.join('\n')).not.toContain(FRESH);
     expect(lines.join('\n')).not.toContain('secret body');

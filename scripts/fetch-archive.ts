@@ -247,12 +247,14 @@ export async function fetchArchive(
       if (got.ok) {
         writeFileSync(join(dir, name), got.value.bytes);
         log(`${name} ${got.value.status} ${got.value.bytes.length} bytes`);
-      } else if (got.error.code === 'http' && got.error.status === 404) {
-        log(`${name} 404 skipped`);
+      } else if (got.error.code === 'http' && (got.error.status === 404 || got.error.status === 403)) {
+        // The archive answers a file it doesn't have (LapCount outside a race) with 403, not 404;
+        // the Index already proved the token.
+        log(`${name} ${got.error.status} skipped`);
       } else {
         log(`${name} ${describe(got.error)}`);
         failed = true;
-        if (got.error.code === 'http' && (got.error.status === 401 || got.error.status === 403)) return 1;
+        if (got.error.code === 'http' && got.error.status === 401) return 1;
       }
     }
   }
