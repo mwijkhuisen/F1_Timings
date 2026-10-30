@@ -7,8 +7,9 @@
 # It installs compose.yaml, roles.sql and the firewall into /etc/f1, the host scripts into
 # /usr/local/bin (root-owned copies: the timers never run a file of the checkout) and the units
 # into /etc/systemd/system; it creates the secret files (the four db_* filled with random hex,
-# cf_tunnel_token and hc_ping_key left empty for the owner) and the f1.env template; it enables
-# and (re)starts f1-firewall.service. It never enables the timers: the owner does that after
+# cf_tunnel_token, hc_ping_key, f1tv_username and f1tv_password left empty for the owner) and the
+# f1.env template and the recorder's directories /srv/f1/live and /srv/f1/state/live (62532, 0700);
+# it enables and (re)starts f1-firewall.service. It never enables the timers: the owner does that after
 # filling the secrets and f1.env (install runbook). When compose.yaml changed under a running
 # deploy, it recreates the stack with the current images and smoke-tests it.
 # It never touches /etc/rws, /srv/rws, the rws project, daemon.json, sysctl, apt,
@@ -46,12 +47,14 @@ install_file() {
   fi
   fix "$dest" install -D -m "$mode" -o 0 -g 0 "$src" "$dest"
 }
+# ensure_dir <dir> <mode> [<uid>:<gid>]: root:root unless an owner is given (install -d also corrects
+# the owner and mode of an existing directory).
 ensure_dir() {
-  local dir=$1 mode=$2
-  if [[ -d $dir && $(stat -c '%a %u %g' "$dir") == "${mode#0} 0 0" ]]; then
+  local dir=$1 mode=$2 owner=${3:-0:0}
+  if [[ -d $dir && $(stat -c '%a %u:%g' "$dir") == "${mode#0} $owner" ]]; then
     ok "$dir"
   else
-    fix "$dir (root $mode)" install -d -m "$mode" -o 0 -g 0 "$dir"
+    fix "$dir (${owner/#0:0/root} $mode)" install -d -m "$mode" -o "${owner%:*}" -g "${owner#*:}" "$dir"
   fi
 }
 
@@ -128,7 +131,7 @@ for entry in "${F1_SECRETS[@]}" container:62532; do
   if grp=$(getent group "${entry##*:}"); then die "gid ${entry##*:} is already the host group ${grp%%:*}: nothing installed"; fi
 done
 if usr=$(getent passwd 62532); then die "uid 62532 is already the host user ${usr%%:*}: nothing installed"; fi
-ok "gids 62001-62006 and uid/gid 62532 are not used on the host"
+ok "gids 62001-62008 and uid/gid 62532 are not used on the host"
 
 # ------------------------------------------------------------------ directories
 ensure_dir "$F1_ETC" 0755
@@ -136,6 +139,10 @@ ensure_dir "$F1_ETC/secrets" 0700
 ensure_dir "$F1_ETC/postgres" 0755
 ensure_dir /srv/f1 0755
 ensure_dir "$F1_STATE" 0700
+# The recorder's two directories (A§14.2): the container user owns them. $F1_STATE itself stays
+# root-only, because current.env there picks what root deploys; live gets only its subdirectory.
+ensure_dir /srv/f1/live 0700 62532:62532
+ensure_dir "$F1_STATE/live" 0700 62532:62532
 
 # ------------------------------------------------------------------ secrets
 set_group() { chown "0:$2" "$1" && chmod 0440 "$1"; }
@@ -172,7 +179,7 @@ for name in db_postgres db_f1_migrator db_f1_ingest db_f1_api; do
   fi
 done
 fill=()
-for name in cf_tunnel_token hc_ping_key; do
+for name in cf_tunnel_token hc_ping_key f1tv_username f1tv_password; do
   secret_matches "$name" '[^[:space:]]' || fill+=("$F1_ETC/secrets/$name")
 done
 

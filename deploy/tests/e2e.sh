@@ -1,11 +1,13 @@
 #!/usr/bin/env bash
 # e2e (CI only, as root: ci / deploy, step `e2e`; D13). The only run of the deploy path before the
 # box: the real f1-install, f1-update and f1-tick on the runner's Docker, with the f1 table loaded.
-# CI never calls OpenF1 or Cloudflare (invariant 4): deploy/tests/ci.override.yaml keeps ingest and
-# cloudflared out (profile "off"), and nothing here enables a timer. It needs the images
+# CI never calls OpenF1, F1 or Cloudflare (invariant 4): deploy/tests/ci.override.yaml keeps ingest,
+# live and cloudflared out (profile "off"), and nothing here enables a timer. It needs the images
 # f1-server:ci and f1-web:ci (built by the job) and nft, curl, flock and systemd-analyze.
-#   1. f1-install twice: the second run makes 0 changes; systemd-analyze verify on the units.
-#   2. Dummy cf_tunnel_token and hc_ping_key, and f1.env with CF_ACCESS_TEAM=ci and a 64-hex AUD.
+#   1. f1-install twice: the second run makes 0 changes; systemd-analyze verify on the units;
+#      /srv/f1/live and /srv/f1/state/live are 62532:62532 0700 and /srv/f1/state stays root 0700.
+#   2. Dummy cf_tunnel_token, hc_ping_key, f1tv_username and f1tv_password (f1-update says "not
+#      configured" while one is empty), and f1.env with CF_ACCESS_TEAM=ci and a 64-hex AUD.
 #   3. f1-update --server f1-server:ci --web f1-web:ci: exit 0, current.env, /healthz 200 on
 #      127.0.0.1:8180 (caddy, api and db as 62532; the publish through f1-publish; local tags),
 #      every container healthy when it returns (the smoke test waits for that).
@@ -85,15 +87,25 @@ run "$tmp/install2" "$repo/deploy/bin/f1-install"
 nft list table inet f1 >/dev/null || fail "f1-install did not load table inet f1"
 systemctl is-active --quiet f1-firewall.service || fail "f1-firewall.service is not active"
 systemd-analyze verify /etc/systemd/system/f1-* || fail "systemd-analyze verify rejects an f1 unit"
-proof "f1-install ran twice, the second: '$(tail -n 1 "$tmp/install2")'; f1-firewall.service active, table inet f1 loaded (resolvers4 $(nft list set inet f1 resolvers4 | grep -o 'elements = {[^}]*}' || echo empty)); systemd-analyze verify passes: $(echo /etc/systemd/system/f1-*)"
+# O1: the recorder's two directories belong to the container user; the state directory itself, which holds
+# current.env, stays root-only.
+for d in /srv/f1/live /srv/f1/state/live; do
+  [[ $(stat -c '%a %u:%g' "$d") == '700 62532:62532' ]] || fail "$d is not 62532:62532 0700: $(stat -c '%a %u:%g' "$d")"
+done
+[[ $(stat -c '%a %u:%g' /srv/f1/state) == '700 0:0' ]] || fail "/srv/f1/state is not root 0700: $(stat -c '%a %u:%g' /srv/f1/state)"
+proof "f1-install ran twice, the second: '$(tail -n 1 "$tmp/install2")'; f1-firewall.service active, table inet f1 loaded (resolvers4 $(nft list set inet f1 resolvers4 | grep -o 'elements = {[^}]*}' || echo empty)); systemd-analyze verify passes: $(echo /etc/systemd/system/f1-*); /srv/f1/live and /srv/f1/state/live are 62532:62532 0700, /srv/f1/state is still root 0700"
 
 # ------------------------------------------------------------------ 2
 step "2. Dummy secrets for the services CI never starts, and f1.env"
 printf 'ci-dummy-tunnel-token\n' >/etc/f1/secrets/cf_tunnel_token
 printf 'ci-dummy-ping-key-0000\n' >/etc/f1/secrets/hc_ping_key
+printf 'ci-dummy-f1tv-user\n' >/etc/f1/secrets/f1tv_username
+printf 'ci-dummy-f1tv-pass\n' >/etc/f1/secrets/f1tv_password
 printf 'CF_ACCESS_TEAM=ci\nCF_ACCESS_AUD=%064d\n' 0 >/etc/f1/f1.env
 [[ $(stat -c '%a %u %g' /etc/f1/secrets/cf_tunnel_token) == '440 0 62005' ]] || fail "cf_tunnel_token lost root:62005 0440"
-proof "cf_tunnel_token and hc_ping_key hold dummies (root:<gid> 0440 kept), f1.env has CF_ACCESS_TEAM=ci and a 64-hex AUD"
+[[ $(stat -c '%a %u %g' /etc/f1/secrets/f1tv_username) == '440 0 62007' ]] || fail "f1tv_username lost root:62007 0440"
+[[ $(stat -c '%a %u %g' /etc/f1/secrets/f1tv_password) == '440 0 62008' ]] || fail "f1tv_password lost root:62008 0440"
+proof "cf_tunnel_token, hc_ping_key, f1tv_username and f1tv_password hold dummies (root:<gid> 0440 kept), f1.env has CF_ACCESS_TEAM=ci and a 64-hex AUD"
 
 # ------------------------------------------------------------------ 3
 step "3. First deploy: f1-update --server f1-server:ci --web f1-web:ci"
@@ -107,7 +119,7 @@ services=$(docker ps -a --filter label=com.docker.compose.project=f1 --format '{
 [[ $services == 'api caddy db ' ]] || fail "the f1 containers are '$services', not 'api caddy db'"
 mapfile -t health < <(docker ps --filter label=com.docker.compose.project=f1 --format '{{.Names}} {{.Status}}')
 for h in "${health[@]}"; do [[ $h == *'(healthy)' ]] || fail "not healthy when f1-update returned: $h"; done
-proof "f1-update deployed the local tags f1-server:ci and f1-web:ci (exit 0, current.env written); $URL answers 200 through caddy, api and db (db as 62532 on a new f1_pgdata, roles.sql through initdb, migrate as f1_migrator) with table inet f1 loaded; containers: ${services% } (no ingest, no cloudflared), each healthy when f1-update returned"
+proof "f1-update deployed the local tags f1-server:ci and f1-web:ci (exit 0, current.env written); $URL answers 200 through caddy, api and db (db as 62532 on a new f1_pgdata, roles.sql through initdb, migrate as f1_migrator) with table inet f1 loaded; containers: ${services% } (no ingest, no live, no cloudflared), each healthy when f1-update returned"
 
 # ------------------------------------------------------------------ 4
 step "4. Egress from api to a non-Cloudflare host is blocked"
@@ -207,4 +219,8 @@ proof "table deleted and conf moved away: f1-tick exit 1, '$(grep -o 'error: loa
 for t in f1-update.timer f1-tick.timer; do
   if systemctl is-enabled --quiet "$t" 2>/dev/null; then fail "$t is enabled"; fi
 done
-proof "no f1 timer is enabled; ingest and cloudflared never ran"
+for s in ingest live cloudflared; do
+  [[ -z $(docker ps -aq --filter label=com.docker.compose.project=f1 --filter "label=com.docker.compose.service=$s") ]] ||
+    fail "a $s container exists"
+done
+proof "no f1 timer is enabled; ingest, live and cloudflared never ran (no container of them exists)"
