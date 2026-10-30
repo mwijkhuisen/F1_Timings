@@ -1,4 +1,4 @@
-import { mkdtempSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
@@ -8,9 +8,12 @@ import {
   compareLaps,
   compareStints,
   firstDiff,
+  type Input,
   mergeCheck,
+  type Oracle,
   type Row,
   readInput,
+  reconstruct,
 } from '../scripts/compare-laps.ts';
 
 const lap = (driver_number: number, lap_number: number, extra: Record<string, unknown> = {}): Row => ({
@@ -97,6 +100,10 @@ describe('merge check', () => {
     );
     expect(mergeCheck('Other', state, { A: 1 })).toBe('merge Other: differs at (root)');
   });
+
+  it('prints a feed key as printable ASCII only', () => {
+    expect(mergeCheck('TimingData', { TimingData: {} }, { '\u001b[2J': 1 })).toBe('merge TimingData: differs at .?[2J');
+  });
 });
 
 describe('readInput and compare', () => {
@@ -119,5 +126,52 @@ describe('readInput and compare', () => {
     expect(await compare(['x'], { CI: 'true' }, (l) => lines.push(l))).toBe(1);
     expect(await compare([], {}, (l) => lines.push(l))).toBe(64);
     expect(lines[0]).toBe('compare-laps refuses to run under CI (A§12.1 invariant 4)');
+  });
+});
+
+describe('compare: the [box] verdict on the synthetic practice feed', () => {
+  // apps/server/test/fixtures/live/ is synthetic: every value is invented.
+  const PRACTICE = join(import.meta.dirname, '../apps/server/test/fixtures/live/practice.jsonl');
+  const run = async (oracle: Oracle, feed = PRACTICE) => {
+    const lines: string[] = [];
+    return { exit: await compare([feed], {}, (l) => lines.push(l), oracle), lines };
+  };
+  const ours = async () => {
+    const { rows } = reconstruct(((await readInput(PRACTICE)) as Input).events, 'f1-live');
+    return rows as NonNullable<typeof rows>;
+  };
+
+  it('passes at 99% or more with exit 0', async () => {
+    const { laps, stints } = await ours();
+    const asked: unknown[] = [];
+    const { exit, lines } = await run(async (key, type) => {
+      asked.push(key, type);
+      return { laps, stints };
+    });
+    expect(asked).toEqual([9001, 'Practice']);
+    expect(lines).toContain('matched 10 of 10 (100.00%): PASS');
+    expect(exit).toBe(0);
+  });
+
+  it('fails below 99% with exit 1', async () => {
+    const { laps, stints } = await ours();
+    const off = laps.map((l, i) => (i === 0 ? { ...l, lap_ms: 1 } : l));
+    const { exit, lines } = await run(async () => ({ laps: off, stints }));
+    expect(lines).toContain('matched 9 of 10 (90.00%): FAIL');
+    expect(exit).toBe(1);
+  });
+
+  it('exits 1 on an oracle failure and prints its code', async () => {
+    const { exit, lines } = await run(async () => JSON.stringify({ code: 'http', status: 401 }));
+    expect(lines.at(-1)).toBe('compare-laps: openf1 {"code":"http","status":401}');
+    expect(exit).toBe(1);
+  });
+
+  it('prints the feed session type as printable ASCII only', async () => {
+    const feed = join(mkdtempSync(join(tmpdir(), 'f1-compare-')), 'feed.jsonl');
+    const type = JSON.stringify([1768046400000, 'SessionInfo', { Type: '\u001b[2J' }, null]);
+    writeFileSync(feed, `${readFileSync(PRACTICE, 'utf8')}\n${type}\n`);
+    const { lines } = await run(async () => 'shape', feed);
+    expect(lines).toContain('session 9001 type ?[2J');
   });
 });

@@ -66,11 +66,12 @@ export type SessionRows = {
 
 type PitLap = { driver_number: number; lap_number: number; is_pit_out: boolean | null; is_pit_in?: boolean };
 
+const perDriver = (r: { driver_number: number }, n: number) => `${r.driver_number}/${n}`;
+
 /** A§9: lap n is an in-lap when the same driver's lap n + 1 is an out-lap (not from `pit`). Mutates and returns `laps`. */
 export function markPitIn<T extends PitLap>(laps: T[]): T[] {
-  const key = (driver: number, lap: number) => `${driver}/${lap}`;
-  const outLaps = new Set(laps.filter((l) => l.is_pit_out).map((l) => key(l.driver_number, l.lap_number)));
-  for (const l of laps) l.is_pit_in = outLaps.has(key(l.driver_number, l.lap_number + 1));
+  const outLaps = new Set(laps.filter((l) => l.is_pit_out).map((l) => perDriver(l, l.lap_number)));
+  for (const l of laps) l.is_pit_in = outLaps.has(perDriver(l, l.lap_number + 1));
   return laps;
 }
 
@@ -90,7 +91,6 @@ export function normaliseSession(
     for (const r of rows) if (r.session_key === key) out.set(id(r), row(r));
     return [...out.values()];
   };
-  const perDriver = (r: { driver_number: number }, n: number) => `${r.driver_number}/${n}`;
 
   const lap = keyed(
     data.laps,

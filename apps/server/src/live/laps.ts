@@ -26,7 +26,8 @@
 import type { Insertable } from 'kysely';
 import type { DB } from '../db/db.ts';
 import { markPitIn } from '../ingest/normalise.ts';
-import { duration, type FeedEvent } from './read.ts';
+import type { Obj } from './merge.ts';
+import { duration, type FeedEvent, isObj } from './read.ts';
 
 // Feed deltas → the lap and stint rows OpenF1 builds (A§11.3). Pure and incremental: push() takes each event with
 // the delta createFeed().apply returned for it, rows() returns the rows so far.
@@ -52,7 +53,6 @@ type Full<T> = { [K in keyof T]-?: Exclude<T[K], undefined> };
 export type LapRow = Full<Insertable<DB['lap']>> & { at: Times };
 export type StintRow = Full<Insertable<DB['stint']>>;
 
-type Obj = Record<string, unknown>;
 type Segments = (number | null)[] | null;
 type Lap = {
   driver_number: number;
@@ -81,7 +81,6 @@ const SECTORS = [
   ['s3_ms', 'seg3'],
 ] as const;
 
-const dict = (v: unknown): v is Obj => typeof v === 'object' && v !== null && !Array.isArray(v);
 const items = (v: unknown): unknown[] => (typeof v === 'object' && v !== null ? Object.values(v) : []);
 // Python truthiness, which OpenF1's checks use: an empty list, object or string, 0 and null are false.
 const truthy = (v: unknown) => (typeof v === 'object' && v !== null ? Object.keys(v).length > 0 : Boolean(v));
@@ -91,6 +90,9 @@ const int16 = (v: unknown) => (typeof v === 'number' && Number.isInteger(v) && M
 // int() of a digit string or an integer.
 const integer = (v: unknown) => int16(typeof v === 'string' && /^\d+$/.test(v) ? Number(v) : v);
 const fit = (ms: number | null) => (ms !== null && Math.abs(ms) <= MAX_MS ? ms : null);
+// Epoch ms in the years 1970 to 9999 (the plain ISO form) as ISO, else null: a bad feed time is no start.
+const iso = (ms: number | null) =>
+  ms !== null && ms >= 0 && ms < 253_402_300_800_000 ? new Date(ms).toISOString() : null;
 // OpenF1 reads a sector with float(): plain seconds only, so "1:05.123" is no value.
 const seconds = (v: unknown) => (typeof v === 'string' && /^\d+(\.\d*)?$/.test(v) ? fit(duration(v)) : null);
 const text = (v: unknown) => (typeof v === 'string' && !v.includes('\0') ? v : null);
@@ -136,7 +138,7 @@ export function createLaps(
     session_key: sessionKey,
     source,
     ...lap,
-    date_start: date_start === null ? null : new Date(date_start).toISOString(),
+    date_start: iso(date_start),
     // PostgreSQL arrays keep null elements; kysely-codegen types them as number[] (as in normalise.ts).
     seg1: seg1 && ([...seg1] as number[]),
     seg2: seg2 && ([...seg2] as number[]),
@@ -148,7 +150,7 @@ export function createLaps(
     at: { ...at },
   });
 
-  // The driver's current lap; the first use creates lap 1 (OpenF1).
+  // The last lap in the driver's list; a driver seen for the first time gets lap 1 (OpenF1).
   function current(driver: number): Lap {
     const list = laps.get(driver);
     if (list) return list.at(-1) as Lap;
@@ -190,16 +192,16 @@ export function createLaps(
   }
 
   // Race lap 1 when lap 2 starts (OpenF1): a missing time is lap 2's start minus lap 1's, then a missing S1 is the
-  // lap minus S2 and S3. Both are set directly, without marking lap 1.
+  // lap minus S2 and S3. Both are set directly, without marking lap 1, and only when positive.
   function firstLap(driver: number, t: number) {
     const first = laps.get(driver)?.[0];
     if (first?.lap_number !== 1) return;
     const ms = first.date_start === null ? null : fit(t - first.date_start);
-    if (!first.lap_ms && ms !== null) {
+    if (!first.lap_ms && ms !== null && ms > 0) {
       first.lap_ms = ms;
       first.at.lap = t;
     }
-    if (first.lap_ms && !first.s1_ms && first.s2_ms && first.s3_ms) {
+    if (first.lap_ms && !first.s1_ms && first.s2_ms && first.s3_ms && first.lap_ms > first.s2_ms + first.s3_ms) {
       first.s1_ms = first.lap_ms - first.s2_ms - first.s3_ms;
       first.at.s1 = t;
     }
@@ -207,32 +209,32 @@ export function createLaps(
 
   // One driver line of TimingData, in OpenF1's order: LastLapTime, Sectors, Speeds, NumberOfLaps, PitOut.
   function timing(driver: number, line: Obj, t: number) {
-    const last = dict(line.LastLapTime) ? line.LastLapTime.Value : undefined;
+    const last = isObj(line.LastLapTime) ? line.LastLapTime.Value : undefined;
     if (typeof last === 'string') {
       const ms = fit(duration(last));
       const lap = ms === null ? undefined : ending(driver, t);
       if (lap) set(lap, 'lap_ms', ms, t);
     }
     // Sectors and segments only as an object: the list form carries no values (FastF1, OpenF1).
-    for (const [key, sector] of Object.entries(dict(line.Sectors) ? line.Sectors : {})) {
+    for (const [key, sector] of Object.entries(isObj(line.Sectors) ? line.Sectors : {})) {
       const i = index(key, 3) as 0 | 1 | 2 | null;
-      if (i === null || !dict(sector)) continue;
+      if (i === null || !isObj(sector)) continue;
       const [time, segs] = SECTORS[i];
       const target = () => (i === 0 ? current(driver) : ending(driver, t));
       const ms = seconds(sector.Value);
       const lap = ms === null ? undefined : target();
       if (lap) set(lap, time, ms, t);
-      for (const [k, seg] of Object.entries(dict(sector.Segments) ? sector.Segments : {})) {
+      for (const [k, seg] of Object.entries(isObj(sector.Segments) ? sector.Segments : {})) {
         const j = index(k, 64); // a sector has about ten
-        if (j === null || !dict(seg)) continue;
+        if (j === null || !isObj(seg)) continue;
         const into = target();
         if (into) segment(into, segs, j, int16(seg.Status), t);
       }
     }
     // Speed traps go to the current lap; FL is not stored (OpenF1).
-    for (const [label, trap] of Object.entries(dict(line.Speeds) ? line.Speeds : {})) {
+    for (const [label, trap] of Object.entries(isObj(line.Speeds) ? line.Speeds : {})) {
       const key = label === 'I1' ? 'i1_kph' : label === 'I2' ? 'i2_kph' : label === 'ST' ? 'st_kph' : null;
-      const kph = key && dict(trap) ? integer(trap.Value) : null;
+      const kph = key && isObj(trap) ? integer(trap.Value) : null;
       if (key && kph !== null) set(current(driver), key, kph, t);
     }
     if (line.NumberOfLaps !== undefined && line.NumberOfLaps !== null) {
@@ -241,7 +243,8 @@ export function createLaps(
       if (count === null) return;
       // A higher number starts a new lap, without filling gaps; a race counts one lower, as its start crosses no
       // line. A lap starts at the first count it sees (OpenF1; FastF1's own counter is not used).
-      const n = count + (race ? 1 : 0);
+      const n = int16(count + (race ? 1 : 0)); // the +1 can leave smallint: skipped the same way
+      if (n === null) return;
       let lap = current(driver);
       if (n > lap.lap_number) {
         lap = newLap(driver, n);
@@ -276,7 +279,7 @@ export function createLaps(
     const last = lastStint(own);
     const at = last && lapAt.get(last);
     if (last && at !== undefined && t - at < WINDOW_MS) change(last, 'lap_end', last.lap_end - 1);
-    const start = last ? last.lap_end + 1 : 1;
+    const start = last ? Math.min(last.lap_end + 1, 32_767) : 1; // smallint
     const stint: Stint = {
       session_key: sessionKey,
       source,
@@ -292,8 +295,8 @@ export function createLaps(
   }
 
   // TimingAppData stints (OpenF1): the key + 1 is the stint number, in key order as text; a list (the feed's form at
-  // the start of a session) all goes to stint 1, where FastF1 numbers it by position. The compound when given; the
-  // tyre age is StartLaps whenever given (F1 corrects it), else TotalLaps while still unknown.
+  // the start of a session) all goes to stint 1, where FastF1 numbers it by position. The compound when given;
+  // tyre_age_at_start takes every StartLaps but null, the latest winning, and TotalLaps only while it is still null.
   function tyres(driver: number, list: unknown, t: number) {
     if (!truthy(list) || typeof list !== 'object' || list === null) return;
     const entries = Array.isArray(list)
@@ -304,7 +307,7 @@ export function createLaps(
       const i = index(key, 32_767);
       if (i === null) continue;
       const stint = own.get(i + 1) ?? addStint(own, driver, i + 1, t);
-      if (!dict(s)) continue;
+      if (!isObj(s)) continue;
       if (Object.hasOwn(s, 'Compound')) change(stint, 'compound', text(s.Compound));
       if (s.StartLaps !== undefined && s.StartLaps !== null) change(stint, 'tyre_age_at_start', int16(s.StartLaps));
       else if (Object.hasOwn(s, 'TotalLaps') && stint.tyre_age_at_start === null) {
@@ -327,7 +330,7 @@ export function createLaps(
 
   return {
     push(ev, delta) {
-      if (!dict(delta)) return;
+      if (!isObj(delta)) return;
       const { t } = ev;
       if (ev.topic === 'SessionInfo') {
         // A race is a session of Type "Race", sprints included (OpenF1).
@@ -335,7 +338,7 @@ export function createLaps(
       } else if (ev.topic === 'SessionData' && race) {
         // A "Started" status gives every driver whose only lap is lap 1 its start, at the status's Utc (OpenF1).
         for (const status of items(delta.StatusSeries)) {
-          const at = dict(status) && status.SessionStatus === 'Started' ? utc(status.Utc) : null;
+          const at = isObj(status) && status.SessionStatus === 'Started' ? utc(status.Utc) : null;
           if (at === null) continue;
           for (const [first, ...more] of laps.values()) {
             if (!first || more.length > 0 || first.lap_number !== 1) continue;
@@ -346,11 +349,11 @@ export function createLaps(
       } else if (ev.topic === 'RaceControlMessages') {
         // The chequered flag is the time of the event that carries the text "CHEQUERED FLAG"; the last wins (OpenF1).
         for (const m of items(delta.Messages)) {
-          if (dict(m) && typeof m.Message === 'string' && m.Message.toUpperCase() === 'CHEQUERED FLAG') chequered = t;
+          if (isObj(m) && typeof m.Message === 'string' && m.Message.toUpperCase() === 'CHEQUERED FLAG') chequered = t;
         }
-      } else if ((ev.topic === 'TimingData' || ev.topic === 'TimingAppData') && dict(delta.Lines)) {
+      } else if ((ev.topic === 'TimingData' || ev.topic === 'TimingAppData') && isObj(delta.Lines)) {
         for (const [key, line] of Object.entries(delta.Lines)) {
-          if (!dict(line)) continue;
+          if (!isObj(line)) continue;
           // Laps ignore TimingData until a TimingAppData line has stints (OpenF1).
           if (ev.topic === 'TimingAppData' && truthy(line.Stints)) open = true;
           const driver = index(key, 32_768);
@@ -365,7 +368,7 @@ export function createLaps(
     },
     rows() {
       return {
-        laps: markPitIn([...shown.values()].map((r) => ({ ...r }))).sort(
+        laps: markPitIn(structuredClone([...shown.values()])).sort(
           (a, b) => a.driver_number - b.driver_number || a.lap_number - b.lap_number,
         ),
         stints: [...shownStints]

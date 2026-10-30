@@ -59,6 +59,12 @@ describe('token file', () => {
     expect(checkToken(jwt(), NOW)).toEqual({ ok: false, error: 'token_format' });
     expect(checkToken('garbage', NOW)).toEqual({ ok: false, error: 'token_format' });
   });
+
+  it('refuses an exp that is no safe integer or no valid Date with token_format', () => {
+    for (const exp of [1e15, NOW / 1000 + 0.5, 2 ** 53]) {
+      expect(checkToken(jwt(exp), NOW)).toEqual({ ok: false, error: 'token_format' });
+    }
+  });
 });
 
 describe('paths', () => {

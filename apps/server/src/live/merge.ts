@@ -57,8 +57,9 @@ export function merge(target: Obj, delta: unknown): Obj | undefined {
  * The feed state, topic → value. `apply` returns the delta for the lap builder: the raw payload of
  * a normal event, the effective delta of a `full` event (a reconnect's full state), and undefined
  * for an exact duplicate (the same topic, t and payload seen within 5 min of t: a reconnect replays
- * messages) or a `full` event that changes nothing. A full event is never deduplicated. A payload
- * that is no object (a `.z` string) replaces the topic's value raw.
+ * messages) or a `full` event that changes nothing. A full event is never deduplicated. A null or
+ * undefined payload is ignored (undefined, no state change); any other payload that is no object
+ * (a `.z` string) replaces the topic's value raw.
  */
 export function createFeed(): { state: Obj; apply(ev: FeedEvent): unknown } {
   const state = empty();
@@ -66,7 +67,7 @@ export function createFeed(): { state: Obj; apply(ev: FeedEvent): unknown } {
   return {
     state,
     apply(ev) {
-      if (UNSAFE.has(ev.topic)) return undefined;
+      if (UNSAFE.has(ev.topic) || ev.payload === null || ev.payload === undefined) return undefined;
       if (!ev.full) {
         for (const [key, t] of seen) {
           if (t >= ev.t - DUPLICATE_WINDOW_MS) break;

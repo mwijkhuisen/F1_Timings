@@ -12,15 +12,16 @@ const read = (file: string) =>
     .split('\n')
     .flatMap(parseFeedLine);
 
-/** Rows the way a replay builds them: every event through the merge, its delta into the laps. */
-function build(events: readonly FeedEvent[], key: number, source: 'f1-live' | 'f1-archive' = 'f1-live') {
+/** The laps the way a replay builds them: every event through the merge, its delta into the laps. */
+function feedLaps(events: readonly FeedEvent[], key: number, source: 'f1-live' | 'f1-archive' = 'f1-live') {
   const [feed, laps] = [createFeed(), createLaps(key, source)];
   for (const ev of events) {
     const delta = feed.apply(ev);
     if (delta !== undefined) laps.push(ev, delta);
   }
-  return laps.rows();
+  return laps;
 }
+const build = (...args: Parameters<typeof feedLaps>) => feedLaps(...args).rows();
 
 type Time = [ms: number, set: string];
 /** Expected rows: each time with the clock time it was set; every other field null or false unless `rest` has it. */
@@ -313,5 +314,66 @@ describe('createLaps', () => {
     // The first S3 segment 2 s into lap 2 is lap 1's and creates its list: lap 1 shows again, completed.
     const later = [...events, timing(97, { Sectors: { 2: { Segments: { 0: { Status: 2049 } } } } })];
     expect(build(later, 9002).laps[0]).toMatchObject({ lap_ms: 95_000, s1_ms: 30_800, s3_ms: 30_000, seg3: [2049] });
+  });
+
+  // Junk the feed can carry: SessionInfo first, open stints, then the lines.
+  const at = Date.parse('2026-01-11T14:00:00Z');
+  const ev = (s: number, topic: string, payload: Obj): FeedEvent => ({ t: at + s * 1000, topic, payload });
+  const timing = (s: number, line: Obj) => ev(s, 'TimingData', { Lines: { 7: line } });
+  const opened = (type: string) => [
+    ev(-600, 'SessionInfo', { Type: type }),
+    ev(-300, 'TimingAppData', { Lines: { 7: { Stints: [{ Compound: 'MEDIUM' }] } } }),
+  ];
+
+  it('a time outside the ISO range gives no start instead of a RangeError', () => {
+    const { laps } = build(
+      [...opened('Practice'), { t: 1e16, topic: 'TimingData', payload: { Lines: { 7: { NumberOfLaps: 1 } } } }],
+      9001,
+    );
+    expect(laps.map((l) => [l.lap_number, l.date_start])).toEqual([[1, null]]);
+  });
+
+  it('race lap 1 gets no inferred time or S1 that is not positive', () => {
+    const shown = (started: string, line: Obj) =>
+      build(
+        [
+          ...opened('Race'),
+          timing(-60, { Sectors: { 0: { Segments: { 0: { Status: 2048 } } } } }),
+          ev(0, 'SessionData', { StatusSeries: [{ Utc: started, SessionStatus: 'Started' }] }),
+          timing(30, line),
+          timing(50, { NumberOfLaps: 1 }),
+          // An S3 segment 2 s into lap 2 is lap 1's: lap 1 shows again.
+          timing(52, { Sectors: { 2: { Segments: { 0: { Status: 2049 } } } } }),
+        ],
+        9002,
+      ).laps[0];
+    // Started 5 min after lap 2's start: 50 s - 300 s.
+    expect(shown('2026-01-11T14:05:00', {})).toMatchObject({ lap_number: 1, lap_ms: null, s1_ms: null });
+    // A 50 s lap with S2 + S3 of 64.2 s.
+    expect(shown('2026-01-11T14:00:00', { Sectors: { 1: { Value: '34.200' }, 2: { Value: '30.000' } } })).toMatchObject(
+      { lap_number: 1, lap_ms: 50_000, s1_ms: null },
+    );
+  });
+
+  it('a race count of 32767 and a stint after it stay inside smallint', () => {
+    const { laps, stints } = build(
+      [
+        ...opened('Race'),
+        timing(1, { NumberOfLaps: 32_767 }),
+        ev(60, 'TimingAppData', { Lines: { 7: { Stints: { 1: { Compound: 'HARD' } } } } }),
+      ],
+      9002,
+    );
+    const numbers = [...laps.map((l) => l.lap_number), ...stints.flatMap((s) => [s.lap_start ?? 0, s.lap_end ?? 0])];
+    expect(Math.max(...numbers)).toBe(32_767);
+  });
+
+  it('rows() returns rows that share nothing with its state', () => {
+    const laps = feedLaps(read('practice.jsonl'), 9001);
+    for (const l of laps.rows().laps) {
+      l.at.lap = -1;
+      l.seg1?.fill(-1);
+    }
+    expect(laps.rows()).toEqual(PRACTICE);
   });
 });

@@ -28,7 +28,9 @@
 
 export type FeedEvent = { t: number /* epoch ms */; topic: string; payload: unknown; full?: true };
 
-const isObj = (v: unknown): v is Record<string, unknown> => typeof v === 'object' && v !== null && !Array.isArray(v);
+/** A plain object: not null, not an array. */
+export const isObj = (v: unknown): v is Record<string, unknown> =>
+  typeof v === 'object' && v !== null && !Array.isArray(v);
 
 /**
  * `h:m:s.f`, `m:s.f` or `s.f` (the fraction optional, as in to_timedelta) → integer ms: the fraction
@@ -46,8 +48,9 @@ export function duration(v: unknown): number | null {
 
 /**
  * An archive `<Topic>.jsonStream`: a UTF-8 BOM, CRLF (or LF) lines, each a 12-character
- * session-relative `HH:MM:SS.mmm` and then the payload. `{` is JSON, `"` a quoted string (a `.z`
- * payload stays that raw string, not decoded), anything else the raw text. A line with a bad
+ * session-relative `HH:MM:SS.mmm` and then the payload. `{` is JSON, `"` a JSON string, or its text
+ * without the outer quotes when it is no valid one (a `.z` payload stays that base64 string, not
+ * decoded), anything else the raw text. A line with a bad
  * timestamp or bad JSON is skipped and counted.
  */
 export function parseJsonStream(text: string, topic: string, t0Ms: number): { events: FeedEvent[]; skipped: number } {
@@ -64,7 +67,13 @@ export function parseJsonStream(text: string, topic: string, t0Ms: number): { ev
       } catch {
         payload = undefined;
       }
-    } else if (body.startsWith('"')) payload = body.replace(/^"+|"+$/g, '');
+    } else if (body.startsWith('"')) {
+      try {
+        payload = JSON.parse(body); // starts with ", so a string
+      } catch {
+        payload = body.replace(/^"+|"+$/g, ''); // FastF1's strip('"')
+      }
+    }
     if (rel === null || body === '' || payload === undefined) skipped++;
     else events.push({ t: t0Ms + rel, topic, payload });
   }

@@ -10,6 +10,7 @@ import { view } from '../apps/server/src/live/state.ts';
 import { EXIT_USAGE } from '../apps/server/src/main.ts';
 import { createClient } from '../apps/server/src/openf1/client.ts';
 import { parse } from '../apps/server/src/openf1/schemas.ts';
+import { safe } from './fetch-archive.ts';
 
 // The P2b [box] judge: laps reconstructed from a P2a recording (feed.jsonl or its directory) or an
 // archive directory (fetch-archive.ts) against OpenF1's laps and stints. Run on the owner's machine
@@ -130,12 +131,12 @@ export function mergeCheck(topic: string, state: Record<string, unknown>, json: 
     expected = target;
   }
   const d = firstDiff(state[topic], expected);
-  return `merge ${topic}: ${d === undefined ? 'equal' : `differs at ${d || '(root)'}`}`;
+  return safe(`merge ${topic}: ${d === undefined ? 'equal' : `differs at ${d || '(root)'}`}`);
 }
 
 const show = (v: unknown) => JSON.stringify(v);
 const line = (d: Diff, what: string) =>
-  `  driver ${d.driver} ${what} ${d.n} ${d.field}: openf1 ${show(d.theirs)} ours ${show(d.ours)}`;
+  safe(`  driver ${d.driver} ${what} ${d.n} ${d.field}: openf1 ${show(d.theirs)} ours ${show(d.ours)}`);
 
 export type Input = { events: FeedEvent[]; archiveDir?: string; skipped: number };
 
@@ -242,7 +243,7 @@ export async function compare(
       exit = 1;
       continue;
     }
-    log(`session ${info.Key} type ${info.Type ?? 'unknown'}`);
+    log(`session ${info.Key} type ${safe(info.Type ?? 'unknown')}`);
     const theirs = await oracle(info.Key, info.Type ?? null);
     if (typeof theirs === 'string') {
       log(`compare-laps: openf1 ${theirs}`);

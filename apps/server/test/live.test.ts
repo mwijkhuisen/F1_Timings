@@ -164,6 +164,14 @@ describe('createFeed', () => {
     expect(feed.apply({ t: 2, topic: 'CarData.z', payload: 'def=', full: true })).toBeUndefined();
     expect(feed.state['CarData.z']).toBe('def=');
   });
+
+  it('ignores a null or undefined payload', () => {
+    const feed = createFeed();
+    feed.apply({ t: 0, topic: 'TimingData', payload: { Lines: { '7': { NumberOfLaps: 3 } } } });
+    expect(feed.apply({ t: 1, topic: 'TimingData', payload: null })).toBeUndefined();
+    expect(feed.apply({ t: 2, topic: 'TimingData', payload: undefined, full: true })).toBeUndefined();
+    expect(feed.state).toEqual({ TimingData: { Lines: { '7': { NumberOfLaps: 3 } } } });
+  });
 });
 
 describe('read', () => {
@@ -185,6 +193,11 @@ describe('read', () => {
     });
     expect(parseJsonStream(text.replaceAll('\r\n', '\n'), 'Heartbeat', t0).events).toHaveLength(3);
     expect(parseJsonStream('', 'Heartbeat', t0)).toEqual({ events: [], skipped: 0 });
+  });
+
+  it('decodes a quoted payload as a JSON string, else strips its quotes as FastF1 does', () => {
+    const text = '00:00:01.000"ab\\/cd=="\n00:00:02.000""x"\n';
+    expect(parseJsonStream(text, 'CarData.z', 0).events.map((e) => e.payload)).toEqual(['ab/cd==', 'x']);
   });
 
   it('takes the archive epoch from the first Heartbeat', () => {

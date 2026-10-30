@@ -44,7 +44,7 @@ const PATH = /^\d{4}\/[A-Za-z0-9_-]+\/[A-Za-z0-9_-]+\/$/;
 export const isArchivePath = (path: string): boolean => PATH.test(path);
 
 /** Printable ASCII only: Index.json text is remote data and may hold control characters. */
-const safe = (value: unknown) => String(value).replace(/[^\x20-\x7e]/g, '?');
+export const safe = (value: unknown) => String(value).replace(/[^\x20-\x7e]/g, '?');
 
 /**
  * `<root>/archive/<session_key>`, or undefined when the key is no plain number or the resolved
@@ -104,11 +104,18 @@ export function tokenExpiry(token: string): number | undefined {
   }
 }
 
-/** Token file text → token and expiry. A token without `exp`, or past it, is refused. */
+/** Token file text → token and expiry. A token without `exp` (a safe integer that is a valid Date), or past it, is refused. */
 export function checkToken(text: string, nowMs: number): Result<{ token: string; exp: number }, TokenCode> {
   const token = extractToken(text);
   const exp = token === undefined ? undefined : tokenExpiry(token);
-  if (token === undefined || exp === undefined) return { ok: false, error: 'token_format' };
+  if (
+    token === undefined ||
+    exp === undefined ||
+    !Number.isSafeInteger(exp) ||
+    Number.isNaN(new Date(exp * 1000).getTime())
+  ) {
+    return { ok: false, error: 'token_format' };
+  }
   return exp * 1000 <= nowMs ? { ok: false, error: 'token_expired' } : { ok: true, value: { token, exp } };
 }
 
