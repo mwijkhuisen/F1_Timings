@@ -3,7 +3,7 @@
 # Renders deploy/compose.yaml with `docker compose config` (dummy image refs; no root, no
 # /etc/f1 needed: the secret files and f1.env are never read by `config`) and checks the
 # result with one jq program: every check is named, and a failure prints the names.
-# Then the negative case: the same program over a copy without api's read_only must fail.
+# Then the negative cases: the same program over a broken copy must fail, naming the check.
 # Usage: bash deploy/tests/hardening.sh
 set -euo pipefail
 
@@ -31,6 +31,8 @@ program='
   no_new_privileges: all($s[]; any(.value.security_opt[]?; . == "no-new-privileges:true")),
   user_62532: all($s[]; .value.user == "62532:62532"),
   limits: all($s[]; .value.mem_limit != null and .value.cpus != null and .value.pids_limit != null),
+  # `config` leaves out a 0, so soft: 0, hard: 0 renders as core: {}. e2e sees the 0s on the running containers.
+  no_core_dumps: all($s[]; .value.ulimits.core | . != null and (.soft // 0) == 0 and (.hard // 0) == 0 and (.single // 0) == 0),
   not_privileged: all($s[]; .value.privileged != true and (.value.cap_add // []) == [] and (.value.devices // []) == []),
   no_host_namespaces: all($s[]; all(.value.network_mode, .value.pid, .value.ipc, .value.uts, .value.userns_mode; . != "host")),
   no_docker_sock: ([$s[].value.volumes[]? | .source // "" | select(test("docker\\.sock"))] == []),
@@ -98,5 +100,7 @@ negative() {
   echo "hardening: the negative case ($label) fails as expected: ${err%$'\n'}"
 }
 negative "api without read_only" read_only 'del(.services.api.read_only)'
+negative "live without the core limit" no_core_dumps 'del(.services.live.ulimits)'
+negative "caddy with a core size" no_core_dumps '.services.caddy.ulimits.core = {soft: 1, hard: 1}'
 negative "live with /srv/f1/state as a source" only_bind_allowlist \
   '(.services.live.volumes[] | select(.target == "/srv/f1/state") | .source) = "/srv/f1/state"'

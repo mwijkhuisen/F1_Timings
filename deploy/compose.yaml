@@ -20,6 +20,11 @@ x-hardening: &hardening
   cap_drop: [ALL]
   security_opt:
     - no-new-privileges:true
+  # A dump of live would hold the F1 TV password and token, and a piped core_pattern puts it on the host.
+  ulimits:
+    core:
+      soft: 0
+      hard: 0
   restart: unless-stopped
 
 x-node-healthcheck: &node-healthcheck
@@ -149,8 +154,9 @@ services:
     healthcheck: *node-healthcheck
 
   # The recorder (A§11.2, P2c): logs in to F1 TV and writes every scheduled session to disk.
-  # tcp/443 out through f1-egress (account.formula1.com, id.formula1.com, livetiming.formula1.com,
-  # hc-ping.com). It logs in to the database as f1_ingest (owner decision O3).
+  # tcp/443 out through f1-egress: to any public IPv4, limited by port and not by host (A§14.3). The
+  # code talks to account.formula1.com, id.formula1.com, livetiming.formula1.com and hc-ping.com; no
+  # firewall rule holds it to those. It logs in to the database as f1_ingest (owner decision O3).
   # Two binds, both read-write, and never /srv/f1/state itself: that directory holds current.env,
   # which picks what root deploys, so a writable mount of it would let a compromised recorder
   # choose that (owner decision O1). The host subdirectory /srv/f1/state/live (62532, 0700)
