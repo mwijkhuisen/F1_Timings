@@ -209,7 +209,7 @@ Expected: the same containers as in `/tmp/rws.before`, all healthy.
 `live` logs in to F1 TV itself (A§12.3) with the account's email and password, which are two file secrets: `/etc/f1/secrets/f1tv_username` and `/etc/f1/secrets/f1tv_password`, each one line, `root:62007 0440` and `root:62008 0440`. `f1-install` creates them empty (step 3) and you fill them in step 4 with `sudo nano`, as the other secrets, so the values never reach a command line.
 
 - Until both are filled, `f1-update` logs `not configured` and deploys nothing (deliberate: `docs/runbooks/update.md`, "Rolling out P2c"). On a host that already runs a deploy, fill them straight after `f1-install`.
-- The account has no 2FA; automatic login depends on that. The password is changed after the Mexico City race (Sun 1 Nov 2026); the new one goes only into the secret file.
+- The account has no 2FA; automatic login depends on that. When you rotate the password, the new one goes only into the secret file.
 - `live` signs in only when a session starts within 48 h and the token it holds does not cover that session's end plus 1 h, so the first login can come days after you fill the files. The status panel shows the token's expiry once it has one.
 - If the login breaks, paste a token by hand: `docs/runbooks/update.md`, "F1 TV token by hand".
 
@@ -224,7 +224,7 @@ Invariant 5: F1 shares no healthchecks group with Waterheight.
    `sudo nano /etc/f1/secrets/hc_ping_key`
 5. `ingest` pings `https://hc-ping.com/<ping key>/f1-ingest` once the schedule sync requested by the daily `30 0 * * *` (UTC) Cron, or by its 15-minute retry, has succeeded. The startup sync does not ping, so a crash-looping ingest cannot stay green. The check turns up after the first deploy and the first 00:30 UTC; period 1 day and grace 1 hour still fit.
 
-`f1-live` (P2c): create a second check in the same project with slug `f1-live`. `live` pings `https://hc-ping.com/<ping key>/f1-live` only when a recording ends complete (a normal stop, a token throughout, no disconnect over 60 s inside the session), so it is quiet between race weekends and for any incomplete recording. Pick a period and grace to suit that (the owner's choice; a long period such as 30 days keeps the summer break from alerting).
+`f1-live` (P2c): create a second check in the same project with slug `f1-live`. `live` pings `https://hc-ping.com/<ping key>/f1-live` only when a recording ends complete (a normal stop, the session seen to start, a token throughout, no disconnect over 60 s inside the session), so it is quiet between race weekends. It pings `https://hc-ping.com/<ping key>/f1-live/fail` when a recording ends incomplete at a normal stop or on a disk failure, which alerts at once, so a failed weekend does not wait for the period; a cancelled or moved session and a SIGTERM (a deploy) ping neither. Pick a period and grace to suit that (the owner's choice; a long period such as 30 days keeps the summer break from alerting).
 
 ## A8: before the first deploy from main [owner]
 

@@ -124,7 +124,7 @@ Why this order, and what the reverse does:
 - **`f1-install` before the new image is deployed:** `live` starts on the old image, which exits 2 for a role it does not have. It restarts in a loop, the smoke test fails and `f1-install` stops with `the stack did not come back`. The same holds for a manual rollback (`f1-update --server …:sha-<old>`) to an image from before P2c: the smoke test fails and `f1-update` rolls back to `current.env`. While `compose.yaml` has `live`, only an image from P2c or later deploys.
 - **Secrets still empty:** `f1-update` checks every entry of `F1_SECRETS` and, while one is empty, logs `not configured: run f1-install, then fill …` and exits 0. So no deploy happens, a new release included, until both `f1tv_*` files are filled. This is deliberate: nothing is deployed that is half configured.
 
-The F1 TV password is changed after the Mexico City race (Sun 1 Nov 2026), per the P2a security review. Change it on formula1.com, then write the new one only into `/etc/f1/secrets/f1tv_password` on the VM (in place, keeping `root:62008 0440`); it goes nowhere else. `live` reads the file at its next login, so a token already on disk keeps working until it expires.
+To rotate the F1 TV password, change it on formula1.com, then write the new one only into `/etc/f1/secrets/f1tv_password` on the VM (in place, keeping `root:62008 0440`); it goes nowhere else. `live` reads the file at its next login, so a token already on disk keeps working until it expires.
 
 ## F1 TV token by hand (when the automatic login fails) [owner]
 
@@ -140,7 +140,7 @@ Paste the value, press Enter, then Ctrl-D. The terminal shows what you paste: cl
 
 | Last error | Meaning |
 |---|---|
-| `token_file` | not a regular file, not readable by 62532, or any group or other permission bit set: check the owner (`62532:62532`) and the mode (`0600`) |
+| `token_file` | not a regular file, not readable by 62532, or any group or other permission bit set: check the owner (`62532:62532`) and the mode (`0600`). Also a token from a login that could not be saved: `live` uses it from memory and writes it as soon as `/srv/f1/state/live` allows that |
 | `token_format` | not a JWT or a `login-session` cookie value on one line, or no expiry in it |
 | `token_expired` | the token is past its expiry |
 | `feed_unauthorized` | the feed refused the token; it is ignored until the file holds a different value |
@@ -155,16 +155,17 @@ After a session, plus 30 minutes (`<path>` is the `path` column, `<session_key>-
 sudo docker compose -p f1 -f /etc/f1/compose.yaml --env-file /srv/f1/state/current.env exec db \
   psql -U postgres -d f1 -c "SELECT session_key, path, started_at, ended_at, bytes, complete FROM recording ORDER BY id DESC LIMIT 3"
 sudo ls -l /srv/f1/live/<path> /srv/f1/live/<path>/snapshots | tail -n 5
+sudo du -sh /srv/f1/live/<path>
 sudo sh -c 'gzip -t /srv/f1/live/<path>/feed-*.jsonl.gz && zcat /srv/f1/live/<path>/feed-*.jsonl.gz | wc -l'
 sudo docker logs f1-live-1 2>&1 | grep -c '"last_error"'
 ```
 
 Pass:
 
-- `complete = t`, and `ended_at` about 30 minutes after the session's end.
+- `complete = t`, and `ended_at` about 30 minutes after the `Ends` status, which comes some time after the session's end (`date_end` + 3 h at the latest).
 - Every segment passes `gzip -t`, and the line count is not 0.
 - A snapshot about every 30 s: the `snapshots` listing grows by two files a minute.
-- `f1-live` on healthchecks.io is green, and the status panel shows `idle` and the token expiry.
+- `f1-live` on healthchecks.io is green (`f1-live/fail` turns it red at once for a recording that ended incomplete), and the status panel shows `idle` and the token expiry.
 
 The last command counts the error log lines of the container, each one a fixed code (`feed_socket` after a drop, say). A few reconnects are normal; `complete = t` already says that no disconnect lasted over 60 s.
 
