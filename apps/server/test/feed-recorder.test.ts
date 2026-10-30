@@ -16,27 +16,35 @@ import { gunzipSync } from 'node:zlib';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { server } from '../../../test/msw.setup.ts';
 import { type Closed, connect, TOPICS } from '../src/live/feed-client.ts';
-import { createFeed } from '../src/live/merge.ts';
 import { parseFeedLine } from '../src/live/read.ts';
 import { gzipLeftovers, openRecording, type Recording } from '../src/live/recording.ts';
-import { type FakeSignalR, startFakeSignalR } from './fake-signalr.ts';
+import {
+  type FakeSignalR,
+  numbered,
+  refuseNonLoopback,
+  replay,
+  segments,
+  seqCounts,
+  startFakeSignalR,
+} from './fake-signalr.ts';
 
 // The [CI] proof of the feed path: feed-client.ts and recording.ts against a real local server over real sockets.
 // msw would intercept fetch and WebSocket, so it is closed for this file; `fake.seen` holds what reached the server
 // over TCP, which is the proof that nothing was intercepted. Every stream is finite: the fake sends only what a test
 // tells it to. msw 3 throws on a second close(), so it listens again for msw.setup.ts's own afterAll, which runs after
 // this one (Vitest runs after-hooks in reverse order).
-beforeAll(() => server.close());
-afterAll(() => server.listen({ onUnhandledFrame: 'error' }));
+let allowNetwork: () => void;
+beforeAll(() => {
+  server.close();
+  allowNetwork = refuseNonLoopback();
+});
+afterAll(() => {
+  allowNetwork();
+  server.listen({ onUnhandledFrame: 'error' });
+});
 
 const TOKEN = 'sentinel.token.value';
 const T0 = Date.parse('2026-10-30T19:30:00Z');
-/** A numbered TimingData message: the `Seq` leaf shows a late duplicate being applied, the `Lines` key shows a loss. */
-const numbered = (n: number): [string, unknown, string] => [
-  'TimingData',
-  { Seq: n, Lines: { [n]: n } },
-  new Date(T0 + n * 1000).toISOString(),
-];
 const range = (from: number, to: number) => Array.from({ length: to - from + 1 }, (_, i) => from + i);
 const plain = (v: unknown) => JSON.parse(JSON.stringify(v)) as unknown;
 
@@ -79,25 +87,6 @@ function runLoop(fake: FakeSignalR, rec: Recording) {
   };
 }
 
-/** Every line on disk, segments in name order. */
-function segments(dir: string): string[] {
-  const names = readdirSync(dir)
-    .filter((n) => /^feed-\d+\.jsonl\.gz$/.test(n))
-    .sort((a, b) => Number(/\d+/.exec(a)?.[0]) - Number(/\d+/.exec(b)?.[0]));
-  return names.flatMap((n) =>
-    gunzipSync(readFileSync(join(dir, n)))
-      .toString()
-      .split('\n')
-      .slice(0, -1),
-  );
-}
-
-function replay(lines: string[]) {
-  const feed = createFeed();
-  for (const line of lines) for (const ev of parseFeedLine(line)) feed.apply(ev);
-  return plain(feed.state);
-}
-
 const seqOf = (line: string): number | undefined => {
   const v = JSON.parse(line) as [number, string, { Seq?: number }];
   return v[1] === 'TimingData' ? v[2].Seq : undefined;
@@ -125,6 +114,14 @@ afterEach(async () => {
   await Promise.all(open.splice(0).map((r) => r.finish()));
   await fake.stop();
   rmSync(root, { recursive: true, force: true });
+});
+
+describe('the safety net', () => {
+  it('a forgotten base fails rather than reaching F1, and fetch and WebSocket refuse any host but loopback', async () => {
+    await expect(connect(TOKEN, () => {}).closed).resolves.toEqual({ error: 'feed_options' });
+    await expect(fetch('https://hc-ping.com/x')).rejects.toThrow('refused hc-ping.com');
+    expect(() => new WebSocket('wss://livetiming.formula1.com/signalrcore')).toThrow('refused livetiming.formula1.com');
+  });
 });
 
 describe('feed client against the fake server', () => {
@@ -247,12 +244,7 @@ describe('feed client against the fake server', () => {
     for (const line of lines) expect(() => JSON.parse(line) as unknown).not.toThrow();
 
     // Every numbered message is on disk exactly as often as it was sent.
-    const onDisk = new Map<number, number>();
-    for (const line of lines) {
-      const seq = seqOf(line);
-      if (seq !== undefined) onDisk.set(seq, (onDisk.get(seq) ?? 0) + 1);
-    }
-    expect([...onDisk].sort(([a], [b]) => a - b)).toEqual([...sent].sort(([a], [b]) => a - b));
+    expect(seqCounts(lines)).toEqual([...sent].sort(([a], [b]) => a - b));
 
     // Two subscribes, each one a _subscribe line holding its own full state.
     const fulls = lines.filter((l) => JSON.parse(l)[1] === '_subscribe').map((l) => JSON.parse(l)[2]);

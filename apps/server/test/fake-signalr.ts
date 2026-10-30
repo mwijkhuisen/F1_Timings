@@ -1,7 +1,12 @@
 import { createHash } from 'node:crypto';
+import { readdirSync, readFileSync } from 'node:fs';
 import { createServer, type IncomingMessage } from 'node:http';
 import type { AddressInfo } from 'node:net';
+import { join } from 'node:path';
 import type { Duplex } from 'node:stream';
+import { gunzipSync } from 'node:zlib';
+import { createFeed } from '../src/live/merge.ts';
+import { parseFeedLine } from '../src/live/read.ts';
 
 // A real local stand-in for the F1 SignalR endpoint: node:http and hand-written WebSocket frames, no dependency. It
 // sends only what a test tells it to, so every stream is finite.
@@ -87,6 +92,73 @@ export type FakeSignalR = {
   drop(): void;
   stop(): Promise<void>;
 };
+
+const LOOPBACK = new Set(['127.0.0.1', 'localhost', '[::1]']);
+const refuseUnlessLoopback = (url: string) => {
+  const { hostname } = new URL(url);
+  if (!LOOPBACK.has(hostname)) throw new Error(`refused ${hostname}`);
+};
+
+/**
+ * The fake's real sockets keep msw closed in the files that use it, and msw's "no handler" error with it. This keeps
+ * invariant 4 enforced there: `fetch` and `WebSocket` refuse any host but loopback, so a forgotten `base` or `login`
+ * injection fails rather than reaching F1. Returns the undo. A test may stub `fetch` on top, and calls this one on.
+ */
+export function refuseNonLoopback(): () => void {
+  const { fetch: realFetch, WebSocket: RealWebSocket } = globalThis;
+  globalThis.fetch = async (input, init) => {
+    refuseUnlessLoopback(input instanceof Request ? input.url : String(input));
+    return realFetch(input, init);
+  };
+  globalThis.WebSocket = class extends RealWebSocket {
+    constructor(...args: ConstructorParameters<typeof WebSocket>) {
+      refuseUnlessLoopback(String(args[0]));
+      super(...args);
+    }
+  };
+  return () => {
+    globalThis.fetch = realFetch;
+    globalThis.WebSocket = RealWebSocket;
+  };
+}
+
+const NUMBERED_T0 = Date.parse('2026-10-30T19:30:00Z');
+/** A numbered TimingData message: the `Seq` leaf shows a late duplicate being applied, the `Lines` key shows a loss. */
+export const numbered = (n: number): [string, unknown, string] => [
+  'TimingData',
+  { Seq: n, Lines: { [n]: n } },
+  new Date(NUMBERED_T0 + n * 1000).toISOString(),
+];
+
+/** Every line on disk, segments in name order. */
+export function segments(dir: string): string[] {
+  const names = readdirSync(dir)
+    .filter((n) => /^feed-\d+\.jsonl\.gz$/.test(n))
+    .sort((a, b) => Number(/\d+/.exec(a)?.[0]) - Number(/\d+/.exec(b)?.[0]));
+  return names.flatMap((n) =>
+    gunzipSync(readFileSync(join(dir, n)))
+      .toString()
+      .split('\n')
+      .slice(0, -1),
+  );
+}
+
+/** The state a replay of these lines builds, as plain JSON. */
+export function replay(lines: string[]): unknown {
+  const feed = createFeed();
+  for (const line of lines) for (const ev of parseFeedLine(line)) feed.apply(ev);
+  return JSON.parse(JSON.stringify(feed.state));
+}
+
+/** How many times each number is in these lines, sorted by number. */
+export function seqCounts(lines: string[]): [number, number][] {
+  const counts = new Map<number, number>();
+  for (const line of lines) {
+    const v = JSON.parse(line) as [number, string, { Seq?: number }];
+    if (v[1] === 'TimingData' && v[2].Seq !== undefined) counts.set(v[2].Seq, (counts.get(v[2].Seq) ?? 0) + 1);
+  }
+  return [...counts].sort(([a], [b]) => a - b);
+}
 
 export async function startFakeSignalR(): Promise<FakeSignalR> {
   const seen: Seen[] = [];
