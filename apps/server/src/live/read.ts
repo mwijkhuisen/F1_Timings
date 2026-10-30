@@ -84,7 +84,8 @@ export function parseJsonStream(text: string, topic: string, t0Ms: number): { ev
  * A P2a `feed.jsonl` line: `[receivedAtMs, topic, payload, f1Timestamp]` is one event at the F1
  * timestamp when it parses, else at receivedAtMs (the native client writes a missing one as
  * "undefined", the library one as null). `[receivedAtMs, "_subscribe", result]` is one `full` event
- * per topic at receivedAtMs. Anything malformed is [].
+ * per topic at receivedAtMs, SessionInfo first: the other topics belong to its session, which laps.ts
+ * checks before it reads them (F1 sends RaceControlMessages before it). Anything malformed is [].
  */
 export function parseFeedLine(line: string): FeedEvent[] {
   let v: unknown;
@@ -98,7 +99,9 @@ export function parseFeedLine(line: string): FeedEvent[] {
   if (typeof receivedAt !== 'number' || !Number.isFinite(receivedAt) || typeof topic !== 'string') return [];
   if (topic === '_subscribe') {
     if (!isObj(payload)) return [];
-    return Object.entries(payload).map(([name, value]) => ({ t: receivedAt, topic: name, payload: value, full: true }));
+    return Object.entries(payload)
+      .sort(([a], [b]) => Number(b === 'SessionInfo') - Number(a === 'SessionInfo'))
+      .map(([name, value]) => ({ t: receivedAt, topic: name, payload: value, full: true }));
   }
   const at = typeof ts === 'string' ? Date.parse(ts) : Number.NaN;
   return [{ t: Number.isNaN(at) ? receivedAt : at, topic, payload }];
