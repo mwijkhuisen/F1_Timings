@@ -108,6 +108,29 @@ export interface RawResponse {
   source: string;
 }
 
+export interface RecorderStatus {
+  id: Generated<boolean>;
+  last_error: string | null;
+  last_login_at: Timestamp | null;
+  login_failures: Generated<number>;
+  session_key: number | null;
+  state: string;
+  token_expires_at: Timestamp | null;
+  updated_at: Timestamp;
+  warning: string | null;
+}
+
+export interface Recording {
+  bytes: Generated<Int8>;
+  complete: Generated<boolean>;
+  ended_at: Timestamp | null;
+  id: Generated<Int8>;
+  path: string;
+  session_key: number;
+  source: Generated<string>;
+  started_at: Timestamp;
+}
+
 export interface Result {
   dnf: boolean | null;
   dns: boolean | null;
@@ -155,6 +178,8 @@ export interface DB {
   pit: Pit;
   race_control: RaceControl;
   raw_response: RawResponse;
+  recorder_status: RecorderStatus;
+  recording: Recording;
   result: Result;
   session: Session;
   stint: Stint;
