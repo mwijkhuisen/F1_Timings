@@ -7,6 +7,7 @@ import { dbUrl, EXIT_CONFIG, runMigrate } from './db/migrate.ts';
 import { pingHealthchecks } from './healthchecks.ts';
 import { healthy, startHeartbeat, touch } from './heartbeat.ts';
 import { backfill, processSession, startIngest } from './ingest/ingest.ts';
+import { startRecorder } from './live/recorder.ts';
 import { createClient } from './openf1/client.ts';
 
 /** Roles of the single server image (A§4); the first argument picks one. */
@@ -47,6 +48,7 @@ export async function run(
   if (role === 'migrate') return runMigrate(env, log);
   if (role === 'api') return runApi(env, log, apiPort);
   if (role === 'ingest' || role === 'backfill' || role === 'refetch') return runIngest(role, Number(rest[0]), env, log);
+  if (role === 'live') return runLive(env, log);
   log(`role ${role} is not implemented yet`);
   return EXIT_NOT_IMPLEMENTED;
 }
@@ -76,6 +78,39 @@ async function runIngest(role: 'ingest' | 'backfill' | 'refetch', key: number, e
     logger.error({ cause: codeOf(err) }, `${role} failed`); // the code only: a message could quote a value
     return 1;
   } finally {
+    await db.destroy();
+  }
+}
+
+/** The recorder daemon (A§11.2), as f1_ingest. Resolves after SIGTERM/SIGINT, with the running recording closed. */
+async function runLive(env: Env, log: (line: string) => void): Promise<number> {
+  const url = dbUrl('f1_ingest', env);
+  if (typeof url === 'string') {
+    log(`live: ${url}`);
+    return EXIT_CONFIG;
+  }
+  const logger = pino({ base: { role: 'live' } });
+  const db = createDb(url, (err) => logger.error({ cause: codeOf(err) }, 'database pool error'));
+  const stop = new AbortController();
+  const abort = () => stop.abort();
+  process.once('SIGTERM', abort);
+  process.once('SIGINT', abort);
+  try {
+    await startRecorder({
+      db,
+      now: () => new Date(),
+      log: logger,
+      beat: () => touch(),
+      ping: (slug) => pingHealthchecks(slug, logger),
+      signal: stop.signal,
+    });
+    return 0;
+  } catch (err) {
+    logger.error({ cause: codeOf(err) }, 'live failed');
+    return 1;
+  } finally {
+    process.off('SIGTERM', abort);
+    process.off('SIGINT', abort);
     await db.destroy();
   }
 }

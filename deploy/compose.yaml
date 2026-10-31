@@ -20,6 +20,11 @@ x-hardening: &hardening
   cap_drop: [ALL]
   security_opt:
     - no-new-privileges:true
+  # A dump of live would hold the F1 TV password and token, and a piped core_pattern puts it on the host.
+  ulimits:
+    core:
+      soft: 0
+      hard: 0
   restart: unless-stopped
 
 x-node-healthcheck: &node-healthcheck
@@ -148,6 +153,44 @@ services:
     pids_limit: 64
     healthcheck: *node-healthcheck
 
+  # The recorder (A§11.2, P2c): logs in to F1 TV and writes every scheduled session to disk.
+  # tcp/443 out through f1-egress: to any public IPv4, limited by port and not by host (A§14.3). The
+  # code talks to account.formula1.com, id.formula1.com, livetiming.formula1.com and hc-ping.com; no
+  # firewall rule holds it to those. It logs in to the database as f1_ingest (owner decision O3).
+  # Two binds, both read-write, and never /srv/f1/state itself: that directory holds current.env,
+  # which picks what root deploys, so a writable mount of it would let a compromised recorder
+  # choose that (owner decision O1). The host subdirectory /srv/f1/state/live (62532, 0700)
+  # appears as /srv/f1/state in the container, where the token file f1tv-token lives.
+  # f1-install creates both host directories; create_host_path: false makes a missing one an error.
+  # stop_grace_period: SIGTERM closes the socket, gzips the last segment and closes the row.
+  live:
+    <<: *hardening
+    image: ${F1_SERVER_IMAGE:?}
+    command: [live]
+    user: "62532:62532"
+    group_add: ["62003", "62006", "62007", "62008"]
+    secrets: [db_f1_ingest, hc_ping_key, f1tv_username, f1tv_password]
+    networks: [f1-egress, f1-db]
+    depends_on:
+      db:
+        condition: service_healthy
+    volumes:
+      - type: bind
+        source: /srv/f1/live
+        target: /srv/f1/live
+        bind:
+          create_host_path: false
+      - type: bind
+        source: /srv/f1/state/live
+        target: /srv/f1/state
+        bind:
+          create_host_path: false
+    mem_limit: 384m
+    cpus: 1.0
+    pids_limit: 64
+    stop_grace_period: 60s
+    healthcheck: *node-healthcheck
+
   # The site on :80 for cloudflared (f1-tunnel-edge) and for the smoke test (f1-publish, the only
   # publish: Docker does not publish for a container on internal networks only). No capability:
   # the image strips caddy's file capability, and this namespaced sysctl lets a non-root process
@@ -237,7 +280,7 @@ networks:
     ipam:
       config:
         - subnet: 10.62.2.0/24
-  # ingest (live in P2): tcp/443 anywhere public, DNS to the host's resolvers.
+  # ingest and live: tcp/443 anywhere public, DNS to the host's resolvers.
   f1-egress:
     name: f1-egress
     enable_ipv6: false
@@ -288,7 +331,7 @@ networks:
         - subnet: 10.62.7.0/24
 
 # GIDs (A§14.2): 62001 db_postgres, 62002 db_f1_migrator, 62003 db_f1_ingest, 62004 db_f1_api,
-# 62005 cf_tunnel_token, 62006 hc_ping_key; 62007 and up are P2c's (f1tv_*).
+# 62005 cf_tunnel_token, 62006 hc_ping_key, 62007 f1tv_username, 62008 f1tv_password.
 secrets:
   db_postgres:
     file: /etc/f1/secrets/db_postgres
@@ -302,6 +345,10 @@ secrets:
     file: /etc/f1/secrets/cf_tunnel_token
   hc_ping_key:
     file: /etc/f1/secrets/hc_ping_key
+  f1tv_username:
+    file: /etc/f1/secrets/f1tv_username
+  f1tv_password:
+    file: /etc/f1/secrets/f1tv_password
 
 volumes:
   pgdata:

@@ -10,6 +10,7 @@ import { colours } from '../timing/colours.ts';
 
 const NO_STORE = { 'Cache-Control': 'no-store' };
 const FINAL = { 'Cache-Control': 'private, max-age=86400' };
+const STALE_MS = 5 * 60_000; // the recorder reports every few seconds
 const STATES = ['scheduled', 'due', 'fetched', 'final', 'failed'] as const;
 
 const badRequest = (c: Context) => c.json({ error: 'bad request' }, 400, NO_STORE);
@@ -315,7 +316,23 @@ export function createApp({
       if (is_cancelled) cancelled += n;
       else if (ingest_state in states) states[ingest_state as keyof Status['states']] += n;
     }
-    const body = { states, cancelled, failed };
+    const row = await db
+      .selectFrom('recorder_status as r')
+      .leftJoin('session as s', 's.session_key', 'r.session_key')
+      .leftJoin('meeting as m', 'm.meeting_key', 's.meeting_key')
+      .select([
+        'r.state',
+        'r.session_key',
+        'm.name as meeting_name',
+        's.name as session_name',
+        'r.token_expires_at',
+        'r.last_error',
+        'r.warning',
+        'r.updated_at',
+      ])
+      .executeTakeFirst();
+    const recorder = row && { ...row, stale: Date.now() - row.updated_at.getTime() > STALE_MS };
+    const body = { states, cancelled, failed, recorder: recorder ?? null };
     return c.json(body, 200, NO_STORE);
   });
 

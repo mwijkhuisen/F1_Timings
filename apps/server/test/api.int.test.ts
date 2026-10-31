@@ -303,7 +303,45 @@ describe('api (f1_api login, Access JWT)', { timeout: 120_000 }, () => {
           next_fetch_at: '2026-10-30T20:25:00.000Z',
         },
       ],
+      recorder: null,
     });
+  });
+
+  it('the status carries the recorder row: names, and stale after 5 minutes', async () => {
+    const row = {
+      state: 'recording',
+      session_key: FAILING,
+      token_expires_at: new Date('2026-11-02T00:00:00Z'),
+      last_error: 'disk_low',
+      warning: 'disk_low',
+    };
+    const recorder = async () => (await body('/api/v1/status', Status)).recorder;
+    try {
+      await admin
+        .insertInto('recorder_status')
+        .values({ ...row, updated_at: new Date(Date.now() - 10_000) })
+        .execute();
+      expect(await recorder()).toEqual({
+        state: 'recording',
+        session_key: FAILING,
+        meeting_name: expect.any(String),
+        session_name: 'Practice 1',
+        token_expires_at: '2026-11-02T00:00:00.000Z',
+        last_error: 'disk_low',
+        warning: 'disk_low',
+        stale: false,
+        updated_at: expect.any(String),
+      });
+      await admin
+        .updateTable('recorder_status')
+        .set({ updated_at: new Date(Date.now() - 6 * 60_000) })
+        .execute();
+      expect(await recorder()).toMatchObject({ stale: true });
+      await admin.updateTable('recorder_status').set({ state: 'idle', session_key: null }).execute();
+      expect(await recorder()).toMatchObject({ meeting_name: null, session_name: null });
+    } finally {
+      await admin.deleteFrom('recorder_status').execute();
+    }
   });
 
   it('the api role on @hono/node-server: a taken port exits 1; it listens, answers and exits 0 on SIGTERM', async () => {

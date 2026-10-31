@@ -1,20 +1,24 @@
 #!/usr/bin/env bash
 # e2e (CI only, as root: ci / deploy, step `e2e`; D13). The only run of the deploy path before the
 # box: the real f1-install, f1-update and f1-tick on the runner's Docker, with the f1 table loaded.
-# CI never calls OpenF1 or Cloudflare (invariant 4): deploy/tests/ci.override.yaml keeps ingest and
-# cloudflared out (profile "off"), and nothing here enables a timer. It needs the images
-# f1-server:ci and f1-web:ci (built by the job) and nft, curl, flock and systemd-analyze.
-#   1. f1-install twice: the second run makes 0 changes; systemd-analyze verify on the units.
-#   2. Dummy cf_tunnel_token and hc_ping_key, and f1.env with CF_ACCESS_TEAM=ci and a 64-hex AUD.
+# CI never calls OpenF1, F1 or Cloudflare (invariant 4): deploy/tests/ci.override.yaml keeps ingest
+# and cloudflared out (profile "off"), nothing here enables a timer, and live runs only because
+# without ingest the session table is empty, so it idles and calls nothing (asserted here). It needs
+# the images f1-server:ci and f1-web:ci (built by the job) and nft, curl, flock and systemd-analyze.
+#   1. f1-install twice: the second run makes 0 changes; systemd-analyze verify on the units;
+#      /srv/f1/live and /srv/f1/state/live are 62532:62532 0700 and /srv/f1/state stays root 0700.
+#   2. Dummy cf_tunnel_token, hc_ping_key, f1tv_username and f1tv_password (f1-update says "not
+#      configured" while one is empty), and f1.env with CF_ACCESS_TEAM=ci and a 64-hex AUD.
 #   3. f1-update --server f1-server:ci --web f1-web:ci: exit 0, current.env, /healthz 200 on
 #      127.0.0.1:8180 (caddy, api and db as 62532; the publish through f1-publish; local tags),
-#      every container healthy when it returns (the smoke test waits for that).
+#      every container healthy when it returns (the smoke test waits for that); live is idle on an
+#      empty schedule.
 #   4. Egress from api to a non-Cloudflare host is blocked.
-#   5. f1-update --server f1-server:broken (migrate passes, api exits): exit 1, "rolled back",
+#   5. f1-update --server f1-server:broken (migrate passes, api and live exit): exit 1, "rolled back",
 #      current.env unchanged, failed.env written, /healthz 200 again; the same pair again is
 #      skipped as known-bad.
-#   6. docker inspect of db, api and caddy: read-only root, CapDrop ALL, user 62532:62532,
-#      no-new-privileges; caddy's 127.0.0.1:8180 is the only published port.
+#   6. docker inspect of db, api, caddy and live: read-only root, CapDrop ALL, user 62532:62532,
+#      no-new-privileges, core size 0; caddy's 127.0.0.1:8180 is the only published port.
 #   7. f1-tick restores a deleted table inet f1 and writes the disk file.
 #   8. A local tag with a registry host (localhost/f1-server:ci) is pulled, never recorded as given.
 #   9. f1-tick skips the container restarts while the update lock is held.
@@ -51,7 +55,7 @@ on_exit() {
   if ((rc != 0)); then
     echo "::group::diagnostics"
     docker compose -p f1 ps -a 2>&1 || true
-    for s in db api caddy; do docker logs --tail 60 "f1-$s-1" 2>&1 | sed "s/^/$s| /" || true; done
+    for s in db api caddy live; do docker logs --tail 60 "f1-$s-1" 2>&1 | sed "s/^/$s| /" || true; done
     nft list table inet f1 2>&1 | head -n 80 || true
     echo "::endgroup::"
   fi
@@ -85,15 +89,25 @@ run "$tmp/install2" "$repo/deploy/bin/f1-install"
 nft list table inet f1 >/dev/null || fail "f1-install did not load table inet f1"
 systemctl is-active --quiet f1-firewall.service || fail "f1-firewall.service is not active"
 systemd-analyze verify /etc/systemd/system/f1-* || fail "systemd-analyze verify rejects an f1 unit"
-proof "f1-install ran twice, the second: '$(tail -n 1 "$tmp/install2")'; f1-firewall.service active, table inet f1 loaded (resolvers4 $(nft list set inet f1 resolvers4 | grep -o 'elements = {[^}]*}' || echo empty)); systemd-analyze verify passes: $(echo /etc/systemd/system/f1-*)"
+# O1: the recorder's two directories belong to the container user; the state directory itself, which holds
+# current.env, stays root-only.
+for d in /srv/f1/live /srv/f1/state/live; do
+  [[ $(stat -c '%a %u:%g' "$d") == '700 62532:62532' ]] || fail "$d is not 62532:62532 0700: $(stat -c '%a %u:%g' "$d")"
+done
+[[ $(stat -c '%a %u:%g' /srv/f1/state) == '700 0:0' ]] || fail "/srv/f1/state is not root 0700: $(stat -c '%a %u:%g' /srv/f1/state)"
+proof "f1-install ran twice, the second: '$(tail -n 1 "$tmp/install2")'; f1-firewall.service active, table inet f1 loaded (resolvers4 $(nft list set inet f1 resolvers4 | grep -o 'elements = {[^}]*}' || echo empty)); systemd-analyze verify passes: $(echo /etc/systemd/system/f1-*); /srv/f1/live and /srv/f1/state/live are 62532:62532 0700, /srv/f1/state is still root 0700"
 
 # ------------------------------------------------------------------ 2
-step "2. Dummy secrets for the services CI never starts, and f1.env"
+step "2. Dummy secrets (live reads the F1 TV ones only for a login, and none is due here), and f1.env"
 printf 'ci-dummy-tunnel-token\n' >/etc/f1/secrets/cf_tunnel_token
 printf 'ci-dummy-ping-key-0000\n' >/etc/f1/secrets/hc_ping_key
+printf 'ci-dummy-f1tv-user\n' >/etc/f1/secrets/f1tv_username
+printf 'ci-dummy-f1tv-pass\n' >/etc/f1/secrets/f1tv_password
 printf 'CF_ACCESS_TEAM=ci\nCF_ACCESS_AUD=%064d\n' 0 >/etc/f1/f1.env
 [[ $(stat -c '%a %u %g' /etc/f1/secrets/cf_tunnel_token) == '440 0 62005' ]] || fail "cf_tunnel_token lost root:62005 0440"
-proof "cf_tunnel_token and hc_ping_key hold dummies (root:<gid> 0440 kept), f1.env has CF_ACCESS_TEAM=ci and a 64-hex AUD"
+[[ $(stat -c '%a %u %g' /etc/f1/secrets/f1tv_username) == '440 0 62007' ]] || fail "f1tv_username lost root:62007 0440"
+[[ $(stat -c '%a %u %g' /etc/f1/secrets/f1tv_password) == '440 0 62008' ]] || fail "f1tv_password lost root:62008 0440"
+proof "cf_tunnel_token, hc_ping_key, f1tv_username and f1tv_password hold dummies (root:<gid> 0440 kept), f1.env has CF_ACCESS_TEAM=ci and a 64-hex AUD"
 
 # ------------------------------------------------------------------ 3
 step "3. First deploy: f1-update --server f1-server:ci --web f1-web:ci"
@@ -104,10 +118,14 @@ grep -q 'deployed server f1-server:ci web f1-web:ci' "$tmp/update1" || fail "f1-
   fail "current.env: $(cat "$STATE/current.env")"
 curl -fsS --max-time 5 -o /dev/null "$URL" || fail "$URL is not 200"
 services=$(docker ps -a --filter label=com.docker.compose.project=f1 --format '{{.Label "com.docker.compose.service"}}' | sort | tr '\n' ' ')
-[[ $services == 'api caddy db ' ]] || fail "the f1 containers are '$services', not 'api caddy db'"
+[[ $services == 'api caddy db live ' ]] || fail "the f1 containers are '$services', not 'api caddy db live'"
 mapfile -t health < <(docker ps --filter label=com.docker.compose.project=f1 --format '{{.Names}} {{.Status}}')
 for h in "${health[@]}"; do [[ $h == *'(healthy)' ]] || fail "not healthy when f1-update returned: $h"; done
-proof "f1-update deployed the local tags f1-server:ci and f1-web:ci (exit 0, current.env written); $URL answers 200 through caddy, api and db (db as 62532 on a new f1_pgdata, roles.sql through initdb, migrate as f1_migrator) with table inet f1 loaded; containers: ${services% } (no ingest, no cloudflared), each healthy when f1-update returned"
+[[ $(docker inspect -f '{{.State.Health.Status}}' f1-live-1) == healthy ]] || fail "f1-live-1 is not healthy"
+# Invariant 4 rests on the empty schedule: an idle recorder has no session to log in for or to record.
+live_status=$(docker exec f1-db-1 psql -U postgres -d f1 -tAc "SELECT state, (SELECT count(*) FROM session) FROM recorder_status")
+[[ $live_status == 'idle|0' ]] || fail "recorder_status.state and the session count are '$live_status', not 'idle|0'"
+proof "f1-update deployed the local tags f1-server:ci and f1-web:ci (exit 0, current.env written); $URL answers 200 through caddy, api and db (db as 62532 on a new f1_pgdata, roles.sql through initdb, migrate as f1_migrator) with table inet f1 loaded; containers: ${services% } (no ingest, no cloudflared), each healthy when f1-update returned; live idle on an empty schedule (state|sessions: $live_status)"
 
 # ------------------------------------------------------------------ 4
 step "4. Egress from api to a non-Cloudflare host is blocked"
@@ -137,16 +155,18 @@ rm -f "$STATE/failed.env"
 proof "f1-update --server f1-server:broken: exit $broken_rc, '$(grep -o 'rolled back.*' "$tmp/update2" | head -n 1)', current.env unchanged, failed.env = the broken pair, $URL 200 again; run again: exit 0, '$(grep -o 'skipping known-bad.*' "$tmp/update3")'"
 
 # ------------------------------------------------------------------ 6
-step "6. docker inspect: the hardening flags of db, api and caddy, and the only publish"
-for s in db api caddy; do
+step "6. docker inspect: the hardening flags of db, api, caddy and live, and the only publish"
+for s in db api caddy live; do
   got=$(docker inspect -f '{{.HostConfig.ReadonlyRootfs}} {{.HostConfig.CapDrop}} {{.Config.User}}' "f1-$s-1")
   [[ $got == 'true [ALL] 62532:62532' ]] || fail "f1-$s-1: $got"
   [[ $(docker inspect -f '{{.HostConfig.SecurityOpt}}' "f1-$s-1") == *no-new-privileges:true* ]] || fail "f1-$s-1 lacks no-new-privileges"
+  core=$(docker inspect -f '{{json .HostConfig.Ulimits}}' "f1-$s-1")
+  [[ $core == *'"Name":"core","Hard":0,"Soft":0'* ]] || fail "f1-$s-1 does not limit core dumps to 0: $core"
 done
 mapfile -t ids < <(docker ps -q --filter label=com.docker.compose.project=f1)
 ports=$(docker inspect -f '{{.Name}} {{json .HostConfig.PortBindings}}' "${ids[@]}" | grep -vE ' (\{\}|null)$' || true)
 [[ $ports == '/f1-caddy-1 {"80/tcp":[{"HostIp":"127.0.0.1","HostPort":"8180"}]}' ]] || fail "published ports: $ports"
-proof "db, api and caddy: ReadonlyRootfs true, CapDrop [ALL], User 62532:62532, no-new-privileges:true; the only port binding: $ports"
+proof "db, api, caddy and live: ReadonlyRootfs true, CapDrop [ALL], User 62532:62532, no-new-privileges:true, core size 0; the only port binding: $ports"
 
 # ------------------------------------------------------------------ 7
 step "7. f1-tick restores a deleted table inet f1"
@@ -207,4 +227,10 @@ proof "table deleted and conf moved away: f1-tick exit 1, '$(grep -o 'error: loa
 for t in f1-update.timer f1-tick.timer; do
   if systemctl is-enabled --quiet "$t" 2>/dev/null; then fail "$t is enabled"; fi
 done
-proof "no f1 timer is enabled; ingest and cloudflared never ran"
+for s in ingest cloudflared; do
+  [[ -z $(docker ps -aq --filter label=com.docker.compose.project=f1 --filter "label=com.docker.compose.service=$s") ]] ||
+    fail "a $s container exists"
+done
+sessions=$(docker exec f1-db-1 psql -U postgres -d f1 -tAc "SELECT count(*) FROM session")
+[[ $sessions == 0 ]] || fail "the session table has $sessions rows: live was not idle"
+proof "no f1 timer is enabled; ingest and cloudflared never ran (no container of them exists); the session table stayed empty, so live never had a session to log in for"

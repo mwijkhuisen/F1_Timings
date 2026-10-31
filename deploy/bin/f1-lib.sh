@@ -12,9 +12,9 @@ readonly F1_STATE=/srv/f1/state
 readonly F1_LOCK_DIR=/run/f1
 readonly F1_SMOKE_URL=http://127.0.0.1:8180/healthz
 # Each secret file and its GID (A§14.2, D5): /etc/f1/secrets/<name>, root:<gid> 0440, and only
-# its consumers get the gid (compose.yaml group_add). P2c takes 62007 and up.
+# its consumers get the gid (compose.yaml group_add).
 readonly F1_SECRETS=(db_postgres:62001 db_f1_migrator:62002 db_f1_ingest:62003 db_f1_api:62004
-  cf_tunnel_token:62005 hc_ping_key:62006)
+  cf_tunnel_token:62005 hc_ping_key:62006 f1tv_username:62007 f1tv_password:62008)
 # An image reference f1-update may write into an env file: no space, quote, `$` or newline.
 readonly F1_REF_RE='^[A-Za-z0-9][A-Za-z0-9._/:@-]{0,254}$'
 

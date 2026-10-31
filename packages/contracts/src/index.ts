@@ -143,6 +143,20 @@ export const Status = z.strictObject({
       next_fetch_at: date.nullable(),
     }),
   ),
+  // The live recorder's one row (A§8), null until it has run; `stale` = no report for 5 minutes.
+  recorder: z
+    .strictObject({
+      state: z.enum(['idle', 'connecting', 'recording']),
+      session_key: int.nullable(),
+      meeting_name: text,
+      session_name: text,
+      token_expires_at: date.nullable(),
+      last_error: text,
+      warning: z.enum(['token_expiring', 'login_failed', 'disk_low']).nullable(),
+      stale: z.boolean(),
+      updated_at: date,
+    })
+    .nullable(),
 });
 
 export type Seasons = z.infer<typeof Seasons>;

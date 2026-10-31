@@ -1,6 +1,7 @@
-import { closeSync, fstatSync, mkdirSync, openSync, readFileSync, writeFileSync } from 'node:fs';
+import { mkdirSync, writeFileSync } from 'node:fs';
 import { join, resolve, sep } from 'node:path';
 import { parseArgs } from 'node:util';
+import { checkToken, readTokenFile } from '../apps/server/src/live/token.ts';
 import { EXIT_USAGE } from '../apps/server/src/main.ts';
 import type { Result } from '../apps/server/src/openf1/schemas.ts';
 
@@ -16,7 +17,6 @@ export const PRIVATE = join(import.meta.dirname, '../fixtures-private');
 const USAGE = 'usage: fetch-archive.ts <year> <session_key> --token-file <path> [--path <year/meeting/session/>]';
 const TIMEOUT_MS = 60_000;
 export const MAX_BYTES = 256 * 1024 * 1024;
-const MAX_TOKEN_FILE_BYTES = 64 * 1024;
 
 /** The 11 topics the views need, plus SessionData and Heartbeat (the archive's t0). */
 export const TOPICS = [
@@ -35,10 +35,8 @@ export const TOPICS = [
   'Heartbeat',
 ];
 
-export type TokenCode = 'token_file' | 'token_format' | 'token_expired';
 export type Failure = { code: 'http'; status: number } | { code: 'network' | 'timeout' | 'too_large' | 'host' };
 
-const JWT = /^[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]*$/;
 const PATH = /^\d{4}\/[A-Za-z0-9_-]+\/[A-Za-z0-9_-]+\/$/;
 
 export const isArchivePath = (path: string): boolean => PATH.test(path);
@@ -55,68 +53,6 @@ export function outDir(root: string, sessionKey: string): string | undefined {
   const base = resolve(root, 'archive');
   const dir = resolve(base, sessionKey);
   return dir.startsWith(base + sep) ? dir : undefined;
-}
-
-/** The token file's text: a regular file, mode & 0o077 === 0, small. Fixed codes only. */
-export function readTokenFile(path: string): Result<string, TokenCode> {
-  let fd: number;
-  try {
-    fd = openSync(path, 'r');
-  } catch {
-    return { ok: false, error: 'token_file' };
-  }
-  try {
-    const st = fstatSync(fd);
-    if (!st.isFile() || (st.mode & 0o077) !== 0 || st.size > MAX_TOKEN_FILE_BYTES) {
-      return { ok: false, error: 'token_file' };
-    }
-    return { ok: true, value: readFileSync(fd, 'utf8') };
-  } catch {
-    return { ok: false, error: 'token_file' };
-  } finally {
-    closeSync(fd);
-  }
-}
-
-/** A raw JWT or a `login-session` cookie value (URL-encoded JSON with data.subscriptionToken), on one line. */
-export function extractToken(text: string): string | undefined {
-  const line = text.replace(/\r?\n$/, '').trim();
-  if (line === '' || /[\r\n]/.test(line)) return undefined;
-  if (JWT.test(line)) return line;
-  try {
-    const cookie = JSON.parse(decodeURIComponent(line)) as { data?: { subscriptionToken?: unknown } } | null;
-    const token = cookie?.data?.subscriptionToken;
-    return typeof token === 'string' && JWT.test(token) ? token : undefined;
-  } catch {
-    return undefined;
-  }
-}
-
-/** `exp` (seconds) from the JWT payload, without verifying the signature. */
-export function tokenExpiry(token: string): number | undefined {
-  try {
-    const payload = JSON.parse(Buffer.from(token.split('.')[1] ?? '', 'base64url').toString('utf8')) as {
-      exp?: unknown;
-    } | null;
-    return typeof payload?.exp === 'number' && Number.isFinite(payload.exp) ? payload.exp : undefined;
-  } catch {
-    return undefined;
-  }
-}
-
-/** Token file text → token and expiry. A token without `exp` (a safe integer that is a valid Date), or past it, is refused. */
-export function checkToken(text: string, nowMs: number): Result<{ token: string; exp: number }, TokenCode> {
-  const token = extractToken(text);
-  const exp = token === undefined ? undefined : tokenExpiry(token);
-  if (
-    token === undefined ||
-    exp === undefined ||
-    !Number.isSafeInteger(exp) ||
-    Number.isNaN(new Date(exp * 1000).getTime())
-  ) {
-    return { ok: false, error: 'token_format' };
-  }
-  return exp * 1000 <= nowMs ? { ok: false, error: 'token_expired' } : { ok: true, value: { token, exp } };
 }
 
 export type IndexSession = { Key: unknown; Type: unknown; Name: unknown; Path: string };
