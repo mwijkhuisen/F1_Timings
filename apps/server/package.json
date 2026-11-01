@@ -12,7 +12,7 @@
     "@f1/contracts": "workspace:*",
     "@hono/node-server": "2.1.5",
     "croner": "10.0.1",
-    "hono": "4.13.13",
+    "hono": "4.13.14",
     "kysely": "0.29.7",
     "pg": "8.23.1",
     "pino": "10.4.0",
