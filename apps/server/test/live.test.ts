@@ -204,6 +204,29 @@ describe('read', () => {
     expect(parseJsonStream('', 'Heartbeat', t0)).toEqual({ events: [], skipped: 0 });
   });
 
+  it('reads the day count of a .jsonStream time past 24 h, .NET TimeSpan style', () => {
+    const text =
+      '23:59:59.999{"a":1}\r\n' +
+      '1.00:00:00.000{"a":2}\r\n' +
+      '2.03:04:05.006{"a":3}\r\n' +
+      '10.00:00:01.000{"a":4}\r\n' +
+      'x.00:00:01.000{"a":5}\r\n' +
+      '1.xx:yy:zz.www{"a":6}\r\n' +
+      '1:00:00:00.000{"a":7}\r\n' +
+      '99999999999999999999.00:00:00.000{"a":8}\r\n';
+    expect(parseJsonStream(text, 'TimingData', 0)).toEqual({
+      events: [
+        { t: 86_399_999, topic: 'TimingData', payload: { a: 1 } },
+        { t: 86_400_000, topic: 'TimingData', payload: { a: 2 } },
+        { t: 183_845_006, topic: 'TimingData', payload: { a: 3 } },
+        { t: 864_001_000, topic: 'TimingData', payload: { a: 4 } },
+      ],
+      skipped: 4,
+    });
+    const { events } = parseJsonStream('1.00:00:01.500{"Utc":"2026-10-31T18:30:01.500Z"}\r\n', 'Heartbeat', 0);
+    expect(archiveT0(events)).toBe(Date.parse('2026-10-30T18:30:00Z'));
+  });
+
   it('decodes a quoted payload as a JSON string, else strips its quotes as FastF1 does', () => {
     const text = '00:00:01.000"ab\\/cd=="\n00:00:02.000""x"\n';
     expect(parseJsonStream(text, 'CarData.z', 0).events.map((e) => e.payload)).toEqual(['ab/cd==', 'x']);
