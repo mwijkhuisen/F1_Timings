@@ -1,6 +1,6 @@
 # ADR-0006: One TS parser for the live feed and the archive; no Python
 
-- **Status:** Accepted (owner, 2026-10-25)
+- **Status:** Accepted (owner, 2026-10-25); amended in P2b (owner, 2026-10-29), see below
 - **Date:** 2026-10-25
 - **Source:** `docs/plan/ARCHITECTURE.md` (planning session 2026-10-25)
 
@@ -14,6 +14,10 @@
 - One TypeScript parser (`apps/server/src/live/`) merges topic deltas into a typed state and reconstructs laps. It is built for live in P2b and reused for the 2018–2022 archive import in P3a.
 - FastF1 serves as a reference for the format, lap reconstruction and the login flow, not as a dependency. Any ported logic keeps its MIT notice.
 - The P2-rec recording with the FastF1 CLI is a throwaway tool outside the repo.
+
+### Amended (owner, 2026-10-29)
+
+- FastF1 is the base; where it disagrees with OpenF1 (the oracle), OpenF1's behaviour wins; OpenF1's code (CC BY-NC-SA 4.0) is never copied. A§11.3 states each rule in our own words with its origin.
 
 ## Consequences
 
