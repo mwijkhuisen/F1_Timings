@@ -28,7 +28,7 @@ import {
 const MINUTE = 60_000;
 const HOUR = 60 * MINUTE;
 const LEAD_MS = 60 * MINUTE;
-const AFTER_MS = 30 * MINUTE;
+export const AFTER_MS = 30 * MINUTE;
 const HARD_STOP_MS = 3 * HOUR;
 // ponytail: 60 s is a judgement call: about two reconnects at full backoff. Tighten it if a real recording with a
 // shorter gap turns out to miss laps.

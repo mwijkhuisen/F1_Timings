@@ -8,6 +8,7 @@ import { type Kysely, sql } from 'kysely';
 import type { Logger } from 'pino';
 import { codeOf, type DB } from '../db/db.ts';
 import { playback } from '../live/playback.ts';
+import { AFTER_MS } from '../live/recorder.ts';
 import { colours } from '../timing/colours.ts';
 
 // The api role's routes (A§10). JSON uses the A§7 column names; answers match the zod contracts in
@@ -16,7 +17,7 @@ import { colours } from '../timing/colours.ts';
 const NO_STORE = { 'Cache-Control': 'no-store' };
 const FINAL = { 'Cache-Control': 'private, max-age=86400' };
 const STALE_MS = 5 * 60_000; // the recorder reports every few seconds
-const NEXT_GRACE_MS = 30 * 60_000; // the recorder keeps a session in view this long after date_end (A§11.2)
+const WRITE_TIMEOUT_MS = 60_000; // one SSE write (or ping) that takes longer ends the stream (a stalled client)
 const MAX_STREAMS = 8; // per process: each holds a file handle, a state and a timer
 const SPEEDS = [1, 2, 4, 8, 16];
 const STATES = ['scheduled', 'due', 'fetched', 'final', 'failed'] as const;
@@ -36,12 +37,15 @@ export function createApp({
   access,
   log,
   liveDir,
+  writeTimeoutMs = WRITE_TIMEOUT_MS,
 }: {
   db: Kysely<DB>;
   access: MiddlewareHandler;
   log: Pick<Logger, 'error'>;
   /** The recordings' root (A§11.2), read-only here. */
   liveDir: string;
+  /** For tests only. */
+  writeTimeoutMs?: number;
 }) {
   let streams = 0;
   /** The session of a per-session route: its key and state, or the 400/404 answer. */
@@ -360,7 +364,7 @@ export function createApp({
           .selectFrom('session')
           .select('session_key')
           .where('is_cancelled', '=', false)
-          .where('date_end', '>', new Date(Date.now() - NEXT_GRACE_MS))
+          .where('date_end', '>', new Date(Date.now() - AFTER_MS))
           .orderBy('date_start')
           .orderBy('session_key')
           .limit(1)
@@ -429,6 +433,11 @@ export function createApp({
       log.error({ cause: 'ENOENT' }, 'playback');
     });
     if (!found?.isDirectory()) return notFound(c);
+    // hono runs this handler for HEAD and drops the body without cancelling it: a generator would stay open for good.
+    if (c.req.method === 'HEAD')
+      return new Response(null, {
+        headers: { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-store, no-transform' },
+      });
     if (streams >= MAX_STREAMS) return c.json({ error: 'unavailable' }, 503, NO_STORE);
 
     streams++; // no await since the check above
@@ -447,6 +456,23 @@ export function createApp({
             log.error({ cause: codeOf(err) }, 'playback');
             return false;
           });
+      // A write that does not complete (a client that stopped reading) ends the stream and frees the slot.
+      const within = async (write: Promise<unknown>) => {
+        let timer: NodeJS.Timeout | undefined;
+        try {
+          await Promise.race([
+            write,
+            new Promise((_, reject) => {
+              timer = setTimeout(
+                () => reject(Object.assign(new Error('write timeout'), { code: 'write_timeout' })),
+                writeTimeoutMs,
+              );
+            }),
+          ]);
+        } finally {
+          clearTimeout(timer);
+        }
+      };
       try {
         const events = playback({
           dir,
@@ -460,12 +486,14 @@ export function createApp({
         });
         for await (const ev of events) {
           // The snapshot's state is the stream's own: serialized before the generator moves on.
-          if (ev.event === 'ping') await stream.write(': ping\n\n');
-          else await stream.writeSSE({ event: ev.event, data: JSON.stringify(ev.data) });
+          if (ev.event === 'ping') await within(stream.write(': ping\n\n'));
+          else await within(stream.writeSSE({ event: ev.event, data: JSON.stringify(ev.data) }));
         }
       } catch (err) {
         if (!abort.signal.aborted) log.error({ cause: codeOf(err) }, 'playback'); // never the message to the client
+        if (codeOf(err) === 'write_timeout') stream.abort(); // ends the response of the stalled client
       } finally {
+        abort.abort();
         streams--;
       }
     });

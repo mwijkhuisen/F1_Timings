@@ -235,6 +235,33 @@ describe('playback routes (f1_api login, Access JWT, real socket)', { timeout: 6
     await backTo(baseline);
   });
 
+  it('HEAD on the stream answers 200 with the SSE headers and no body, and takes no slot, handle or generator', async () => {
+    const open = stream(ids.open, 'at=live');
+    const warm = await call(open);
+    await readUntil(warm.res, /event: snapshot/);
+    warm.abort.abort();
+    const baseline = await quiet();
+    for (let i = 0; i < 10; i++) {
+      // 10 > the cap of 8: a leaked slot would turn the later ones into 503s
+      const res = await fetch(`${base}${open}`, {
+        method: 'HEAD',
+        headers: { ...headers, 'cf-access-jwt-assertion': token },
+      });
+      expect(res.status).toBe(200);
+      expect(res.headers.get('content-type')).toBe('text/event-stream');
+      expect(res.headers.get('cache-control')).toBe('no-store, no-transform');
+      expect(await res.text()).toBe('');
+    }
+    await backTo(baseline);
+    const eight = await Promise.all(Array.from({ length: 8 }, () => call(open)));
+    for (const { res } of eight) {
+      expect(res.status).toBe(200);
+      await readUntil(res, /event: snapshot\ndata: .*\n\n/);
+    }
+    for (const { abort } of eight) abort.abort();
+    await backTo(baseline);
+  });
+
   it('a 9th concurrent stream is a 503 with the fixed body, and frees up when one closes', async () => {
     const open = stream(ids.open, 'at=live');
     const eight = await Promise.all(Array.from({ length: 8 }, () => call(open)));
