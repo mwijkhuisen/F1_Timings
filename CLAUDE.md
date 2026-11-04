@@ -67,6 +67,7 @@ From Waterheight's list, the ones that apply here:
   - An inline matcher takes one path (`handle /a /a/*` does not parse); use a named matcher. Caddy re-sorts named matchers that hold only a `path`: use `path_regexp` or `expression` when the order matters.
 - **hono 4.13 JWT:** the `hono/jwk` middleware accepts only `Bearer <token>` (Cloudflare Access sends the bare JWT in `Cf-Access-Jwt-Assertion`), so `/api` uses its own middleware on `verifyWithJwks` (A§10). hono's `verify` skips an absent `exp` and checks `iat`/`nbf` with zero leeway.
 - **hono 4.13 `streamSSE`:** it sets `Cache-Control: no-cache`, and its `onError` writes `e.message` to the client. The playback route passes no `onError` and overrides the header with `no-store, no-transform`. `@hono/node-server` 2.1.5 waits for `drain` and cancels the body on socket close (`stream.onAbort`).
+- **hono runs a GET handler for HEAD, and `@hono/node-server` discards a streaming body without cancelling it:** `onAbort` never fires, so a HEAD on a streaming route leaks its slot, file handle and generator until restart (Caddy allows HEAD). A streaming route answers HEAD itself, before it takes a slot (`playback.int.test.ts` has the test).
 - **EventSource drops an event without `data`:** the `end` event carries data.
 - **`server.close()` waits for open connections**, so an open SSE stream would block shutdown: `main.ts` calls `server.closeAllConnections()` after it.
 - **Node 26 `FileHandle`:** an open one does not show in `process.getActiveResourcesInfo()`; the playback leak test counts `/proc/self/fd`.
