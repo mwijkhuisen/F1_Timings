@@ -1,4 +1,5 @@
-import { open, readdir, readFile, stat } from 'node:fs/promises';
+import { constants } from 'node:fs';
+import { open, readdir, stat } from 'node:fs/promises';
 import { join } from 'node:path';
 import { pipeline } from 'node:stream';
 import { promisify } from 'node:util';
@@ -26,6 +27,12 @@ const HEARTBEAT_MS = 15_000;
 const TAIL_MS = 1_000;
 const ENDED_MS = 30_000;
 const CHUNK = 64 * 1024;
+const AGAIN_MS = 50;
+// Files from `live`, which parses the untrusted feed (A§12.1): no file is read through a symlink (ELOOP), and no line
+// or snapshot grows without bound.
+const NOFOLLOW = constants.O_RDONLY | constants.O_NOFOLLOW;
+const MAX_LINE = 8 * 2 ** 20; // a feed line is a few kB
+const MAX_SNAPSHOT = 16 * 2 ** 20;
 const SEGMENT = /^feed-(\d+)\.jsonl(\.gz)?$/;
 const SNAPSHOT = /^\d+\.json\.gz$/;
 const gunzipAsync = promisify(gunzip);
@@ -33,6 +40,7 @@ const gunzipAsync = promisify(gunzip);
 const missing = (err: unknown): undefined => {
   if (codeOf(err) !== 'ENOENT') throw err;
 };
+const tooLarge = () => Object.assign(new Error('playback_too_large'), { code: 'playback_too_large' });
 
 /** The `\n`-terminated lines of a byte stream whose receivedAt is a safe integer; a partial line waits for the rest. */
 function splitter(): (chunk: Buffer) => Line[] {
@@ -48,14 +56,15 @@ function splitter(): (chunk: Buffer) => Line[] {
       if (Number.isSafeInteger(r)) out.push({ r, text });
     }
     rest = buf.subarray(from);
+    if (rest.length > MAX_LINE) throw tooLarge();
     return out;
   };
 }
 
 /** A sealed segment: the plain file while it is there (it is complete once renamed), else its gzip. */
 async function* segment(dir: string, base: string, plain: boolean): AsyncGenerator<Line> {
-  const fh = plain ? await open(join(dir, base)).catch(missing) : undefined;
-  const file = (fh ?? (await open(join(dir, `${base}.gz`)))).createReadStream(); // closes its handle
+  const fh = plain ? await open(join(dir, base), NOFOLLOW).catch(missing) : undefined;
+  const file = (fh ?? (await open(join(dir, `${base}.gz`), NOFOLLOW))).createReadStream(); // closes its handle
   const source = fh ? file : pipeline(file, createGunzip(), () => {}); // an error surfaces in the loop below
   const split = splitter();
   try {
@@ -80,15 +89,18 @@ async function segments(dir: string): Promise<{ ms: number; base: string; plain:
 
 /**
  * Every line from `from` on, in order: the sealed segments from the last one that starts at or before `from`, then
- * feed.jsonl, tailed. `undefined` means nothing more for now; the next call looks again. A segment is named after its
- * first line's receivedAt, and `done` is the newest file read. feed.jsonl is opened before each listing, so a rotation
- * in between neither skips a segment (the listing shows it) nor repeats one (the open file's first line is ≤ `done`).
+ * feed.jsonl, tailed. `undefined` means nothing more for now, `null` that a rotation may be in progress: the open
+ * feed.jsonl was renamed already, or it is missing for the first time (twice in a row, the recording is sealed). Either
+ * way the next call looks again. A segment is named after its first line's receivedAt, and `done` is the newest file
+ * read. feed.jsonl is opened before each listing, so a rotation in between neither skips a segment (the listing shows
+ * it) nor repeats one (the open file's first line is ≤ `done`).
  */
-async function* lines(dir: string, from: number): AsyncGenerator<Line | undefined, undefined> {
+async function* lines(dir: string, from: number): AsyncGenerator<Line | null | undefined, undefined> {
   const current = join(dir, 'feed.jsonl');
   let done: number | undefined;
+  let gone = false; // feed.jsonl was missing in the last pass
   for (;;) {
-    const fh = await open(current).catch(missing);
+    const fh = await open(current, NOFOLLOW).catch(missing);
     try {
       const segs = await segments(dir);
       done ??= (segs.findLast((s) => s.ms <= from)?.ms ?? Number.NEGATIVE_INFINITY) - 1;
@@ -98,9 +110,11 @@ async function* lines(dir: string, from: number): AsyncGenerator<Line | undefine
         done = s.ms;
       }
       if (!fh) {
-        yield undefined;
+        yield gone ? undefined : null;
+        gone = true;
         continue;
       }
+      gone = false;
       const { ino } = await fh.stat();
       const buffer = Buffer.allocUnsafe(CHUNK);
       const split = splitter();
@@ -114,7 +128,7 @@ async function* lines(dir: string, from: number): AsyncGenerator<Line | undefine
           for (const line of split(buffer.subarray(0, bytesRead))) {
             first ??= line.r;
             if (first <= done) {
-              yield undefined; // renamed after the open and read as a segment already: look again later
+              yield null; // renamed after the open and read as a segment already: look again
               break tail;
             }
             if (line.r >= from) yield line;
@@ -171,14 +185,25 @@ export async function* playback(o: {
   const src = lines(o.dir, s - PRIME_MS);
   try {
     const next = async () => (await src.next()).value;
-    let line = await next();
-    for (; line && line.r < s; line = await next()) apply(line);
+    // The seek reads to the real end of the data; the loop below takes `null` as `undefined`.
+    const seekNext = async () => {
+      let line = await next();
+      for (; line === null; line = await next()) await o.sleep(AGAIN_MS, o.signal);
+      return line;
+    };
+    let line: Line | null | undefined = await seekNext();
+    for (; line && line.r < s; line = await seekNext()) apply(line);
     if (snapshot) {
+      const fh = await open(join(o.dir, 'snapshots', snapshot), NOFOLLOW);
+      const gz = await fh.readFile().finally(() => fh.close());
+      const json = await gunzipAsync(gz, { maxOutputLength: MAX_SNAPSHOT }).catch((err: unknown) => {
+        throw codeOf(err) === 'ERR_BUFFER_TOO_LARGE' ? tooLarge() : err;
+      });
       for (const topic of Object.keys(feed.state)) delete feed.state[topic];
-      merge(feed.state, JSON.parse(String(await gunzipAsync(await readFile(join(o.dir, 'snapshots', snapshot))))));
+      merge(feed.state, JSON.parse(String(json)));
       for (const topic of Object.keys(feed.state)) if (topic.endsWith('.z')) delete feed.state[topic];
     }
-    for (; line && line.r <= at; line = await next()) apply(line);
+    for (; line && line.r <= at; line = await seekNext()) apply(line);
     yield { event: 'snapshot', data: { t: at, state: feed.state } };
 
     let wrote = o.now();

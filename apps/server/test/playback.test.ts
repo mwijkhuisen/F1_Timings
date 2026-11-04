@@ -1,4 +1,13 @@
-import { linkSync, mkdtempSync, readdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import {
+  linkSync,
+  mkdirSync,
+  mkdtempSync,
+  readdirSync,
+  readFileSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { gunzipSync, gzipSync } from 'node:zlib';
@@ -132,6 +141,7 @@ async function drain(gen: AsyncGenerator<PlaybackEvent>, clock: { now: number },
 const deltas = (events: Seen[]) =>
   events.flatMap(({ at, ev }) => (ev.event === 'delta' ? [{ at, t: ev.data.t, topic: ev.data.topic }] : []));
 const kinds = (events: Seen[]) => events.map(({ ev }) => ev.event);
+const text = (values: Value[]) => values.map((v) => `${JSON.stringify(v)}\n`).join('');
 
 describe('playback', () => {
   const sources = [fixture('practice-reconnect.jsonl'), fixture('race.jsonl')];
@@ -257,20 +267,79 @@ describe('playback', () => {
     const dir = tmp();
     const values = counter(8, 1000, 360_000);
     const name = (n: number) => join(dir, `feed-${nth(values, 2 * n)[0]}.jsonl`);
-    const text = (n: number) => `${JSON.stringify(values[2 * n])}\n${JSON.stringify(values[2 * n + 1])}\n`;
-    writeFileSync(`${name(0)}.gz`, gzipSync(text(0)));
-    writeFileSync(name(1), text(1));
-    writeFileSync(`${name(1)}.gz`, gzipSync(text(1)));
-    symlinkSync(join(dir, 'gone'), name(2)); // listed, but gone by the open
-    writeFileSync(`${name(2)}.gz`, gzipSync(text(2)));
-    writeFileSync(name(3), text(3));
+    const pair = (n: number) => text(values.slice(2 * n, 2 * n + 2));
+    writeFileSync(`${name(0)}.gz`, gzipSync(pair(0)));
+    writeFileSync(name(1), pair(1));
+    writeFileSync(`${name(1)}.gz`, gzipSync(pair(1)));
+    writeFileSync(name(2), pair(2)); // listed, but gone by the open: its gzip job finished in between
+    writeFileSync(`${name(2)}.gz`, gzipSync(pair(2)));
+    writeFileSync(name(3), pair(3));
     linkSync(name(3), join(dir, 'feed.jsonl')); // the open found feed.jsonl, the listing its new name
     writeFileSync(`${name(3)}.gz.tmp`, 'not a segment');
-    const { gen, clock } = start(dir, { at: T0 - 1000, speed: 16 });
+    // The seek lists every segment and stops at the first line; the first sleep comes after the listing.
+    const { gen, clock } = start(dir, { at: T0 - 1000, speed: 16, tick: async () => rmSync(name(2), { force: true }) });
     const events = await drain(gen, clock);
 
     expect(deltas(events).map((d) => d.t)).toEqual(values.map((v) => v[0]));
     expect(events.at(-1)?.ev.event).toBe('end');
+  });
+
+  it('a live join in a rotation waits for the new feed.jsonl: its snapshot holds every line', async () => {
+    const values = counter(4, 1000, 360_000);
+    // The open found feed.jsonl before its rename (a hard link to the segment), or none before the writer's reopen.
+    for (const renamed of [true, false]) {
+      const dir = tmp();
+      const seg = join(dir, `feed-${T0}.jsonl`);
+      writeFileSync(seg, text(values.slice(0, 2)));
+      if (renamed) linkSync(seg, join(dir, 'feed.jsonl'));
+      let reopened = false;
+      const { gen, clock } = start(dir, {
+        at: 'live',
+        clock: { now: T0 + 10_000 },
+        ended: async () => reopened,
+        tick: async () => {
+          if (reopened) return;
+          rmSync(join(dir, 'feed.jsonl'), { force: true });
+          writeFileSync(join(dir, 'feed.jsonl'), text(values.slice(2)));
+          reopened = true;
+        },
+      });
+      const events = await drain(gen, clock);
+
+      expect(events[0]?.ev).toEqual({
+        event: 'snapshot',
+        data: { t: T0 + 10_000, state: replay(values, T0 + 10_000) },
+      });
+      expect(kinds(events)).toEqual(['snapshot', 'end']);
+    }
+  });
+
+  it('never opens a recording file through a symlink', async () => {
+    const values = counter(2);
+    for (const name of [`feed-${T0}.jsonl`, `feed-${T0}.jsonl.gz`, 'feed.jsonl', `snapshots/${T0}.json.gz`]) {
+      const dir = tmp();
+      mkdirSync(join(dir, 'snapshots'));
+      const real = join(dir, 'real'); // a valid file: only the link is refused
+      writeFileSync(
+        real,
+        name.startsWith('snapshots') ? gzipSync('{}') : name.endsWith('.gz') ? gzipSync(text(values)) : text(values),
+      );
+      symlinkSync(real, join(dir, name));
+      const { gen, clock } = start(dir, { at: 'live', clock: { now: T0 + 5000 } });
+      await expect(drain(gen, clock), name).rejects.toMatchObject({ code: 'ELOOP' });
+    }
+  });
+
+  it('refuses a snapshot over 16 MiB unzipped and a partial line over 8 MiB', async () => {
+    const snapshot = tmp();
+    mkdirSync(join(snapshot, 'snapshots'));
+    writeFileSync(join(snapshot, 'snapshots', `${T0}.json.gz`), gzipSync(`{"X":"${'x'.repeat(16 * 2 ** 20)}"}`));
+    const line = tmp();
+    writeFileSync(join(line, 'feed.jsonl'), `[${T0},"${'x'.repeat(8 * 2 ** 20)}`);
+    for (const dir of [snapshot, line]) {
+      const { gen, clock } = start(dir, { at: 'live', clock: { now: T0 + 5000 } });
+      await expect(drain(gen, clock), dir).rejects.toMatchObject({ code: 'playback_too_large' });
+    }
   });
 
   it('a consumer that stalls 30 s gets one fresh snapshot, not the backlog', async () => {
@@ -319,7 +388,7 @@ describe('playback', () => {
     const finished = start(done, { at: 'live', clock: { now: last + 3_600_000 } });
     expect((await drain(finished.gen, finished.clock)).map(({ ev }) => ev)).toEqual([
       { event: 'snapshot', data: { t: last + 3_600_000, state: replay(values, last) } },
-      { event: 'end', data: { t: last + 3_600_000 } },
+      { event: 'end', data: { t: last + 3_600_050 } }, // after one 50 ms look at the missing feed.jsonl
     ]);
 
     // An open recording: `ended` is asked at most every 30 s, and the stream stops on abort, with its file closed.
