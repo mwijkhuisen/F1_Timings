@@ -158,32 +158,96 @@ describe('the stints bars', () => {
 });
 
 describe('the status panel', () => {
-  const html = renderToStaticMarkup(
-    <StatusPanel
-      status={Status.parse({
-        states: { scheduled: 25, due: 0, fetched: 1, final: 454, failed: 1 },
-        cancelled: 15,
-        failed: [
-          {
-            session_key: 9965,
-            year: 2026,
-            meeting_name: 'Singapore Grand Prix',
-            session_name: 'Race',
-            fail_count: 3,
-            last_error: '<b>http_500</b>',
-            next_fetch_at: '2026-10-11T12:00:00.000Z',
-          },
-        ],
-      })}
-    />,
-  );
+  const recorder = {
+    state: 'recording',
+    session_key: 9965,
+    meeting_name: 'Singapore Grand Prix',
+    session_name: 'Race',
+    token_expires_at: '2026-10-11T12:00:00.000Z',
+    last_error: null,
+    warning: null,
+    stale: false,
+    updated_at: '2026-10-11T11:00:00.000Z',
+  };
+  const render = (r: Record<string, unknown> | null) =>
+    renderToStaticMarkup(
+      <StatusPanel
+        status={Status.parse({
+          states: { scheduled: 25, due: 0, fetched: 1, final: 454, failed: 1 },
+          cancelled: 15,
+          failed: [
+            {
+              session_key: 9965,
+              year: 2026,
+              meeting_name: 'Singapore Grand Prix',
+              session_name: 'Race',
+              fail_count: 3,
+              last_error: '<b>http_500</b>',
+              next_fetch_at: '2026-10-11T12:00:00.000Z',
+            },
+          ],
+          recorder: r && { ...recorder, ...r },
+        })}
+      />,
+    );
+  const html = render(null);
 
   it('counts sessions per state and the cancelled ones', () => {
+    expect(html).toContain('<h1>Status</h1><h2>Ingest</h2>');
     expect(html).toContain('<dt>final</dt><dd>454</dd>');
     expect(html).toContain('<dt>cancelled</dt><dd>15</dd>');
   });
 
   it('lists failed sessions with the error as text', () => {
     expect(html).toContain('<td>&lt;b&gt;http_500&lt;/b&gt;</td><td>Sun 11 Oct 2026, 14:00</td>');
+  });
+
+  it('the recorder: nothing yet', () => {
+    expect(html).toContain('<h2>Recorder</h2><p>The recorder has not reported yet.</p>');
+    expect(html).not.toContain('role="alert"');
+  });
+
+  it('the recorder: state, session, token expiry and last report', () => {
+    const r = render({});
+    expect(r).toContain('<dt>state</dt><dd>recording</dd>');
+    expect(r).toContain('<dt>session</dt><dd>Singapore Grand Prix Race</dd>');
+    expect(r).toContain('<dt>token expires</dt><dd>Sun 11 Oct 2026, 14:00</dd>');
+    expect(r).toContain('<dt>last error</dt><dd>None</dd>');
+    expect(r).toContain('<dt>last report</dt><dd>Sun 11 Oct 2026, 13:00</dd>');
+    expect(r).not.toContain('role="alert"');
+  });
+
+  it('the recorder: connecting names the session it waits for', () => {
+    expect(render({ state: 'connecting' })).toContain('<dt>session</dt><dd>Singapore Grand Prix Race</dd>');
+  });
+
+  it('the recorder: idle without a session or token, and the last error code', () => {
+    const r = render({
+      state: 'idle',
+      session_key: null,
+      meeting_name: null,
+      session_name: null,
+      token_expires_at: null,
+      last_error: 'feed_timeout',
+    });
+    expect(r).toContain('<dt>state</dt><dd>idle</dd>');
+    expect(r).toContain('<dt>session</dt><dd>—</dd>');
+    expect(r).toContain('<dt>token expires</dt><dd>—</dd>');
+    expect(r).toContain('<dt>last error</dt><dd>feed_timeout</dd>');
+  });
+
+  it.each([
+    ['token_expiring', 'The F1 TV token expires within 24 h and a session is due.'],
+    ['login_failed', 'The F1 TV login failed. Recording continues without a token; paste a token if it keeps failing.'],
+    ['disk_low', 'Less than 5 GB free for recordings.'],
+  ])('the recorder: warning %s', (warning, text) => {
+    expect(render({ warning })).toContain(`<p role="alert">${text}</p>`);
+  });
+
+  it('the recorder: stale, alone and with a warning', () => {
+    const stale = 'The recorder has not reported for over 5 minutes.';
+    expect(render({ stale: true })).toContain(`<p role="alert">${stale}</p>`);
+    const both = render({ stale: true, warning: 'disk_low' });
+    expect(both).toContain(`<p role="alert">Less than 5 GB free for recordings.</p><p role="alert">${stale}</p>`);
   });
 });
