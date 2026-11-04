@@ -8,7 +8,19 @@ import { createTestDb, type TestDb } from './db.ts';
 
 // Roles and grants (security): who may do what, proven against a real server.
 
-const TABLES = ['meeting', 'session', 'driver', 'lap', 'stint', 'pit', 'race_control', 'result', 'raw_response'];
+const TABLES = [
+  'meeting',
+  'session',
+  'driver',
+  'lap',
+  'stint',
+  'pit',
+  'race_control',
+  'result',
+  'raw_response',
+  'recording',
+  'recorder_status',
+];
 
 let db: TestDb;
 const clients: pg.Client[] = [];
@@ -65,6 +77,32 @@ it('f1_api reads but cannot write, and cannot read raw_response', async () => {
     '42501',
   );
   expect(await code(c.query('SELECT * FROM raw_response'))).toBe('42501');
+});
+
+it('the recorder tables: f1_ingest writes (identity needs no sequence grant), f1_api only reads', async () => {
+  const ingest = await connect(db.urls.f1_ingest);
+  await ingest.query("INSERT INTO recording (session_key, path, started_at) VALUES (10, '10-1', now())");
+  await ingest.query("UPDATE recording SET bytes = 5, complete = true WHERE path = '10-1'");
+  expect(await code(ingest.query("UPDATE recording SET path = '../state' WHERE path = '10-1'"))).toBe('23514');
+  await ingest.query(
+    "INSERT INTO recorder_status (state, last_error, updated_at) VALUES ('idle', 'login_token', now())",
+  );
+  await ingest.query("UPDATE recorder_status SET state = 'recording', session_key = 10, warning = 'disk_low'");
+  expect(await code(ingest.query("UPDATE recorder_status SET last_error = 'free text'"))).toBe('23514');
+  expect(await code(ingest.query("UPDATE recorder_status SET last_error = 'db'"))).toBe('23514');
+  expect(
+    await code(ingest.query("INSERT INTO recorder_status (id, state, updated_at) VALUES (false, 'idle', now())")),
+  ).toBe('23514');
+  expect(await code(ingest.query('DELETE FROM recording'))).toBe('42501');
+  const admin = await connect(db.urls.admin);
+  expect(await code(admin.query('DELETE FROM session WHERE session_key = 10'))).toBe('23001'); // RESTRICT
+  const api = await connect(db.urls.f1_api);
+  expect((await api.query('SELECT * FROM recording')).rowCount).toBe(1);
+  expect((await api.query('SELECT * FROM recorder_status')).rowCount).toBe(1);
+  expect(await code(api.query("UPDATE recorder_status SET state = 'idle'"))).toBe('42501');
+  expect(await code(api.query("INSERT INTO recording (session_key, path, started_at) VALUES (10, 'x', now())"))).toBe(
+    '42501',
+  );
 });
 
 it('the committed Kysely types match the migrated schema (kysely-codegen --verify)', async () => {
