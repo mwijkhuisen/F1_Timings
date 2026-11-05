@@ -8,6 +8,7 @@ import {
   PlaybackDelta,
   PlaybackEnd,
   PlaybackLaps,
+  PlaybackPing,
   PlaybackSnapshot,
   Recordings,
   type Stints,
@@ -120,11 +121,11 @@ async function readUntil(res: Response, re: RegExp): Promise<string> {
   return text;
 }
 
-/** SSE text → events; comments (pings) are dropped. */
+/** SSE text → events (the heartbeat is one too, `ping`). */
 const events = (text: string) =>
   text
     .split('\n\n')
-    .filter((block) => block && !block.startsWith(':'))
+    .filter((block) => block)
     .map((block) => {
       const m = /^event: (\w+)\ndata: (.*)$/s.exec(block);
       expect(m, block).not.toBeNull();
@@ -345,6 +346,7 @@ describe('playback routes (f1_api login, Access JWT, real socket)', { timeout: 6
     for (const { event, data } of seen) {
       if (event === 'delta') PlaybackDelta.parse(data);
       else if (event === 'end') PlaybackEnd.parse(data);
+      else if (event === 'ping') PlaybackPing.parse(data);
       else {
         const rows = event === 'snapshot' ? PlaybackSnapshot.parse(data) : PlaybackLaps.parse(data);
         for (const l of rows.laps) laps.set(`${l.driver_number}/${l.lap_number}`, l);

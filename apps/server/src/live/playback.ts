@@ -24,7 +24,7 @@ export type PlaybackEvent =
   | { event: 'delta'; data: { t: number; topic: string; data: unknown } }
   | { event: 'laps'; data: { t: number; laps: Lap[]; stints: Stints } }
   | { event: 'end'; data: { t: number } }
-  | { event: 'ping' };
+  | { event: 'ping'; data: { t: number } };
 type Line = { r: number; text: string };
 
 const BEHIND_MS = 5_000;
@@ -334,7 +334,7 @@ export async function* playback(o: {
       }
       const idle = wrote + HEARTBEAT_MS - o.now();
       if (idle <= 0) {
-        yield { event: 'ping' };
+        yield { event: 'ping', data: { t: now } };
         wrote = o.now();
         continue;
       }

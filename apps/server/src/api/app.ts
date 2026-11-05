@@ -512,8 +512,7 @@ export function createApp({
         });
         for await (const ev of events) {
           // The snapshot's state is the stream's own: serialized before the generator moves on.
-          if (ev.event === 'ping') await within(stream.write(': ping\n\n'));
-          else await within(stream.writeSSE({ event: ev.event, data: JSON.stringify(ev.data) }));
+          await within(stream.writeSSE({ event: ev.event, data: JSON.stringify(ev.data) }));
         }
       } catch (err) {
         if (!abort.signal.aborted) log.error({ cause: codeOf(err) }, 'playback'); // never the message to the client

@@ -197,6 +197,8 @@ export const PlaybackSnapshot = z.strictObject({
 export const PlaybackLaps = z.strictObject({ t: int, laps: Laps, stints: Stints });
 export const PlaybackDelta = z.strictObject({ t: int, topic: z.string(), data: z.unknown() });
 export const PlaybackEnd = z.strictObject({ t: int });
+// The heartbeat after 15 s without a write: a real event, because EventSource never delivers a comment to JS.
+export const PlaybackPing = z.strictObject({ t: int });
 
 export type Seasons = z.infer<typeof Seasons>;
 export type Season = z.infer<typeof Season>;
@@ -213,6 +215,7 @@ export type PlaybackSnapshot = z.infer<typeof PlaybackSnapshot>;
 export type PlaybackLaps = z.infer<typeof PlaybackLaps>;
 export type PlaybackDelta = z.infer<typeof PlaybackDelta>;
 export type PlaybackEnd = z.infer<typeof PlaybackEnd>;
+export type PlaybackPing = z.infer<typeof PlaybackPing>;
 
 export type SectorDelta = { lap_number: number; s1: number | null; s2: number | null; s3: number | null };
 

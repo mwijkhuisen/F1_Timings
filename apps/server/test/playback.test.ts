@@ -2,7 +2,7 @@ import { linkSync, mkdtempSync, readdirSync, readFileSync, rmSync, symlinkSync, 
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { gunzipSync, gzipSync } from 'node:zlib';
-import { type Lap, merge, type Obj, type Stints } from '@f1/contracts';
+import { type Lap, merge, type Obj, PlaybackPing, type Stints } from '@f1/contracts';
 import fc from 'fast-check';
 import { afterEach, describe, expect, it } from 'vitest';
 import { createLaps } from '../src/live/laps.ts';
@@ -441,18 +441,22 @@ describe('playback', () => {
     expect(rest.at(-1)?.ev.event).toBe('end');
   });
 
-  it('sends a heartbeat after 15 s without a write', async () => {
+  it('sends a heartbeat event with T after 15 s without a write', async () => {
     const dir = tmp();
     const values = counter(2, 40_000);
     await record(dir, values, 3_600_000);
     const { gen, clock } = start(dir, { at: T0 });
-    expect((await drain(gen, clock)).map(({ at, ev }) => [ev.event, at])).toEqual([
+    const seen = await drain(gen, clock);
+    expect(seen.map(({ at, ev }) => [ev.event, at])).toEqual([
       ['snapshot', 0],
       ['ping', 15_000],
       ['ping', 30_000],
       ['delta', 40_000],
       ['end', 40_000],
     ]);
+    // An event with data, not an SSE comment: EventSource delivers only those to the page (its liveness check).
+    const pings = seen.flatMap(({ ev }) => (ev.event === 'ping' ? [PlaybackPing.parse(ev.data)] : []));
+    expect(pings).toEqual([{ t: T0 + 15_000 }, { t: T0 + 30_000 }]);
   });
 
   it('ends a finished recording once it is fully sent, and an open one only on abort', async () => {
