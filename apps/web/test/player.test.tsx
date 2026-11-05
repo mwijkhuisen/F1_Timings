@@ -93,7 +93,7 @@ describe('streamUrl', () => {
 });
 
 describe('markers', () => {
-  it('ignores the 2 s Started blip and finds RED and CHEQUERED', () => {
+  it('comes from the status series alone: start (not the 2 s blip), TrackStatus Red, Finished', () => {
     const state = {
       SessionData: {
         StatusSeries: {
@@ -101,13 +101,9 @@ describe('markers', () => {
           '1': { Utc: '2026-10-25T20:00:00', SessionStatus: 'Started' },
           '2': { Utc: '2026-10-25T20:00:02', SessionStatus: 'Aborted' },
           '3': { Utc: '2026-10-25T20:05:00.000Z', SessionStatus: 'Started' },
-        },
-      },
-      RaceControlMessages: {
-        Messages: {
-          '0': { Utc: '2026-10-25T20:30:00', Category: 'Flag', Flag: 'RED' },
-          '1': { Utc: '2026-10-25T20:31:00', Category: 'Flag', Flag: 'GREEN' },
-          '2': { Utc: '2026-10-25T21:30:00', Category: 'Flag', Flag: 'CHEQUERED' },
+          '4': { Utc: '2026-10-25T20:05:50', TrackStatus: 'Yellow' }, // not a SessionStatus: the start stays
+          '5': { Utc: '2026-10-25T20:30:00', TrackStatus: 'Red' },
+          '6': { Utc: '2026-10-25T21:30:00', SessionStatus: 'Finished' },
         },
       },
     };
@@ -118,9 +114,28 @@ describe('markers', () => {
     ]);
     expect(markers({})).toEqual([]);
   });
+
+  it('a RaceControl RED or CHEQUERED alone gives no marker', () => {
+    const Messages = {
+      '0': { Utc: '2026-10-25T20:30:00', Category: 'Flag', Flag: 'RED' },
+      '1': { Utc: '2026-10-25T21:30:00', Category: 'Flag', Flag: 'CHEQUERED' },
+    };
+    expect(markers({ RaceControlMessages: { Messages } })).toEqual([]);
+  });
 });
 
 describe('Player', () => {
+  it('a marker before the recording started is not drawn', () => {
+    render({ recording: ended, start: S + 3_600_000 });
+    const StatusSeries = {
+      '0': { Utc: '2026-10-24T17:32:52Z', SessionStatus: 'Started' }, // the day before
+      '1': { Utc: new Date(S + 600_000).toISOString(), SessionStatus: 'Started' },
+    };
+    last().emit('snapshot', { t: S + 3_600_000, state: { SessionData: { StatusSeries } }, laps: [], stints: [] });
+    advance(250); // the store's flush
+    expect(host.querySelectorAll('.marker')).toHaveLength(1);
+  });
+
   it('delay slider: 0–120 in 1 s steps, ±1/±5/±30 clamp at the bounds', () => {
     render({});
     const input = $<HTMLInputElement>('input[aria-label="Delay"]');

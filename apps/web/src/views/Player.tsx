@@ -22,22 +22,25 @@ export type Marker = { kind: 'start' | 'red' | 'chequered'; t: number };
 // A feed Utc as UTC, with or without its Z.
 const utc = (v: string | undefined) => (v === undefined ? Number.NaN : Date.parse(v.endsWith('Z') ? v : `${v}Z`));
 
-/** The session's start, red flags and chequered flags so far. A Started followed within 60 s by another status is the race's 2 s blip (A§11.1). */
+/**
+ * The session's start, red flags and chequered flags so far, from `SessionData.StatusSeries` alone (A§13). A Started
+ * followed within 60 s by the next entry with a SessionStatus is the race's 2 s blip (A§11.1); a TrackStatus-only entry
+ * does not count. Red is every TrackStatus Red, chequered every SessionStatus Finished. RaceControl is not read: a red
+ * flag can arrive without its `Flag: RED` (A§11.3).
+ */
 export function markers(state: Obj): Marker[] {
   const out: Marker[] = [];
-  const statuses = Object.values(view(state, 'SessionData')?.StatusSeries ?? {})
-    .flatMap((s) => (s?.SessionStatus === undefined ? [] : [{ status: s.SessionStatus, t: utc(s.Utc) }]))
+  const series = Object.values(view(state, 'SessionData')?.StatusSeries ?? {})
+    .flatMap((s) => (s ? [{ ...s, t: utc(s.Utc) }] : []))
     .filter((s) => !Number.isNaN(s.t))
     .sort((a, b) => a.t - b.t);
-  statuses.forEach((s, i) => {
-    const next = statuses[i + 1];
-    if (s.status === 'Started' && !(next && next.t - s.t <= 60_000)) out.push({ kind: 'start', t: s.t });
+  series.forEach((s, i) => {
+    if (s.TrackStatus === 'Red') out.push({ kind: 'red', t: s.t });
+    if (s.SessionStatus === 'Finished') out.push({ kind: 'chequered', t: s.t });
+    if (s.SessionStatus !== 'Started') return;
+    const next = series.slice(i + 1).find((n) => n.SessionStatus !== undefined);
+    if (!(next && next.t - s.t <= 60_000)) out.push({ kind: 'start', t: s.t });
   });
-  for (const m of Object.values(view(state, 'RaceControlMessages')?.Messages ?? {})) {
-    const kind = m?.Flag === 'RED' ? 'red' : m?.Flag === 'CHEQUERED' ? 'chequered' : null;
-    const t = utc(m?.Utc);
-    if (kind && !Number.isNaN(t)) out.push({ kind, t });
-  }
   return out;
 }
 
@@ -225,7 +228,6 @@ export function Player({
   const state = feed?.state;
   // Every marker seen during the visit; the stream delivers nothing ahead of T, so none is a spoiler.
   if (state) for (const m of markers(state)) seen.current.set(`${m.kind}:${m.t}`, m);
-  const marks = [...seen.current.values()];
   // Rebuilt only when the lap rows change (a snapshot or a `laps` event), so the lap table skips deltas.
   const lapTable = useMemo(
     () => detail && feed && <Laps detail={streamDetail(detail, feed.state)} laps={snap.laps} />,
@@ -233,6 +235,8 @@ export function Player({
   );
 
   const top = Math.max(lo, hi());
+  // A marker outside the recording (a status left over from the day before) is not drawn.
+  const marks = [...seen.current.values()].filter((m) => m.t >= lo && m.t <= top);
   const x = (t: number) => ({ '--x': `${((clamp(t, lo, top) - lo) / Math.max(1, top - lo)) * 100}%` }) as CSSProperties;
   const remaining = state && view(state, 'ExtrapolatedClock')?.Remaining;
   const lapCount = state && view(state, 'LapCount');
