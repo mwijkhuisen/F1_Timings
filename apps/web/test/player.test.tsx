@@ -1,10 +1,16 @@
 // @vitest-environment happy-dom
-import { Lap, SessionDetail } from '@f1/contracts';
+import { Lap, SessionDetail, view } from '@f1/contracts';
 import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { streamUrl } from '../src/lib/stream.ts';
-import { markers, Player, type PlayerRecording } from '../src/views/Player.tsx';
+import { markers, streamUrl } from '../src/lib/stream.ts';
+import { Player, type PlayerRecording } from '../src/views/Player.tsx';
+
+// `view` (a zod parse of a topic) counts what the tower, the clock line's info and the markers derive from the state.
+vi.mock('@f1/contracts', async (load) => {
+  const m = await load<typeof import('@f1/contracts')>();
+  return { ...m, view: vi.fn(m.view) };
+});
 
 // The player (A§13, A§15): a real React tree in happy-dom, a fake EventSource, fake timers, no fetch.
 
@@ -272,6 +278,7 @@ describe('Player', () => {
     const first = last();
     first.emit('error');
     expect(first.closed).toBe(true);
+    expect(host.textContent).toContain('Reconnecting…');
     advance(999);
     expect(FakeES.all).toHaveLength(1);
     advance(1);
@@ -287,15 +294,79 @@ describe('Player', () => {
 
     // A snapshot resets it.
     last().emit('snapshot', { t: start + 5_000, state: {}, laps: [], stints: [] });
+    expect(host.textContent).not.toContain('Reconnecting…');
     last().emit('error');
     advance(1_000);
     expect(FakeES.all).toHaveLength(4);
     expect(atOf(last())).toBe(String(start + 6_000));
     expect(openCount()).toBe(1);
 
+    // Five in a row without a snapshot: the reload hint, and it keeps retrying.
+    const reload = 'The stream keeps failing. Reload the page (your Access session may have expired).';
+    for (const wait of [2_000, 4_000, 8_000]) {
+      last().emit('error');
+      expect(host.textContent).not.toContain(reload);
+      advance(wait);
+    }
+    last().emit('error');
+    expect(host.textContent).toContain(reload);
+    expect(host.textContent).not.toContain('Reconnecting…');
+    advance(16_000);
+    expect(FakeES.all).toHaveLength(8);
+    expect(openCount()).toBe(1);
+    last().emit('snapshot', { t: start, state: {}, laps: [], stints: [] });
+    expect(host.textContent).not.toContain(reload);
+
     // Data that fails its contract is an error too.
     last().emit('delta', { t: 'x' });
     expect(last().closed).toBe(true);
+  });
+
+  it('a silent stream is reopened after 40 s without events; pings keep it open', () => {
+    const start = S + 3_600_000;
+    render({ recording: ended, start });
+    const first = last();
+    first.emit('snapshot', { t: start, state: {}, laps: [], stints: [] });
+    for (let i = 1; i <= 6; i++) {
+      advance(15_000);
+      first.emit('ping', { t: start + i * 15_000 });
+    }
+    expect(first.closed).toBe(false); // 90 s, a ping every 15 s
+    advance(39_000);
+    expect(first.closed).toBe(false);
+    advance(1_000); // 40 s since the last ping
+    expect(first.closed).toBe(true);
+    expect(host.textContent).toContain('Reconnecting…');
+    advance(1_000); // the backoff
+    expect(FakeES.all).toHaveLength(2);
+    expect(atOf(last())).toBe(String(start + 131_000));
+    expect(openCount()).toBe(1);
+
+    // A page resumed after its timers were frozen: the first check after the gap reopens.
+    last().emit('snapshot', { t: start + 131_000, state: {}, laps: [], stints: [] });
+    vi.setSystemTime(Date.now() + 300_000);
+    advance(1_000);
+    expect(FakeES.all.at(-2)?.closed).toBe(true);
+  });
+
+  it('the 1 s tick alone re-derives nothing from the state', () => {
+    const start = S + 3_600_000;
+    render({ recording: ended, start });
+    const StatusSeries = { '0': { Utc: new Date(S + 600_000).toISOString(), SessionStatus: 'Started' } };
+    last().emit('snapshot', {
+      t: start,
+      state: { SessionData: { StatusSeries }, TimingData: { Lines: { '1': { Line: 1, Position: '1' } } } },
+      laps: [],
+      stints: [],
+    });
+    advance(250);
+    const clockText = () => host.querySelector('.clock time')?.textContent;
+    const before = clockText();
+    const calls = vi.mocked(view).mock.calls.length;
+    expect(calls).toBeGreaterThan(0);
+    advance(5_000);
+    expect(clockText()).not.toBe(before); // the clock ticked
+    expect(vi.mocked(view).mock.calls.length).toBe(calls);
   });
 
   it('an error in live mode reopens at live', () => {

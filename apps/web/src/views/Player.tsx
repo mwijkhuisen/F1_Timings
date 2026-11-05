@@ -2,6 +2,7 @@ import { type Obj, type SessionDetail, view } from '@f1/contracts';
 import {
   type CSSProperties,
   memo,
+  type ReactNode,
   useEffect,
   useMemo,
   useReducer,
@@ -9,40 +10,14 @@ import {
   useState,
   useSyncExternalStore,
 } from 'react';
-import { createStore, openStream } from '../lib/stream.ts';
+import { createStore, type Marker, openStream } from '../lib/stream.ts';
 import { fmtClock } from '../lib/time.ts';
 import { LapTable } from './LapTable.tsx';
 import { Tower } from './Tower.tsx';
 
 // The player (A§13): one playback stream at a time, the clock, the delay slider (live), the seek bar with markers
-// and play/pause. `at` is the open stream's start: 'live', epoch ms (replay), or null while paused.
-
-export type Marker = { kind: 'start' | 'red' | 'chequered'; t: number };
-
-// A feed Utc as UTC, with or without its Z.
-const utc = (v: string | undefined) => (v === undefined ? Number.NaN : Date.parse(v.endsWith('Z') ? v : `${v}Z`));
-
-/**
- * The session's start, red flags and chequered flags so far, from `SessionData.StatusSeries` alone (A§13). A Started
- * followed within 60 s by the next entry with a SessionStatus is the race's 2 s blip (A§11.1); a TrackStatus-only entry
- * does not count. Red is every TrackStatus Red, chequered every SessionStatus Finished. RaceControl is not read: a red
- * flag can arrive without its `Flag: RED` (A§11.3).
- */
-export function markers(state: Obj): Marker[] {
-  const out: Marker[] = [];
-  const series = Object.values(view(state, 'SessionData')?.StatusSeries ?? {})
-    .flatMap((s) => (s ? [{ ...s, t: utc(s.Utc) }] : []))
-    .filter((s) => !Number.isNaN(s.t))
-    .sort((a, b) => a.t - b.t);
-  series.forEach((s, i) => {
-    if (s.TrackStatus === 'Red') out.push({ kind: 'red', t: s.t });
-    if (s.SessionStatus === 'Finished') out.push({ kind: 'chequered', t: s.t });
-    if (s.SessionStatus !== 'Started') return;
-    const next = series.slice(i + 1).find((n) => n.SessionStatus !== undefined);
-    if (!(next && next.t - s.t <= 60_000)) out.push({ kind: 'start', t: s.t });
-  });
-  return out;
-}
+// and play/pause. `at` is the open stream's start: 'live', epoch ms (replay), or null while paused. Only the clock line
+// and the seek bar tick each second; the tower and everything else derived from the state render on a store flush.
 
 /** A SessionDetail whose drivers and results come from the stream: OpenF1 has no drivers during a live session. */
 function streamDetail(detail: SessionDetail, state: Obj): SessionDetail {
@@ -103,6 +78,76 @@ function writeDelay(s: number) {
 
 const clamp = (v: number, lo: number, hi: number) => Math.min(hi, Math.max(lo, v));
 const signed = (s: number) => `${s > 0 ? '+' : '−'}${Math.abs(s)} s`;
+const FAILING = 5; // consecutive errors without a snapshot before the reload hint
+
+/** Re-renders the calling component every second while `on`. */
+function useTick(on: boolean) {
+  const [, tick] = useReducer((n: number) => n + 1, 0);
+  useEffect(() => {
+    if (!on) return;
+    const id = setInterval(tick, 1000);
+    return () => clearInterval(id);
+  }, [on]);
+}
+
+/** The clock line: T, ticking locally; `children` is the rest of the line, from the state. */
+function Clock({ now, playing, children }: { now: () => number; playing: boolean; children: ReactNode }) {
+  useTick(playing);
+  const T = now();
+  return (
+    <p className="clock" aria-live="off">
+      <time dateTime={new Date(T).toISOString()}>{fmtClock(T)}</time>
+      {children}
+    </p>
+  );
+}
+
+/** The seek bar over [lo, hi()], ticking with the clock; only markers inside it are drawn. */
+function Seek({
+  now,
+  playing,
+  lo,
+  hi,
+  marks,
+  onSeek,
+}: {
+  now: () => number;
+  playing: boolean;
+  lo: number;
+  hi: () => number;
+  marks: Marker[];
+  onSeek(t: number): void;
+}) {
+  useTick(playing);
+  const T = now();
+  const top = Math.max(lo, hi());
+  const x = (t: number) => ({ '--x': `${((clamp(t, lo, top) - lo) / Math.max(1, top - lo)) * 100}%` }) as CSSProperties;
+  return (
+    <div className="seek">
+      <input
+        type="range"
+        aria-label="Position"
+        aria-valuetext={fmtClock(T)}
+        min={lo}
+        max={top}
+        step={1000}
+        value={clamp(T, lo, top)}
+        onChange={(e) => onSeek(Number(e.target.value))}
+      />
+      {/* A marker outside the recording (a status left over from the day before) is not drawn. */}
+      {marks
+        .filter((m) => m.t >= lo && m.t <= top)
+        .map((m) => (
+          <span
+            key={`${m.kind}:${m.t}`}
+            className={`marker m-${m.kind}`}
+            style={x(m.t)}
+            title={`${m.kind === 'start' ? 'Start' : m.kind === 'red' ? 'Red flag' : 'Chequered flag'} ${fmtClock(m.t)}`}
+          />
+        ))}
+    </div>
+  );
+}
 
 export type PlayerRecording = { id: number; started_at: string; ended_at: string | null };
 
@@ -128,17 +173,18 @@ export function Player({
   const setAt = (a: number | 'live' | null) => setOpen({ at: a });
   const [seek, setSeek] = useState<number | null>(null); // a pending seek, shown on the bar
   const [tab, setTab] = useState<'tower' | 'laps'>('tower');
-  const [, tick] = useReducer((n: number) => n + 1, 0);
+  const [fails, setFails] = useState(0); // errors since the last snapshot
   const [store] = useState(() => createStore());
   const snap = useSyncExternalStore(store.subscribe, store.get);
   // T = clock.t + the wall time since clock.wall while playing; resynced to every event's t.
   const clock = useRef({ t: start === 'live' ? Date.now() - delay * 1000 : start, wall: Date.now() });
   const backoff = useRef(1000);
   const timers = useRef<{ delay?: ReturnType<typeof setTimeout>; seek?: ReturnType<typeof setTimeout> }>({});
-  const seen = useRef(new Map<string, Marker>());
   // The bounds for a reopen after an error, without reopening when a refetch changes the row.
   const rec = useRef(recording);
-  rec.current = recording;
+  useEffect(() => {
+    rec.current = recording;
+  }, [recording]);
   const liveDelay = at === 'live' ? streamDelay : 0;
 
   const playing = at !== null;
@@ -157,11 +203,15 @@ export function Player({
       { recording: recording.id, at: from, delay: liveDelay },
       {
         onData(feed, kind) {
-          if (kind === 'snapshot') backoff.current = 1000;
+          if (kind === 'snapshot') {
+            backoff.current = 1000;
+            setFails(0);
+          }
           clock.current = { t: feed.t, wall: Date.now() };
           store.update(feed, kind);
         },
         onError() {
+          setFails((n) => n + 1);
           const wait = backoff.current;
           backoff.current = Math.min(wait * 2, 30_000);
           retry = setTimeout(() => {
@@ -182,12 +232,6 @@ export function Player({
       clearTimeout(retry);
     };
   }, [recording.id, open, liveDelay, store]);
-
-  useEffect(() => {
-    if (!playing) return;
-    const id = setInterval(tick, 1000);
-    return () => clearInterval(id);
-  }, [playing]);
 
   useEffect(
     () => () => {
@@ -223,29 +267,27 @@ export function Player({
   };
   const play = () => setAt(Math.round(clamp(nowT(), lo, hi())));
 
-  const T = seek ?? nowT();
+  const now = () => seek ?? nowT();
   const feed = snap.feed;
   const state = feed?.state;
-  // Every marker seen during the visit; the stream delivers nothing ahead of T, so none is a spoiler.
-  if (state) for (const m of markers(state)) seen.current.set(`${m.kind}:${m.t}`, m);
   // Rebuilt only when the lap rows change (a snapshot or a `laps` event), so the lap table skips deltas.
   const lapTable = useMemo(
     () => detail && feed && <Laps detail={streamDetail(detail, feed.state)} laps={snap.laps} />,
     [detail, feed, snap.laps],
   );
-
-  const top = Math.max(lo, hi());
-  // A marker outside the recording (a status left over from the day before) is not drawn.
-  const marks = [...seen.current.values()].filter((m) => m.t >= lo && m.t <= top);
-  const x = (t: number) => ({ '--x': `${((clamp(t, lo, top) - lo) / Math.max(1, top - lo)) * 100}%` }) as CSSProperties;
-  const remaining = state && view(state, 'ExtrapolatedClock')?.Remaining;
-  const lapCount = state && view(state, 'LapCount');
-  const track = state && view(state, 'TrackStatus')?.Message;
-
-  return (
-    <>
-      <p className="clock" aria-live="off">
-        <time>{fmtClock(T)}</time>
+  // The state is mutated in place: what is derived from it is keyed on the snapshot, a new object per store flush.
+  const tower = useMemo(() => {
+    const s = snap.feed?.state;
+    return s && <Tower state={s} sessionKey={sessionKey} />;
+  }, [snap, sessionKey]);
+  const info = useMemo(() => {
+    const s = snap.feed?.state;
+    if (!s) return null;
+    const remaining = view(s, 'ExtrapolatedClock')?.Remaining;
+    const lapCount = view(s, 'LapCount');
+    const track = view(s, 'TrackStatus')?.Message;
+    return (
+      <>
         {remaining && <span> · {remaining} left</span>}
         {lapCount?.CurrentLap !== undefined && (
           <span>
@@ -255,8 +297,26 @@ export function Player({
           </span>
         )}
         {track && <span> · {track}</span>}
+      </>
+    );
+  }, [snap]);
+
+  return (
+    <>
+      <Clock now={now} playing={playing}>
+        {info}
         {at === 'live' ? <span> · Live</span> : !playing && <span> · Paused</span>}
-      </p>
+      </Clock>
+      {playing && fails >= FAILING ? (
+        <p role="status">The stream keeps failing. Reload the page (your Access session may have expired).</p>
+      ) : (
+        playing &&
+        fails > 0 && (
+          <p role="status" className="muted">
+            Reconnecting…
+          </p>
+        )
+      )}
       {detail && (
         <fieldset className="segmented" aria-label="View">
           <button type="button" aria-pressed={tab === 'tower'} onClick={() => setTab('tower')}>
@@ -267,33 +327,9 @@ export function Player({
           </button>
         </fieldset>
       )}
-      {!state ? (
-        <p className="muted">Connecting…</p>
-      ) : tab === 'laps' && lapTable ? (
-        lapTable
-      ) : (
-        <Tower state={state} sessionKey={sessionKey} />
-      )}
+      {!state ? <p className="muted">Connecting…</p> : tab === 'laps' && lapTable ? lapTable : tower}
       <section className="player" aria-label="Playback controls">
-        <div className="seek">
-          <input
-            type="range"
-            aria-label="Position"
-            min={lo}
-            max={top}
-            step={1000}
-            value={clamp(T, lo, top)}
-            onChange={(e) => seekTo(Number(e.target.value))}
-          />
-          {marks.map((m) => (
-            <span
-              key={`${m.kind}:${m.t}`}
-              className={`marker m-${m.kind}`}
-              style={x(m.t)}
-              title={`${m.kind === 'start' ? 'Start' : m.kind === 'red' ? 'Red flag' : 'Chequered flag'} ${fmtClock(m.t)}`}
-            />
-          ))}
-        </div>
+        <Seek now={now} playing={playing} lo={lo} hi={hi} marks={snap.marks} onSeek={seekTo} />
         <div className="controls">
           {playing ? (
             <button type="button" onClick={pause}>
@@ -327,7 +363,12 @@ export function Player({
           ) : (
             <>
               {NUDGES.map((s) => (
-                <button key={s} type="button" aria-label={`Position ${signed(s)}`} onClick={() => seekTo(T + s * 1000)}>
+                <button
+                  key={s}
+                  type="button"
+                  aria-label={`Position ${signed(s)}`}
+                  onClick={() => seekTo(now() + s * 1000)}
+                >
                   {signed(s)}
                 </button>
               ))}
