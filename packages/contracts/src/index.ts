@@ -169,8 +169,16 @@ export const Live = z.strictObject({
 });
 
 // The SSE events of /playback/:recording/stream (A§10); each event's data is one of these as JSON. `state` is
-// {topic: value}; a delta's `data` is merged into state[topic] when it is an object, else it replaces it.
-export const PlaybackSnapshot = z.strictObject({ t: int, state: z.record(z.string(), z.unknown()) });
+// {topic: value}; a delta's `data` is merged into state[topic] when it is an object, else it replaces it. A snapshot
+// carries every lap and stint row so far; `laps` only the rows that changed since the last snapshot or `laps`, which
+// replace the rows of the same (driver_number, lap_number) or (driver_number, stint_number).
+export const PlaybackSnapshot = z.strictObject({
+  t: int,
+  state: z.record(z.string(), z.unknown()),
+  laps: Laps,
+  stints: Stints,
+});
+export const PlaybackLaps = z.strictObject({ t: int, laps: Laps, stints: Stints });
 export const PlaybackDelta = z.strictObject({ t: int, topic: z.string(), data: z.unknown() });
 export const PlaybackEnd = z.strictObject({ t: int });
 
@@ -185,6 +193,7 @@ export type RaceControl = z.infer<typeof RaceControl>;
 export type Status = z.infer<typeof Status>;
 export type Live = z.infer<typeof Live>;
 export type PlaybackSnapshot = z.infer<typeof PlaybackSnapshot>;
+export type PlaybackLaps = z.infer<typeof PlaybackLaps>;
 export type PlaybackDelta = z.infer<typeof PlaybackDelta>;
 export type PlaybackEnd = z.infer<typeof PlaybackEnd>;
 

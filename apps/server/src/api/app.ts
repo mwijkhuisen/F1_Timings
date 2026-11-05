@@ -419,7 +419,7 @@ export function createApp({
       return badRequest(c);
     const row = await db
       .selectFrom('recording')
-      .select(['path', 'started_at', 'ended_at'])
+      .select(['path', 'session_key', 'started_at', 'ended_at'])
       .where('id', '=', id)
       .executeTakeFirst();
     if (!row) return notFound(c);
@@ -476,6 +476,7 @@ export function createApp({
       try {
         const events = playback({
           dir,
+          sessionKey: row.session_key,
           at: from,
           delay: delayS,
           speed: speedX,
