@@ -27,3 +27,14 @@ export const fmtSector = (ms: number): string =>
 
 /** A time difference as signed seconds: `+0.123`, `−0.045` (a minus sign, not a hyphen), `+0.000`. */
 export const fmtDelta = (ms: number): string => `${ms < 0 ? '−' : '+'}${(Math.abs(ms) / 1000).toFixed(3)}`;
+
+const clock = new Intl.DateTimeFormat('en-GB', {
+  timeZone: 'Europe/Amsterdam',
+  hour: '2-digit',
+  minute: '2-digit',
+  second: '2-digit',
+  hourCycle: 'h23',
+});
+
+/** Epoch ms as Amsterdam wall-clock time, `HH:mm:ss`. */
+export const fmtClock = (ms: number): string => clock.format(ms);

@@ -2,6 +2,7 @@ import { useEffect } from 'react';
 import { useSeasons } from './lib/api.ts';
 import { Link, navigate, type Route, replace, useRoute } from './lib/routes.ts';
 import { NotFound } from './ui/ErrorView.tsx';
+import { Live, Replay } from './views/Live.tsx';
 import { Latest, Picker } from './views/Picker.tsx';
 import { Session } from './views/Session.tsx';
 import { Status } from './views/Status.tsx';
@@ -25,7 +26,10 @@ function Header({ year }: { year: number | null }) {
           </option>
         ))}
       </select>
-      <Link to="/status">Status</Link>
+      <nav className="links">
+        <Link to="/live">Live</Link>
+        <Link to="/status">Status</Link>
+      </nav>
     </header>
   );
 }
@@ -46,6 +50,10 @@ function Page({ route }: { route: Route | null }) {
       return route.view === null ? null : <Session key={route.session} session={route.session} view={route.view} />;
     case 'status':
       return <Status />;
+    case 'live':
+      return <Live />;
+    case 'replay':
+      return <Replay key={route.recording} recording={route.recording} />;
     default:
       return <NotFound />;
   }

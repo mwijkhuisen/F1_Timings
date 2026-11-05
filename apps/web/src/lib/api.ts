@@ -1,4 +1,4 @@
-import { Laps, Season, Seasons, SessionDetail, Status, Stints } from '@f1/contracts';
+import { Laps, Live, Recordings, Season, Seasons, SessionDetail, Status, Stints } from '@f1/contracts';
 import { QueryClient, queryOptions, useQuery } from '@tanstack/react-query';
 import { ZodError } from 'zod';
 
@@ -71,9 +71,26 @@ export const useStints = (key: number) =>
     staleTime: STALE_MS,
   });
 
-export const useStatus = () =>
+/** `refetchMs`: poll, such as every 60 s on `/live`. */
+export const useStatus = (refetchMs: number | false = false) =>
   useQuery({
     queryKey: ['status'],
     queryFn: ({ signal }) => getJson('/api/v1/status', Status, signal),
+    staleTime: STALE_MS,
+    refetchInterval: refetchMs,
+  });
+
+/** Polled every 30 s while nothing is live, so `/live` picks up a session that starts. */
+export const useLive = () =>
+  useQuery({
+    queryKey: ['live'],
+    queryFn: ({ signal }) => getJson('/api/v1/live', Live, signal),
+    refetchInterval: (q) => (q.state.data?.recording && q.state.data.recording.ended_at === null ? false : 30_000),
+  });
+
+export const useRecordings = () =>
+  useQuery({
+    queryKey: ['recordings'],
+    queryFn: ({ signal }) => getJson('/api/v1/recordings', Recordings, signal),
     staleTime: STALE_MS,
   });
