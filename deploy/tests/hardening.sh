@@ -38,7 +38,8 @@ program='
   no_docker_sock: ([$s[].value.volumes[]? | .source // "" | select(test("docker\\.sock"))] == []),
   only_bind_allowlist: ([$s[] | .key as $k | .value.volumes[]? | select(.type == "bind")
       | {svc: $k, source, target, read_only: (.read_only // false)}] | sort_by(.svc, .source)
-    == [{svc: "db", source: "/etc/f1/postgres/roles.sql", target: "/docker-entrypoint-initdb.d/10-roles.sql", read_only: true},
+    == [{svc: "api", source: "/srv/f1/live", target: "/srv/f1/live", read_only: true},
+        {svc: "db", source: "/etc/f1/postgres/roles.sql", target: "/docker-entrypoint-initdb.d/10-roles.sql", read_only: true},
         {svc: "live", source: "/srv/f1/live", target: "/srv/f1/live", read_only: false},
         {svc: "live", source: "/srv/f1/state/live", target: "/srv/f1/state", read_only: false}]),
   only_port_127_0_0_1_8180: ([$s[] | .key as $k | .value.ports[]? | {svc: $k, host_ip, published, target, protocol}]
@@ -104,3 +105,7 @@ negative "live without the core limit" no_core_dumps 'del(.services.live.ulimits
 negative "caddy with a core size" no_core_dumps '.services.caddy.ulimits.core = {soft: 1, hard: 1}'
 negative "live with /srv/f1/state as a source" only_bind_allowlist \
   '(.services.live.volumes[] | select(.target == "/srv/f1/state") | .source) = "/srv/f1/state"'
+negative "api with /srv/f1/live read-write" only_bind_allowlist \
+  '(.services.api.volumes[] | select(.target == "/srv/f1/live") | .read_only) = false'
+negative "api with an extra bind" only_bind_allowlist \
+  '.services.api.volumes += [{type: "bind", source: "/srv/f1/state/live", target: "/srv/f1/state", read_only: true}]'

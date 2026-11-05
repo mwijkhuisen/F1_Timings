@@ -1,8 +1,14 @@
+import { stat } from 'node:fs/promises';
+import { join } from 'node:path';
+import { setTimeout as sleep } from 'node:timers/promises';
 import type { Seasons, Status, Stints } from '@f1/contracts';
 import { type Context, Hono, type MiddlewareHandler } from 'hono';
+import { streamSSE } from 'hono/streaming';
 import { type Kysely, sql } from 'kysely';
 import type { Logger } from 'pino';
 import { codeOf, type DB } from '../db/db.ts';
+import { playback } from '../live/playback.ts';
+import { AFTER_MS } from '../live/recorder.ts';
 import { colours } from '../timing/colours.ts';
 
 // The api role's routes (A§10). JSON uses the A§7 column names; answers match the zod contracts in
@@ -11,6 +17,9 @@ import { colours } from '../timing/colours.ts';
 const NO_STORE = { 'Cache-Control': 'no-store' };
 const FINAL = { 'Cache-Control': 'private, max-age=86400' };
 const STALE_MS = 5 * 60_000; // the recorder reports every few seconds
+const WRITE_TIMEOUT_MS = 60_000; // one SSE write (or ping) that takes longer ends the stream (a stalled client)
+const MAX_STREAMS = 8; // per process: each holds a file handle, a state and a timer
+const SPEEDS = [1, 2, 4, 8, 16];
 const STATES = ['scheduled', 'due', 'fetched', 'final', 'failed'] as const;
 
 const badRequest = (c: Context) => c.json({ error: 'bad request' }, 400, NO_STORE);
@@ -27,11 +36,18 @@ export function createApp({
   db,
   access,
   log,
+  liveDir,
+  writeTimeoutMs = WRITE_TIMEOUT_MS,
 }: {
   db: Kysely<DB>;
   access: MiddlewareHandler;
   log: Pick<Logger, 'error'>;
+  /** The recordings' root (A§11.2), read-only here. */
+  liveDir: string;
+  /** For tests only. */
+  writeTimeoutMs?: number;
 }) {
+  let streams = 0;
   /** The session of a per-session route: its key and state, or the 400/404 answer. */
   const lookup = async (c: Context): Promise<{ key: number; state: string } | Response> => {
     const key = sessionKey(c);
@@ -334,6 +350,155 @@ export function createApp({
     const recorder = row && { ...row, stale: Date.now() - row.updated_at.getTime() > STALE_MS };
     const body = { states, cancelled, failed, recorder: recorder ?? null };
     return c.json(body, 200, NO_STORE);
+  });
+
+  // The open recording and its session; else the next session (the recorder's notion) with its latest recording.
+  api.get('/live', async (c) => {
+    const columns = ['id', 'session_key', 'started_at', 'ended_at', 'complete'] as const;
+    const latest = () => db.selectFrom('recording').select(columns).orderBy('started_at', 'desc').orderBy('id', 'desc');
+    let recording = await latest().where('ended_at', 'is', null).limit(1).executeTakeFirst();
+    const key =
+      recording?.session_key ??
+      (
+        await db
+          .selectFrom('session')
+          .select('session_key')
+          .where('is_cancelled', '=', false)
+          .where('date_end', '>', new Date(Date.now() - AFTER_MS))
+          .orderBy('date_start')
+          .orderBy('session_key')
+          .limit(1)
+          .executeTakeFirst()
+      )?.session_key;
+    const session =
+      key === undefined
+        ? undefined
+        : await db
+            .selectFrom('session as s')
+            .innerJoin('meeting as m', 'm.meeting_key', 's.meeting_key')
+            .select(['s.session_key', 'm.name as meeting_name', 's.name as session_name', 's.date_start', 's.date_end'])
+            .where('s.session_key', '=', key)
+            .executeTakeFirst();
+    if (session)
+      recording ??= await latest().where('session_key', '=', session.session_key).limit(1).executeTakeFirst();
+    const body = {
+      session: session ?? null,
+      recording: recording
+        ? {
+            id: Number(recording.id), // bigint comes back as a string
+            started_at: recording.started_at,
+            ended_at: recording.ended_at,
+            complete: recording.complete,
+          }
+        : null,
+    };
+    return c.json(body, 200, NO_STORE);
+  });
+
+  // State at T over SSE (A§10, A§11.3). Parameters are checked before any lookup, and nothing from the URL reaches a path.
+  api.get('/playback/:recording/stream', async (c) => {
+    const id = c.req.param('recording');
+    const param = (name: string) => {
+      const all = c.req.queries(name);
+      return all && all.length > 1 ? null : all?.[0]; // a repeated parameter is ambiguous
+    };
+    const [at, delay, speed] = [param('at'), param('delay'), param('speed')];
+    const live = at === 'live';
+    const num = (v: string | null | undefined, re: RegExp, dflt: number) =>
+      v === undefined ? dflt : v !== null && re.test(v) ? Number(v) : Number.NaN;
+    const delayS = num(delay, /^\d{1,3}$/, 0);
+    const speedX = num(speed, /^\d{1,2}$/, 1);
+    if (
+      !/^\d{1,9}$/.test(id) ||
+      !(live || /^\d{1,15}$/.test(at ?? '')) ||
+      (delay !== undefined && !live) ||
+      !(delayS <= 120) ||
+      !SPEEDS.includes(speedX) ||
+      (live && speedX !== 1)
+    )
+      return badRequest(c);
+    const row = await db
+      .selectFrom('recording')
+      .select(['path', 'started_at', 'ended_at'])
+      .where('id', '=', id)
+      .executeTakeFirst();
+    if (!row) return notFound(c);
+    const from = live ? 'live' : Number(at);
+    if (from !== 'live' && (from < row.started_at.getTime() || from > (row.ended_at?.getTime() ?? Date.now())))
+      return badRequest(c);
+    if (!/^\d+-\d+$/.test(row.path)) return notFound(c); // the column's CHECK says so; this path is not built from less
+    const dir = join(liveDir, row.path);
+    const found = await stat(dir).catch((err: unknown) => {
+      if (codeOf(err) !== 'ENOENT') throw err;
+      log.error({ cause: 'ENOENT' }, 'playback');
+    });
+    if (!found?.isDirectory()) return notFound(c);
+    // hono runs this handler for HEAD and drops the body without cancelling it: a generator would stay open for good.
+    if (c.req.method === 'HEAD')
+      return new Response(null, {
+        headers: { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-store, no-transform' },
+      });
+    if (streams >= MAX_STREAMS) return c.json({ error: 'unavailable' }, 503, NO_STORE);
+
+    streams++; // no await since the check above
+    const res = streamSSE(c, async (stream) => {
+      const abort = new AbortController();
+      stream.onAbort(() => abort.abort());
+      // A transient database error is not the end of the recording.
+      const ended = () =>
+        db
+          .selectFrom('recording')
+          .select('ended_at')
+          .where('id', '=', id)
+          .executeTakeFirst()
+          .then((r) => r?.ended_at != null)
+          .catch((err: unknown) => {
+            log.error({ cause: codeOf(err) }, 'playback');
+            return false;
+          });
+      // A write that does not complete (a client that stopped reading) ends the stream and frees the slot.
+      const within = async (write: Promise<unknown>) => {
+        let timer: NodeJS.Timeout | undefined;
+        try {
+          await Promise.race([
+            write,
+            new Promise((_, reject) => {
+              timer = setTimeout(
+                () => reject(Object.assign(new Error('write timeout'), { code: 'write_timeout' })),
+                writeTimeoutMs,
+              );
+            }),
+          ]);
+        } finally {
+          clearTimeout(timer);
+        }
+      };
+      try {
+        const events = playback({
+          dir,
+          at: from,
+          delay: delayS,
+          speed: speedX,
+          now: Date.now,
+          sleep: (ms, signal) => sleep(ms, undefined, { signal }),
+          ended,
+          signal: abort.signal,
+        });
+        for await (const ev of events) {
+          // The snapshot's state is the stream's own: serialized before the generator moves on.
+          if (ev.event === 'ping') await within(stream.write(': ping\n\n'));
+          else await within(stream.writeSSE({ event: ev.event, data: JSON.stringify(ev.data) }));
+        }
+      } catch (err) {
+        if (!abort.signal.aborted) log.error({ cause: codeOf(err) }, 'playback'); // never the message to the client
+        if (codeOf(err) === 'write_timeout') stream.abort(); // ends the response of the stalled client
+      } finally {
+        abort.abort();
+        streams--;
+      }
+    });
+    res.headers.set('Cache-Control', 'no-store, no-transform'); // streamSSE says no-cache
+    return res;
   });
 
   app.route('/api/v1', api);

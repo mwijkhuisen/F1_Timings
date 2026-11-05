@@ -127,7 +127,7 @@ describe('api (f1_api login, Access JWT)', { timeout: 120_000 }, () => {
       .where('session_key', '=', FAILING)
       .execute();
     apiDb = createDb(testDb.urls.f1_api);
-    app = createApp({ db: apiDb, access: access({ team: TEAM, aud: AUD }, log), log });
+    app = createApp({ db: apiDb, access: access({ team: TEAM, aud: AUD }, log), log, liveDir: '/nonexistent' });
     key = await rsaKey('test-kid');
     token = await jwt(key.priv);
   });
@@ -180,7 +180,12 @@ describe('api (f1_api login, Access JWT)', { timeout: 120_000 }, () => {
     expect((await app.request('/healthz', { method: 'HEAD' })).status).toBe(200);
     const down = createDb('postgres://f1_api@127.0.0.1:1/f1?sslmode=disable');
     try {
-      const broken = createApp({ db: down, access: access({ team: TEAM, aud: AUD }, log), log });
+      const broken = createApp({
+        db: down,
+        access: access({ team: TEAM, aud: AUD }, log),
+        log,
+        liveDir: '/nonexistent',
+      });
       const dead = await broken.request('/healthz');
       expect(dead.status).toBe(503);
       expect(await dead.text()).toBe('{"ok":false}');

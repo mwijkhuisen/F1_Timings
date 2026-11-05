@@ -115,6 +115,7 @@ services:
 
   # The API (A§10) on :8080, never published: caddy reaches it on f1-edge. Its only way out is
   # f1-api-egress: tcp/443 to Cloudflare's ranges for the Access certs (nftables, A§14.3).
+  # It reads the recordings for playback (A§11.3): /srv/f1/live, read-only.
   api:
     <<: *hardening
     image: ${F1_SERVER_IMAGE:?}
@@ -131,6 +132,13 @@ services:
     depends_on:
       db:
         condition: service_healthy
+    volumes:
+      - type: bind
+        source: /srv/f1/live
+        target: /srv/f1/live
+        read_only: true
+        bind:
+          create_host_path: false
     mem_limit: 384m
     cpus: 1.0
     pids_limit: 64
