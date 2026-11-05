@@ -182,7 +182,7 @@ Remaining 2026 weekends (OpenF1 schedule): Austin (race 25 Oct) · Mexico City 3
   - a reader for archive `.jsonStream` (token from P2a) to get winter test data
 - **Acceptance:**
   - [CI] merge property (A§15).
-  - [CI] synthetic fixtures cover reconnect duplicates and a full-state `R` message.
+  - [CI] synthetic fixtures cover reconnect duplicates and the `Subscribe` completion's full state.
   - [box] for 3 recorded or archived 2026 sessions, the reconstructed laps match OpenF1 laps: lap and sector times within 1 ms on ≥ 99% of laps, with differences listed.
 
 ### P2c: Recorder role and token management

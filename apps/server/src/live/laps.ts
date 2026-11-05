@@ -124,6 +124,7 @@ export function createLaps(
   sessionKey: number,
   source: 'f1-live' | 'f1-archive',
 ): { push(ev: FeedEvent, delta: unknown): void; rows(): { laps: LapRow[]; stints: StintRow[] } } {
+  let ours = false;
   let race = false;
   let open = false;
   let chequered: number | null = null;
@@ -332,6 +333,10 @@ export function createLaps(
     push(ev, delta) {
       if (!isObj(delta)) return;
       const { t } = ev;
+      // Only the session's own events count: from a SessionInfo with its Key to one with another Key. A feed joined
+      // before the session holds the previous session's full state until F1 switches with a SessionInfo keyframe.
+      if (ev.topic === 'SessionInfo' && typeof delta.Key === 'number') ours = delta.Key === sessionKey;
+      if (!ours) return;
       if (ev.topic === 'SessionInfo') {
         // A race is a session of Type "Race", sprints included (OpenF1).
         if (typeof delta.Type === 'string') race = delta.Type.toLowerCase() === 'race';

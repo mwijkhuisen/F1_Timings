@@ -48,7 +48,9 @@ export function duration(v: unknown): number | null {
 
 /**
  * An archive `<Topic>.jsonStream`: a UTF-8 BOM, CRLF (or LF) lines, each a 12-character
- * session-relative `HH:MM:SS.mmm` and then the payload. `{` is JSON, `"` a JSON string, or its text
+ * session-relative `HH:MM:SS.mmm` and then the payload. The time is .NET TimeSpan text: past 24 h a
+ * day count comes first, `d.HH:MM:SS.mmm` (a stream can open a day before its session; FastF1 reads a
+ * fixed 12 characters). `{` is JSON, `"` a JSON string, or its text
  * without the outer quotes when it is no valid one (a `.z` payload stays that base64 string, not
  * decoded), anything else the raw text. A line with a bad
  * timestamp or bad JSON is skipped and counted.
@@ -58,8 +60,11 @@ export function parseJsonStream(text: string, topic: string, t0Ms: number): { ev
   let skipped = 0;
   for (const line of text.replace(/^﻿/, '').split(/\r?\n/)) {
     if (line === '') continue;
-    const rel = duration(line.slice(0, 12));
-    const body = line.slice(12);
+    const day = /^(\d+)\./.exec(line);
+    const at = day ? day[0].length : 0;
+    const hms = duration(line.slice(at, at + 12));
+    const rel = hms === null ? null : Number(day?.[1] ?? 0) * 86_400_000 + hms;
+    const body = line.slice(at + 12);
     let payload: unknown = body;
     if (body.startsWith('{')) {
       try {
@@ -74,7 +79,7 @@ export function parseJsonStream(text: string, topic: string, t0Ms: number): { ev
         payload = body.replace(/^"+|"+$/g, ''); // FastF1's strip('"')
       }
     }
-    if (rel === null || body === '' || payload === undefined) skipped++;
+    if (rel === null || !Number.isSafeInteger(rel) || body === '' || payload === undefined) skipped++;
     else events.push({ t: t0Ms + rel, topic, payload });
   }
   return { events, skipped };
@@ -84,7 +89,8 @@ export function parseJsonStream(text: string, topic: string, t0Ms: number): { ev
  * A P2a `feed.jsonl` line: `[receivedAtMs, topic, payload, f1Timestamp]` is one event at the F1
  * timestamp when it parses, else at receivedAtMs (the native client writes a missing one as
  * "undefined", the library one as null). `[receivedAtMs, "_subscribe", result]` is one `full` event
- * per topic at receivedAtMs. Anything malformed is [].
+ * per topic at receivedAtMs, SessionInfo first: the other topics belong to its session, which laps.ts
+ * checks before it reads them (F1 sends RaceControlMessages before it). Anything malformed is [].
  */
 export function parseFeedLine(line: string): FeedEvent[] {
   let v: unknown;
@@ -98,7 +104,9 @@ export function parseFeedLine(line: string): FeedEvent[] {
   if (typeof receivedAt !== 'number' || !Number.isFinite(receivedAt) || typeof topic !== 'string') return [];
   if (topic === '_subscribe') {
     if (!isObj(payload)) return [];
-    return Object.entries(payload).map(([name, value]) => ({ t: receivedAt, topic: name, payload: value, full: true }));
+    return Object.entries(payload)
+      .sort(([a], [b]) => Number(b === 'SessionInfo') - Number(a === 'SessionInfo'))
+      .map(([name, value]) => ({ t: receivedAt, topic: name, payload: value, full: true }));
   }
   const at = typeof ts === 'string' ? Date.parse(ts) : Number.NaN;
   return [{ t: Number.isNaN(at) ? receivedAt : at, topic, payload }];
