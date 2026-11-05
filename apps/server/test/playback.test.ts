@@ -11,9 +11,10 @@ import {
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { gunzipSync, gzipSync } from 'node:zlib';
+import { merge, type Obj } from '@f1/contracts';
 import fc from 'fast-check';
 import { afterEach, describe, expect, it } from 'vitest';
-import { createFeed, merge, type Obj } from '../src/live/merge.ts';
+import { createFeed } from '../src/live/merge.ts';
 import { type PlaybackEvent, playback } from '../src/live/playback.ts';
 import { parseFeedLine } from '../src/live/read.ts';
 import { openRecording, type Recording } from '../src/live/recording.ts';

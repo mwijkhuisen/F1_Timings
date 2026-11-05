@@ -4,8 +4,9 @@ import { join } from 'node:path';
 import { pipeline } from 'node:stream';
 import { promisify } from 'node:util';
 import { createGunzip, gunzip } from 'node:zlib';
+import { merge, type Obj } from '@f1/contracts';
 import { codeOf } from '../db/db.ts';
-import { createFeed, merge, type Obj } from './merge.ts';
+import { createFeed } from './merge.ts';
 import { parseFeedLine } from './read.ts';
 
 // State at T over one recording's files (A§11.3, ADR-0007): a seek to the newest snapshot at or before T, then a delta

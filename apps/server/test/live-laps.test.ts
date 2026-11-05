@@ -1,9 +1,10 @@
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
+import type { Obj } from '@f1/contracts';
 import fc from 'fast-check';
 import { describe, expect, it } from 'vitest';
 import { createLaps, type LapRow, type StintRow } from '../src/live/laps.ts';
-import { createFeed, type Obj } from '../src/live/merge.ts';
+import { createFeed } from '../src/live/merge.ts';
 import { archiveT0, type FeedEvent, parseFeedLine, parseJsonStream } from '../src/live/read.ts';
 
 // fixtures/live/ is synthetic, hand-written in the P2a feed.jsonl format: every value is invented.

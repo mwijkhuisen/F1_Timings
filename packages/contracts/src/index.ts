@@ -1,5 +1,7 @@
 import { z } from 'zod';
 
+export * from './live.ts';
+
 // The zod contracts of every API answer (A§10), shared by the server and the web.
 // Field names are the A§7 column names (snake_case, no mapping layer). Nullability
 // follows the DDL: a NOT NULL column is never nullable here. Our own objects are

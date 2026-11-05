@@ -15,7 +15,8 @@ import { join } from 'node:path';
 import { pipeline } from 'node:stream/promises';
 import { promisify } from 'node:util';
 import { createGzip, gzip } from 'node:zlib';
-import { createFeed, type Obj } from './merge.ts';
+import type { Obj } from '@f1/contracts';
+import { createFeed } from './merge.ts';
 import { parseFeedLine } from './read.ts';
 
 // One recording's directory (A§11.2): `feed.jsonl` is the current segment, `feed-<firstReceivedMs>.jsonl.gz` a
