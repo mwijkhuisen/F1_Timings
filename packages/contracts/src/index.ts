@@ -159,6 +159,19 @@ export const Status = z.strictObject({
     .nullable(),
 });
 
+export const Live = z.strictObject({
+  session: z
+    .strictObject({ session_key: int, meeting_name: text, session_name: text, date_start: date, date_end: date })
+    .nullable(),
+  recording: z.strictObject({ id: int, started_at: date, ended_at: date.nullable(), complete: z.boolean() }).nullable(),
+});
+
+// The SSE events of /playback/:recording/stream (A§10); each event's data is one of these as JSON. `state` is
+// {topic: value}; a delta's `data` is merged into state[topic] when it is an object, else it replaces it.
+export const PlaybackSnapshot = z.strictObject({ t: int, state: z.record(z.string(), z.unknown()) });
+export const PlaybackDelta = z.strictObject({ t: int, topic: z.string(), data: z.unknown() });
+export const PlaybackEnd = z.strictObject({ t: int });
+
 export type Seasons = z.infer<typeof Seasons>;
 export type Season = z.infer<typeof Season>;
 export type SessionDetail = z.infer<typeof SessionDetail>;
@@ -168,6 +181,10 @@ export type Stints = z.infer<typeof Stints>;
 export type Pits = z.infer<typeof Pits>;
 export type RaceControl = z.infer<typeof RaceControl>;
 export type Status = z.infer<typeof Status>;
+export type Live = z.infer<typeof Live>;
+export type PlaybackSnapshot = z.infer<typeof PlaybackSnapshot>;
+export type PlaybackDelta = z.infer<typeof PlaybackDelta>;
+export type PlaybackEnd = z.infer<typeof PlaybackEnd>;
 
 export type SectorDelta = { lap_number: number; s1: number | null; s2: number | null; s3: number | null };
 

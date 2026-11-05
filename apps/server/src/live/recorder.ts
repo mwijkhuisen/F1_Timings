@@ -28,7 +28,7 @@ import {
 const MINUTE = 60_000;
 const HOUR = 60 * MINUTE;
 const LEAD_MS = 60 * MINUTE;
-const AFTER_MS = 30 * MINUTE;
+export const AFTER_MS = 30 * MINUTE;
 const HARD_STOP_MS = 3 * HOUR;
 // ponytail: 60 s is a judgement call: about two reconnects at full backoff. Tighten it if a real recording with a
 // shorter gap turns out to miss laps.
@@ -38,6 +38,8 @@ const DISK_LOW_BYTES = 5 * 1024 ** 3;
 const DISK_FLOOR_BYTES = 1024 ** 3;
 const DISK_COOLDOWN_MS = 5 * MINUTE;
 const BACKOFF_RESET_MS = 60_000;
+/** The recordings (A§11.2): the live role writes them, the api reads them read-only. */
+export const LIVE_DIR = '/srv/f1/live';
 
 export type SessionWindow = Session & { cancelled: boolean };
 export type Decision = 'continue' | 'stop' | 'abort';
@@ -150,7 +152,7 @@ const windowOf = (r: { date_start: Date; date_end: Date; is_cancelled: boolean }
 export async function startRecorder(deps: RecorderDeps): Promise<void> {
   const { db, log, ping, signal, secretsDir, feedOptions } = deps;
   const {
-    liveDir = '/srv/f1/live',
+    liveDir = LIVE_DIR,
     tokenPath = '/srv/f1/state/f1tv-token',
     tickMs = 30_000,
     connect: open = connect,

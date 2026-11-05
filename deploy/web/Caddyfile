@@ -50,7 +50,9 @@
 		respond "{err.status_code} {err.status_text}"
 	}
 
-	encode zstd gzip
+	# Not the playback SSE stream: compression would buffer it, and it must stream unbuffered.
+	@compress not path_regexp ^/api/v1/playback/[0-9]+/stream$
+	encode @compress zstd gzip
 
 	# Only GET and HEAD, on every route: any other method is this 405 with the
 	# site headers (file_server's own 405 would carry none and name the server).

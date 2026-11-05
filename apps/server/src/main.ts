@@ -1,3 +1,4 @@
+import type { Server } from 'node:http';
 import { serve } from '@hono/node-server';
 import pino from 'pino';
 import { access, accessConfig } from './api/access.ts';
@@ -7,7 +8,7 @@ import { dbUrl, EXIT_CONFIG, runMigrate } from './db/migrate.ts';
 import { pingHealthchecks } from './healthchecks.ts';
 import { healthy, startHeartbeat, touch } from './heartbeat.ts';
 import { backfill, processSession, startIngest } from './ingest/ingest.ts';
-import { startRecorder } from './live/recorder.ts';
+import { LIVE_DIR, startRecorder } from './live/recorder.ts';
 import { createClient } from './openf1/client.ts';
 
 /** Roles of the single server image (A§4); the first argument picks one. */
@@ -129,8 +130,8 @@ async function runApi(env: Env, log: (line: string) => void, port: number): Prom
   }
   const logger = pino({ base: { role: 'api' } });
   const db = createDb(url, (err) => logger.error({ cause: codeOf(err) }, 'database pool error'));
-  const app = createApp({ db, access: access(config, logger), log: logger });
-  const server = serve({ fetch: app.fetch, port, hostname: '0.0.0.0' });
+  const app = createApp({ db, access: access(config, logger), log: logger, liveDir: LIVE_DIR });
+  const server = serve({ fetch: app.fetch, port, hostname: '0.0.0.0' }) as Server; // plain http: no createServer option
   const listening = await new Promise<boolean>((resolve) => {
     server.once('listening', () => resolve(true));
     server.once('error', (err) => {
@@ -155,7 +156,9 @@ async function runApi(env: Env, log: (line: string) => void, port: number): Prom
   });
   logger.info({}, 'stopping');
   stopHeartbeat();
-  await new Promise((resolve) => server.close(resolve));
+  const closed = new Promise((resolve) => server.close(resolve));
+  server.closeAllConnections(); // an open SSE stream would hold close() for good
+  await closed;
   await db.destroy();
   return 0;
 }
