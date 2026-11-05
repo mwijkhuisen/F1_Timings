@@ -1,4 +1,5 @@
 import type { Live as LiveData, Recordings } from '@f1/contracts';
+import { useState } from 'react';
 import { useLive, useRecordings, useSession, useStatus } from '../lib/api.ts';
 import { Link } from '../lib/routes.ts';
 import { fmtInstant } from '../lib/time.ts';
@@ -67,12 +68,17 @@ export function Live() {
   const live = useLive();
   const recordings = useRecordings();
   const status = useStatus(60_000);
+  // The recording the player follows: it stays (with its new `ended_at`) while `/live` names it, so a delayed viewer
+  // sees the end, and the player's stream is not closed by the refetch that marks it ended.
+  const [watched, setWatched] = useState<number>();
+  const open = live.data?.recording?.ended_at === null ? live.data.recording.id : undefined;
+  if (open !== undefined && open !== watched) setWatched(open); // derived state, set during render
   if (!live.data) return <Pending error={live.error} />;
   const { session, recording } = live.data;
   return (
     <>
       {status.data && <RecorderWarnings recorder={status.data.recorder} />}
-      {session && recording && recording.ended_at === null ? (
+      {session && recording && (recording.ended_at === null || recording.id === watched) ? (
         <Watch title={titleOf(session)} recording={recording} sessionKey={session.session_key} start="live" />
       ) : (
         <>

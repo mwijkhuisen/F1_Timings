@@ -135,16 +135,18 @@ function Seek({
         onChange={(e) => onSeek(Number(e.target.value))}
       />
       {/* A marker outside the recording (a status left over from the day before) is not drawn. */}
-      {marks
-        .filter((m) => m.t >= lo && m.t <= top)
-        .map((m) => (
-          <span
-            key={`${m.kind}:${m.t}`}
-            className={`marker m-${m.kind}`}
-            style={x(m.t)}
-            title={`${m.kind === 'start' ? 'Start' : m.kind === 'red' ? 'Red flag' : 'Chequered flag'} ${fmtClock(m.t)}`}
-          />
-        ))}
+      <div className="marks">
+        {marks
+          .filter((m) => m.t >= lo && m.t <= top)
+          .map((m) => (
+            <span
+              key={`${m.kind}:${m.t}`}
+              className={`marker m-${m.kind}`}
+              style={x(m.t)}
+              title={`${m.kind === 'start' ? 'Start' : m.kind === 'red' ? 'Red flag' : 'Chequered flag'} ${fmtClock(m.t)}`}
+            />
+          ))}
+      </div>
     </div>
   );
 }
@@ -174,6 +176,7 @@ export function Player({
   const [seek, setSeek] = useState<number | null>(null); // a pending seek, shown on the bar
   const [tab, setTab] = useState<'tower' | 'laps'>('tower');
   const [fails, setFails] = useState(0); // errors since the last snapshot
+  const [held, setHeld] = useState<number | null>(null); // T at a pause or `end`: where the tower stands
   const [store] = useState(() => createStore());
   const snap = useSyncExternalStore(store.subscribe, store.get);
   // T = clock.t + the wall time since clock.wall while playing; resynced to every event's t.
@@ -190,7 +193,9 @@ export function Player({
   const playing = at !== null;
   const nowT = () => (playing ? clock.current.t + Math.max(0, Date.now() - clock.current.wall) : clock.current.t);
   const lo = Date.parse(recording.started_at);
-  const hi = () => (recording.ended_at === null ? Date.now() - delay * 1000 : Date.parse(recording.ended_at));
+  // A replay ignores the delay (A§13): an open recording's bar ends at now, or now − delay while live.
+  const hi = () =>
+    recording.ended_at === null ? Date.now() - (at === 'live' ? delay : 0) * 1000 : Date.parse(recording.ended_at);
   const freeze = (t: number) => {
     clock.current = { t, wall: Date.now() };
   };
@@ -223,6 +228,7 @@ export function Player({
         },
         onEnd(t) {
           clock.current = { t, wall: Date.now() };
+          setHeld(t);
           setOpen({ at: null });
         },
       },
@@ -262,12 +268,16 @@ export function Player({
   };
 
   const pause = () => {
-    freeze(nowT());
+    const t = nowT();
+    freeze(t);
+    setHeld(t);
     setAt(null);
   };
   const play = () => setAt(Math.round(clamp(nowT(), lo, hi())));
 
   const now = () => seek ?? nowT();
+  // A seek while paused only moves T (the sync flow: pause, seek, Play on both screens); the tower stays at `held`.
+  const moved = !playing && held !== null && now() !== held;
   const feed = snap.feed;
   const state = feed?.state;
   // Rebuilt only when the lap rows change (a snapshot or a `laps` event), so the lap table skips deltas.
@@ -310,10 +320,9 @@ export function Player({
       {playing && fails >= FAILING ? (
         <p role="status">The stream keeps failing. Reload the page (your Access session may have expired).</p>
       ) : (
-        playing &&
-        fails > 0 && (
+        ((playing && fails > 0) || moved) && (
           <p role="status" className="muted">
-            Reconnecting…
+            {moved ? 'Press Play to load this position.' : 'Reconnecting…'}
           </p>
         )
       )}
@@ -330,6 +339,21 @@ export function Player({
       {!state ? <p className="muted">Connecting…</p> : tab === 'laps' && lapTable ? lapTable : tower}
       <section className="player" aria-label="Playback controls">
         <Seek now={now} playing={playing} lo={lo} hi={hi} marks={snap.marks} onSeek={seekTo} />
+        {at === 'live' && (
+          <label>
+            Delay {delay} s
+            <input
+              type="range"
+              aria-label="Delay"
+              min={0}
+              max={MAX_DELAY}
+              step={1}
+              value={delay}
+              onChange={(e) => changeDelay(Number(e.target.value))}
+            />
+          </label>
+        )}
+        {/* One row of equal buttons at 390 px: Play/Pause and the six nudges (a Live button wraps to its own row). */}
         <div className="controls">
           {playing ? (
             <button type="button" onClick={pause}>
@@ -341,25 +365,11 @@ export function Player({
             </button>
           )}
           {at === 'live' ? (
-            <>
-              <label>
-                Delay {delay} s
-                <input
-                  type="range"
-                  aria-label="Delay"
-                  min={0}
-                  max={MAX_DELAY}
-                  step={1}
-                  value={delay}
-                  onChange={(e) => changeDelay(Number(e.target.value))}
-                />
-              </label>
-              {NUDGES.map((s) => (
-                <button key={s} type="button" aria-label={`Delay ${signed(s)}`} onClick={() => changeDelay(delay + s)}>
-                  {signed(s)}
-                </button>
-              ))}
-            </>
+            NUDGES.map((s) => (
+              <button key={s} type="button" aria-label={`Delay ${signed(s)}`} onClick={() => changeDelay(delay + s)}>
+                {signed(s)}
+              </button>
+            ))
           ) : (
             <>
               {NUDGES.map((s) => (

@@ -80,12 +80,12 @@ export const useStatus = (refetchMs: number | false = false) =>
     refetchInterval: refetchMs,
   });
 
-/** Polled every 30 s while nothing is live, so `/live` picks up a session that starts. */
+/** Polled every 30 s, so `/live` picks up a session that starts and the player an `ended_at` that is set. */
 export const useLive = () =>
   useQuery({
     queryKey: ['live'],
     queryFn: ({ signal }) => getJson('/api/v1/live', Live, signal),
-    refetchInterval: (q) => (q.state.data?.recording && q.state.data.recording.ended_at === null ? false : 30_000),
+    refetchInterval: 30_000,
   });
 
 export const useRecordings = () =>

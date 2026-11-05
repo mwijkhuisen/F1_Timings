@@ -1,9 +1,11 @@
 // @vitest-environment happy-dom
-import { Lap, SessionDetail, view } from '@f1/contracts';
+import { Lap, type Live as LiveData, SessionDetail, view } from '@f1/contracts';
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { markers, streamUrl } from '../src/lib/stream.ts';
+import { Live } from '../src/views/Live.tsx';
 import { Player, type PlayerRecording } from '../src/views/Player.tsx';
 
 // `view` (a zod parse of a topic) counts what the tower, the clock line's info and the markers derive from the state.
@@ -367,6 +369,82 @@ describe('Player', () => {
     advance(5_000);
     expect(clockText()).not.toBe(before); // the clock ticked
     expect(vi.mocked(view).mock.calls.length).toBe(calls);
+  });
+
+  it('a replay of an open recording ignores the stored delay: the seek bar ends at now', () => {
+    localStorage.setItem('f1.delay', '45');
+    render({ start: NOW - 60_000 });
+    const bar = $<HTMLInputElement>('input[aria-label="Position"]');
+    expect(bar.max).toBe(String(NOW));
+    expect(bar.getAttribute('aria-valuetext')).toBe('22:59:00'); // NOW − 60 s in Amsterdam (CET)
+    click('Position +30 s');
+    click('Position +30 s');
+    click('Position +30 s');
+    advance(400);
+    expect(atOf(last())).toBe(String(NOW));
+  });
+
+  it('a seek while paused moves T only, and says Play loads it', () => {
+    const start = S + 3_600_000;
+    render({ recording: ended, start });
+    last().emit('snapshot', { t: start, state: {}, laps: [], stints: [] });
+    button('Pause');
+    const hint = 'Press Play to load this position.';
+    expect(host.textContent).not.toContain(hint);
+    click('Position −30 s');
+    expect(host.textContent).toContain(hint);
+    advance(400);
+    expect(FakeES.all).toHaveLength(1); // nothing opens while paused
+    expect(host.textContent).toContain(hint);
+    click('Position +30 s'); // back where the tower stands
+    advance(400);
+    expect(host.textContent).not.toContain(hint);
+    click('Position −5 s');
+    advance(400);
+    button('Play');
+    expect(atOf(last())).toBe(String(start - 5_000));
+    expect(host.textContent).not.toContain(hint);
+  });
+
+  it('/live: a refetch that sets ended_at keeps the player and its stream', () => {
+    // No query fetches (msw would fail it): the data is put into the cache by hand.
+    const client = new QueryClient({ defaultOptions: { queries: { enabled: false } } });
+    const session = {
+      session_key: 11404,
+      meeting_name: 'Mexico City',
+      session_name: 'Race',
+      date_start: '',
+      date_end: '',
+    };
+    const live = (ended_at: string | null): LiveData => ({
+      session: { ...session, date_start: new Date(S).toISOString(), date_end: new Date(E).toISOString() },
+      recording: { id: 7, started_at: new Date(S).toISOString(), ended_at, complete: false },
+    });
+    // TanStack notifies its observers on a 0 ms timer, a fake one here.
+    const put = (d: LiveData) => {
+      act(() => client.setQueryData(['live'], d));
+      advance(0);
+    };
+    put(live(null));
+    act(() =>
+      root.render(
+        <QueryClientProvider client={client}>
+          <Live />
+        </QueryClientProvider>,
+      ),
+    );
+    expect(FakeES.all).toHaveLength(1);
+    const first = last();
+    expect(first.url).toContain('at=live');
+    put(live(new Date(E).toISOString()));
+    expect(FakeES.all).toHaveLength(1);
+    expect(first.closed).toBe(false);
+    expect($<HTMLInputElement>('input[aria-label="Position"]').max).toBe(String(E)); // the new ended_at
+
+    // Once /live names something else, the page offers it.
+    put({ ...live(null), recording: null });
+    expect(first.closed).toBe(true);
+    expect(host.textContent).toContain('Next:');
   });
 
   it('an error in live mode reopens at live', () => {
