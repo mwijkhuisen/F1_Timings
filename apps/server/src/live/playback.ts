@@ -255,7 +255,7 @@ export async function* playback(o: {
       stints: unsent(all.stints, (s) => `stint ${s.driver_number} ${s.stint_number}`),
     };
   };
-  // ponytail: every open sends all lap rows uncompressed, ~0.5 MB for a full race (Caddy leaves the SSE route
+  // ponytail: every open sends all lap rows uncompressed, about 0.65 MB for a full race (Caddy leaves the SSE route
   // uncompressed); a compact or compressed form if that hurts.
   const snapshot = (t: number): PlaybackEvent => {
     sent.clear();
