@@ -105,10 +105,13 @@ export type PlayerRecording = { id: number; started_at: string; ended_at: string
 
 export function Player({
   recording,
+  sessionKey,
   start,
   detail,
 }: {
   recording: PlayerRecording;
+  /** The recording's session: the tower waits until the feed shows it. */
+  sessionKey?: number;
   /** 'live', or the replay's first T in epoch ms; read on mount only. */
   start: number | 'live';
   /** The session from the API; without it there is only the tower. */
@@ -260,7 +263,13 @@ export function Player({
           </button>
         </fieldset>
       )}
-      {!state ? <p className="muted">Connecting…</p> : tab === 'laps' && lapTable ? lapTable : <Tower state={state} />}
+      {!state ? (
+        <p className="muted">Connecting…</p>
+      ) : tab === 'laps' && lapTable ? (
+        lapTable
+      ) : (
+        <Tower state={state} sessionKey={sessionKey} />
+      )}
       <section className="player" aria-label="Playback controls">
         <div className="seek">
           <input

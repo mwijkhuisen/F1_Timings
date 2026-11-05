@@ -508,6 +508,33 @@ header .links {
   gap: 12px;
 }
 
+/* The timing tower (A§13): Pos and driver stay put while the table scrolls inside .scroll. */
+.tower td:first-child {
+  position: sticky;
+  left: 0;
+  min-width: 3em;
+  background: var(--bg);
+}
+
+.tower tbody th,
+.tower thead th:nth-child(2) {
+  left: 3em;
+}
+
+.tower thead th:nth-child(2) {
+  z-index: 2;
+}
+
+.tower td.sector > span:first-child {
+  display: inline-block;
+  min-width: 4.5em;
+  margin-right: 4px;
+}
+
+.tower tr.out {
+  color: var(--muted);
+}
+
 /* The player bar (A§13): sticky at the bottom, within thumb reach; every target 44 px; it wraps, never scrolls. */
 .player {
   position: sticky;

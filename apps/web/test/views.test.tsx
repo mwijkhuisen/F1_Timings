@@ -1,8 +1,9 @@
-import { Laps, Season, SessionDetail, Status, Stints } from '@f1/contracts';
+import { Laps, Recordings, Season, SessionDetail, Status, Stints } from '@f1/contracts';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, expect, it } from 'vitest';
+import { Next, RecordingsList } from '../src/views/Live.tsx';
 import { findLatest, latestPath, Meetings } from '../src/views/Picker.tsx';
-import { StatusPanel } from '../src/views/Status.tsx';
+import { RecorderWarnings, StatusPanel } from '../src/views/Status.tsx';
 import { StintBars } from '../src/views/Stints.tsx';
 
 // The picker (D13), the stints bars (D11) and the status panel (D12), on hand-built data.
@@ -249,5 +250,108 @@ describe('the status panel', () => {
     expect(render({ stale: true })).toContain(`<p role="alert">${stale}</p>`);
     const both = render({ stale: true, warning: 'disk_low' });
     expect(both).toContain(`<p role="alert">Less than 5 GB free for recordings.</p><p role="alert">${stale}</p>`);
+  });
+});
+
+describe('the recorder warnings on /live', () => {
+  const recorder = (r: Record<string, unknown>) =>
+    Status.parse({
+      states: { scheduled: 0, due: 0, fetched: 0, final: 0, failed: 0 },
+      cancelled: 0,
+      failed: [],
+      recorder: r,
+    }).recorder;
+  const base = {
+    state: 'idle',
+    session_key: null,
+    meeting_name: null,
+    session_name: null,
+    token_expires_at: null,
+    last_error: null,
+    warning: null,
+    stale: false,
+    updated_at: '2026-10-11T11:00:00.000Z',
+  };
+
+  it('renders nothing without a recorder, a warning or a stale report', () => {
+    expect(renderToStaticMarkup(<RecorderWarnings recorder={null} />)).toBe('');
+    expect(renderToStaticMarkup(<RecorderWarnings recorder={recorder(base)} />)).toBe('');
+  });
+
+  it('renders the warning and the stale notice as alerts', () => {
+    const html = renderToStaticMarkup(
+      <RecorderWarnings recorder={recorder({ ...base, warning: 'disk_low', stale: true })} />,
+    );
+    expect(html).toBe(
+      '<p role="alert">Less than 5 GB free for recordings.</p>' +
+        '<p role="alert">The recorder has not reported for over 5 minutes.</p>',
+    );
+  });
+});
+
+describe('the recordings list', () => {
+  const rec = (id: number, ended_at: string | null, complete: boolean) => ({
+    id,
+    session_key: 9965,
+    year: 2026,
+    meeting_name: 'Singapore Grand Prix',
+    session_name: 'Race',
+    session_type: 'Race',
+    date_start: '2026-10-11T12:00:00.000Z',
+    started_at: '2026-10-11T11:00:00.000Z',
+    ended_at,
+    complete,
+  });
+  const html = renderToStaticMarkup(
+    <RecordingsList
+      recordings={Recordings.parse([
+        rec(3, null, false),
+        rec(2, '2026-10-11T14:00:00.000Z', false),
+        rec(1, '2026-10-11T14:00:00.000Z', true),
+      ])}
+    />,
+  );
+
+  it('links each recording to its replay with the start in Amsterdam time', () => {
+    expect(html).toContain('<a href="/replay/2">Singapore Grand Prix · Race</a>');
+    expect(html).toContain('<time dateTime="2026-10-11T11:00:00.000Z">Sun 11 Oct 2026, 13:00</time>');
+  });
+
+  it('tags a recording as recording, incomplete or complete', () => {
+    expect(html.match(/<span class="badge">[a-z]+<\/span>/g)).toEqual([
+      '<span class="badge">recording</span>',
+      '<span class="badge">incomplete</span>',
+      '<span class="badge">complete</span>',
+    ]);
+  });
+
+  it('says so when there are none', () => {
+    expect(renderToStaticMarkup(<RecordingsList recordings={[]} />)).toBe('<p class="muted">No recordings yet.</p>');
+  });
+});
+
+describe('the next session on /live', () => {
+  const session = {
+    session_key: 9965,
+    meeting_name: 'Singapore Grand Prix',
+    session_name: 'Race',
+    date_start: '2026-10-11T12:00:00.000Z',
+    date_end: '2026-10-11T14:00:00.000Z',
+  };
+
+  it('names it with its start, and links the replay when a recording exists', () => {
+    const none = renderToStaticMarkup(<Next live={{ session, recording: null }} />);
+    expect(none).toContain(
+      'Next: Singapore Grand Prix · Race starts <time dateTime="2026-10-11T12:00:00.000Z">Sun 11 Oct 2026, 14:00</time>',
+    );
+    expect(none).not.toContain('/replay/');
+    const recording = { id: 4, started_at: session.date_start, ended_at: session.date_end, complete: true };
+    expect(renderToStaticMarkup(<Next live={{ session, recording }} />)).toContain('<a href="/replay/4">Replay</a>');
+  });
+
+  it('says so when no session is scheduled', () => {
+    expect(renderToStaticMarkup(<Next live={{ session: null, recording: null }} />)).toBe(
+      '<p>No session is scheduled.</p>',
+    );
   });
 });
