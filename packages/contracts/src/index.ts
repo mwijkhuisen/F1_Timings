@@ -168,6 +168,22 @@ export const Live = z.strictObject({
   recording: z.strictObject({ id: int, started_at: date, ended_at: date.nullable(), complete: z.boolean() }).nullable(),
 });
 
+// Every recording, newest first, with its session and meeting.
+export const Recordings = z.array(
+  z.strictObject({
+    id: int,
+    session_key: int,
+    year: int,
+    meeting_name: text,
+    session_name: text,
+    session_type: text,
+    date_start: date,
+    started_at: date,
+    ended_at: date.nullable(),
+    complete: z.boolean(),
+  }),
+);
+
 // The SSE events of /playback/:recording/stream (A§10); each event's data is one of these as JSON. `state` is
 // {topic: value}; a delta's `data` is merged into state[topic] when it is an object, else it replaces it. A snapshot
 // carries every lap and stint row so far; `laps` only the rows that changed since the last snapshot or `laps`, which
@@ -192,6 +208,7 @@ export type Pits = z.infer<typeof Pits>;
 export type RaceControl = z.infer<typeof RaceControl>;
 export type Status = z.infer<typeof Status>;
 export type Live = z.infer<typeof Live>;
+export type Recordings = z.infer<typeof Recordings>;
 export type PlaybackSnapshot = z.infer<typeof PlaybackSnapshot>;
 export type PlaybackLaps = z.infer<typeof PlaybackLaps>;
 export type PlaybackDelta = z.infer<typeof PlaybackDelta>;

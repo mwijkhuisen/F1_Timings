@@ -395,6 +395,31 @@ export function createApp({
     return c.json(body, 200, NO_STORE);
   });
 
+  // Every recording, newest first: the replay list.
+  api.get('/recordings', async (c) => {
+    const rows = await db
+      .selectFrom('recording as r')
+      .innerJoin('session as s', 's.session_key', 'r.session_key')
+      .innerJoin('meeting as m', 'm.meeting_key', 's.meeting_key')
+      .select([
+        'r.id',
+        'r.session_key',
+        'm.year',
+        'm.name as meeting_name',
+        's.name as session_name',
+        's.type as session_type',
+        's.date_start',
+        'r.started_at',
+        'r.ended_at',
+        'r.complete',
+      ])
+      .orderBy('r.started_at', 'desc')
+      .orderBy('r.id', 'desc')
+      .execute();
+    const body = rows.map((r) => ({ ...r, id: Number(r.id) })); // bigint comes back as a string
+    return c.json(body, 200, NO_STORE);
+  });
+
   // State at T over SSE (A§10, A§11.3). Parameters are checked before any lookup, and nothing from the URL reaches a path.
   api.get('/playback/:recording/stream', async (c) => {
     const id = c.req.param('recording');
