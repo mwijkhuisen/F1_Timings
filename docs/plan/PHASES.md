@@ -9,7 +9,7 @@ Status: approved by the owner (2026-10-25). It builds on `ARCHITECTURE.md` (cite
 | Now → mid Nov 2026 | **P0**, **P1a–P1c**, **P2-rec** (owner, alongside) | Foundation and data first. Record live feeds while the 2026 season still runs |
 | Nov 2026 | **P1d–P1f**, **P2a** spike (Las Vegas 20–22 Nov or Lusail 27–29 Nov; Yas Marina 4–6 Dec is the last chance) | v1 live on the VM. The live connection has to be proven while sessions still happen |
 | Dec 2026 → Feb 2027 | **P2b–P2e** | No sessions; build on the recordings and archive files |
-| 2027 pre-season testing / first race | **P2f** | Live verified on a real session |
+| Las Vegas 20–22 Nov 2026 (fallbacks: Lusail 27–29 Nov, Yas Marina 4–6 Dec) | **P2f** | Live verified on a real session |
 | After P2 | **P3a–P3c** | History back to 2018 (and optional pre-2018 lap times) |
 
 Remaining 2026 weekends (OpenF1 schedule): Austin (race 25 Oct) · Mexico City 30 Oct–1 Nov · São Paulo 6–8 Nov · Las Vegas 20–22 Nov · Lusail 27–29 Nov · Yas Marina 4–6 Dec.
@@ -227,7 +227,7 @@ Remaining 2026 weekends (OpenF1 schedule): Austin (race 25 Oct) · Mexico City 3
 
 - **Goal:** live in production.
 - **Acceptance:**
-  - [weekend] 2027 pre-season testing or the first race weekend: every session is recorded automatically, the live view runs with a delay on the phone for a full session, and the replay works afterwards.
+  - [weekend] Las Vegas 20–22 Nov 2026 (owner, 2026-11-06; fallbacks Lusail 27–29 Nov and Yas Marina 4–6 Dec 2026): every session is recorded automatically, the live view runs with a delay on the phone for a full session, and the replay works afterwards.
   - [box] measure resources and update A§14.2.
 
 ### P3a: History 2018–2022 from the F1 archive

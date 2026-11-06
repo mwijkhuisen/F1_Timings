@@ -51,6 +51,8 @@ program='
   no_token_argument: all($s[]; all((.value.command // [])[], (.value.entrypoint // [])[];
     (startswith("--token") | not) or . == "--token-file")),
   tunnel_token_file: any($c.services.cloudflared.command[]?; . == "--token-file"),
+  # http2 over tcp/7844 only (P2f): QUIC fails on the VM and the firewall has no udp/7844 (nft-check.sh).
+  tunnel_http2: (($c.services.cloudflared.command // []) | index(["--protocol", "http2"]) != null),
   healthchecks: all($s[] | select(.key != "migrate"); .value.healthcheck.test != null and .value.healthcheck.disable != true),
   images_pinned: all($s[]; .value.image | test("@sha256:[0-9a-f]{64}$") or . == "f1-server:ci" or . == "f1-web:ci"),
   networks_named_f1: ($n != {} and all($n | to_entries[]; (.key | test("^f1-[a-z-]+$")) and .value.name == .key
@@ -109,3 +111,5 @@ negative "api with /srv/f1/live read-write" only_bind_allowlist \
   '(.services.api.volumes[] | select(.target == "/srv/f1/live") | .read_only) = false'
 negative "api with an extra bind" only_bind_allowlist \
   '.services.api.volumes += [{type: "bind", source: "/srv/f1/state/live", target: "/srv/f1/state", read_only: true}]'
+negative "cloudflared without --protocol http2" tunnel_http2 \
+  '.services.cloudflared.command |= map(select(. != "--protocol" and . != "http2"))'

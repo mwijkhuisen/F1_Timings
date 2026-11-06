@@ -233,6 +233,9 @@ services:
   # the image binds 0.0.0.0:20241 by default, which caddy could then reach. The image's own
   # `tunnel ready` asks that endpoint (200 once a connection is up); f1-tick restarts it when
   # unhealthy. cloudflare/cloudflared 2026.10.3 (2026-10-21), multi-arch index digest.
+  # --protocol http2: on the VM QUIC (udp/7844) fails with "tls: no application protocol" and
+  # cloudflared falls back to http2 only after ~130 s, longer than the 120 s smoke test of
+  # f1-update and f1-install (seen 2026-11-04). So http2 is pinned and the firewall allows tcp/7844 only.
   cloudflared:
     <<: *hardening
     image: cloudflare/cloudflared:2026.10.3@sha256:faa8e0a1475f137c910be6025f43c8e4092fdd35461b31e19fd1390657a1ff39
@@ -243,6 +246,8 @@ services:
       - info
       - --edge-ip-version
       - "4"
+      - --protocol
+      - http2
       - --metrics
       - 127.0.0.1:20241
       - run
@@ -308,7 +313,7 @@ networks:
     ipam:
       config:
         - subnet: 10.62.4.0/24
-  # cloudflared: tcp+udp/7844 to Cloudflare's tunnel ranges (cf_tunnel4), DNS.
+  # cloudflared: tcp/7844 (http2) to Cloudflare's tunnel ranges (cf_tunnel4), DNS.
   f1-tunnel:
     name: f1-tunnel
     enable_ipv6: false

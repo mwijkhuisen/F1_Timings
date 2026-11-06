@@ -3,7 +3,7 @@
 # Proves deploy/host/nftables-f1.conf in a throw-away Debian 13 container (NET_ADMIN there only:
 # nft touches the container's own network namespace, never the runner's): `nft -c`, two loads
 # in a row (the `table` + `delete table` idiom makes a reload idempotent), f1-resolvers filling
-# the resolver set, and the listed table. Also: the file never contains `flush ruleset`.
+# the resolver set, and the listed table (tunnel rule tcp/7844, no udp/7844). Also: the file never contains `flush ruleset`.
 # The container is on the default bridge because apt needs deb.debian.org.
 # Usage: bash deploy/tests/nft-check.sh
 set -euo pipefail
@@ -32,7 +32,12 @@ docker run --rm --cap-add NET_ADMIN \
     nft -f /f1/nftables-f1.conf
     /f1/bin/f1-resolvers
     nft list table inet f1
+    # P2f: cloudflared runs http2, so the tunnel rule is tcp/7844 and no udp/7844 rule exists.
+    listed=$(nft list table inet f1)
+    grep -Eq "iifname \"f1-tunnel\" tcp dport 7844 " <<<"$listed" ||
+      { echo "nft-check: no f1-tunnel rule with tcp dport 7844" >&2; exit 1; }
+    ! grep -Eq "udp.*7844" <<<"$listed" || { echo "nft-check: a udp 7844 rule exists" >&2; exit 1; }
     [[ $(nft list tables) == "table inet f1" ]] || { echo "nft-check: unexpected tables: $(nft list tables)" >&2; exit 1; }
     for set in resolvers4 cf4 cf_tunnel4; do nft list set inet f1 "$set" >/dev/null; done
-    echo "nft-check: nft -c, two loads and f1-resolvers pass; only table inet f1 exists"
+    echo "nft-check: nft -c, two loads and f1-resolvers pass; only table inet f1 exists; tunnel tcp/7844 only"
   '
