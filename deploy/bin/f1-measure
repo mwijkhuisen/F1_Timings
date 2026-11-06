@@ -1,0 +1,179 @@
+#!/usr/bin/env bash
+# f1-measure ([box]; A§14.2, P2f): CPU, memory and disk per f1 service over a session, to tune
+# the compose limits. Run as root (the TSV lives in the root-only /srv/f1/state), with sudo or
+# systemd-run; it only reads, and only the containers of the compose project f1 (never rws).
+#
+# Samples go to /srv/f1/state/measure-<UTC start>.tsv (0600), tab-separated, <epoch> first:
+#   stats  <service> <cpu %> <mem MiB> <limit MiB>   every interval (100 % = one core, like `cpus`)
+#   disk   <what> <bytes>                            at the start and at the end: live-recordings,
+#                                                    db-volume, <service>-container (its logs)
+#   state  <service> <OOMKilled> <RestartCount>      at the end
+# Then it prints a Markdown summary (per service, then disk) on stdout. SIGINT and SIGTERM (Ctrl-C,
+# systemctl stop) end the run early and still write the end rows and the summary, so the data is
+# kept. --summary <file> rebuilds the summary from a TSV (a run that was killed, or after a reboot).
+#
+# Exit: 0 done (also stopped by a signal); 1 no f1 container runs, or not root, or no such file;
+# 64 usage. Duration: GNU sleep syntax (30s, 90m, 5h); interval: whole seconds, default 10.
+#
+# Usage: f1-measure <duration: 30s|90m|5h> [<interval seconds, default 10>] | --summary <file>
+# On the box: sudo systemd-run --unit f1-measure --collect /usr/local/bin/f1-measure 5h
+#             journalctl -u f1-measure
+set -euo pipefail
+# shellcheck source=deploy/bin/f1-lib.sh
+. "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/f1-lib.sh"
+
+readonly PS_F1=(docker ps --no-trunc --filter label=com.docker.compose.project=f1)
+
+usage() {
+  echo "usage: f1-measure <duration: 30s|90m|5h> [<interval seconds, default 10>] | --summary <file>" >&2
+  exit 64
+}
+mode=run summary_file='' duration='' interval=10
+if [[ ${1:-} == --summary ]]; then
+  (($# == 2)) || usage
+  mode=summary summary_file=$2
+else
+  (($# >= 1 && $# <= 2)) && [[ $1 =~ ^[0-9]+[smh]?$ ]] || usage
+  duration=$1 interval=${2:-10}
+  [[ $interval =~ ^[1-9][0-9]{0,3}$ ]] || usage
+fi
+((EUID == 0)) || die "run as root (sudo)"
+
+# summary <tsv>: the Markdown tables.
+summary() {
+  local first last
+  [[ -r $1 ]] || die "cannot read $1"
+  first=$(head -n 1 "$1" | cut -f1) last=$(tail -n 1 "$1" | cut -f1)
+  [[ $first =~ ^[0-9]+$ && $last =~ ^[0-9]+$ ]] || die "$1 holds no samples"
+  printf 'File: %s\nWindow: %s to %s UTC\n\n' "$1" \
+    "$(date -u -d "@$first" +%Y-%m-%dT%H:%M:%SZ)" "$(date -u -d "@$last" +%Y-%m-%dT%H:%M:%SZ)"
+  awk -F'\t' '
+    function see(s) { if (!(s in seen)) { seen[s] = 1; svc[++ns] = s } }
+    $2 == "stats" {
+      see($3); n[$3]++; sum[$3] += $4
+      if ($4 + 0 > cmax[$3]) cmax[$3] = $4 + 0
+      if ($5 + 0 > mmax[$3]) mmax[$3] = $5 + 0
+      lim[$3] = $6
+    }
+    $2 == "state" { see($3); oom[$3] = $4; rst[$3] = $5 }
+    $2 == "disk" {
+      if (!($3 in first)) { what[++nd] = $3; first[$3] = $4 } else { last[$3] = $4 }
+    }
+    END {
+      print "| service | samples | CPU mean % | CPU max % | mem max MiB | limit MiB | mem max % of limit | OOM killed | restarts |"
+      print "|---|---:|---:|---:|---:|---:|---:|---|---:|"
+      for (i = 1; i <= ns; i++) {
+        s = svc[i]
+        if (n[s]) {
+          cpu = sprintf("%.1f | %.1f", sum[s] / n[s], cmax[s])
+          mem = sprintf("%.1f | %.1f | %s", mmax[s], lim[s], lim[s] > 0 ? sprintf("%.1f", 100 * mmax[s] / lim[s]) : "-")
+        } else {
+          cpu = "- | -"; mem = "- | - | -"
+        }
+        printf "| %s | %d | %s | %s | %s | %s |\n", s, n[s], cpu, mem, (s in oom) ? oom[s] : "-", (s in rst) ? rst[s] : "-"
+      }
+      print ""
+      print "| disk | start bytes | end bytes | growth MiB |"
+      print "|---|---:|---:|---:|"
+      for (i = 1; i <= nd; i++) {
+        w = what[i]
+        if (w in last) printf "| %s | %s | %s | %.1f |\n", w, first[w], last[w], (last[w] - first[w]) / 1048576
+        else printf "| %s | %s | - | - |\n", w, first[w]
+      }
+    }' "$1"
+}
+
+if [[ $mode == summary ]]; then
+  summary "$summary_file"
+  exit 0
+fi
+
+# svc <container name>: f1-db-1 -> db
+svc() {
+  local n=${1#f1-}
+  printf '%s' "${n%-*}"
+}
+
+start=$(date -u +%Y%m%dT%H%M%SZ)
+tsv=$F1_STATE/measure-$start.tsv
+mapfile -t ids < <("${PS_F1[@]}" -q)
+((${#ids[@]})) || die "no f1 container runs: nothing to measure"
+: >"$tsv" # 0600 by f1-lib's umask
+
+# du_row <what> <path>: a disk row; skipped when the path is missing.
+du_row() {
+  local bytes
+  bytes=$(du -sb -- "$2" 2>/dev/null | cut -f1 || true) # a file that vanishes mid-count is fine
+  if [[ $bytes =~ ^[0-9]+$ ]]; then
+    printf '%s\tdisk\t%s\t%s\n' "$(date +%s)" "$1" "$bytes" >>"$tsv"
+  fi
+}
+disk_rows() {
+  local mp root id name
+  du_row live-recordings /srv/f1/live
+  mp=$(docker volume inspect -f '{{.Mountpoint}}' f1_pgdata 2>/dev/null) || mp=''
+  [[ -z $mp ]] || du_row db-volume "$mp"
+  root=$(docker info -f '{{.DockerRootDir}}' 2>/dev/null) || root=''
+  [[ -z $root ]] || while read -r id name; do
+    du_row "$(svc "$name")-container" "$root/containers/$id"
+  done < <("${PS_F1[@]}" --format '{{.ID}} {{.Names}}')
+}
+state_rows() {
+  local id name oom restarts
+  while read -r id name; do
+    read -r oom restarts < <(docker inspect -f '{{.State.OOMKilled}} {{.RestartCount}}' "$id") || continue
+    printf '%s\tstate\t%s\t%s\t%s\n' "$(date +%s)" "$(svc "$name")" "$oom" "$restarts" >>"$tsv"
+  done < <("${PS_F1[@]}" -a --format '{{.ID}} {{.Names}}')
+}
+
+# ponytail: sampled every interval (docker stats' ~1 s CPU window), so a spike shorter than the interval can be missed; read cgroup cpu.stat/memory.events if a limit gets tight.
+sample() {
+  local ids
+  while :; do
+    # Only the f1 containers: a bare `docker stats` would list Waterheight's too (invariant 5).
+    mapfile -t ids < <("${PS_F1[@]}" -q)
+    if ((${#ids[@]})); then
+      docker stats --no-stream --format '{{.Name}}\t{{.CPUPerc}}\t{{.MemUsage}}' "${ids[@]}" |
+        awk -F'\t' -v t="$(date +%s)" '
+          function mib(s,  v, u) {
+            v = s + 0; u = s; sub(/^[0-9.]+/, "", u)
+            if (u == "B") return v / 1048576
+            if (u == "kB") return v * 1000 / 1048576
+            if (u == "KiB") return v / 1024
+            if (u == "MB") return v * 1000000 / 1048576
+            if (u == "MiB") return v
+            if (u == "GB") return v * 1000000000 / 1048576
+            if (u == "GiB") return v * 1024
+            return 0
+          }
+          {
+            n = $1; sub(/^f1-/, "", n); sub(/-[0-9]+$/, "", n)
+            split($3, m, " / "); c = $2; sub(/%/, "", c)
+            printf "%s\tstats\t%s\t%.2f\t%.1f\t%.1f\n", t, n, c, mib(m[1]), mib(m[2])
+          }' >>"$tsv" || true
+    fi
+    sleep "$interval"
+  done
+}
+
+log "measuring ${#ids[@]} f1 containers for $duration, every $interval s: $tsv"
+disk_rows
+sample &
+sampler=$!
+sleeper=''
+# On the end and on INT/TERM: stop the sampler, write the end rows, print the summary.
+finish() {
+  trap - INT TERM EXIT
+  kill "$sampler" ${sleeper:+"$sleeper"} 2>/dev/null || true
+  wait "$sampler" 2>/dev/null || true
+  disk_rows
+  state_rows
+  log "done: $tsv"
+  summary "$tsv"
+  exit 0
+}
+trap finish INT TERM EXIT
+# wait, not a foreground sleep: a trapped signal ends `wait` at once.
+sleep "$duration" &
+sleeper=$!
+wait "$sleeper"

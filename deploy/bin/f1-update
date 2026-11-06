@@ -4,8 +4,9 @@
 # Deploys the newest images: lock; readiness (f1.env and the secrets); table inet f1 loaded (else
 # exit 1; a stack that f1-tick stopped without it starts again); resolve
 # ghcr.io/mwijkhuisen/f1-{server,web}:main to their digests; wait while their revision labels
-# differ (a release half pushed); skip an unchanged or known-bad pair; otherwise migrate, `up -d`
-# and smoke-test (/healthz 200, then every f1 container healthy). Success moves candidate.env to
+# differ (a release half pushed); skip an unchanged or known-bad pair; defer while live records
+# (recorder_status not idle and under 5 min old; a drill too); otherwise migrate, `up -d` and
+# smoke-test (/healthz 200, then every f1 container healthy). Success moves candidate.env to
 # current.env. A failure keeps the pair in failed.env (never retried automatically) and rolls back
 # to current.env. Migrations are never undone (expand/contract).
 #
@@ -18,9 +19,9 @@
 # (the rollback target) never names a tag that can move. The image not named stays as
 # current.env has it (no pull of :main during a drill).
 #
-# Exit: 0 deployed, up to date, known-bad skipped, release half pushed, not configured, busy, or
-# the default pull failed (transient); 1 no firewall, or the deploy failed (rolled back, or the
-# first deploy failed); 64 usage.
+# Exit: 0 deployed, up to date, known-bad skipped, deferred (live is recording), release half
+# pushed, not configured, busy, or the default pull failed (transient); 1 no firewall, or the
+# deploy failed (rolled back, or the first deploy failed); 64 usage.
 #
 # Usage: f1-update [--server <ref>] [--web <ref>]
 set -euo pipefail
@@ -148,6 +149,18 @@ fi
 if [[ -f $FAILED ]] && cmp -s "$CANDIDATE" "$FAILED"; then
   rm -f -- "$CANDIDATE"
   log "skipping known-bad $pair; rm $FAILED to retry"
+  exit 0
+fi
+
+# A deploy recreates live and ends its recording (complete = f): hold while it records. Not only
+# 'recording': the recorder writes 'connecting' during a reconnect inside a recording. Fails open
+# (no db container on a first deploy, db down or wedged: the query gets 20 s) and on a row older
+# than 5 min (live is down), so a fix can always deploy. A drill is held too.
+held=$(timeout 20 docker exec f1-db-1 psql -U postgres -d f1 -tAc "SELECT coalesce(session_key::text, '-') FROM recorder_status WHERE state <> 'idle' AND updated_at > now() - interval '5 minutes'" 2>/dev/null) || held=''
+held=${held//[[:space:]]/}
+if [[ -n $held ]]; then
+  rm -f -- "$CANDIDATE"
+  log "live is recording (session $held): deploy deferred to a later run"
   exit 0
 fi
 
