@@ -63,6 +63,7 @@ From Waterheight's list, the ones that apply here:
   - Docker does not publish a port for a container that is only on internal networks: caddy also sits on the non-internal `f1-publish`.
   - `pg_isready` needs `-U postgres` when the container UID has no passwd entry (62532).
   - cloudflared's metrics bind to `0.0.0.0:20241` by default: pass `--metrics 127.0.0.1:20241`.
+  - cloudflared's QUIC fails on the VM (`tls: no application protocol`) and its http2 fallback takes ~130 s, longer than the 120 s smoke test, so it is pinned to `--protocol http2` and the firewall allows tcp/7844 only.
   - Docker never restarts an *unhealthy* container (only an exited one), so `f1-tick` does.
   - The stock caddy image's file capability breaks exec under `cap_drop: ALL`: the web image strips it.
 - **Caddy 2.11:**

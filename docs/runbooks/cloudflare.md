@@ -68,7 +68,7 @@ Run it from a browser outside the VM, after A2, A3 and the first deploy.
 | Set | Used by | Source |
 |---|---|---|
 | `cf4` | `api`, tcp/443 to `<team>.cloudflareaccess.com` | https://www.cloudflare.com/ips-v4 |
-| `cf_tunnel4` | `cloudflared`, tcp+udp/7844 | `198.41.192.0/24` and `198.41.200.0/24`, from Cloudflare's "Tunnel with firewall" documentation (developers.cloudflare.com, Cloudflare One, Cloudflare Tunnel) |
+| `cf_tunnel4` | `cloudflared`, tcp/7844 (http2) | `198.41.192.0/24` and `198.41.200.0/24`, from Cloudflare's "Tunnel with firewall" documentation (developers.cloudflare.com, Cloudflare One, Cloudflare Tunnel) |
 
 Symptoms of a stale set: `/api` answers 503 `unavailable` once the cached Access certs are over an hour old (`cf4`); `cloudflared` shows no connections (`cf_tunnel4`). To refresh:
 

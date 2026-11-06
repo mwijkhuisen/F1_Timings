@@ -18,6 +18,7 @@ Both timers are enabled by the owner after install (`docs/runbooks/install.md`, 
 | `/srv/f1/state/disk` | `<UTC time> <disk use % of /srv/f1>`, written by `f1-tick` |
 | `/srv/f1/state/live/` | the only part of the state directory the `live` container sees (as `/srv/f1/state`); `f1tv-token` lives here. `62532:62532 0700`; `/srv/f1/state` itself stays root `0700` |
 | `/srv/f1/live/<session_key>-<startedAt>/` | one recording: `feed.jsonl` (current segment), `feed-<ms>.jsonl.gz` (finished ones), `snapshots/<ms>.json.gz`. `62532:62532`, files `0600` |
+| `/srv/f1/state/measure-<UTC>.tsv` | the samples of one `f1-measure` run, root `0600` (`docs/runbooks/weekend.md`) |
 | `/etc/f1/compose.yaml`, `/usr/local/bin/f1-*` | root-owned copies installed by `f1-install` |
 
 ```bash
@@ -38,6 +39,7 @@ sudo cat /srv/f1/state/current.env
 | `another f1-update or f1-install is running` | the lock is held | 0 |
 | `server revision <a> and web revision <b> differ; waiting for the release to finish` | the two `:main` images come from different commits (the release is half pushed); drills skip this check | 0 |
 | `skipping known-bad … ; rm /srv/f1/state/failed.env to retry` | this pair already failed | 0 |
+| `live is recording (session N): deploy deferred to a later run` | `recorder_status` is not `idle` and under 5 minutes old, so a deploy would end the recording (`N` is `-` when it names no session); the next run retries. A drill is held too. It fails open: an unreachable db or a stale row does not hold | 0 |
 | `error: table inet f1 is not loaded: no deploy without the f1 firewall (systemctl restart f1-firewall)` | the firewall table is missing; nothing deployed | 1 |
 | `error: cannot resolve the images (--server …, --web …)` | a drill ref could not be pulled (a ref with a registry host is always pulled and recorded by digest) | 1 |
 | `smoke test failed: …` (two forms, below), `deploy of … failed: rolling back to …`, `rolled back to …` | the new pair failed migrate, `up` or the smoke test; the old pair runs again | 1 |
@@ -114,7 +116,7 @@ Expected: the changed files as `changed  <path>`, `ok` for the rest, and `f1-ins
 P2c adds the `live` service, two secrets (`f1tv_username`, `f1tv_password`) and two host directories. The compose file and the image must arrive in this order:
 
 1. Merge the PR.
-2. Approve the release in GitHub (the `production` environment). **Not during a session**: a deploy restarts `live`, which closes the open `recording` row with `complete = false` and starts a new one on the next tick.
+2. Approve the release in GitHub (the `production` environment). **Not during a session**: a deploy restarts `live`, which closes the open `recording` row with `complete = false` and starts a new one on the next tick. Since P2f `f1-update` defers a deploy by itself while `live` records, but `f1-install` has no such hold and must still not run during a session.
 3. Wait until `f1-update` has deployed the new image: `sudo journalctl -u f1-update --since '-30min' --no-pager` shows `deployed …`, and `sudo cat /srv/f1/state/current.env` names the new digests. The old compose file is still installed, so there is no `live` yet.
 4. Run `f1-install` from a fresh checkout (`docs/runbooks/install.md`, step 3; update the checkout first). It creates `/srv/f1/live` and `/srv/f1/state/live` (`62532:62532 0700`) and the two empty secret files, installs the new `compose.yaml` and, because a deploy is running, recreates the stack with the images of `current.env`, so `live` starts now. It ends with the two files to fill. Do this outside a session too.
 5. Fill `f1tv_username` and `f1tv_password` straight away (`docs/runbooks/install.md`, step 4, A4). Until then `live` runs, records nothing and shows `no_credentials` on the status panel; it reads the files again on its next tick (within 30 s).
@@ -125,6 +127,18 @@ Why this order, and what the reverse does:
 - **Secrets still empty:** `f1-update` checks every entry of `F1_SECRETS` and, while one is empty, logs `not configured: run f1-install, then fill …` and exits 0. So no deploy happens, a new release included, until both `f1tv_*` files are filled. This is deliberate: nothing is deployed that is half configured.
 
 To rotate the F1 TV password, change it on formula1.com, then write the new one only into `/etc/f1/secrets/f1tv_password` on the VM (in place, keeping `root:62008 0440`); it goes nowhere else. `live` reads the file at its next login, so a token already on disk keeps working until it expires.
+
+## Rolling out P2f (the deploy hold, `f1-measure`, cloudflared over http2) [owner]
+
+P2f changes `f1-update`, adds `f1-measure`, and pins cloudflared to `--protocol http2` with a firewall that allows tcp/7844 only (A§14.3).
+
+1. Merge the PR and approve the release in GitHub. Never during a session (`docs/runbooks/weekend.md`).
+2. Wait until `f1-update` has deployed the new images (`deployed …` in `sudo journalctl -u f1-update --since '-30min' --no-pager`). This is still the old `f1-update`, compose file and firewall.
+3. Outside a session, update the checkout and run `f1-install` from it (see "Host-file changes" below). It installs the new `f1-update` and `f1-measure`, loads the new firewall (`f1-firewall.service restarted (table inet f1 reloaded)`) and, because a deploy is running, recreates the stack with the new compose file.
+4. Expect exit 0 and `f1-install: N change(s)` well within the 120 s smoke test, because cloudflared now connects over http2 at once (before, its QUIC attempt failed with `tls: no application protocol` and its fallback took ~130 s). `sudo docker logs f1-cloudflared-1` shows connections registered with `protocol=http2`.
+5. `sudo nft list table inet f1` shows the tunnel rule with `tcp dport 7844` only, no `udp`.
+
+Next time `live` records, `journalctl -u f1-update` shows `deploy deferred` for a deploy that arrives meanwhile. The weekend checklist is `docs/runbooks/weekend.md`.
 
 ## F1 TV token by hand (when the automatic login fails) [owner]
 
