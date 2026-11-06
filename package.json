@@ -12,8 +12,8 @@
     "test:integration": "vitest run --project integration"
   },
   "devDependencies": {
-    "@biomejs/biome": "2.6.2",
-    "@types/node": "26.6.5",
+    "@biomejs/biome": "2.6.4",
+    "@types/node": "26.6.6",
     "fast-check": "4.10.2",
     "happy-dom": "21.0.4",
     "msw": "3.0.3",
