@@ -15,6 +15,7 @@ Both timers are enabled by the owner after install (`docs/runbooks/install.md`, 
 | `/srv/f1/state/current.env` | the image pair that last passed its smoke test |
 | `/srv/f1/state/failed.env` | the pair that last failed; never retried until you remove the file |
 | `/srv/f1/state/candidate.env` | the pair being deployed (only while a run is going) |
+| `/srv/f1/state/held-since` | while a hold lasts: the epoch of its first deferral (its mtime is the last one); removed when a deploy starts |
 | `/srv/f1/state/disk` | `<UTC time> <disk use % of /srv/f1>`, written by `f1-tick` |
 | `/srv/f1/state/live/` | the only part of the state directory the `live` container sees (as `/srv/f1/state`); `f1tv-token` lives here. `62532:62532 0700`; `/srv/f1/state` itself stays root `0700` |
 | `/srv/f1/live/<session_key>-<startedAt>/` | one recording: `feed.jsonl` (current segment), `feed-<ms>.jsonl.gz` (finished ones), `snapshots/<ms>.json.gz`. `62532:62532`, files `0600` |
@@ -39,7 +40,9 @@ sudo cat /srv/f1/state/current.env
 | `another f1-update or f1-install is running` | the lock is held | 0 |
 | `server revision <a> and web revision <b> differ; waiting for the release to finish` | the two `:main` images come from different commits (the release is half pushed); drills skip this check | 0 |
 | `skipping known-bad … ; rm /srv/f1/state/failed.env to retry` | this pair already failed | 0 |
-| `live is recording (session N): deploy deferred to a later run` | `recorder_status` is not `idle` and under 5 minutes old, so a deploy would end the recording (`N` is `-` when it names no session); the next run retries. A drill is held too. It fails open: an unreachable db or a stale row does not hold | 0 |
+| `live is recording (session N): deploy deferred to a later run` | `recorder_status` is not `idle`, under 5 minutes old and not over 1 minute in the future, so a deploy would end the recording (`N` is `-` when it names no session); the next run retries. A drill is held too. It fails open: an unreachable db or a stale row does not hold. To deploy during a recording anyway: `sudo docker stop f1-live-1` (closes it, `complete = f`), then `sudo systemctl start f1-update` | 0 |
+| `error: deploys held for over 14 h (session N, since <UTC time>): deploying anyway; check recorder_status` | the hold lasted 14 h without a gap (a stuck row, or a recorder that is broken but still ticks); the deploy goes ahead. Look at `recorder_status` and `docker logs f1-live-1` | continues |
+| `warning: cannot read recorder_status: deploying without the hold` | the query failed (no db container, db down or wedged, a renamed column); the run deploys without the hold | continues |
 | `error: table inet f1 is not loaded: no deploy without the f1 firewall (systemctl restart f1-firewall)` | the firewall table is missing; nothing deployed | 1 |
 | `error: cannot resolve the images (--server …, --web …)` | a drill ref could not be pulled (a ref with a registry host is always pulled and recorded by digest) | 1 |
 | `smoke test failed: …` (two forms, below), `deploy of … failed: rolling back to …`, `rolled back to …` | the new pair failed migrate, `up` or the smoke test; the old pair runs again | 1 |
@@ -134,7 +137,7 @@ P2f changes `f1-update`, adds `f1-measure`, and pins cloudflared to `--protocol 
 
 1. Merge the PR and approve the release in GitHub. Never during a session (`docs/runbooks/weekend.md`).
 2. Wait until `f1-update` has deployed the new images (`deployed …` in `sudo journalctl -u f1-update --since '-30min' --no-pager`). This is still the old `f1-update`, compose file and firewall.
-3. Outside a session, update the checkout and run `f1-install` from it (see "Host-file changes" below). It installs the new `f1-update` and `f1-measure`, loads the new firewall (`f1-firewall.service restarted (table inet f1 reloaded)`) and, because a deploy is running, recreates the stack with the new compose file.
+3. Outside a session, update the checkout and run `f1-install` from it (see "Host-file changes" above). It installs the new `f1-update` and `f1-measure`, loads the new firewall (`f1-firewall.service restarted (table inet f1 reloaded)`) and, because a deploy is running, recreates the stack with the new compose file.
 4. Expect exit 0 and `f1-install: N change(s)` well within the 120 s smoke test, because cloudflared now connects over http2 at once (before, its QUIC attempt failed with `tls: no application protocol` and its fallback took ~130 s). `sudo docker logs f1-cloudflared-1` shows connections registered with `protocol=http2`.
 5. `sudo nft list table inet f1` shows the tunnel rule with `tcp dport 7844` only, no `udp`.
 
@@ -167,7 +170,7 @@ After a session, plus 30 minutes (`<path>` is the `path` column, `<session_key>-
 
 ```bash
 sudo docker compose -p f1 -f /etc/f1/compose.yaml --env-file /srv/f1/state/current.env exec db \
-  psql -U postgres -d f1 -c "SELECT session_key, path, started_at, ended_at, bytes, complete FROM recording ORDER BY id DESC LIMIT 3"
+  psql -U postgres -d f1 -c "SELECT id, session_key, path, started_at, ended_at, bytes, complete FROM recording ORDER BY id DESC LIMIT 3"
 sudo ls -l /srv/f1/live/<path> /srv/f1/live/<path>/snapshots | tail -n 5
 sudo du -sh /srv/f1/live/<path>
 sudo sh -c 'gzip -t /srv/f1/live/<path>/feed-*.jsonl.gz && zcat /srv/f1/live/<path>/feed-*.jsonl.gz | wc -l'

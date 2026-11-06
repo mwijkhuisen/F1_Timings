@@ -4,16 +4,21 @@
 # systemd-run; it only reads, and only the containers of the compose project f1 (never rws).
 #
 # Samples go to /srv/f1/state/measure-<UTC start>.tsv (0600), tab-separated, <epoch> first:
-#   stats  <service> <cpu %> <mem MiB> <limit MiB>   every interval (100 % = one core, like `cpus`)
+#   stats  <service> <cpu %> <mem MiB> <limit MiB>   every sample (100 % = one core, like `cpus`)
 #   disk   <what> <bytes>                            at the start and at the end: live-recordings,
 #                                                    db-volume, <service>-container (its logs)
-#   state  <service> <OOMKilled> <RestartCount>      at the end
+#   event  <service> <oom|die|restart>               when it happens, from `docker events` (not
+#                                                    State.OOMKilled or RestartCount: Docker resets
+#                                                    the first on a restart, and the second misses
+#                                                    `docker restart`). A policy restart is a die;
+#                                                    `restart` is a `docker restart` (f1-tick's).
 # Then it prints a Markdown summary (per service, then disk) on stdout. SIGINT and SIGTERM (Ctrl-C,
 # systemctl stop) end the run early and still write the end rows and the summary, so the data is
 # kept. --summary <file> rebuilds the summary from a TSV (a run that was killed, or after a reboot).
 #
 # Exit: 0 done (also stopped by a signal); 1 no f1 container runs, or not root, or no such file;
-# 64 usage. Duration: GNU sleep syntax (30s, 90m, 5h); interval: whole seconds, default 10.
+# 64 usage. Duration: GNU sleep syntax (30s, 90m, 5h); interval: whole seconds, default 10, the
+# pause between two samples (a sample takes about 2-3 s: `docker stats --no-stream`).
 #
 # Usage: f1-measure <duration: 30s|90m|5h> [<interval seconds, default 10>] | --summary <file>
 # On the box: sudo systemd-run --unit f1-measure --collect /usr/local/bin/f1-measure 5h
@@ -33,7 +38,7 @@ if [[ ${1:-} == --summary ]]; then
   (($# == 2)) || usage
   mode=summary summary_file=$2
 else
-  (($# >= 1 && $# <= 2)) && [[ $1 =~ ^[0-9]+[smh]?$ ]] || usage
+  (($# >= 1 && $# <= 2)) && [[ $1 =~ ^[1-9][0-9]*[smh]?$ ]] || usage
   duration=$1 interval=${2:-10}
   [[ $interval =~ ^[1-9][0-9]{0,3}$ ]] || usage
 fi
@@ -55,13 +60,13 @@ summary() {
       if ($5 + 0 > mmax[$3]) mmax[$3] = $5 + 0
       lim[$3] = $6
     }
-    $2 == "state" { see($3); oom[$3] = $4; rst[$3] = $5 }
+    $2 == "event" { see($3); ev[$3 SUBSEP $4]++ }
     $2 == "disk" {
       if (!($3 in first)) { what[++nd] = $3; first[$3] = $4 } else { last[$3] = $4 }
     }
     END {
-      print "| service | samples | CPU mean % | CPU max % | mem max MiB | limit MiB | mem max % of limit | OOM killed | restarts |"
-      print "|---|---:|---:|---:|---:|---:|---:|---|---:|"
+      print "| service | samples | CPU mean % | CPU max % | mem max MiB | limit MiB | mem max % of limit | OOM kills | exits | restarts |"
+      print "|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|"
       for (i = 1; i <= ns; i++) {
         s = svc[i]
         if (n[s]) {
@@ -70,7 +75,7 @@ summary() {
         } else {
           cpu = "- | -"; mem = "- | - | -"
         }
-        printf "| %s | %d | %s | %s | %s | %s |\n", s, n[s], cpu, mem, (s in oom) ? oom[s] : "-", (s in rst) ? rst[s] : "-"
+        printf "| %s | %d | %s | %s | %d | %d | %d |\n", s, n[s], cpu, mem, ev[s SUBSEP "oom"], ev[s SUBSEP "die"], ev[s SUBSEP "restart"]
       }
       print ""
       print "| disk | start bytes | end bytes | growth MiB |"
@@ -118,14 +123,6 @@ disk_rows() {
     du_row "$(svc "$name")-container" "$root/containers/$id"
   done < <("${PS_F1[@]}" --format '{{.ID}} {{.Names}}')
 }
-state_rows() {
-  local id name oom restarts
-  while read -r id name; do
-    read -r oom restarts < <(docker inspect -f '{{.State.OOMKilled}} {{.RestartCount}}' "$id") || continue
-    printf '%s\tstate\t%s\t%s\t%s\n' "$(date +%s)" "$(svc "$name")" "$oom" "$restarts" >>"$tsv"
-  done < <("${PS_F1[@]}" -a --format '{{.ID}} {{.Names}}')
-}
-
 # ponytail: sampled every interval (docker stats' ~1 s CPU window), so a spike shorter than the interval can be missed; read cgroup cpu.stat/memory.events if a limit gets tight.
 sample() {
   local ids
@@ -156,18 +153,23 @@ sample() {
   done
 }
 
-log "measuring ${#ids[@]} f1 containers for $duration, every $interval s: $tsv"
+log "measuring ${#ids[@]} f1 containers for $duration, pausing $interval s between samples: $tsv"
+# The service comes from the compose label. awk flushes every line; it ends when docker is killed.
+docker events --filter type=container --filter label=com.docker.compose.project=f1 \
+  --filter event=oom --filter event=die --filter event=restart \
+  --format '{{.Time}} {{index .Actor.Attributes "com.docker.compose.service"}} {{.Action}}' \
+  > >(awk -v OFS='\t' 'NF == 3 { print $1, "event", $2, $3; fflush() }' >>"$tsv") 2>/dev/null &
+events=$!
 disk_rows
 sample &
 sampler=$!
 sleeper=''
-# On the end and on INT/TERM: stop the sampler, write the end rows, print the summary.
+# On the end and on INT/TERM: stop the sampler and the events, write the end rows, print the summary.
 finish() {
   trap - INT TERM EXIT
-  kill "$sampler" ${sleeper:+"$sleeper"} 2>/dev/null || true
-  wait "$sampler" 2>/dev/null || true
+  kill "$sampler" "$events" ${sleeper:+"$sleeper"} 2>/dev/null || true
+  wait "$sampler" "$events" 2>/dev/null || true
   disk_rows
-  state_rows
   log "done: $tsv"
   summary "$tsv"
   exit 0

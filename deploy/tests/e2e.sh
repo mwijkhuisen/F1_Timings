@@ -14,14 +14,19 @@
 #      every container healthy when it returns (the smoke test waits for that); live is idle on an
 #      empty schedule.
 #   4. Egress from api to a non-Cloudflare host is blocked.
-#  4b. f1-measure 20s 2: stats rows for db, api, caddy and live, the disk rows live-recordings and
-#      db-volume, the TSV root 0600, and the summary lists the four services.
+#  4b. f1-measure 60s 2 in the background; after 8 s `docker restart f1-live-1`, then SIGTERM: exit 0
+#      and the summary (the signal path), stats rows for db, api, caddy and live, the disk rows
+#      live-recordings and db-volume, a die and a restart event row for live, the TSV root 0600.
 #  4c. The deploy hold: with live stopped and recorder_status fresh and not idle, f1-update --server
 #      f1-server:broken exits 0 with "deploy deferred", current.env, the api container and
-#      candidate.env untouched. Then the row is made 10 minutes old (live is down: no hold).
+#      candidate.env untouched, held-since written. Then the row is made 10 minutes old (live is down:
+#      no hold).
 #   5. f1-update --server f1-server:broken (migrate passes, api and live exit): exit 1, "rolled back",
 #      current.env unchanged, failed.env written, /healthz 200 again; the same pair again is
 #      skipped as known-bad. The stale row of 4c did not hold this deploy.
+#  5a. The 14 h cap: live stopped, recorder_status recording and fresh, held-since 15 h old (fresh
+#      mtime): f1-update --server f1-server:broken deploys anyway (the "held for over 14 h" error),
+#      fails, rolls back (exit 1, current.env unchanged, failed.env written) and removes held-since.
 #  5b. After the rollback live runs, is healthy and writes recorder_status idle again.
 #   6. docker inspect of db, api, caddy and live: read-only root, CapDrop ALL, user 62532:62532,
 #      no-new-privileges, core size 0; caddy's 127.0.0.1:8180 is the only published port.
@@ -141,10 +146,18 @@ result=$(docker exec f1-api-1 /nodejs/bin/node -e "$probe")
 proof "api -> https://www.google.com: $result"
 
 # ------------------------------------------------------------------ 4b
-step "4b. f1-measure 20s 2 on the running stack"
+step "4b. f1-measure 60s 2 on the running stack: docker restart of live, then SIGTERM"
 rm -f "$STATE"/measure-*.tsv
-run "$tmp/measure" "$BIN/f1-measure" 20s 2
-((rc == 0)) || fail "f1-measure exited $rc"
+"$BIN/f1-measure" 60s 2 >"$tmp/measure" 2>&1 &
+mpid=$!
+sleep 8
+docker restart f1-live-1 >/dev/null
+sleep 4
+kill -TERM "$mpid"
+rc=0
+wait "$mpid" || rc=$?
+cat "$tmp/measure"
+((rc == 0)) || fail "f1-measure exited $rc after SIGTERM, not 0"
 tsvs=("$STATE"/measure-*.tsv)
 ((${#tsvs[@]} == 1)) && [[ -f ${tsvs[0]} ]] || fail "expected one $STATE/measure-*.tsv, found: ${tsvs[*]}"
 tsv=${tsvs[0]}
@@ -156,8 +169,12 @@ done
 for w in live-recordings db-volume; do
   awk -F'\t' -v w="$w" '$2 == "disk" && $3 == w { f = 1 } END { exit !f }' "$tsv" || fail "no disk row for $w in $tsv"
 done
+for e in die restart; do
+  awk -F'\t' -v e="$e" '$2 == "event" && $3 == "live" && $4 == e { f = 1 } END { exit !f }' "$tsv" ||
+    fail "no '$e' event row for live in $tsv"
+done
 samples=$(awk -F'\t' '$2 == "stats" { n++ } END { print n + 0 }' "$tsv")
-proof "f1-measure 20s 2: exit 0, $samples stats rows with one for each of db, api, caddy and live, disk rows live-recordings and db-volume, the TSV root 0600, and the summary lists the four services"
+proof "f1-measure 60s 2, docker restart f1-live-1 after 8 s, SIGTERM 4 s later: exit 0 with the summary, $samples stats rows with one for each of db, api, caddy and live, disk rows live-recordings and db-volume, a die and a restart event row for live, the TSV root 0600"
 rm -f "$tsv"
 
 # ------------------------------------------------------------------ 4c
@@ -176,8 +193,9 @@ grep -q 'deploy deferred' "$tmp/update-hold" || fail "f1-update did not log 'dep
 [[ $(sha256sum <"$STATE/current.env") == "$env_sha" ]] || fail "current.env changed during the hold"
 [[ $(docker inspect -f '{{.Id}}' f1-api-1) == "$api_id" ]] || fail "the api container was recreated during the hold"
 [[ ! -e $STATE/candidate.env ]] || fail "$STATE/candidate.env is left after the hold"
+[[ $(cat "$STATE/held-since" 2>&1) =~ ^[0-9]+$ ]] || fail "$STATE/held-since after the hold: $(cat "$STATE/held-since" 2>&1)"
 docker exec f1-db-1 psql -U postgres -d f1 -tAc "UPDATE recorder_status SET updated_at = now() - interval '10 minutes'" >/dev/null
-proof "live stopped and recorder_status recording and fresh: f1-update --server f1-server:broken exit 0, '$(grep -o 'live is recording.*' "$tmp/update-hold")', current.env and the api container unchanged, no candidate.env; then the row was made 10 minutes old (live down)"
+proof "live stopped and recorder_status recording and fresh: f1-update --server f1-server:broken exit 0, '$(grep -o 'live is recording.*' "$tmp/update-hold")', current.env and the api container unchanged, no candidate.env, $STATE/held-since written; then the row was made 10 minutes old (live down)"
 
 # ------------------------------------------------------------------ 5
 step "5. Rollback: f1-update --server f1-server:broken"
@@ -195,6 +213,23 @@ run "$tmp/update3" "$BIN/f1-update" --server f1-server:broken
 if ((rc != 0)) || ! grep -q 'skipping known-bad' "$tmp/update3"; then fail "the known-bad pair was not skipped (exit $rc)"; fi
 rm -f "$STATE/failed.env"
 proof "f1-update --server f1-server:broken: exit $broken_rc, '$(grep -o 'rolled back.*' "$tmp/update2" | head -n 1)', current.env unchanged, failed.env = the broken pair, $URL 200 again; run again: exit 0, '$(grep -o 'skipping known-bad.*' "$tmp/update3")'; the row of 4c, 10 minutes old, did not hold this deploy"
+
+# ------------------------------------------------------------------ 5a
+step "5a. The 14 h cap: a hold that began 15 h ago does not hold the deploy"
+docker stop f1-live-1 >/dev/null
+docker exec f1-db-1 psql -U postgres -d f1 -tAc "UPDATE recorder_status SET state = 'recording', updated_at = now()" >/dev/null
+printf '%s\n' "$(($(date +%s) - 15 * 3600))" >"$STATE/held-since" # its mtime is now: an unbroken chain
+run "$tmp/update-cap" env F1_SMOKE_TIMEOUT=60 "$BIN/f1-update" --server f1-server:broken
+cap_rc=$rc
+((cap_rc == 1)) || fail "f1-update exited $cap_rc after the cap, not 1"
+grep -q 'error: deploys held for over 14 h' "$tmp/update-cap" || fail "f1-update did not log the 14 h error"
+grep -q 'rolled back' "$tmp/update-cap" || fail "f1-update did not roll back after the cap"
+cmp -s "$tmp/current.before" "$STATE/current.env" || fail "current.env changed"
+[[ $(cat "$STATE/failed.env" 2>&1) == $'F1_SERVER_IMAGE=f1-server:broken\nF1_WEB_IMAGE=f1-web:ci' ]] ||
+  fail "failed.env: $(cat "$STATE/failed.env" 2>&1)"
+[[ ! -e $STATE/held-since ]] || fail "$STATE/held-since is left after the deploy started"
+rm -f "$STATE/failed.env"
+proof "live stopped, recorder_status recording and fresh, held-since 15 h old: f1-update --server f1-server:broken exit $cap_rc, '$(grep -o 'error: deploys held for over 14 h.*' "$tmp/update-cap")', then the deploy ran and '$(grep -o 'rolled back.*' "$tmp/update-cap" | head -n 1)', current.env unchanged, held-since removed"
 
 # ------------------------------------------------------------------ 5b
 step "5b. live runs again after the rollback and writes idle (it ticks every 30 s)"

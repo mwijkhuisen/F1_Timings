@@ -8,8 +8,9 @@ Never run `f1-install`, merge or approve a release during a session. `f1-update`
 
 Do this by Thursday evening, outside a session.
 
-1. **No deploy pending.** `sudo journalctl -u f1-update --since '-1h' --no-pager` ends in `up to date` or `deployed …` (`docs/runbooks/update.md`, "What an `f1-update` run logs"), and no release waits for your approval in GitHub (`production` environment). Approve none during a session (`docs/runbooks/update.md`, "Rolling out P2c").
-2. **The schedule.** List the weekend's sessions with their UTC times and check them against the F1 calendar:
+1. **P2e is live.** P2e (#41: `/live`, `/replay/<id>`, the delay) is merged and deployed: `/live` loads on the phone.
+2. **No deploy pending.** `sudo journalctl -u f1-update --since '-1h' --no-pager` ends in `up to date` or `deployed …` (`docs/runbooks/update.md`, "What an `f1-update` run logs"), and no release waits for your approval in GitHub (`production` environment). Approve none during a session (`docs/runbooks/update.md`, "Rolling out P2c").
+3. **The schedule.** List the weekend's sessions with their UTC times and check them against the F1 calendar:
 
    ```bash
    sudo docker compose -p f1 -f /etc/f1/compose.yaml --env-file /srv/f1/state/current.env exec db \
@@ -17,9 +18,9 @@ Do this by Thursday evening, outside a session.
    ```
 
    `live` reads the next session from the database on every tick (30 s), so a changed time is used once `ingest` has synced it. `ingest` syncs the schedule daily at 00:30 UTC and at every start (A§8; a failed sync is retried every 15 minutes, and the sync is skipped during a live window). To pick up a change now: `sudo docker restart f1-ingest-1`, then run the query again. If a session is missing, `meeting` has no row for it yet: wait for the next sync, do not edit the tables.
-3. **The token.** Open `/status`, section Recorder: `token expires` is the F1 TV token's expiry (it lasts about 4 days). The recorder signs in by itself when a session starts within 48 h (or is running) and the token does not cover that session's end + 1 h (A§12.3), so a token that ends before Sunday's race is no fault on Thursday. A warning `token_expiring` shows when under 24 h are left and a session is due; `login_failed` shows after any failed login. Neither may show on Thursday evening. If one does, follow "Manual token fallback" below.
-4. **The recorder.** `/status` shows `state` `idle`, a recent `last report` (no "has not reported for over 5 minutes" notice) and `last error` `None`. A `last error` of `disk_low` is the disk check below.
-5. **The disk.** Every recording is kept forever (ADR-0007), and `live` warns under 5 GiB free and stops under 1 GiB (A§11.2).
+4. **The token.** Open `/status`, section Recorder: `token expires` is the F1 TV token's expiry (it lasts about 4 days). The recorder signs in by itself when a session starts within 48 h (or is running) and the token does not cover that session's end + 1 h (A§12.3), so a token that ends before Sunday's race is no fault on Thursday. A warning `token_expiring` shows when a session is due within 48 h and under 24 h are left on the token. It can show harmlessly: the token still covers the next session's end + 1 h, or the recorder signs in by itself within 48 h. Act only on `login_failed` (it shows after any failed login) or a `last error` of `no_credentials`, `login_*` or `token_*` that does not clear: follow "Manual token fallback" below.
+5. **The recorder.** `/status` shows `state` `idle`, a recent `last report` (no "has not reported for over 5 minutes" notice) and `last error` `None`. A `last error` of `disk_low` is the disk check below.
+6. **The disk.** Every recording is kept forever (ADR-0007), and `live` warns under 5 GiB free and stops under 1 GiB (A§11.2).
 
    ```bash
    sudo cat /srv/f1/state/disk
@@ -27,8 +28,8 @@ Do this by Thursday evening, outside a session.
    ```
 
    `disk` holds `<UTC time> <use %>` from the last `f1-tick`. Free space before the weekend if it is near 5 GiB.
-6. **The alarm.** The `f1-live` check on healthchecks.io exists (A6 is open: its ping got a 404 on 2026-11-06, so create it now). Without it a recording that ends incomplete rings nobody (`docs/runbooks/update.md`, "Check a recording [box]").
-7. **A replay opens on the phone.** Open `/replay/<recording id>` on the phone, through the tunnel, for the newest recording (`id` is the `recording` row's id, from the query in "Check a recording [box]").
+7. **The alarm.** The `f1-live` check on healthchecks.io exists (A6 is open: its ping got a 404 on 2026-11-06, so create it now). Without it a recording that ends incomplete rings nobody (`docs/runbooks/update.md`, "Check a recording [box]").
+8. **A replay opens on the phone.** Open `/replay/<recording id>` on the phone, through the tunnel, for the newest recording (`id` is the `recording` row's id, from the query in "Check a recording [box]").
 
 ## During a session
 
@@ -41,7 +42,7 @@ Do this by Thursday evening, outside a session.
 
   A code that repeats for minutes (`feed_unauthorized`, `login_*`, `token_*`, `disk`) is not normal: see "Manual token fallback".
 - The live view (`/live`) on the phone, with the delay set next to the F1 TV picture (0–120 s, A§13).
-- `deploy deferred` in `sudo journalctl -u f1-update --since '-1h' --no-pager` is expected while a recording runs: `live is recording (session N): deploy deferred to a later run`. The next run after the recording deploys it.
+- `deploy deferred` in `sudo journalctl -u f1-update --since '-1h' --no-pager` is expected while a recording runs: `live is recording (session N): deploy deferred to a later run`. The next run after the recording deploys it. A hold ends after 14 h at the latest (`error: deploys held for over 14 h …`, then the deploy runs). To deploy a fix during a recording at once, end it: `sudo docker stop f1-live-1` (the recording is closed with `complete = f`), then `sudo systemctl start f1-update`.
 - Never run `f1-install` during a recording, and do not restart `live`.
 
 ### The measurement [box]
@@ -59,14 +60,14 @@ sudo systemd-run --unit f1-measure --collect --on-calendar '<YYYY-MM-DD HH:MM:SS
 systemctl list-timers 'f1-measure*'
 ```
 
-It samples every 10 s into `/srv/f1/state/measure-<UTC start>.tsv` (root `0600`; the TSV has counts and sizes only). Read the summary afterwards:
+It samples into `/srv/f1/state/measure-<UTC start>.tsv` (root `0600`; the TSV has counts and sizes only), with a pause of 10 s between samples (a sample takes 2-3 s, so about every 12-13 s). Read the summary afterwards:
 
 ```bash
 sudo journalctl -u f1-measure --no-pager
 sudo f1-measure --summary /srv/f1/state/measure-<UTC start>.tsv
 ```
 
-The summary is a Markdown table per service (samples, CPU mean and max %, memory max against its limit, OOM kills, restarts; 100 % CPU is one core, the unit of `cpus`) and a table of disk growth (`live-recordings`, `db-volume`, `<service>-container`). `sudo systemctl stop f1-measure` (or Ctrl-C on a foreground run) ends it early and still writes the end rows and the summary. It reads only the f1 containers and changes nothing. `f1-measure` with no f1 container running logs `no f1 container runs: nothing to measure` and exits 1.
+The summary is a Markdown table per service (samples, CPU mean and max %, memory max against its limit, OOM kills, exits, restarts; 100 % CPU is one core, the unit of `cpus`) and a table of disk growth (`live-recordings`, `db-volume`, `<service>-container`). OOM kills, exits (every `die`, a policy restart included) and restarts (`docker restart`, as `f1-tick` does) are counted from `docker events` while it runs. `sudo systemctl stop f1-measure` (or Ctrl-C on a foreground run) ends it early and still writes the end rows and the summary. It reads only the f1 containers and changes nothing. `f1-measure` with no f1 container running logs `no f1 container runs: nothing to measure` and exits 1.
 
 ## After a session
 
@@ -78,7 +79,7 @@ The summary is a Markdown table per service (samples, CPU mean and max %, memory
 
 ## Manual token fallback [owner]
 
-If `/status` shows `login_failed` or a `last error` of `login_*`, or `token_expiring` close to a session, and it does not clear within a few minutes, put a token in by hand: `docs/runbooks/update.md`, "F1 TV token by hand". The recorder reads the file every 30 s and, if it records without a token, reconnects with it. `live` records anonymously meanwhile (17 of 19 topics), and a recording without a token over the session is `complete = f` (A§11.2).
+If `/status` shows `login_failed` or a `last error` of `no_credentials`, `login_*` or `token_*` (a `token_expiring` alone needs nothing, see "Before the weekend"), and it does not clear within a few minutes, put a token in by hand: `docs/runbooks/update.md`, "F1 TV token by hand". The recorder reads the file every 30 s and, if it records without a token, reconnects with it. `live` records anonymously meanwhile (17 of 19 topics), and a recording without a token over the session is `complete = f` (A§11.2).
 
 ## Evidence rules
 
