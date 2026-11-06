@@ -145,7 +145,7 @@ Next time `live` records, `journalctl -u f1-update` shows `deploy deferred` for 
 
 ## F1 TV token by hand (when the automatic login fails) [owner]
 
-The status panel then shows `login_failed` (or a `login_*` last error), and `live` keeps recording without a token: 17 of the 19 topics arrive anonymously, and `CarData.z` and `Position.z` need one. To give it a token yourself, copy the value of the `login-session` cookie from formula1.com (browser developer tools, Storage or Application, Cookies; a raw `subscriptionToken` JWT works too) and put it in the token file without it touching a command line or the shell history:
+The status panel then shows the warning "The F1 TV login failed. …" (`login_failed`) or a `login_*` last error, and `live` keeps recording without a token: 17 of the 19 topics arrive anonymously, and `CarData.z` and `Position.z` need one. To give it a token yourself, copy the value of the `login-session` cookie from formula1.com (browser developer tools, Storage or Application, Cookies; a raw `subscriptionToken` JWT works too) and put it in the token file without it touching a command line or the shell history:
 
 ```bash
 sudo install -o 62532 -g 62532 -m 0600 /dev/stdin /srv/f1/state/live/f1tv-token
