@@ -12,10 +12,13 @@ export type Route =
   | { id: 'year'; year: number }
   /** `view` is null for `/:year/:meeting/:session`, which redirects to `laps`. */
   | { id: 'session'; year: number; meeting: number; session: number; view: View | null }
-  | { id: 'status' };
+  | { id: 'status' }
+  | { id: 'live' }
+  | { id: 'replay'; recording: number };
 
 const KEY_SEGMENT = /^(\d{1,9})(?:-[a-z0-9-]*)?$/;
 const YEAR = /^\d{4}$/;
+const ID = /^\d{1,9}$/;
 
 const keyOf = (segment: string): number | null => {
   const m = KEY_SEGMENT.exec(segment);
@@ -34,6 +37,9 @@ export function routeOf(pathname: string): Route | null {
   const [root, a, b, c, d, ...extra] = path.split('/');
   if (root !== '' || a === undefined || extra.length > 0) return null;
   if (a === 'status') return b === undefined ? { id: 'status' } : null;
+  if (a === 'live') return b === undefined ? { id: 'live' } : null;
+  if (a === 'replay')
+    return b !== undefined && c === undefined && ID.test(b) ? { id: 'replay', recording: Number(b) } : null;
   if (!YEAR.test(a)) return null;
   const year = Number(a);
   if (b === undefined) return { id: 'year', year };

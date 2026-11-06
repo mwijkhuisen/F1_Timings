@@ -1,68 +1,11 @@
-import type { FeedEvent } from './read.ts';
+import { merge, type Obj } from '@f1/contracts';
+import { type FeedEvent, isObj } from './read.ts';
 
-// Topic deltas → state (A§11.3). Pure apart from mutating the state it is given.
-//
-// Objects merge key by key. An array in a delta is an index-keyed object ([a, b] ≡ {"0": a, "1": b}),
-// so the state holds no arrays and a full state equals the merged deltas. A leaf (string, number,
-// boolean, null) replaces, and so does an object replacing a leaf or the other way round. `_deleted: [k…]`
-// removes those keys from the object it sits in (the archive's final .json states hold no `_deleted`), and
-// the effective delta carries the keys that were really removed. Merge input
-// is untrusted: the state's objects have no prototype, reads are own-property only, the keys
-// __proto__, constructor and prototype are dropped, and objects nested deeper than MAX_DEPTH are dropped.
+// Events → state (A§11.3): merge() and its rules live in @f1/contracts (the web merges the stream's deltas too).
 
-export type Obj = { [key: string]: unknown };
-
-export const MAX_DEPTH = 32;
 const DUPLICATE_WINDOW_MS = 5 * 60_000;
-const UNSAFE = new Set(['__proto__', 'constructor', 'prototype']);
-
-const isObj = (v: unknown): v is object => typeof v === 'object' && v !== null;
+const UNSAFE = new Set(['__proto__', 'constructor', 'prototype']); // as in merge()
 const empty = (): Obj => Object.create(null);
-
-// `target` sits at nesting level `depth` (the root is 1); a child object would be at depth + 1.
-function into(target: Obj, delta: object, depth: number): Obj | undefined {
-  let effective: Obj | undefined;
-  for (const [key, value] of Object.entries(delta)) {
-    if (UNSAFE.has(key)) continue;
-    if (key === '_deleted' && Array.isArray(value)) {
-      const gone = value.map(String).filter((k) => Object.hasOwn(target, k));
-      for (const k of gone) delete target[k];
-      if (gone.length > 0) {
-        effective ??= empty();
-        effective[key] = gone;
-      }
-      continue;
-    }
-    const old = Object.hasOwn(target, key) ? target[key] : undefined;
-    let changed: unknown;
-    if (isObj(value)) {
-      if (depth >= MAX_DEPTH) continue;
-      if (isObj(old)) changed = into(old as Obj, value, depth + 1);
-      else {
-        // A new object counts as changed even when it is empty, so the effective deltas rebuild it.
-        const fresh = empty();
-        target[key] = fresh;
-        changed = into(fresh, value, depth + 1) ?? empty();
-      }
-    } else {
-      if (Object.hasOwn(target, key) && old === value) continue;
-      target[key] = value;
-      changed = value;
-    }
-    if (changed === undefined) continue;
-    effective ??= empty();
-    effective[key] = changed;
-  }
-  return effective;
-}
-
-/**
- * Merges `delta` into `target` (mutated) and returns the effective delta: only what changed, as
- * fresh objects that never alias the state. Undefined when nothing changed or `delta` is no object.
- */
-export function merge(target: Obj, delta: unknown): Obj | undefined {
-  return isObj(delta) ? into(target, delta, 1) : undefined;
-}
 
 /**
  * The feed state, topic → value. `apply` returns the delta for the lap builder: the raw payload of

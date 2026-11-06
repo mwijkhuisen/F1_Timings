@@ -1,8 +1,18 @@
-import { mkdtempSync, readdirSync, rmSync } from 'node:fs';
+import { mkdtempSync, readdirSync, readFileSync, rmSync } from 'node:fs';
 import type { Server } from 'node:http';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { Live, PlaybackDelta, PlaybackEnd, PlaybackSnapshot } from '@f1/contracts';
+import {
+  type Lap,
+  Live,
+  PlaybackDelta,
+  PlaybackEnd,
+  PlaybackLaps,
+  PlaybackPing,
+  PlaybackSnapshot,
+  Recordings,
+  type Stints,
+} from '@f1/contracts';
 import { serve } from '@hono/node-server';
 import type { Hono } from 'hono';
 import type { Kysely } from 'kysely';
@@ -30,6 +40,8 @@ const OPEN_AT = NOW - 5 * MIN;
 const LINES = 4; // one every 100 ms
 const M = 9100;
 const [S_DONE, S_LIVE, S_NEXT, S_MISSING] = [9101, 9102, 9103, 9104];
+const S_LAPS = 9001; // the session of fixtures/live/practice.jsonl
+const LAPS_AT = NOW - 2 * 24 * 60 * MIN;
 
 const lines: string[] = [];
 const log = pino({ base: null }, { write: (line: string) => void lines.push(line) });
@@ -44,7 +56,7 @@ let token: string;
 let key: Awaited<ReturnType<typeof rsaKey>>;
 let liveDir: string;
 const recs: Recording[] = [];
-const ids = { done: '', open: '', missing: '' };
+const ids = { done: '', open: '', missing: '', laps: '' };
 let donePath: string;
 let openPath: string;
 
@@ -58,6 +70,24 @@ function record(path: string, at: number, n: number): Recording {
     rec.feed(clock, 'TimingData', { Lines: { '1': { N: i } } }, iso(clock));
   }
   return rec;
+}
+
+/**
+ * The synthetic practice.jsonl (its laps and stints), a line every 50 ms from `at`: the receive times are compressed,
+ * the F1 times (the laps' clock) kept. Its full state at the start becomes its SessionInfo alone (the session's Key).
+ */
+async function recordPractice(path: string, at: number) {
+  const rec = openRecording({ dir: join(liveDir, path), now: () => at, snapshotMs: 3_600_000 });
+  const values = readFileSync(join(import.meta.dirname, 'fixtures/live/practice.jsonl'), 'utf8')
+    .trim()
+    .split('\n')
+    .map((line) => JSON.parse(line) as [number, string, unknown, string?]);
+  for (const [i, [, topic, payload, ts]] of values.entries()) {
+    if (topic === '_subscribe')
+      rec.feed(at + i * 50, 'SessionInfo', (payload as { SessionInfo: unknown }).SessionInfo, 'undefined');
+    else rec.feed(at + i * 50, topic, payload, ts ?? 'undefined');
+  }
+  await rec.finish();
 }
 
 const headers = { 'cf-access-jwt-assertion': '', connection: 'close' };
@@ -91,11 +121,11 @@ async function readUntil(res: Response, re: RegExp): Promise<string> {
   return text;
 }
 
-/** SSE text → events; comments (pings) are dropped. */
+/** SSE text → events (the heartbeat is one too, `ping`). */
 const events = (text: string) =>
   text
     .split('\n\n')
-    .filter((block) => block && !block.startsWith(':'))
+    .filter((block) => block)
     .map((block) => {
       const m = /^event: (\w+)\ndata: (.*)$/s.exec(block);
       expect(m, block).not.toBeNull();
@@ -154,6 +184,7 @@ describe('playback routes (f1_api login, Access JWT, real socket)', { timeout: 6
         session(S_LIVE, 'Practice 2', OPEN_AT, NOW + 55 * MIN),
         session(S_NEXT, 'Practice 3', NOW + 24 * 60 * MIN, NOW + 25 * 60 * MIN),
         session(S_MISSING, 'Qualifying', DONE_AT, DONE_AT + 60 * MIN),
+        { ...session(S_LAPS, 'Practice 1', LAPS_AT, LAPS_AT + 60 * MIN), type: 'Practice' },
       ])
       .execute();
     const row = async (session_key: number, started: number, ended: number | null) => {
@@ -174,8 +205,10 @@ describe('playback routes (f1_api login, Access JWT, real socket)', { timeout: 6
     const done = await row(S_DONE, DONE_AT, DONE_AT + MIN);
     const open = await row(S_LIVE, OPEN_AT, null);
     const missing = await row(S_MISSING, DONE_AT, DONE_AT + MIN); // no directory
-    [ids.done, ids.open, ids.missing] = [done.id, open.id, missing.id];
+    const laps = await row(S_LAPS, LAPS_AT, LAPS_AT + MIN);
+    [ids.done, ids.open, ids.missing, ids.laps] = [done.id, open.id, missing.id, laps.id];
     [donePath, openPath] = [done.path, open.path];
+    await recordPractice(laps.path, LAPS_AT);
     await record(donePath, DONE_AT, LINES).finish();
     record(openPath, OPEN_AT, LINES); // stays open: feed.jsonl is being tailed
 
@@ -290,7 +323,7 @@ describe('playback routes (f1_api login, Access JWT, real socket)', { timeout: 6
     const seen = events(await res.text());
     expect(seen.map((e) => e.event)).toEqual(['snapshot', ...Array(LINES - 1).fill('delta'), 'end']);
     const snapshot = PlaybackSnapshot.parse(seen[0]?.data);
-    expect(snapshot).toEqual({ t: DONE_AT, state: { TimingData: { Lines: { '1': { N: 0 } } } } });
+    expect(snapshot).toEqual({ t: DONE_AT, state: { TimingData: { Lines: { '1': { N: 0 } } } }, laps: [], stints: [] });
     const deltas = seen.slice(1, -1).map((e) => PlaybackDelta.parse(e.data));
     expect(deltas.map((d) => d.t)).toEqual([1, 2, 3].map((i) => DONE_AT + i * 100));
     expect(deltas.map((d) => d.topic)).toEqual(Array(LINES - 1).fill('TimingData'));
@@ -301,6 +334,59 @@ describe('playback routes (f1_api login, Access JWT, real socket)', { timeout: 6
     const later = events(await (await call(stream(ids.done, 'at=live&delay=5'))).res.text());
     expect(later.map((e) => e.event)).toEqual(['snapshot', 'end']);
     expect(PlaybackSnapshot.parse(later[0]?.data).state).toEqual({ TimingData: { Lines: { '1': { N: LINES - 1 } } } });
+  });
+
+  it('lap rows: the snapshot carries all of them, `event: laps` the changes; every event parses against its contract', async () => {
+    const seen = events(await (await call(stream(ids.laps, `at=${LAPS_AT}&speed=16`))).res.text());
+    expect(new Set(seen.map((e) => e.event))).toEqual(new Set(['snapshot', 'delta', 'laps', 'end']));
+    expect(seen[0]?.event).toBe('snapshot');
+    expect(seen.at(-1)?.event).toBe('end');
+    const laps = new Map<string, Lap>();
+    const stints = new Map<string, Stints[number]>();
+    for (const { event, data } of seen) {
+      if (event === 'delta') PlaybackDelta.parse(data);
+      else if (event === 'end') PlaybackEnd.parse(data);
+      else if (event === 'ping') PlaybackPing.parse(data);
+      else {
+        const rows = event === 'snapshot' ? PlaybackSnapshot.parse(data) : PlaybackLaps.parse(data);
+        for (const l of rows.laps) laps.set(`${l.driver_number}/${l.lap_number}`, l);
+        for (const s of rows.stints) stints.set(`${s.driver_number}/${s.stint_number}`, s);
+      }
+    }
+
+    // The same rows as a seek to the end.
+    const later = events(await (await call(stream(ids.laps, 'at=live'))).res.text());
+    expect(later.map((e) => e.event)).toEqual(['snapshot', 'end']);
+    const all = PlaybackSnapshot.parse(later[0]?.data);
+    expect(all.laps.length).toBeGreaterThan(0);
+    expect(all.stints.length).toBeGreaterThan(0);
+    const byLap = (a: Lap, b: Lap) => a.driver_number - b.driver_number || a.lap_number - b.lap_number;
+    const byStint = (a: Stints[number], b: Stints[number]) =>
+      a.driver_number - b.driver_number || a.stint_number - b.stint_number;
+    expect([...laps.values()].sort(byLap)).toEqual(all.laps);
+    expect([...stints.values()].sort(byStint)).toEqual(all.stints);
+  });
+
+  it('/recordings: every recording with its session and meeting, newest first, no-store', async () => {
+    const res = await get('/api/v1/recordings');
+    expect(res.status).toBe(200);
+    expect(res.headers.get('cache-control')).toBe('no-store');
+    const body = Recordings.parse(await res.json());
+    // started_at descending, then id descending (done and missing started together).
+    expect(body.map((r) => r.id)).toEqual([ids.open, ids.laps, ids.missing, ids.done].map(Number));
+    expect(body[0]).toEqual({
+      id: Number(ids.open),
+      session_key: S_LIVE,
+      year: 2027,
+      meeting_name: 'Synthetic Grand Prix',
+      session_name: 'Practice 2',
+      session_type: null,
+      date_start: iso(OPEN_AT),
+      started_at: iso(OPEN_AT),
+      ended_at: null,
+      complete: false,
+    });
+    expect(body[1]).toMatchObject({ session_key: S_LAPS, session_type: 'Practice', ended_at: iso(LAPS_AT + MIN) });
   });
 
   it('400 for every bound, 404 for an unknown recording or a missing directory; bodies never echo input', async () => {
@@ -345,8 +431,8 @@ describe('playback routes (f1_api login, Access JWT, real socket)', { timeout: 6
     expect(lines.map((l) => JSON.parse(l))).toEqual([expect.objectContaining({ cause: 'ENOENT', msg: 'playback' })]);
   });
 
-  it('both routes are a 401 without a token', async () => {
-    for (const path of ['/api/v1/live', stream(ids.open, 'at=live')]) {
+  it('every route here is a 401 without a token', async () => {
+    for (const path of ['/api/v1/live', '/api/v1/recordings', stream(ids.open, 'at=live')]) {
       const res = await app.request(path);
       expect(res.status, path).toBe(401);
       expect(await res.text()).toBe('{"error":"unauthorized"}');

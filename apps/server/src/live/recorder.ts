@@ -1,6 +1,7 @@
 import { statfsSync, statSync } from 'node:fs';
 import { join } from 'node:path';
 import { setTimeout as sleep } from 'node:timers/promises';
+import { view } from '@f1/contracts';
 import type { Insertable, Kysely } from 'kysely';
 import type { Logger } from 'pino';
 import { codeOf, type DB } from '../db/db.ts';
@@ -8,7 +9,6 @@ import type { Recording as RecordingRow } from '../db/types.ts';
 import { type Conn, type ConnectOptions, connect, type FeedCode } from './feed-client.ts';
 import { type Credentials, credentials, LoginError, login, type Token } from './login.ts';
 import { gzipLeftovers, openRecording, type Recording } from './recording.ts';
-import { view } from './state.ts';
 import {
   checkToken,
   loginAllowed,

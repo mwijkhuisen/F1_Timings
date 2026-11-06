@@ -1,8 +1,8 @@
+import { MAX_DEPTH, merge, type Obj, view } from '@f1/contracts';
 import fc from 'fast-check';
 import { describe, expect, it } from 'vitest';
-import { createFeed, MAX_DEPTH, merge, type Obj } from '../src/live/merge.ts';
+import { createFeed } from '../src/live/merge.ts';
 import { archiveT0, duration, type FeedEvent, parseFeedLine, parseJsonStream } from '../src/live/read.ts';
-import { view } from '../src/live/state.ts';
 
 // Nested deltas the way the feed sends them: index-keyed objects, arrays, nulls, leaves. The few
 // keys collide often, so values flip between leaf and object.

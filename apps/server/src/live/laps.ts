@@ -23,10 +23,10 @@
 // OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 // SOFTWARE.
 
+import type { Obj } from '@f1/contracts';
 import type { Insertable } from 'kysely';
 import type { DB } from '../db/db.ts';
 import { markPitIn } from '../ingest/normalise.ts';
-import type { Obj } from './merge.ts';
 import { duration, type FeedEvent, isObj } from './read.ts';
 
 // Feed deltas → the lap and stint rows OpenF1 builds (A§11.3). Pure and incremental: push() takes each event with

@@ -502,3 +502,106 @@ td.deleted {
   border: 1px solid var(--yellow);
   border-radius: 6px;
 }
+
+header .links {
+  display: flex;
+  gap: 12px;
+}
+
+/* The timing tower (A§13): Pos and driver stay put while the table scrolls inside .scroll. */
+.tower td:first-child {
+  position: sticky;
+  left: 0;
+  min-width: 3em;
+  background: var(--bg);
+}
+
+.tower tbody th,
+.tower thead th:nth-child(2) {
+  left: 3em;
+}
+
+.tower thead th:nth-child(2) {
+  z-index: 2;
+}
+
+.tower td.sector > span:first-child {
+  display: inline-block;
+  min-width: 4.5em;
+  margin-right: 4px;
+}
+
+.tower tr.out {
+  color: var(--muted);
+}
+
+/* The player bar (A§13): sticky at the bottom, within thumb reach; every target 44 px; it never scrolls. */
+.player {
+  position: sticky;
+  bottom: 0;
+  z-index: 3;
+  margin: 12px -16px 0;
+  padding: 8px 16px;
+  background: var(--raised);
+  border-top: 1px solid var(--line);
+}
+
+.player input[type="range"] {
+  width: 100%;
+  min-height: 44px;
+  margin: 0;
+}
+
+/* Seven equal buttons in one row at 390 px: (358 − 6 × 4) / 7 ≈ 47.7 px each, so every one stays ≥ 44 px wide. */
+.player .controls {
+  margin: 0;
+  gap: 4px;
+}
+
+.player .controls button {
+  flex: 1 1 0;
+  padding: 0;
+  font-size: 0.875rem; /* "Pause" and "+30 s" fit 47.7 px */
+  white-space: nowrap;
+}
+
+.player label {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  white-space: nowrap;
+}
+
+/* Markers on the seek bar, placed by --x (a custom property: CSP-safe). */
+.seek {
+  position: relative;
+}
+
+/*
+ * A native range thumb travels the track minus its own width, so the markers' track is inset by half a thumb on each
+ * side (about 16 px wide in Chromium and WebKit, 20 px in Firefox: 8 px is within 2 px everywhere).
+ */
+.marks {
+  position: absolute;
+  inset: 0 8px;
+  pointer-events: none;
+}
+
+.marker {
+  position: absolute;
+  top: 0;
+  left: var(--x);
+  width: 3px;
+  height: 10px;
+  transform: translateX(-50%);
+  pointer-events: none;
+  background: var(--fg);
+}
+
+.m-start {
+  background: var(--green);
+}
+
+.m-red {
+  background: var(--soft);
+}

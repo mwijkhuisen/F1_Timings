@@ -1,5 +1,7 @@
 import { z } from 'zod';
 
+export * from './live.ts';
+
 // The zod contracts of every API answer (A§10), shared by the server and the web.
 // Field names are the A§7 column names (snake_case, no mapping layer). Nullability
 // follows the DDL: a NOT NULL column is never nullable here. Our own objects are
@@ -166,11 +168,37 @@ export const Live = z.strictObject({
   recording: z.strictObject({ id: int, started_at: date, ended_at: date.nullable(), complete: z.boolean() }).nullable(),
 });
 
+// Every recording, newest first, with its session and meeting.
+export const Recordings = z.array(
+  z.strictObject({
+    id: int,
+    session_key: int,
+    year: int,
+    meeting_name: text,
+    session_name: text,
+    session_type: text,
+    date_start: date,
+    started_at: date,
+    ended_at: date.nullable(),
+    complete: z.boolean(),
+  }),
+);
+
 // The SSE events of /playback/:recording/stream (A§10); each event's data is one of these as JSON. `state` is
-// {topic: value}; a delta's `data` is merged into state[topic] when it is an object, else it replaces it.
-export const PlaybackSnapshot = z.strictObject({ t: int, state: z.record(z.string(), z.unknown()) });
+// {topic: value}; a delta's `data` is merged into state[topic] when it is an object, else it replaces it. A snapshot
+// carries every lap and stint row so far; `laps` only the rows that changed since the last snapshot or `laps`, which
+// replace the rows of the same (driver_number, lap_number) or (driver_number, stint_number).
+export const PlaybackSnapshot = z.strictObject({
+  t: int,
+  state: z.record(z.string(), z.unknown()),
+  laps: Laps,
+  stints: Stints,
+});
+export const PlaybackLaps = z.strictObject({ t: int, laps: Laps, stints: Stints });
 export const PlaybackDelta = z.strictObject({ t: int, topic: z.string(), data: z.unknown() });
 export const PlaybackEnd = z.strictObject({ t: int });
+// The heartbeat after 15 s without a write: a real event, because EventSource never delivers a comment to JS.
+export const PlaybackPing = z.strictObject({ t: int });
 
 export type Seasons = z.infer<typeof Seasons>;
 export type Season = z.infer<typeof Season>;
@@ -182,9 +210,12 @@ export type Pits = z.infer<typeof Pits>;
 export type RaceControl = z.infer<typeof RaceControl>;
 export type Status = z.infer<typeof Status>;
 export type Live = z.infer<typeof Live>;
+export type Recordings = z.infer<typeof Recordings>;
 export type PlaybackSnapshot = z.infer<typeof PlaybackSnapshot>;
+export type PlaybackLaps = z.infer<typeof PlaybackLaps>;
 export type PlaybackDelta = z.infer<typeof PlaybackDelta>;
 export type PlaybackEnd = z.infer<typeof PlaybackEnd>;
+export type PlaybackPing = z.infer<typeof PlaybackPing>;
 
 export type SectorDelta = { lap_number: number; s1: number | null; s2: number | null; s3: number | null };
 

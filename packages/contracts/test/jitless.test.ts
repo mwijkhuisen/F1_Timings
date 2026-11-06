@@ -24,6 +24,7 @@ it('with z.config({ jitless: true }) set first, importing, building and using th
     const contracts = await import('../src/index.ts');
     expect(contracts.Seasons.parse([{ year: 2026, meetings: 1, sessions: 5 }])).toHaveLength(1);
     expect(contracts.Status.safeParse({}).success).toBe(false);
+    expect(contracts.view({ LapCount: { CurrentLap: 3 } }, 'LapCount')?.CurrentLap).toBe(3); // the live views too
     expect(calls).toBe(0);
 
     // The probe is real and the counter sees it: without jitless a new object schema makes one.

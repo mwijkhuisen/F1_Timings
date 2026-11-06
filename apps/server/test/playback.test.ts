@@ -1,20 +1,13 @@
-import {
-  linkSync,
-  mkdirSync,
-  mkdtempSync,
-  readdirSync,
-  readFileSync,
-  rmSync,
-  symlinkSync,
-  writeFileSync,
-} from 'node:fs';
+import { linkSync, mkdtempSync, readdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { gunzipSync, gzipSync } from 'node:zlib';
+import { type Lap, merge, type Obj, PlaybackPing, type Stints } from '@f1/contracts';
 import fc from 'fast-check';
 import { afterEach, describe, expect, it } from 'vitest';
-import { createFeed, merge, type Obj } from '../src/live/merge.ts';
-import { type PlaybackEvent, playback } from '../src/live/playback.ts';
+import { createLaps } from '../src/live/laps.ts';
+import { createFeed } from '../src/live/merge.ts';
+import { lapRows, type PlaybackEvent, playback } from '../src/live/playback.ts';
 import { parseFeedLine } from '../src/live/read.ts';
 import { openRecording, type Recording } from '../src/live/recording.ts';
 
@@ -78,14 +71,54 @@ async function record(
   await rec.finish();
 }
 
-/** The full replay: createFeed over every line with receivedAt ≤ t, `.z` skipped (O1), as JSON. */
-function replay(values: Value[], t: number): unknown {
-  const feed = createFeed();
+/**
+ * The full replay as JSON: createFeed and createLaps over every line with receivedAt ≤ t, `.z` skipped (O1), the state
+ * cleared before a SessionInfo with another Key than the state's.
+ */
+function full(values: Value[], t: number, key = 9001): { state: Obj; laps: Lap[]; stints: Stints } {
+  const [feed, laps] = [createFeed(), createLaps(key, 'f1-live')];
+  const keyOf = (v: unknown) => (isObj(v) && typeof v.Key === 'number' ? v.Key : undefined);
   for (const v of values) {
     if (v[0] > t) continue;
-    for (const ev of parseFeedLine(JSON.stringify(v))) if (!ev.topic.endsWith('.z')) feed.apply(ev);
+    for (const ev of parseFeedLine(JSON.stringify(v))) {
+      if (ev.topic.endsWith('.z')) continue;
+      const [next, now] = [keyOf(ev.payload), keyOf(feed.state.SessionInfo)];
+      if (ev.topic === 'SessionInfo' && next !== undefined && now !== undefined && next !== now)
+        for (const topic of Object.keys(feed.state)) delete feed.state[topic];
+      const delta = feed.apply(ev);
+      if (delta !== undefined) laps.push(ev, delta);
+    }
   }
-  return plain(feed.state);
+  return plain({ state: feed.state, ...lapRows(laps.rows()) });
+}
+
+/**
+ * A client's lap and stint rows: a snapshot replaces them, a `laps` event replaces the rows of the same key. `apply`
+ * returns how many rows it got that equal the row it held.
+ */
+function clientRows() {
+  const laps = new Map<string, Lap>();
+  const stints = new Map<string, Stints[number]>();
+  return {
+    apply(data: { laps: Lap[]; stints: Stints }, snapshot: boolean) {
+      if (snapshot) {
+        laps.clear();
+        stints.clear();
+      }
+      let same = 0;
+      const put = <R>(map: Map<string, R>, key: string, row: R) => {
+        if (JSON.stringify(map.get(key)) === JSON.stringify(row)) same++;
+        map.set(key, row);
+      };
+      for (const l of data.laps) put(laps, `${l.driver_number}/${l.lap_number}`, l);
+      for (const s of data.stints) put(stints, `${s.driver_number}/${s.stint_number}`, s);
+      return same;
+    },
+    rows: () => ({
+      laps: [...laps.values()].sort((a, b) => a.driver_number - b.driver_number || a.lap_number - b.lap_number),
+      stints: [...stints.values()].sort((a, b) => a.driver_number - b.driver_number || a.stint_number - b.stint_number),
+    }),
+  };
 }
 
 /** What a client does with a delta: an object merges into state[topic] (from {} when that is no object), else replaces. */
@@ -102,6 +135,7 @@ function start(
   dir: string,
   o: {
     at: number | 'live';
+    sessionKey?: number;
     delay?: number;
     speed?: number;
     clock?: { now: number };
@@ -113,6 +147,7 @@ function start(
   const abort = new AbortController();
   const gen = playback({
     dir,
+    sessionKey: o.sessionKey ?? 9001,
     at: o.at,
     delay: o.delay ?? 0,
     speed: o.speed ?? 1,
@@ -144,7 +179,11 @@ const kinds = (events: Seen[]) => events.map(({ ev }) => ev.event);
 const text = (values: Value[]) => values.map((v) => `${JSON.stringify(v)}\n`).join('');
 
 describe('playback', () => {
-  const sources = [fixture('practice-reconnect.jsonl'), fixture('race.jsonl')];
+  // With their sessions: both make laps and stints.
+  const sources: [Value[], number][] = [
+    [fixture('practice-reconnect.jsonl'), 9001],
+    [fixture('race.jsonl'), 9002],
+  ];
 
   it('state at T from snapshot + deltas equals a full replay from 0', async () => {
     await fc.assert(
@@ -154,12 +193,13 @@ describe('playback', () => {
         // Reconnect duplicates: a line re-sent later (up to 4 min) with its topic, payload and F1 timestamp.
         fc.array(fc.tuple(fc.nat(), fc.integer({ min: 1, max: 240_000 })), { maxLength: 8 }),
         fc.array(fc.nat(), { maxLength: 3 }), // CarData.z lines, just after these lines
-        // Snapshots after a line: at its receivedAt, halfway to the next line, or at the next line's.
+        fc.array(fc.nat(), { maxLength: 4 }), // lines received in the same ms as the line before
+        // Snapshot files after a line (playback ignores them): at its receivedAt, halfway to the next, or at the next.
         fc.array(fc.tuple(fc.nat(), fc.constantFrom(0, 0.5, 1)), { maxLength: 6 }),
         fc.array(fc.constantFrom('gz', 'plain', 'both'), { minLength: 1, maxLength: 4 }), // the segments' files
         fc.nat(), // T
         fc.constantFrom(1, 2, 4, 8, 16),
-        async (base, rotateMs, dups, zs, snaps, forms, pick, speed) => {
+        async ([base, sessionKey], rotateMs, dups, zs, same, snaps, forms, pick, speed) => {
           const values = [...base];
           for (const [i, delay] of dups) {
             const [r, ...rest] = nth(base, i);
@@ -170,6 +210,11 @@ describe('playback', () => {
             values.push([r, 'CarData.z', 'eJyLjgUAARUAuQ==', iso(r)]);
           }
           values.sort((a, b) => a[0] - b[0]);
+          for (const i of same) {
+            const k = 1 + (i % (values.length - 1));
+            const [, ...rest] = nth(values, k);
+            values[k] = [nth(values, k - 1)[0], ...rest]; // still in order
+          }
           const snapAt = new Map<number, number[]>();
           for (const [i, f] of snaps) {
             const k = i % values.length;
@@ -198,26 +243,34 @@ describe('playback', () => {
             const last = nth(rs, rs.length - 1);
             const candidates = [first - 60_000, ...rs, ...rs.map((r, i) => Math.floor((r + (rs[i + 1] ?? r)) / 2))];
             const at = nth([...candidates, ...[...snapAt.values()].flat(), last + 60_000], pick);
-            const { gen, clock } = start(dir, { at, speed });
+            const { gen, clock } = start(dir, { at, speed, sessionKey });
             const events = await drain(gen, clock);
+            const truth = (t: number) => full(values, t, sessionKey);
 
-            // (a) the seek
-            expect(events[0]?.ev).toEqual({ event: 'snapshot', data: { t: at, state: replay(values, at) } });
-            // (b) the client's state after every delta (after the last one of a line), to the end
+            // (a) the seek, with every lap and stint row up to T
+            expect(events[0]?.ev).toEqual({ event: 'snapshot', data: { t: at, ...truth(at) } });
+            // (b) the client's state after every delta (after the last one of a line), and its rows after every
+            // snapshot and `laps` event, to the end
             let client: Obj = {};
+            const rows = clientRows();
             for (const [i, { ev }] of events.entries()) {
-              if (ev.event === 'snapshot') {
-                client = ev.data.state;
-                expect(client).toEqual(replay(values, ev.data.t));
+              if (ev.event === 'snapshot' || ev.event === 'laps') {
+                rows.apply(ev.data, ev.event === 'snapshot');
+                const { state, ...expected } = truth(ev.data.t);
+                expect(rows.rows()).toEqual(expected);
+                if (ev.event === 'snapshot') {
+                  client = ev.data.state;
+                  expect(client).toEqual(state);
+                }
               } else if (ev.event === 'delta') {
                 clientApply(client, ev.data);
                 const after = events[i + 1]?.ev;
                 if (after?.event !== 'delta' || after.data.t !== ev.data.t)
-                  expect(client).toEqual(replay(values, ev.data.t));
+                  expect(client).toEqual(truth(ev.data.t).state);
               }
             }
             expect(events.at(-1)?.ev.event).toBe('end');
-            expect(client).toEqual(replay(values, Number.POSITIVE_INFINITY));
+            expect({ state: client, ...rows.rows() }).toEqual(truth(Number.POSITIVE_INFINITY));
           } finally {
             rmSync(dir, { recursive: true, force: true });
           }
@@ -257,7 +310,7 @@ describe('playback', () => {
     const events = await drain(gen, clock);
 
     for (const { at, ev } of events) if ('data' in ev) expect(ev.data.t).toBeLessThanOrEqual(at - 45_000);
-    expect(events[0]?.ev).toEqual({ event: 'snapshot', data: { t: T0 - 50_000, state: {} } });
+    expect(events[0]?.ev).toEqual({ event: 'snapshot', data: { t: T0 - 50_000, state: {}, laps: [], stints: [] } });
     expect(deltas(events).map((d) => d.t)).toEqual(values.map((v) => v[0])); // each line once, in order
     expect(events.at(-1)?.ev.event).toBe('end');
     expect(readdirSync(dir).filter((n) => n.startsWith('feed-'))).toHaveLength(2); // one rotation
@@ -308,7 +361,7 @@ describe('playback', () => {
 
       expect(events[0]?.ev).toEqual({
         event: 'snapshot',
-        data: { t: T0 + 10_000, state: replay(values, T0 + 10_000) },
+        data: { t: T0 + 10_000, ...full(values, T0 + 10_000) },
       });
       expect(kinds(events)).toEqual(['snapshot', 'end']);
     }
@@ -316,30 +369,52 @@ describe('playback', () => {
 
   it('never opens a recording file through a symlink', async () => {
     const values = counter(2);
-    for (const name of [`feed-${T0}.jsonl`, `feed-${T0}.jsonl.gz`, 'feed.jsonl', `snapshots/${T0}.json.gz`]) {
+    for (const name of [`feed-${T0}.jsonl`, `feed-${T0}.jsonl.gz`, 'feed.jsonl']) {
       const dir = tmp();
-      mkdirSync(join(dir, 'snapshots'));
       const real = join(dir, 'real'); // a valid file: only the link is refused
-      writeFileSync(
-        real,
-        name.startsWith('snapshots') ? gzipSync('{}') : name.endsWith('.gz') ? gzipSync(text(values)) : text(values),
-      );
+      writeFileSync(real, name.endsWith('.gz') ? gzipSync(text(values)) : text(values));
       symlinkSync(real, join(dir, name));
       const { gen, clock } = start(dir, { at: 'live', clock: { now: T0 + 5000 } });
       await expect(drain(gen, clock), name).rejects.toMatchObject({ code: 'ELOOP' });
     }
   });
 
-  it('refuses a snapshot over 16 MiB unzipped and a partial line over 8 MiB', async () => {
-    const snapshot = tmp();
-    mkdirSync(join(snapshot, 'snapshots'));
-    writeFileSync(join(snapshot, 'snapshots', `${T0}.json.gz`), gzipSync(`{"X":"${'x'.repeat(16 * 2 ** 20)}"}`));
-    const line = tmp();
-    writeFileSync(join(line, 'feed.jsonl'), `[${T0},"${'x'.repeat(8 * 2 ** 20)}`);
-    for (const dir of [snapshot, line]) {
-      const { gen, clock } = start(dir, { at: 'live', clock: { now: T0 + 5000 } });
-      await expect(drain(gen, clock), dir).rejects.toMatchObject({ code: 'playback_too_large' });
-    }
+  it('refuses a partial line over 8 MiB', async () => {
+    const dir = tmp();
+    writeFileSync(join(dir, 'feed.jsonl'), `[${T0},"${'x'.repeat(8 * 2 ** 20)}`);
+    const { gen, clock } = start(dir, { at: 'live', clock: { now: T0 + 5000 } });
+    await expect(drain(gen, clock)).rejects.toMatchObject({ code: 'playback_too_large' });
+  });
+
+  it('a session switch clears the state: a fresh snapshot without the previous session, and a seek after it too', async () => {
+    // practice-stale.jsonl: the full state of an earlier race (8999: drivers 7, 42 and 99, a chequered flag), then
+    // F1's switch to 9001 and its reset lines; practice.jsonl follows.
+    const values = [...fixture('practice-stale.jsonl'), ...fixture('practice.jsonl')];
+    const dir = tmp();
+    await record(dir, values, 3_600_000);
+    const [first, last] = [nth(values, 0)[0], nth(values, values.length - 1)[0]];
+    const switchAt = nth(values, 1)[0]; // the SessionInfo of 9001
+    const lines = (state: Obj) => Object.keys(((state.TimingData as Obj | undefined)?.Lines ?? {}) as Obj).sort();
+
+    const { gen, clock } = start(dir, { at: first, speed: 16 });
+    const events = await drain(gen, clock);
+    const seek = events[0]?.ev;
+    expect(seek?.event === 'snapshot' && seek.data.state).toMatchObject({ SessionInfo: { Key: 8999 } });
+    expect(seek?.event === 'snapshot' && lines(seek.data.state)).toEqual(['42', '7', '99']);
+    // The switch line comes as a snapshot, not as a delta.
+    const at = events.filter(({ ev }) => 'data' in ev && ev.data.t === switchAt).map(({ ev }) => ev);
+    expect(at).toEqual([{ event: 'snapshot', data: { t: switchAt, ...full(values, switchAt) } }]);
+    expect(at[0]?.event === 'snapshot' && Object.keys(at[0].data.state)).toEqual(['SessionInfo']);
+    expect(at[0]?.event === 'snapshot' && at[0].data.state.SessionInfo).toMatchObject({ Key: 9001 });
+
+    const later = start(dir, { at: last });
+    const after = (await drain(later.gen, later.clock))[0]?.ev;
+    expect(after).toEqual({ event: 'snapshot', data: { t: last, ...full(values, last) } });
+    const state = after?.event === 'snapshot' ? after.data.state : {};
+    expect(lines(state)).toEqual(['7', '99']);
+    expect(JSON.stringify(state)).not.toMatch(/8999|Earlier Synthetic|2026-01-03/); // 9001 has its own chequered flag
+    expect(after?.event === 'snapshot' && after.data.laps.length).toBeGreaterThan(0);
+    expect(after?.event === 'snapshot' && after.data.laps.filter((l) => l.driver_number === 42)).toEqual([]);
   });
 
   it('a consumer that stalls 30 s gets one fresh snapshot, not the backlog', async () => {
@@ -360,24 +435,28 @@ describe('playback', () => {
     clock.now += 30_000; // the consumer's write of that delta took 30 s
     const rest = await drain(gen, clock);
 
-    expect(rest[0]?.ev).toEqual({ event: 'snapshot', data: { t: T0 + 32_000, state: replay(values, T0 + 32_000) } });
+    expect(rest[0]?.ev).toEqual({ event: 'snapshot', data: { t: T0 + 32_000, ...full(values, T0 + 32_000) } });
     expect(kinds(rest).filter((k) => k === 'snapshot')).toHaveLength(1);
     expect(deltas(rest).map((d) => d.t)).toEqual(values.slice(33).map((v) => v[0]));
     expect(rest.at(-1)?.ev.event).toBe('end');
   });
 
-  it('sends a heartbeat after 15 s without a write', async () => {
+  it('sends a heartbeat event with T after 15 s without a write', async () => {
     const dir = tmp();
     const values = counter(2, 40_000);
     await record(dir, values, 3_600_000);
     const { gen, clock } = start(dir, { at: T0 });
-    expect((await drain(gen, clock)).map(({ at, ev }) => [ev.event, at])).toEqual([
+    const seen = await drain(gen, clock);
+    expect(seen.map(({ at, ev }) => [ev.event, at])).toEqual([
       ['snapshot', 0],
       ['ping', 15_000],
       ['ping', 30_000],
       ['delta', 40_000],
       ['end', 40_000],
     ]);
+    // An event with data, not an SSE comment: EventSource delivers only those to the page (its liveness check).
+    const pings = seen.flatMap(({ ev }) => (ev.event === 'ping' ? [PlaybackPing.parse(ev.data)] : []));
+    expect(pings).toEqual([{ t: T0 + 15_000 }, { t: T0 + 30_000 }]);
   });
 
   it('ends a finished recording once it is fully sent, and an open one only on abort', async () => {
@@ -387,7 +466,7 @@ describe('playback', () => {
     await record(done, values, 600_000);
     const finished = start(done, { at: 'live', clock: { now: last + 3_600_000 } });
     expect((await drain(finished.gen, finished.clock)).map(({ ev }) => ev)).toEqual([
-      { event: 'snapshot', data: { t: last + 3_600_000, state: replay(values, last) } },
+      { event: 'snapshot', data: { t: last + 3_600_000, ...full(values, last) } },
       { event: 'end', data: { t: last + 3_600_050 } }, // after one 50 ms look at the missing feed.jsonl
     ]);
 
@@ -433,5 +512,26 @@ describe('playback', () => {
       at: Math.ceil((nth(values, values.length - 1)[0] - at) / 4),
       ev: { event: 'end', data: { t: expect.any(Number) } },
     });
+  });
+
+  it('laps events carry only the changed rows, at most once a second, and the last ones before end', async () => {
+    const dir = tmp();
+    const values = fixture('race.jsonl');
+    await record(dir, values, 3_600_000);
+    const { gen, clock } = start(dir, { at: nth(values, 0)[0], sessionKey: 9002 });
+    const events = await drain(gen, clock);
+
+    const laps = events.filter(({ ev }) => ev.event === 'laps');
+    expect(laps.length).toBeGreaterThan(2);
+    for (const [i, { at }] of laps.entries())
+      if (i > 0) expect(at - (laps[i - 1]?.at ?? 0)).toBeGreaterThanOrEqual(1000);
+    expect(kinds(events).slice(-2)).toEqual(['laps', 'end']); // the race's last laps come with its last lines
+    // Each laps event holds changed rows only: none equals the client's row of its key.
+    const rows = clientRows();
+    for (const { ev } of events)
+      if (ev.event === 'snapshot' || ev.event === 'laps') expect(rows.apply(ev.data, ev.event === 'snapshot')).toBe(0);
+    const { state: _, ...expected } = full(values, Number.POSITIVE_INFINITY, 9002);
+    expect(rows.rows()).toEqual(expected);
+    expect(expected.laps.length).toBeGreaterThan(0);
   });
 });

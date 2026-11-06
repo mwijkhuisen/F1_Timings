@@ -13,6 +13,16 @@ const WARNINGS = {
 
 const at = (iso: string | null) => (iso === null ? '—' : fmtInstant(iso));
 
+/** The recorder's warning and its stale notice (also shown on /live). */
+export function RecorderWarnings({ recorder: r }: { recorder: StatusData['recorder'] }) {
+  return (
+    <>
+      {r?.warning && <p role="alert">{WARNINGS[r.warning]}</p>}
+      {r?.stale && <p role="alert">The recorder has not reported for over 5 minutes.</p>}
+    </>
+  );
+}
+
 function Recorder({ recorder: r }: { recorder: StatusData['recorder'] }) {
   if (r === null) return <p>The recorder has not reported yet.</p>;
   const values: [string, string][] = [
@@ -24,8 +34,7 @@ function Recorder({ recorder: r }: { recorder: StatusData['recorder'] }) {
   ];
   return (
     <>
-      {r.warning && <p role="alert">{WARNINGS[r.warning]}</p>}
-      {r.stale && <p role="alert">The recorder has not reported for over 5 minutes.</p>}
+      <RecorderWarnings recorder={r} />
       <dl className="counts">
         {values.map(([k, v]) => (
           <div key={k}>

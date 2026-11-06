@@ -4,12 +4,12 @@ import { createInterface } from 'node:readline';
 import { parseArgs } from 'node:util';
 import { normaliseSession } from '../apps/server/src/ingest/normalise.ts';
 import { createLaps } from '../apps/server/src/live/laps.ts';
-import { createFeed, merge } from '../apps/server/src/live/merge.ts';
+import { createFeed } from '../apps/server/src/live/merge.ts';
 import { archiveT0, type FeedEvent, parseFeedLine, parseJsonStream } from '../apps/server/src/live/read.ts';
-import { view } from '../apps/server/src/live/state.ts';
 import { EXIT_USAGE } from '../apps/server/src/main.ts';
 import { createClient } from '../apps/server/src/openf1/client.ts';
 import { parse } from '../apps/server/src/openf1/schemas.ts';
+import { merge, view } from '../packages/contracts/src/index.ts';
 import { safe } from './fetch-archive.ts';
 
 // The P2b [box] judge: laps reconstructed from a P2a recording (feed.jsonl or its directory) or an
