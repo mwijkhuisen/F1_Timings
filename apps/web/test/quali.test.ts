@@ -1,44 +1,9 @@
-import type { Lap, SessionDetail } from '@f1/contracts';
 import { describe, expect, it } from 'vitest';
 import { margin, phaseName, type Quali, qualiPhases } from '../src/lib/quali.ts';
-import { lap } from './laps.ts';
+import { field, lap, result, time } from './laps.ts';
 
 // Synthetic fields only. Car d's best in phase p is (81 − p) s + 10·d ms, so
 // car 1 is fastest everywhere and the slowest car through sets each cut-off.
-
-type Result = SessionDetail['results'][number];
-const result = (driver_number: number, position: number | null = null): Result => ({
-  driver_number,
-  position,
-  laps: null,
-  dnf: null,
-  dns: null,
-  dsq: null,
-  durations_ms: null,
-  gaps_ms: null,
-});
-
-const time = (d: number, p: number) => (81 - p) * 1000 + 10 * d;
-
-/** `sizes[p − 1]` cars run phase p: an out-lap, a timed lap and an in-lap each. */
-function field(sizes: number[]): Lap[] {
-  const laps: Lap[] = [];
-  const next = new Map<number, number>();
-  const add = (d: number, extra: Partial<Lap>) => {
-    const n = (next.get(d) ?? 0) + 1;
-    next.set(d, n);
-    laps.push(lap(d, n, extra));
-  };
-  sizes.forEach((size, i) => {
-    const p = i + 1;
-    for (let d = 1; d <= size; d++) {
-      add(d, { quali_phase: p, is_pit_out: true });
-      add(d, { quali_phase: p, lap_ms: time(d, p) });
-      add(d, { quali_phase: p, lap_ms: time(d, p) + 9000, is_pit_in: true });
-    }
-  });
-  return laps;
-}
 
 const cutoffs = (q: Quali) => q.phases.map((p) => p.cutoff && [p.cutoff.driver_number, p.cutoff.lap_ms]);
 const order = (q: Quali) => q.rows.map((r) => r.driver);
