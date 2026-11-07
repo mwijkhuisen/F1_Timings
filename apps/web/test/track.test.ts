@@ -38,6 +38,17 @@ describe('trackPeriods', () => {
     expect(periods(red(30), resume(33))).toEqual([{ kind: 'red', from: 30, to: 32 }]);
   });
 
+  it('ends a red flag the lap before a safety car that follows it without RACE WILL RESUME', () => {
+    expect(periods(red(30), rc(32, SC), rc(36, SC_IN), chq(58))).toEqual([
+      { kind: 'red', from: 30, to: 31 },
+      { kind: 'sc', from: 32, to: 36 },
+    ]);
+    expect(periods(red(30), rc(30, SC), rc(33, SC_IN))).toEqual([
+      { kind: 'red', from: 30, to: 30 },
+      { kind: 'sc', from: 30, to: 33 },
+    ]);
+  });
+
   it('reads the 2026 red flag without a flag', () => {
     expect(periods(rc(12, 'RED FLAG - RACE SUSPENDED'), resume(13))).toEqual([{ kind: 'red', from: 12, to: 12 }]);
   });

@@ -63,6 +63,7 @@ export function trackPeriods(rows: RaceControl): Track {
     }
     switch (form) {
       case 'sc+':
+        close('red', n - 1); // a restart behind the safety car, without RACE WILL RESUME
         close('vsc', n);
         start('sc', n);
         break;
