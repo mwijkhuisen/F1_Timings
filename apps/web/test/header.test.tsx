@@ -42,14 +42,14 @@ describe('the session switcher', () => {
     expect(html).toContain(`<a aria-current="page" href="${SP}/9104-practice-3/compare">São Paulo</a>`);
     expect(html).toContain('<a href="/2026/1310-mexico-city/9001-qualifying/compare">Mexico City</a>');
     expect(html).toContain('<a href="/2026/1300-pre-season-testing/9000-day-1/compare">Pre-Season Testing</a>');
-    expect(html).toContain('<li><s>Emilia Romagna</s></li>');
+    expect(html).toContain('<li><s>Emilia Romagna<span class="vh"> (cancelled)</span></s></li>');
     expect(html).not.toMatch(/href="[^"]*1315/);
   });
 
   it("lists the meeting's sessions, keeping the view, a cancelled one struck", () => {
     expect(html).toContain(`<a aria-current="page" href="${SP}/9104-practice-3/compare">Practice 3</a>`);
     expect(html).toContain(`<a href="${SP}/9107-race/compare">Race</a>`);
-    expect(html).toContain('<li><s>Practice 2</s></li>');
+    expect(html).toContain('<li><s>Practice 2<span class="vh"> (cancelled)</span></s></li>');
     expect(html).not.toMatch(/href="[^"]*9102/);
   });
 
@@ -135,7 +135,7 @@ describe('the session head', () => {
     expect(html).toContain('<nav class="wk" aria-label="This weekend&#x27;s sessions">');
     expect(html).toContain(`<a aria-current="page" href="${SP}/9103-sprint-qualifying/stints">SQ</a>`);
     expect(html).toContain(`<a href="${SP}/9101-practice-1/stints">FP1</a>`);
-    expect(html).toContain('<s>FP2</s>');
+    expect(html).toContain('<s>FP2<span class="vh"> (cancelled)</span></s>');
     expect(html).not.toMatch(/href="[^"]*9102/);
   });
 

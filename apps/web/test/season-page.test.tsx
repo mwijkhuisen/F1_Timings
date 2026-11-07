@@ -48,10 +48,12 @@ describe('the season page', () => {
 
   it('links each session to its laps, and strikes a cancelled one without a link', () => {
     expect(html).toContain('<a href="/2026/1320-sao-paulo/9101-practice-1/laps">Practice 1</a>');
-    expect(html).toContain('<s>Practice 2</s>');
+    // The weekend row says "cancelled" in its state, so its name needs no hidden word.
+    expect(html).toContain('<li><s>Practice 2</s>');
     expect(html).not.toMatch(/href="[^"]*9102/);
     // A cancelled meeting's sessions are not linked either.
-    expect(html).toContain('<h3><s>Emilia Romagna Grand Prix</s></h3>');
+    expect(html).toContain('<h3><s>Emilia Romagna Grand Prix<span class="vh"> (cancelled)</span></s></h3>');
+    expect(html).toContain('<li><s>Race<span class="vh"> (cancelled)</span></s>');
     expect(html).not.toMatch(/href="[^"]*9010/);
   });
 
@@ -73,7 +75,7 @@ describe('the season page', () => {
     expect(cards.map(([, eyebrow, name]) => `${eyebrow} | ${name}`)).toEqual([
       'BRN | Pre-Season Testing',
       'Round 1 · MEX | Mexico City Grand Prix',
-      'ITA | <s>Emilia Romagna Grand Prix</s>',
+      'ITA | <s>Emilia Romagna Grand Prix<span class="vh"> (cancelled)</span></s>',
       'Round 3 · USA | Las Vegas Grand Prix',
     ]);
     expect(html).toContain('<a href="/2026/1310-mexico-city/9002-race/laps">Race</a>');

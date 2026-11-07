@@ -3,6 +3,7 @@ import { useQuery } from '@tanstack/react-query';
 import { seasonQuery, useSeasons } from '../lib/api.ts';
 import { Link, type Route, sessionPath } from '../lib/routes.ts';
 import { meetingTarget, neighbours, type Slot } from '../lib/season.ts';
+import { Cancelled } from '../ui/Cancelled.tsx';
 import { Menu } from '../ui/Menu.tsx';
 
 // The header (A§13): the session switcher (‹ year / meeting / session ›) and Live · Replays · Status. It reads
@@ -72,7 +73,7 @@ export function HeaderView({
                         {short(m.name)}
                       </Link>
                     ) : (
-                      <s>{short(m.name)}</s>
+                      <Cancelled>{short(m.name)}</Cancelled>
                     )}
                   </li>
                 );
@@ -83,7 +84,7 @@ export function HeaderView({
               {meeting.sessions.map((s) => (
                 <li key={s.session_key}>
                   {s.is_cancelled ? (
-                    <s>{s.name}</s>
+                    <Cancelled>{s.name}</Cancelled>
                   ) : (
                     <Link to={path({ meeting, session: s })} aria-current={s === current ? 'page' : undefined}>
                       {s.name}

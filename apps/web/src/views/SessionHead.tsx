@@ -3,6 +3,7 @@ import { useRecordings, useSeason } from '../lib/api.ts';
 import { Link, sessionPath, type View } from '../lib/routes.ts';
 import { roundNumbers, shortName } from '../lib/season.ts';
 import { fmtInstant } from '../lib/time.ts';
+import { Cancelled } from '../ui/Cancelled.tsx';
 
 // A session's head (A§13): "2026 · Round 19 · Mexico City", the meeting with the session boxed beside it, the start
 // and circuit, the weekend's other sessions as pills (the view kept), and a Replay link when there is a recording.
@@ -45,7 +46,7 @@ export function SessionHead({
         <nav className="wk" aria-label="This weekend's sessions">
           {meeting.sessions.map((s) =>
             s.is_cancelled ? (
-              <s key={s.session_key}>{shortName(s.name)}</s>
+              <Cancelled key={s.session_key}>{shortName(s.name)}</Cancelled>
             ) : (
               <Link
                 key={s.session_key}

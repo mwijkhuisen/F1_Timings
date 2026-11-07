@@ -13,6 +13,7 @@ import {
   thisWeekend,
 } from '../lib/season.ts';
 import { fmtCountdown, fmtInstant, fmtTrack } from '../lib/time.ts';
+import { Cancelled } from '../ui/Cancelled.tsx';
 import { Pending } from '../ui/ErrorView.tsx';
 
 // `/:year` (A§13): this weekend first, its sessions in words, then the other meetings. Never a result.
@@ -20,9 +21,22 @@ import { Pending } from '../ui/ErrorView.tsx';
 
 const dot = (...parts: (string | number | null | undefined | false)[]) => parts.filter(Boolean).join(' · ');
 
-/** The session's name: a link to its lap table, struck through and unlinked when cancelled. */
-function Name({ year, meeting: m, session: s }: { year: number; meeting: Meeting; session: SeasonSession }) {
-  if (m.is_cancelled || s.is_cancelled) return <s>{s.name}</s>;
+/**
+ * The session's name: a link to its lap table, struck through and unlinked when cancelled, with the word for a screen
+ * reader unless `worded` (the state beside it says so).
+ */
+function Name({
+  year,
+  meeting: m,
+  session: s,
+  worded,
+}: {
+  year: number;
+  meeting: Meeting;
+  session: SeasonSession;
+  worded?: boolean;
+}) {
+  if (m.is_cancelled || s.is_cancelled) return worded ? <s>{s.name}</s> : <Cancelled>{s.name}</Cancelled>;
   const to = sessionPath(year, { key: m.meeting_key, name: m.name }, { key: s.session_key, name: s.name }, 'laps');
   return <Link to={to}>{s.name}</Link>;
 }
@@ -113,7 +127,7 @@ export function SeasonView({
                 const track = fmtTrack(s.date_start, weekend.gmt_offset);
                 return (
                   <li key={s.session_key}>
-                    <Name year={year} meeting={weekend} session={s} />
+                    <Name year={year} meeting={weekend} session={s} worded />
                     <span className="when">
                       <time dateTime={s.date_start}>{fmtInstant(s.date_start)}</time>
                       {track && ` · ${track} at the track`}
@@ -147,7 +161,7 @@ export function SeasonView({
               <p className="eyebrow">
                 {dot(rounds.has(m.meeting_key) && `Round ${rounds.get(m.meeting_key)}`, m.country_code)}
               </p>
-              <h3>{m.is_cancelled ? <s>{m.name}</s> : m.name}</h3>
+              <h3>{m.is_cancelled ? <Cancelled>{m.name}</Cancelled> : m.name}</h3>
               {m.circuit_short_name && <p className="muted">{m.circuit_short_name}</p>}
               <ul className="sess">
                 {m.sessions.map((s) => (
