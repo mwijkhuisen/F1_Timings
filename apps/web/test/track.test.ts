@@ -80,7 +80,7 @@ describe('trackPeriods', () => {
     expect(periods(rc(40, 'VSC DEPLOYED'), rc(44, 'GREEN LIGHT - PIT EXIT OPEN'), rc(42, 'TRACK CLEAR'))).toEqual([
       { kind: 'vsc', from: 40, to: 44 },
     ]);
-    // Melbourne 2023: a red flag after the chequered flag.
+    // A red flag after the chequered flag (END → RED once in the [box] output, query 3).
     expect(periods(chq(58), red(58))).toEqual([{ kind: 'red', from: 58, to: 58 }]);
   });
 
