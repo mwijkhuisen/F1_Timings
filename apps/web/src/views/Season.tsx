@@ -125,7 +125,7 @@ export function SeasonView({
             </ul>
           </div>
           {upNext && (
-            <div className="next">
+            <div className="upnext">
               <p className="eyebrow">Up next</p>
               <Countdown to={Date.parse(upNext.date_start)} />
               <p>

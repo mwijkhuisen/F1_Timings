@@ -942,7 +942,7 @@ header .links {
   margin: 0;
 }
 
-.next {
+.upnext {
   display: grid;
   align-content: center;
   justify-items: start;
@@ -951,7 +951,7 @@ header .links {
   border-left: 1px solid var(--line);
 }
 
-.next .count {
+.upnext .count {
   font-family: var(--display);
   font-size: 32px;
   font-weight: 800;
@@ -1075,7 +1075,7 @@ header .links {
     grid-template-columns: minmax(0, 1fr);
   }
 
-  .next {
+  .upnext {
     padding: 12px 0 0;
     border-left: 0;
     border-top: 1px solid var(--line);
