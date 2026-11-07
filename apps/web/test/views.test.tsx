@@ -199,7 +199,10 @@ describe('the status panel', () => {
     expect(html).toContain('<dt>cancelled</dt><dd>15</dd>');
   });
 
-  it('lists failed sessions with the error as text', () => {
+  it('lists failed sessions with the error as text, in a focusable, named scroll region', () => {
+    expect(html).toContain(
+      '<div class="scroll" tabindex="0" role="region" aria-label="Last fetch failed"><table class="list" aria-label="Last fetch failed">',
+    );
     expect(html).toContain('<td>&lt;b&gt;http_500&lt;/b&gt;</td><td>Sun 11 Oct 2026, 14:00</td>');
   });
 

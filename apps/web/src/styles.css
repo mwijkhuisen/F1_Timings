@@ -117,6 +117,12 @@ a {
   color: var(--muted);
 }
 
+/* Focus (A§13): a 3 px outline, inset inside a scroll box so its overflow never clips it. */
+:focus-visible {
+  outline: 3px solid var(--fg);
+  outline-offset: 2px;
+}
+
 /* Tap targets (D14): every link, button and select at least 44 px. */
 a,
 button,
@@ -211,12 +217,33 @@ header {
 }
 
 /* Tables scroll inside their box, never the page (D14); the box scrolls both
-   ways so the sticky header row and first column hold. */
+   ways so the sticky header row and first column hold. It is a focusable, named
+   region (ui/Scroll.tsx); scroll-padding keeps a focused cell clear of the sticky
+   header row and columns. */
 .scroll {
   overflow: auto;
   max-width: 100%;
   max-height: 75dvh;
   border: 1px solid var(--line);
+  scroll-padding: 44px 0 0 5em;
+}
+
+.scroll:focus-visible,
+.scroll :focus-visible {
+  outline-offset: -3px;
+}
+
+/* The tower freezes Pos and Driver; the deltas have two header rows; columns mode freezes only the lap number. */
+.scroll:has(.tower) {
+  scroll-padding-left: 7em;
+}
+
+.scroll:has(.deltas) {
+  scroll-padding-top: 88px;
+}
+
+.scroll:has(.cols) {
+  scroll-padding-left: 3em;
 }
 
 table {

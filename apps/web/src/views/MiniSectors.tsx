@@ -1,5 +1,6 @@
 import type { Lap } from '@f1/contracts';
 import { type Driver, teamStyle } from '../lib/session.ts';
+import { Scroll } from '../ui/Scroll.tsx';
 
 // The mini-sector grid with the speed traps (D6): per selected driver, one row per lap.
 
@@ -82,7 +83,7 @@ export function MiniSectors({
         </p>
       )}
       <MsLegend />
-      <div className="scroll">
+      <Scroll label="Mini-sectors and speed traps (km/h)">
         <table className="laps minisectors" aria-label="Mini-sectors and speed traps (km/h)">
           <thead>
             <tr>
@@ -128,7 +129,7 @@ export function MiniSectors({
             </tbody>
           ))}
         </table>
-      </div>
+      </Scroll>
     </>
   );
 }

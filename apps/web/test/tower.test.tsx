@@ -318,7 +318,7 @@ describe('the tower', () => {
     expect(renderToStaticMarkup(<Tower state={{ ...state, SessionInfo: undefined }} sessionKey={9965} />)).toContain(
       'Waiting for the session',
     );
-    expect(html).toContain('aria-label="Timing tower"');
+    expect(html).toContain('<div class="scroll" tabindex="0" role="region" aria-label="Timing tower"><table');
   });
 
   it('renders feed text as text', () => {

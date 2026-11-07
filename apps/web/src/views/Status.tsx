@@ -2,6 +2,7 @@ import type { Status as StatusData } from '@f1/contracts';
 import { useStatus } from '../lib/api.ts';
 import { fmtInstant } from '../lib/time.ts';
 import { Pending } from '../ui/ErrorView.tsx';
+import { Scroll } from '../ui/Scroll.tsx';
 
 // The status page (D12): session counts per state, every session whose last fetch failed, and the live recorder.
 
@@ -65,8 +66,8 @@ export function StatusPanel({ status }: { status: StatusData }) {
       {status.failed.length === 0 ? (
         <p>None.</p>
       ) : (
-        <div className="scroll">
-          <table className="list">
+        <Scroll label="Last fetch failed">
+          <table className="list" aria-label="Last fetch failed">
             <thead>
               <tr>
                 <th scope="col">Year</th>
@@ -90,7 +91,7 @@ export function StatusPanel({ status }: { status: StatusData }) {
               ))}
             </tbody>
           </table>
-        </div>
+        </Scroll>
       )}
       <h2>Recorder</h2>
       <Recorder recorder={status.recorder} />

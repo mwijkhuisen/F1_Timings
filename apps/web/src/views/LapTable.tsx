@@ -3,6 +3,7 @@ import { useState } from 'react';
 import { compoundOf, type Driver, orderDrivers, teamStyle } from '../lib/session.ts';
 import { fmtLap, fmtSector } from '../lib/time.ts';
 import { Note } from '../ui/Note.tsx';
+import { Scroll } from '../ui/Scroll.tsx';
 
 // The lap table (D1, D10): a drivers × laps matrix with one metric per cell.
 
@@ -136,7 +137,7 @@ export function LapGrid({
     />
   );
   return (
-    <div className="scroll">
+    <Scroll label={`${LABEL[metric]} times`}>
       <table className={columns ? 'laps cols' : 'laps'} aria-label={`${LABEL[metric]} times`}>
         {columns ? (
           <>
@@ -180,7 +181,7 @@ export function LapGrid({
           </>
         )}
       </table>
-    </div>
+    </Scroll>
   );
 }
 

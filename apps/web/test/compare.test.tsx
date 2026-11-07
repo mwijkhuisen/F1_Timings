@@ -188,7 +188,8 @@ describe('the delta table', () => {
 
   it('names the reference, the first selected driver, in the header', () => {
     expect(html).toContain('aria-label="Sector deltas"');
-    expect(html).toMatch(/<div class="scroll"><table/);
+    // A focusable, named scroll region (ui/Scroll.tsx).
+    expect(html).toContain('<div class="scroll" tabindex="0" role="region" aria-label="Sector deltas"><table');
     expect(rows(html).slice(0, 2)).toEqual([
       ['Lap', 'NOR Δ vs VER'],
       ['S1', 'S2', 'S3'],
@@ -232,9 +233,9 @@ describe('the delta table', () => {
 
   it('says so when the reference has no laps, and still shows the Best-lap row', () => {
     const html = table([driver(99, 'ZZZ', null), VER]);
-    expect(html).toMatch(/^<p class="muted">ZZZ has no laps in this session: no deltas.<\/p><div class="scroll">/);
+    expect(html).toMatch(/^<p class="muted">ZZZ has no laps in this session: no deltas.<\/p><div class="scroll" /);
     expect(rows(html).slice(2)).toEqual([['Best lap<br/>L— vs L2', '—', '—', '—']]);
-    expect(table([VER, NOR])).toMatch(/^<div class="scroll">/);
+    expect(table([VER, NOR])).toMatch(/^<div class="scroll" /);
   });
 
   it('gives every other driver its own column group', () => {

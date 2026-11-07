@@ -253,14 +253,19 @@ describe('the lap grid', () => {
     expect([...html.matchAll(/<th scope="row">(\d+)</g)].map(([, n]) => n)).toEqual(['1', '2', '3']);
     // Lap 1 of HAM and NOR, then lap 2, then lap 3.
     expect(cells(html).map(colourOf)).toEqual([null, 'green', 'purple', 'yellow', 'yellow', 'yellow']);
-    expect(html).toContain('class="laps cols"');
+    expect(html).toContain(
+      '<div class="scroll" tabindex="0" role="region" aria-label="Lap times"><table class="laps cols"',
+    );
+    expect(grid('s2')).toContain('aria-label="S2 times"><table class="laps" aria-label="S2 times">');
   });
 
   it('starts on the lap time, drivers as rows, and says when there are no laps', () => {
     const html = renderToStaticMarkup(<LapTable detail={detail} laps={laps} />);
     expect(html).toMatch(/<button type="button" aria-pressed="true">Lap<\/button>/);
     expect(html).toMatch(/aria-pressed="false">Drivers as columns</);
-    expect(html).toContain('<table class="laps" aria-label="Lap times">');
+    expect(html).toContain(
+      '<div class="scroll" tabindex="0" role="region" aria-label="Lap times"><table class="laps" aria-label="Lap times">',
+    );
     // The non-colour cue is explained next to the switch (styles.css boxes purple and bolds green).
     expect(html).toContain(
       '<p class="legend"><span class="t-purple">overall best</span> <span class="t-green">personal best</span> <span class="t-yellow">other</span></p>',

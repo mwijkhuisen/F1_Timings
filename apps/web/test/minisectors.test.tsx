@@ -140,7 +140,9 @@ describe('the mini-sector grid', () => {
   it('shows the speed traps in km/h, — for a null speed', () => {
     expect(ver1?.speeds).toEqual(['—', '250', '310']);
     expect(nor1?.speeds).toEqual(['290', '250', '—']);
-    expect(html).toContain('aria-label="Mini-sectors and speed traps (km/h)"');
+    expect(html).toContain(
+      '<div class="scroll" tabindex="0" role="region" aria-label="Mini-sectors and speed traps (km/h)"><table',
+    );
   });
 
   it('strikes a deleted lap and badges in- and out-laps, laps in order', () => {

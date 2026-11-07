@@ -1,6 +1,7 @@
 import { type Lap, type SectorDelta, sectorDeltas } from '@f1/contracts';
 import { type Driver, teamStyle } from '../lib/session.ts';
 import { fmtDelta } from '../lib/time.ts';
+import { Scroll } from '../ui/Scroll.tsx';
 
 // The sector-delta table (D5): the first selected driver is the reference (E4); every other
 // driver gets a Δ S1/S2/S3 group, that driver − the reference. A Best-lap row heads it (E3).
@@ -43,7 +44,7 @@ export function DeltaTable({ drivers, laps }: { drivers: readonly Driver[]; laps
   return (
     <>
       {refLaps.length === 0 && <p className="muted">{ref.acronym} has no laps in this session: no deltas.</p>}
-      <div className="scroll">
+      <Scroll label="Sector deltas">
         <table className="laps deltas" aria-label="Sector deltas">
           <thead>
             <tr>
@@ -88,7 +89,7 @@ export function DeltaTable({ drivers, laps }: { drivers: readonly Driver[]; laps
             ))}
           </tbody>
         </table>
-      </div>
+      </Scroll>
     </>
   );
 }

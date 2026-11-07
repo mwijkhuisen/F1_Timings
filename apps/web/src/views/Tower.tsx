@@ -1,6 +1,7 @@
 import { type Obj, type Views, view } from '@f1/contracts';
 import { compoundOf, type Driver, teamColour, teamStyle } from '../lib/session.ts';
 import { Note } from '../ui/Note.tsx';
+import { Scroll } from '../ui/Scroll.tsx';
 import { MsLegend, segClass } from './MiniSectors.tsx';
 
 // The timing tower (A§13): one row per TimingData line, from the stream's state. Feed text is rendered as text only.
@@ -168,7 +169,7 @@ export function Tower({ state, sessionKey }: { state: Obj; sessionKey?: number |
   return (
     <>
       <MsLegend />
-      <div className="scroll">
+      <Scroll label="Timing tower">
         <table className="list tower" aria-label="Timing tower">
           <thead>
             <tr>
@@ -214,7 +215,7 @@ export function Tower({ state, sessionKey }: { state: Obj; sessionKey?: number |
             })}
           </tbody>
         </table>
-      </div>
+      </Scroll>
     </>
   );
 }
