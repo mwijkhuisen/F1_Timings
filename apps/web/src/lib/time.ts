@@ -25,8 +25,9 @@ export const fmtLap = (ms: number): string =>
 export const fmtSector = (ms: number): string =>
   ms < 60_000 ? `${pad(Math.floor(ms / 1000), 2)}.${pad(ms % 1000, 3)}` : fmtLap(ms);
 
-/** A time difference as signed seconds: `+0.123`, `−0.045` (a minus sign, not a hyphen), `+0.000`. */
-export const fmtDelta = (ms: number): string => `${ms < 0 ? '−' : '+'}${(Math.abs(ms) / 1000).toFixed(3)}`;
+/** A time difference as signed seconds: `+0.123`, `−0.045` (a minus sign, not a hyphen), `+0.000`; `digits` 2 gives `+0.12`. */
+export const fmtDelta = (ms: number, digits = 3): string =>
+  `${ms < 0 ? '−' : '+'}${(Math.abs(ms) / 1000).toFixed(digits)}`;
 
 const clock = new Intl.DateTimeFormat('en-GB', {
   timeZone: 'Europe/Amsterdam',
