@@ -1,6 +1,6 @@
 import type { Lap, Laps, SessionDetail } from '@f1/contracts';
 import { sessionBests } from '../lib/bests.ts';
-import { phaseName, type Quali } from '../lib/quali.ts';
+import { hasPole, phaseName, type Quali } from '../lib/quali.ts';
 import { fmtDelta, fmtLap, fmtSector } from '../lib/time.ts';
 import { Note } from '../ui/Note.tsx';
 
@@ -101,7 +101,7 @@ export function QualiTiles({ detail, quali }: { detail: SessionDetail; quali: Qu
     <dl className="tiles" aria-label="Qualifying">
       <Tile
         id="tile-pole"
-        label="Pole"
+        label={hasPole(quali) ? 'Pole' : `Fastest in ${name(phases.length)}`}
         value={pole?.lap_ms != null ? fmtLap(pole.lap_ms) : null}
         who={pole && `${acronym(detail.drivers, pole.driver_number)} · ${name(phases.length)}`}
         reason={`No valid lap in ${name(phases.length)}`}

@@ -1,6 +1,6 @@
 import type { Lap, SessionDetail } from '@f1/contracts';
 import { Fragment } from 'react';
-import { margin, type Phase, type PhaseCell, phaseName, type Quali, type QualiRow } from '../lib/quali.ts';
+import { hasPole, margin, type Phase, type PhaseCell, phaseName, type Quali, type QualiRow } from '../lib/quali.ts';
 import { orderDrivers, teamStyle } from '../lib/session.ts';
 import { fmtDelta, fmtLap } from '../lib/time.ts';
 import { Note } from '../ui/Note.tsx';
@@ -74,6 +74,7 @@ export function QualiTable({ detail, quali }: { detail: SessionDetail; quali: Qu
   const name = (p: number) => phaseName(detail.session.name, p);
   const n = phases.length;
   const pole = phases.at(-1)?.fastest ?? null;
+  const poleWord = hasPole(quali) ? 'pole' : 'fastest';
   const drivers = new Map(
     orderDrivers(
       detail,
@@ -106,7 +107,7 @@ export function QualiTable({ detail, quali }: { detail: SessionDetail; quali: Qu
                   {name(i + 1)}
                 </th>
               ))}
-              <th scope="col">To pole</th>
+              <th scope="col">{`To ${poleWord}`}</th>
               <th scope="col">Timed laps</th>
             </tr>
           </thead>
@@ -127,7 +128,7 @@ export function QualiTable({ detail, quali }: { detail: SessionDetail; quali: Qu
                     <td>
                       {last?.lap_ms && pole?.lap_ms ? (
                         same(last, pole) ? (
-                          <span className="muted">pole</span>
+                          <span className="muted">{poleWord}</span>
                         ) : (
                           fmtDelta(last.lap_ms - pole.lap_ms)
                         )

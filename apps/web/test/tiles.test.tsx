@@ -80,13 +80,17 @@ describe('QualiTiles', () => {
   it('says a cut-off is known once the next phase has laps', () => {
     const html = renderToStaticMarkup(<QualiTiles detail={detail} quali={qualiPhases(field([22, 16]), [])} />);
     expect(tiles(html)).toEqual([
-      ['Pole', '1:19.010', 'C01 · Q2'],
+      ['Fastest in Q2', '1:19.010', 'C01 · Q2'],
       ['Q1 cut-off (P16)', '1:20.160', 'C16'],
     ]);
+    const sprint = sessionDetail('Qualifying', 'Sprint Qualifying', drivers);
+    expect(
+      tiles(renderToStaticMarkup(<QualiTiles detail={sprint} quali={qualiPhases(field([22, 16]), [])} />))[0],
+    ).toEqual(['Fastest in SQ2', '1:19.010', 'C01 · SQ2']);
     // Q2 has only out-laps so far: no pole yet, and no cut-off.
     const outs = [lap(1, 1, { quali_phase: 1, is_pit_out: true }), lap(1, 2, { quali_phase: 2, is_pit_out: true })];
     expect(tiles(renderToStaticMarkup(<QualiTiles detail={detail} quali={qualiPhases(outs, [])} />))).toEqual([
-      ['Pole', '— (No valid lap in Q2)', null],
+      ['Fastest in Q2', '— (No valid lap in Q2)', null],
       ['Q1 cut-off (P1)', '— (Known once Q2 has laps)', null],
     ]);
   });

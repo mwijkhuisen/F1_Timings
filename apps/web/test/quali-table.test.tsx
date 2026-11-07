@@ -72,6 +72,15 @@ describe('QualiTable', () => {
     expect(tds('C22')[4]).toBe('1');
   });
 
+  it('says To fastest, not To pole, before Q3 has laps', () => {
+    expect(html).toContain('<th scope="col">To pole</th>');
+    const detail = sessionDetail('Qualifying', 'Qualifying', drivers, results);
+    const two = renderToStaticMarkup(<QualiTable detail={detail} quali={qualiPhases(field([22, 16]), results)} />);
+    expect(two).toContain('<th scope="col">Q2</th><th scope="col">To fastest</th>');
+    expect(two).toContain('<span class="muted">fastest</span>');
+    expect(two.replace(/<[^>]*>/g, ' ')).not.toMatch(/pole/i);
+  });
+
   it('gives — with its reason where a driver has no time', () => {
     const reasons = (d: string) => tds(d).flatMap((b) => /<div popover[^>]*>([^<]+)<\/div>/.exec(b)?.[1] ?? []);
     expect(reasons('C17')).toEqual(['Knocked out in Q1', 'Knocked out in Q1', 'Not in Q3']);

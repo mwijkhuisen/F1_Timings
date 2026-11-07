@@ -11,7 +11,7 @@ export type PhaseCell = { best: Lap | null; deleted: Lap[]; ran: boolean };
 export type QualiRow = { driver: number; cells: PhaseCell[]; reached: number; timed: number };
 /** `cutoff`: the slowest best among the drivers who went through; `through`: how many did. */
 export type Phase = { fastest: Lap | null; cutoff: Lap | null; through: number };
-/** `phases.length` is the highest `quali_phase` (0: no phase data). Pole is `phases.at(-1)?.fastest`. */
+/** `phases.length` is the highest `quali_phase` (0: no phase data). Pole is `phases.at(-1)?.fastest` once `hasPole`. */
 export type Quali = { phases: Phase[]; rows: QualiRow[] };
 
 const byLap = compare('lap_ms');
@@ -72,6 +72,11 @@ export const margin = (cell: PhaseCell, phase: Phase): number | null => {
   const cut = phase.cutoff?.lap_ms ?? null;
   return best === null || cut === null ? null : best - cut;
 };
+
+// ponytail: the three-phase format (Q1–Q3) is assumed, so only a third phase's
+// fastest is pole; before Q3 has laps the last phase's fastest is "Fastest in Q2".
+// A format with another phase count needs it from the session.
+export const hasPole = (q: Quali): boolean => q.phases.length >= 3;
 
 /** Sprint Qualifying (Sprint Shootout in 2023) names its phases SQ1–SQ3. */
 export const phaseName = (sessionName: string | null, p: number): string =>
