@@ -472,6 +472,7 @@ describe('Player', () => {
       t,
       state: {
         DriverList: { '1': { Tla: 'VER', TeamColour: '3671C6' }, '44': { Tla: 'HAM' }, _kf: true },
+        SessionInfo: { Type: 'Race' }, // the tower's Gap and Int depend on it
         TimingData: {
           Lines: {
             '1': { Line: 1, Position: '1', GapToLeader: 'LAP 3', LastLapTime: { Value: '1:20.000' } },
