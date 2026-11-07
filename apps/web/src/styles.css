@@ -1,9 +1,15 @@
 /*
- * Themes (D9): dark timing-screen tokens by default, light ones under
- * prefers-color-scheme. Purple, green, yellow, --fg and --muted are text on
- * --bg and reach WCAG AA 4.5:1 in both (apps/web/test/contrast.test.ts).
- * No inline styles anywhere: React sets only the custom properties --team,
- * --x and --w, through CSSOM.
+ * The design system (A§13, P4a). Dark timing-screen tokens on :root by default, light ones under
+ * prefers-color-scheme. Colour is data, with no brand accent: purple is the overall best, green a
+ * personal best, "other" times are plain text; --live is live, a red flag or a failure; --amber is SC
+ * and VSC. Every text token reaches 4.5:1 on --bg, --panel and --raised and every mini-sector fill
+ * 3:1 on --bg, and purple, green and --fg stay apart for colour-blind vision (test/contrast.test.ts).
+ * Team colours go through .drv and --tc: --team, or on the light theme --team-l (lib/session.ts).
+ * Type (px): 11 badge and compound · 12 label (upper case) · 14 body and tables · 15 tower · 17 heads ·
+ * 20 clock · 26 title, the titles and the clock in the installed --display stack (no font file).
+ * Cues are outlines and borders, never shadows, so forced colours keep them.
+ * No inline styles anywhere: React sets only the custom properties --team, --team-l, --x and --w,
+ * through CSSOM.
  */
 :root {
   color-scheme: dark light;
