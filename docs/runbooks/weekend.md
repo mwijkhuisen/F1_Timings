@@ -18,8 +18,8 @@ Do this by Thursday evening, outside a session.
    ```
 
    `live` reads the next session from the database on every tick (30 s), so a changed time is used once `ingest` has synced it. `ingest` syncs the schedule daily at 00:30 UTC and at every start (A§8; a failed sync is retried every 15 minutes, and the sync is skipped during a live window). To pick up a change now: `sudo docker restart f1-ingest-1`, then run the query again. If a session is missing, `meeting` has no row for it yet: wait for the next sync, do not edit the tables.
-4. **The token.** Open `/status`, section Recorder: `token expires` is the F1 TV token's expiry (it lasts about 4 days). The recorder signs in by itself when a session starts within 48 h (or is running) and the token does not cover that session's end + 1 h (A§12.3), so a token that ends before Sunday's race is no fault on Thursday. A warning `token_expiring` shows when a session is due within 48 h and under 24 h are left on the token. It can show harmlessly: the token still covers the next session's end + 1 h, or the recorder signs in by itself within 48 h. Act only on `login_failed` (it shows after any failed login) or a `last error` of `no_credentials`, `login_*` or `token_*` that does not clear: follow "Manual token fallback" below.
-5. **The recorder.** `/status` shows `state` `idle`, a recent `last report` (no "has not reported for over 5 minutes" notice) and `last error` `None`. A `last error` of `disk_low` is the disk check below.
+4. **The token.** Open `/status`, section Recorder: `token expires` is the F1 TV token's expiry (it lasts about 4 days). The recorder signs in by itself when a session starts within 48 h (or is running) and the token does not cover that session's end + 1 h (A§12.3), so a token that ends before Sunday's race is no fault on Thursday. The warning line "The F1 TV token expires within 24 h and a session is due." (`token_expiring`) shows when a session is due within 48 h and under 24 h are left on the token. It can show harmlessly: the token still covers the next session's end + 1 h, or the recorder signs in by itself within 48 h. Act only on the warning "The F1 TV login failed. …" (`login_failed`, it shows after any failed login) or a `last error` of `no_credentials`, `login_*` or `token_*` that does not clear: follow "Manual token fallback" below.
+5. **The recorder.** `/status` shows `state` `idle`, a recent `last report` (no "The recorder has not reported for over 5 minutes." notice; the warnings and that notice also show at the top of `/live`) and `last error` `None`. A `last error` of `disk_low` is the disk check below.
 6. **The disk.** Every recording is kept forever (ADR-0007), and `live` warns under 5 GiB free and stops under 1 GiB (A§11.2).
 
    ```bash
@@ -29,7 +29,7 @@ Do this by Thursday evening, outside a session.
 
    `disk` holds `<UTC time> <use %>` from the last `f1-tick`. Free space before the weekend if it is near 5 GiB.
 7. **The alarm.** The `f1-live` check on healthchecks.io exists (A6 is open: its ping got a 404 on 2026-11-06, so create it now). Without it a recording that ends incomplete rings nobody (`docs/runbooks/update.md`, "Check a recording [box]").
-8. **A replay opens on the phone.** Open `/replay/<recording id>` on the phone, through the tunnel, for the newest recording (`id` is the `recording` row's id, from the query in "Check a recording [box]").
+8. **A replay opens on the phone.** On `/live`, under Recordings, tap the newest recording (the link is `/replay/<recording id>`, `id` being the `recording` row's id, also in the query of "Check a recording [box]"). The phone goes through the tunnel.
 
 ## During a session
 
@@ -41,7 +41,7 @@ Do this by Thursday evening, outside a session.
   ```
 
   A code that repeats for minutes (`feed_unauthorized`, `login_*`, `token_*`, `disk`) is not normal: see "Manual token fallback".
-- The live view (`/live`) on the phone, with the delay set next to the F1 TV picture (0–120 s, A§13).
+- The live view (`/live`) on the phone, with the delay (the slider `Delay <n> s` in the playback controls, 0–120 s, A§13) set next to the F1 TV picture. A replay has no delay slider.
 - `deploy deferred` in `sudo journalctl -u f1-update --since '-1h' --no-pager` is expected while a recording runs: `live is recording (session N): deploy deferred to a later run`. The next run after the recording deploys it. A hold ends after 14 h at the latest (`error: deploys held for over 14 h …`, then the deploy runs). To deploy a fix during a recording at once, end it: `sudo docker stop f1-live-1` (the recording is closed with `complete = f`), then `sudo systemctl start f1-update`.
 - Never run `f1-install` during a recording, and do not restart `live`.
 
@@ -72,14 +72,14 @@ The summary is a Markdown table per service (samples, CPU mean and max %, memory
 ## After a session
 
 1. **Check the recording** about 30 minutes after the session ends: `docs/runbooks/update.md`, "Check a recording [box]". It must show `complete = t`, intact segments and a snapshot every 30 s.
-2. **Replay on the phone.** Open `/replay/<recording id>`.
+2. **Replay on the phone.** Tap the recording under Recordings on `/live` (`/replay/<recording id>`).
 3. **healthchecks.io.** `f1-live` is green. Red means the recording ended incomplete (`complete = f`); the `recording` row and `docker logs f1-live-1` say why.
 4. **The deploy.** `journalctl -u f1-update` shows the deferred deploy going through after the recording ended (`deployed …`).
 5. **The measurement** (if run): keep the summary for PR 2.
 
 ## Manual token fallback [owner]
 
-If `/status` shows `login_failed` or a `last error` of `no_credentials`, `login_*` or `token_*` (a `token_expiring` alone needs nothing, see "Before the weekend"), and it does not clear within a few minutes, put a token in by hand: `docs/runbooks/update.md`, "F1 TV token by hand". The recorder reads the file every 30 s and, if it records without a token, reconnects with it. `live` records anonymously meanwhile (17 of 19 topics), and a recording without a token over the session is `complete = f` (A§11.2).
+If `/status` shows the "The F1 TV login failed. …" warning (`login_failed`) or a `last error` of `no_credentials`, `login_*` or `token_*` (a `token_expiring` alone needs nothing, see "Before the weekend"), and it does not clear within a few minutes, put a token in by hand: `docs/runbooks/update.md`, "F1 TV token by hand". The recorder reads the file every 30 s and, if it records without a token, reconnects with it. `live` records anonymously meanwhile (17 of 19 topics), and a recording without a token over the session is `complete = f` (A§11.2).
 
 ## Evidence rules
 
