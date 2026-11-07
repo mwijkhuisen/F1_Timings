@@ -62,6 +62,22 @@ describe('the session switcher', () => {
     expect(status).toContain('<button type="button" popoverTarget="menu-season">Season <span class="caret"');
     expect(status).not.toContain('aria-current="page" href="/2026"');
   });
+
+  it('falls back to the year menu for a session missing from the season', () => {
+    const missing = header({ id: 'session', year: 2026, meeting: 1320, session: 1, view: 'laps' });
+    expect(missing).toContain('<a aria-current="page" href="/2026">2026</a>');
+    expect(missing).not.toContain('class="step"');
+    expect(missing).not.toContain('menu-meeting');
+    expect(missing).not.toContain('menu-session');
+  });
+
+  it('has no steps on a cancelled session, but keeps its meeting and session menus', () => {
+    const cancelled = header({ id: 'session', year: 2026, meeting: 1320, session: 9102, view: 'laps' });
+    expect(cancelled).toContain('<a aria-current="page" href="/2026">2026</a>');
+    expect(cancelled).not.toContain('class="step"');
+    expect(cancelled).toContain('popoverTarget="menu-meeting"');
+    expect(cancelled).toContain('aria-label="Session Practice 2">Practice 2 <span class="caret"');
+  });
 });
 
 describe('the page links', () => {
