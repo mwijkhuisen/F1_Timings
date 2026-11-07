@@ -83,11 +83,14 @@ export function sessionState(
   return key === nextKey ? { kind: 'next' } : { kind: 'scheduled' };
 }
 
-/** Round numbers: a meeting counts when neither it nor its Race-type session is cancelled; the size is M. */
+/**
+ * Round numbers: a meeting counts when neither it nor its Race-type session is cancelled, numbered by its first
+ * non-cancelled session's start (never by array order); the size is M.
+ */
 export function roundNumbers(season: Season): Map<number, number> {
   const rounds = new Map<number, number>();
-  for (const m of season)
-    if (!m.is_cancelled && m.sessions.some((s) => !s.is_cancelled && s.type === 'Race'))
+  for (const { meeting: m } of slots(season))
+    if (!rounds.has(m.meeting_key) && m.sessions.some((s) => !s.is_cancelled && s.type === 'Race'))
       rounds.set(m.meeting_key, rounds.size + 1);
   return rounds;
 }

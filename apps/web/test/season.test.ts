@@ -244,6 +244,14 @@ describe('roundNumbers', () => {
     ]);
   });
 
+  it('numbers by the first open session start, not by array order', () => {
+    expect([...roundNumbers([...season].reverse())]).toEqual([
+      [1001, 1],
+      [1003, 2],
+      [1004, 3],
+    ]);
+  });
+
   it('counts a sprint weekend once, and M is the number of rounds', () => {
     expect(rounds.get(1003)).toBe(2);
     expect(rounds.size).toBe(3);

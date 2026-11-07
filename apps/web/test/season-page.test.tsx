@@ -81,6 +81,15 @@ describe('the season page', () => {
     expect(html).toContain('<a href="/2026/1310-mexico-city/9002-race/laps">Race</a>');
   });
 
+  it('says "track time beside it" only with a parsable gmt_offset', () => {
+    const bad = season.map((m) => ({ ...m, gmt_offset: 'abc' }));
+    const html = renderToStaticMarkup(
+      <SeasonView year={2026} season={bad} live={live} recordings={recordings} now={NOW} />,
+    );
+    expect(html).toContain('Interlagos · Amsterdam time</p>');
+    expect(html).not.toContain('at the track');
+  });
+
   it('has no weekend and no Up next after the last race', () => {
     // Nothing recording: an open recording would keep its weekend in progress.
     const after = render(Date.parse('2026-12-01T00:00:00.000Z'), null);

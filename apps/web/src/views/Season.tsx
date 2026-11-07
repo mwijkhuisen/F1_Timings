@@ -70,8 +70,8 @@ const State = ({ state }: { state: SessionState }) => (
   </span>
 );
 
-/** Time left until `to` (epoch ms), ticking every minute. */
-export function Countdown({ to }: { to: number }) {
+/** Time left until `to` (epoch ms), ticking every minute; rendered with `key={to}`, so a new `to` starts afresh. */
+function Countdown({ to }: { to: number }) {
   const [now, setNow] = useState(Date.now);
   useEffect(() => {
     const id = setInterval(() => setNow(Date.now()), 60_000);
@@ -105,6 +105,7 @@ export function SeasonView({
   const next = nextSession(season, now);
   const nextKey = next?.session.session_key ?? null;
   const upNext = weekend && next?.meeting.meeting_key === weekend.meeting_key ? next.session : null;
+  const tracked = weekend?.sessions.some((s) => fmtTrack(s.date_start, weekend.gmt_offset) !== null);
   return (
     <>
       <h1 tabIndex={-1}>{year}</h1>
@@ -120,7 +121,7 @@ export function SeasonView({
             </p>
             <h2>{weekend.name}</h2>
             <p className="muted">
-              {dot(weekend.circuit_short_name, `Amsterdam time${weekend.gmt_offset ? ', track time beside it' : ''}`)}
+              {dot(weekend.circuit_short_name, `Amsterdam time${tracked ? ', track time beside it' : ''}`)}
             </p>
             <ul className="sess full">
               {weekend.sessions.map((s) => {
@@ -141,7 +142,7 @@ export function SeasonView({
           {upNext && (
             <div className="upnext">
               <p className="eyebrow">Up next</p>
-              <Countdown to={Date.parse(upNext.date_start)} />
+              <Countdown key={upNext.date_start} to={Date.parse(upNext.date_start)} />
               <p>
                 {upNext.name} · <time dateTime={upNext.date_start}>{fmtInstant(upNext.date_start)}</time>
               </p>
