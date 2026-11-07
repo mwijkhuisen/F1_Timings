@@ -127,9 +127,19 @@ export function towerRows(state: Obj): TowerRow[] {
     });
 }
 
-/** A flagged value's class: purple for the overall best, green for a personal best (as in the lap table). */
-const flag = (v: { OverallFastest?: boolean | undefined; PersonalFastest?: boolean | undefined } | undefined) =>
-  v?.OverallFastest ? 't-purple' : v?.PersonalFastest ? 't-green' : undefined;
+type Flag = { className: string; words: string };
+
+/** A flagged value's class and its words for a screen reader: purple for the overall best, green for a personal best (as in the lap table). */
+const flag = (
+  v: { OverallFastest?: boolean | undefined; PersonalFastest?: boolean | undefined } | undefined,
+): Flag | undefined =>
+  v?.OverallFastest
+    ? { className: 't-purple', words: ', overall best' }
+    : v?.PersonalFastest
+      ? { className: 't-green', words: ', personal best' }
+      : undefined;
+
+const Words = ({ f }: { f: Flag | undefined }) => f && <span className="vh">{f.words}</span>;
 
 const SECTORS = ['0', '1', '2'];
 
@@ -137,9 +147,13 @@ function Sector({ s }: { s: NonNullable<Line['Sectors']>[string] }) {
   const segs = Object.entries(s?.Segments ?? {})
     .filter(([i]) => NUMBER.test(i))
     .sort((a, b) => Number(a[0]) - Number(b[0]));
+  const f = flag(s);
   return (
     <td className="sector">
-      <span className={flag(s)}>{s?.Value}</span>
+      <span className={f?.className}>
+        {s?.Value}
+        <Words f={f} />
+      </span>
       {segs.map(([i, seg]) => (
         <span key={i} className={`ms ${segClass(seg?.Status ?? null)}`} aria-hidden="true" />
       ))}
@@ -184,6 +198,7 @@ export function Tower({ state, sessionKey }: { state: Obj; sessionKey?: number |
             {rows.map((r) => {
               const { line } = r;
               const compound = r.tyre && (compoundOf(r.tyre.Compound ?? null) ?? 'unknown');
+              const last = flag(line.LastLapTime);
               return (
                 <tr key={r.driver.number} className={line.Retired || line.Stopped ? 'out' : undefined}>
                   <td>{r.position}</td>
@@ -192,16 +207,24 @@ export function Tower({ state, sessionKey }: { state: Obj; sessionKey?: number |
                   </th>
                   <GapCell gap={r.gap} id={`tower-gap-${r.driver.number}`} />
                   <GapCell gap={r.interval} id={`tower-int-${r.driver.number}`} />
-                  <td className={flag(line.LastLapTime)}>{r.last}</td>
+                  <td className={last?.className}>
+                    {r.last}
+                    <Words f={last} />
+                  </td>
                   <td>{r.best}</td>
                   {SECTORS.map((i) => (
                     <Sector key={i} s={line.Sectors?.[i]} />
                   ))}
                   <td>
                     {r.tyre && (
-                      <span className={`cmp cmp-${compound}`} title={r.tyre.Compound}>
-                        {compound?.[0]?.toUpperCase()}
-                      </span>
+                      <>
+                        <span className={`cmp cmp-${compound}`} title={r.tyre.Compound} aria-hidden="true">
+                          {compound?.[0]?.toUpperCase()}
+                        </span>
+                        <span className="vh">
+                          {compound} tyres{(r.tyre.StartLaps ?? 0) > 0 ? ', used set' : ''},{' '}
+                        </span>
+                      </>
                     )}
                     {r.tyre?.TotalLaps}
                   </td>

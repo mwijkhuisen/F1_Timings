@@ -49,10 +49,11 @@ const state: Obj = {
       '1': {
         Stints: {
           '0': { Compound: 'HARD', TotalLaps: 20 },
-          '1': { Compound: 'SOFT', TotalLaps: 7 },
+          '1': { Compound: 'SOFT', TotalLaps: 7, StartLaps: 0 },
         },
       },
       '2': { Stints: { '0': { Compound: 'MYSTERY', TotalLaps: 3 } } },
+      '4': { Stints: { '0': { Compound: 'SOFT', TotalLaps: 12, StartLaps: 3 } } },
     },
   },
 };
@@ -258,9 +259,10 @@ describe('the tower', () => {
   const html = renderToStaticMarkup(<Tower state={state} sessionKey={9965} />);
   const row = (tla: string) => html.split('<tr').find((r) => r.includes(`>${tla}</th>`)) ?? '';
 
-  it('colours the last lap purple for the overall best and green for a personal best', () => {
-    expect(row('AAA')).toContain('<td class="t-purple">1:30.000</td>');
-    expect(row('BBB')).toContain('<td class="t-green">1:31.000</td>');
+  it('colours the last lap purple for the overall best and green for a personal best, with the words', () => {
+    expect(row('AAA')).toContain('<td class="t-purple">1:30.000<span class="vh">, overall best</span></td>');
+    expect(row('BBB')).toContain('<td class="t-green">1:31.000<span class="vh">, personal best</span></td>');
+    expect(html.match(/class="vh">, /g)).toHaveLength(3);
   });
 
   it('shows the gap and interval as text, and — with its reason in the title and the popover', () => {
@@ -287,17 +289,21 @@ describe('the tower', () => {
 
   it('shows each sector value in its colour with its mini-sector boxes', () => {
     expect(row('AAA')).toContain(
-      '<span class="t-green">30.1</span><span class="ms ms-purple" aria-hidden="true"></span>' +
+      '<span class="t-green">30.1<span class="vh">, personal best</span></span><span class="ms ms-purple" aria-hidden="true"></span>' +
         '<span class="ms ms-green" aria-hidden="true"></span><span class="ms ms-yellow" aria-hidden="true"></span>',
     );
-    expect(row('AAA')).toContain('ms-pit');
+    expect(row('AAA')).toContain('<td class="sector"><span>31.2</span><span class="ms ms-pit"');
     expect(row('AAA')).toContain('ms-none');
     expect(row('AAA')).toContain('ms-grey');
   });
 
-  it('shows the tyre as a compound dot with its laps', () => {
-    expect(row('AAA')).toContain('<span class="cmp cmp-soft" title="SOFT">S</span>7');
-    expect(row('BBB')).toContain('cmp-unknown');
+  it('shows the tyre as a hidden compound dot, its words and its laps', () => {
+    const dot = '<span class="cmp cmp-soft" title="SOFT" aria-hidden="true">S</span>';
+    expect(row('AAA')).toContain(`${dot}<span class="vh">soft tyres, </span>7`);
+    expect(row('DDD')).toContain(`${dot}<span class="vh">soft tyres, used set, </span>12`);
+    expect(row('BBB')).toContain(
+      '<span class="cmp cmp-unknown" title="MYSTERY" aria-hidden="true">U</span><span class="vh">unknown tyres, </span>3',
+    );
   });
 
   it('shows the pit stops with the IN PIT and OUT badges', () => {
