@@ -42,9 +42,12 @@ export function lapChartOption(drivers: readonly Driver[], laps: readonly ChartL
       name: plain(d.acronym),
       color: colour,
       lineStyle: { type: LINE_TYPES[repeat % LINE_TYPES.length] },
-      symbol: 'circle',
+      // Only a deleted lap has a symbol: hollow, and 8 px (ECharts' default is 6) so the hole reads.
+      // showAllSymbol true: the default 'auto' keeps only the symbols on labelled laps once a lap is
+      // narrower than 1.5 symbols, which on a phone hid most deleted laps of a race (A§13).
+      symbol: 'none',
+      showAllSymbol: true,
       // Dense: a missing lap or a lap without a time is null, so the line breaks.
-      // A deleted lap is hollow and larger than the default 4 px, so the hole reads.
       data: lapNumbers.map((n) => {
         const l = at(d, n);
         if (l?.lap_ms == null) return null;
