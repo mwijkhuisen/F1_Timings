@@ -1,38 +1,12 @@
 import { useEffect } from 'react';
-import { useSeasons } from './lib/api.ts';
-import { Link, navigate, type Route, replace, useRoute } from './lib/routes.ts';
+import { useRecordings, useSession } from './lib/api.ts';
+import { type Route, replace, titleOf, useHeadingFocus, useRoute } from './lib/routes.ts';
 import { NotFound } from './ui/ErrorView.tsx';
-import { Live, Replay } from './views/Live.tsx';
-import { Latest, Picker } from './views/Picker.tsx';
+import { Header } from './views/Header.tsx';
+import { Live, Replay, Replays } from './views/Live.tsx';
+import { Season, Start } from './views/Season.tsx';
 import { Session } from './views/Session.tsx';
 import { Status } from './views/Status.tsx';
-
-const yearOf = (route: Route | null): number | null =>
-  route?.id === 'year' || route?.id === 'session' ? route.year : null;
-
-function Header({ year }: { year: number | null }) {
-  const seasons = useSeasons();
-  return (
-    <header>
-      <select
-        aria-label="Season"
-        value={year ?? ''}
-        onChange={(e) => e.target.value !== '' && navigate(`/${e.target.value}`)}
-      >
-        {year === null && <option value="">Season</option>}
-        {seasons.data?.map((s) => (
-          <option key={s.year} value={s.year}>
-            {s.year}
-          </option>
-        ))}
-      </select>
-      <nav className="links">
-        <Link to="/live">Live</Link>
-        <Link to="/status">Status</Link>
-      </nav>
-    </header>
-  );
-}
 
 function Page({ route }: { route: Route | null }) {
   // `/:year/:meeting/:session` has no view of its own: go to the lap table.
@@ -43,15 +17,17 @@ function Page({ route }: { route: Route | null }) {
 
   switch (route?.id) {
     case 'latest':
-      return <Latest />;
+      return <Start />;
     case 'year':
-      return <Picker year={route.year} />;
+      return <Season year={route.year} />;
     case 'session':
       return route.view === null ? null : <Session key={route.session} session={route.session} view={route.view} />;
     case 'status':
       return <Status />;
     case 'live':
       return <Live />;
+    case 'replays':
+      return <Replays />;
     case 'replay':
       return <Replay key={route.recording} recording={route.recording} />;
     default:
@@ -59,11 +35,46 @@ function Page({ route }: { route: Route | null }) {
   }
 }
 
+// `document.title` (A§13), one writer per route. The session and replay names come from the queries their pages
+// make anyway (the same cache keys, so no extra request).
+const useTitle = (title: string) =>
+  useEffect(() => {
+    document.title = title;
+  }, [title]);
+
+function SessionTitle({ route }: { route: Extract<Route, { id: 'session' }> }) {
+  const d = useSession(route.session).data;
+  useTitle(titleOf(route, d && { meeting: d.meeting.name, session: d.session.name }));
+  return null;
+}
+
+function ReplayTitle({ route }: { route: Extract<Route, { id: 'replay' }> }) {
+  const r = useRecordings().data?.find((x) => x.id === route.recording);
+  useTitle(titleOf(route, r && { meeting: r.meeting_name, session: r.session_name }));
+  return null;
+}
+
+function PageTitle({ route }: { route: Route | null }) {
+  useTitle(titleOf(route));
+  return null;
+}
+
+const Title = ({ route }: { route: Route | null }) =>
+  route?.id === 'session' ? (
+    <SessionTitle route={route} />
+  ) : route?.id === 'replay' ? (
+    <ReplayTitle route={route} />
+  ) : (
+    <PageTitle route={route} />
+  );
+
 export function App() {
   const route = useRoute();
+  useHeadingFocus(route);
   return (
     <>
-      <Header year={yearOf(route)} />
+      <Title route={route} />
+      <Header route={route} />
       <main>
         <Page route={route} />
       </main>

@@ -1,12 +1,11 @@
-import { Laps, Recordings, Season, SessionDetail, Status, Stints } from '@f1/contracts';
+import { Laps, Recordings, SessionDetail, Status, Stints } from '@f1/contracts';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, expect, it } from 'vitest';
 import { Next, RecordingsList } from '../src/views/Live.tsx';
-import { findLatest, latestPath, Meetings } from '../src/views/Picker.tsx';
 import { RecorderWarnings, StatusPanel } from '../src/views/Status.tsx';
 import { StintBars } from '../src/views/Stints.tsx';
 
-// The picker (D13), the stints bars (D11) and the status panel (D12), on hand-built data.
+// The stints bars (D11) and the status panel (D12), on hand-built data.
 
 const meeting = {
   official_name: null,
@@ -26,68 +25,6 @@ const session = (session_key: number, name: string, date_start: string, is_cance
   date_end: date_start,
   ingest_state: 'final',
   is_cancelled,
-});
-const season = Season.parse([
-  {
-    ...meeting,
-    meeting_key: 1290,
-    name: 'Singapore Grand Prix',
-    sessions: [
-      session(9963, 'Qualifying', '2026-10-10T13:00:00.000Z'),
-      session(9964, 'Sprint', '2026-10-10T09:00:00.000Z', true),
-      session(9965, 'Race', '2026-10-11T12:00:00.000Z'),
-    ],
-  },
-]);
-
-describe('the season picker', () => {
-  const html = renderToStaticMarkup(<Meetings year={2026} season={season} />);
-
-  it('links each session to its lap table, with the start in Amsterdam time', () => {
-    expect(html).toContain('<a href="/2026/1290-singapore/9965-race/laps">Race</a>');
-    expect(html).toContain('<time dateTime="2026-10-11T12:00:00.000Z">Sun 11 Oct 2026, 14:00</time>');
-  });
-
-  it('strikes a cancelled session and does not link it', () => {
-    expect(html).toContain('<s title="Cancelled">Sprint</s>');
-    expect(html).not.toContain('9964');
-  });
-
-  it('finds the last started session that is not cancelled', () => {
-    expect(latestPath(2026, season, Date.parse('2026-10-11T12:00:00Z'))).toBe('/2026/1290-singapore/9965-race/laps');
-    expect(latestPath(2026, season, Date.parse('2026-10-11T11:59:59Z'))).toBe(
-      '/2026/1290-singapore/9963-qualifying/laps',
-    );
-    expect(latestPath(2026, season, Date.parse('2026-10-10T12:00:00Z'))).toBeNull();
-  });
-
-  it('sends / to the newest season with a started session, else to the newest season', async () => {
-    // 2027 is listed before its first session.
-    const next = Season.parse([
-      {
-        ...meeting,
-        meeting_key: 1400,
-        name: 'Australian Grand Prix',
-        sessions: [session(9999, 'Race', '2027-03-07T05:00:00.000Z')],
-      },
-    ]);
-    const loaded: number[] = [];
-    const load = async (year: number) => {
-      loaded.push(year);
-      return year === 2027 ? next : season;
-    };
-    expect(await findLatest([2027, 2026], load, Date.parse('2026-10-28T00:00:00Z'))).toBe(
-      '/2026/1290-singapore/9965-race/laps',
-    );
-    expect(loaded).toEqual([2027, 2026]);
-    // A season that has one is the last one loaded.
-    loaded.length = 0;
-    expect(await findLatest([2026, 2025], load, Date.parse('2026-10-28T00:00:00Z'))).toBe(
-      '/2026/1290-singapore/9965-race/laps',
-    );
-    expect(loaded).toEqual([2026]);
-    expect(await findLatest([2027, 2026], load, Date.parse('2026-01-01T00:00:00Z'))).toBe('/2027');
-  });
 });
 
 describe('the stints bars', () => {
@@ -194,7 +131,7 @@ describe('the status panel', () => {
   const html = render(null);
 
   it('counts sessions per state and the cancelled ones', () => {
-    expect(html).toContain('<h1>Status</h1><h2>Ingest</h2>');
+    expect(html).toContain('<h1 tabindex="-1">Status</h1><h2>Ingest</h2>');
     expect(html).toContain('<dt>final</dt><dd>454</dd>');
     expect(html).toContain('<dt>cancelled</dt><dd>15</dd>');
   });

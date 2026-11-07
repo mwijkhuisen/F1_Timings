@@ -7,7 +7,7 @@ import { NotFound, Pending } from '../ui/ErrorView.tsx';
 import { Player, type PlayerRecording } from './Player.tsx';
 import { RecorderWarnings } from './Status.tsx';
 
-// `/live` and `/replay/:recording` (A§13): the player on a recording, with the session from the API for the lap table.
+// `/live`, `/replay` and `/replay/:recording` (A§13): the player on a recording, with the session from the API for the lap table.
 
 function Watch({
   title,
@@ -23,7 +23,7 @@ function Watch({
   const session = useSession(sessionKey);
   return (
     <>
-      <h1>{title}</h1>
+      <h1 tabIndex={-1}>{title}</h1>
       <Player key={recording.id} recording={recording} sessionKey={sessionKey} start={start} detail={session.data} />
     </>
   );
@@ -66,7 +66,6 @@ export function RecordingsList({ recordings }: { recordings: Recordings }) {
 
 export function Live() {
   const live = useLive();
-  const recordings = useRecordings();
   const status = useStatus(60_000);
   // The recording the player follows: it stays (with its new `ended_at`) while `/live` names it, so a delayed viewer
   // sees the end, and the player's stream is not closed by the refetch that marks it ended.
@@ -82,11 +81,23 @@ export function Live() {
         <Watch title={titleOf(session)} recording={recording} sessionKey={session.session_key} start="live" />
       ) : (
         <>
-          <h1>Live</h1>
+          <h1 tabIndex={-1}>Live</h1>
           <Next live={live.data} />
         </>
       )}
-      <h2>Recordings</h2>
+      <p>
+        <Link to="/replay">All replays</Link>
+      </p>
+    </>
+  );
+}
+
+/** `/replay`: every recording, newest first. */
+export function Replays() {
+  const recordings = useRecordings();
+  return (
+    <>
+      <h1 tabIndex={-1}>Replays</h1>
       {recordings.data ? <RecordingsList recordings={recordings.data} /> : <Pending error={recordings.error} />}
     </>
   );
