@@ -108,8 +108,15 @@ const TimingLine = z.looseObject({
   Speeds: obj({ I1: obj(Flagged), I2: obj(Flagged), FL: obj(Flagged), ST: obj(Flagged) }),
   InPit: bool,
   PitOut: bool,
+  // The gaps depend on the session type (A§11.3): a race sends GapToLeader and IntervalToPositionAhead, practice
+  // TimeDiffToFastest and TimeDiffToPositionAhead, and qualifying both per part under Stats, with the interval spelt
+  // TimeDifftoPositionAhead and the part's best lap under BestLapTimes, both keyed by SessionPart − 1.
   GapToLeader: str,
   IntervalToPositionAhead: obj({ Value: str, Catching: bool }),
+  TimeDiffToFastest: str,
+  TimeDiffToPositionAhead: str,
+  Stats: rec(z.looseObject({ TimeDiffToFastest: str, TimeDifftoPositionAhead: str })),
+  BestLapTimes: rec(z.looseObject({ Value: str, Lap: int })),
   Retired: bool,
   Stopped: bool,
   KnockedOut: bool,

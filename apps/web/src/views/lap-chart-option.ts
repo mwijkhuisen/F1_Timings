@@ -68,7 +68,15 @@ export function lapChartOption(drivers: readonly Driver[], laps: readonly ChartL
   return {
     backgroundColor: 'transparent',
     textStyle: { color: tokens.fg },
-    grid: { left: 8, right: 16, top: 40, bottom: 8, containLabel: true },
+    // The axis labels fit inside these margins (ECharts 6's replacement for the deprecated `containLabel`).
+    grid: {
+      left: 8,
+      right: 16,
+      top: 40,
+      bottom: 8,
+      outerBoundsMode: 'same' as const,
+      outerBoundsContain: 'axisLabel' as const,
+    },
     legend: { top: 0, textStyle: { color: tokens.fg } },
     xAxis: {
       type: 'category' as const,

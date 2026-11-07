@@ -139,6 +139,17 @@ describe('lapChartOption', () => {
     expect(option.yAxis.axisLabel.formatter(79000)).toBe('1:19.000');
   });
 
+  it('keeps the axis labels inside the grid margins through outerBounds, not the deprecated containLabel', () => {
+    expect(option.grid).toEqual({
+      left: 8,
+      right: 16,
+      top: 40,
+      bottom: 8,
+      outerBoundsMode: 'same',
+      outerBoundsContain: 'axisLabel',
+    });
+  });
+
   it('uses a rich-text tooltip with a plain-text formatter, and no HTML anywhere', () => {
     expect(option.tooltip).toMatchObject({ trigger: 'axis', renderMode: 'richText', confine: true });
     expect(option.tooltip.formatter([{ dataIndex: 3 }])).toBe('Lap 4\nVER 1:20.000 deleted\nNOR 1:22.000\nPER —');
