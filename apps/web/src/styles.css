@@ -497,8 +497,10 @@ td.deleted {
   left: 0;
 }
 
-/* Mini-sectors (D6): one box per segment. Colour is never the only cue: each box has a
-   title, purple is also boxed, and "no data" is an empty outline. */
+/* Mini-sectors (D6): one box per segment, and a shape per class, so colour is never the only cue (A§13).
+   Other (--ms-other) and unknown codes (--muted) fill the lower half; a personal best (--green) is full
+   height; an overall best (--purple) is full height with a ring; the pit lane is hatched --pit with a thin
+   frame; no data is a dashed outline. Every fill reaches 3:1 on --bg (contrast.test.ts). */
 .ms {
   display: inline-block;
   width: 12px;
@@ -506,7 +508,7 @@ td.deleted {
   margin-right: 2px;
   border-radius: 2px;
   vertical-align: middle;
-  background: var(--ms);
+  background: linear-gradient(to top, var(--ms) 50%, transparent 0);
 }
 
 .legend .ms {
@@ -514,12 +516,12 @@ td.deleted {
 }
 
 .ms-purple {
-  --ms: var(--purple);
-  box-shadow: inset 0 0 0 2px var(--fg);
+  background: var(--purple);
+  outline: 1.5px solid var(--fg);
 }
 
 .ms-green {
-  --ms: var(--green);
+  background: var(--green);
 }
 
 .ms-yellow {
@@ -527,7 +529,9 @@ td.deleted {
 }
 
 .ms-pit {
-  --ms: var(--pit);
+  background: repeating-linear-gradient(45deg, var(--pit) 0 2px, transparent 2px 4px);
+  outline: 1px solid var(--pit);
+  outline-offset: -1px;
 }
 
 .ms-grey {
@@ -535,8 +539,9 @@ td.deleted {
 }
 
 .ms-none {
-  --ms: transparent;
-  box-shadow: inset 0 0 0 1px var(--muted);
+  background: none;
+  outline: 1px dashed var(--dim);
+  outline-offset: -1px;
 }
 
 .minisectors td.segs {

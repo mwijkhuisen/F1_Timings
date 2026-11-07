@@ -36,6 +36,17 @@ const SPEEDS = ['i1_kph', 'i2_kph', 'st_kph'] as const;
 
 const LEGEND = ['ms-purple', 'ms-green', 'ms-yellow', 'ms-pit', 'ms-grey', 'ms-none'];
 
+/** The mini-sector legend: each class's shape with its name (the boxes are decoration, the words say it). */
+export const MsLegend = () => (
+  <p className="legend">
+    {LEGEND.map((c) => (
+      <span key={c}>
+        <span className={`ms ${c}`} aria-hidden="true" /> {TITLE[c] ?? 'unknown code'}
+      </span>
+    ))}
+  </p>
+);
+
 /** One sector cell: boxes with a hover title each, and one short text for a screen reader, such as "S1: 4 personal best, 2 other". */
 function Sector({ name, codes }: { name: string; codes: (number | null)[] }) {
   const count = new Map<string, number>();
@@ -70,13 +81,7 @@ export function MiniSectors({
           Mini-sector colours unreliable in races
         </p>
       )}
-      <p className="legend">
-        {LEGEND.map((c) => (
-          <span key={c}>
-            <span className={`ms ${c}`} /> {TITLE[c] ?? 'unknown code'}
-          </span>
-        ))}
-      </p>
+      <MsLegend />
       <div className="scroll">
         <table className="laps minisectors" aria-label="Mini-sectors and speed traps (km/h)">
           <thead>

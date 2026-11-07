@@ -280,6 +280,11 @@ describe('the tower', () => {
     expect(ids).toEqual(['tower-gap-4', 'tower-int-4']);
   });
 
+  it('shows the mini-sector legend above its scroll box', () => {
+    expect(html).toMatch(/^<p class="legend">[\s\S]*?<\/p><div class="scroll"[^>]*><table class="list tower"/);
+    expect(html).toContain('<span class="ms ms-purple" aria-hidden="true"></span> overall best</span>');
+  });
+
   it('shows each sector value in its colour with its mini-sector boxes', () => {
     expect(row('AAA')).toContain(
       '<span class="t-green">30.1</span><span class="ms ms-purple" aria-hidden="true"></span>' +

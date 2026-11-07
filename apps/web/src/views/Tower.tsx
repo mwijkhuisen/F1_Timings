@@ -1,7 +1,7 @@
 import { type Obj, type Views, view } from '@f1/contracts';
 import { compoundOf, type Driver, teamColour, teamStyle } from '../lib/session.ts';
 import { Note } from '../ui/Note.tsx';
-import { segClass } from './MiniSectors.tsx';
+import { MsLegend, segClass } from './MiniSectors.tsx';
 
 // The timing tower (A§13): one row per TimingData line, from the stream's state. Feed text is rendered as text only.
 
@@ -166,52 +166,55 @@ export function Tower({ state, sessionKey }: { state: Obj; sessionKey?: number |
   const rows = towerRows(state);
   if (rows.length === 0) return <p className="muted">No timing yet.</p>;
   return (
-    <div className="scroll">
-      <table className="list tower" aria-label="Timing tower">
-        <thead>
-          <tr>
-            {['Pos', 'Driver', 'Gap', 'Int', 'Last', 'Best', 'S1', 'S2', 'S3', 'Tyre', 'Pits'].map((h) => (
-              <th key={h} scope="col">
-                {h}
-              </th>
-            ))}
-          </tr>
-        </thead>
-        <tbody>
-          {rows.map((r) => {
-            const { line } = r;
-            const compound = r.tyre && (compoundOf(r.tyre.Compound ?? null) ?? 'unknown');
-            return (
-              <tr key={r.driver.number} className={line.Retired || line.Stopped ? 'out' : undefined}>
-                <td>{r.position}</td>
-                <th scope="row" className="drv" style={teamStyle(r.driver)} title={r.driver.name ?? undefined}>
-                  {r.driver.acronym}
+    <>
+      <MsLegend />
+      <div className="scroll">
+        <table className="list tower" aria-label="Timing tower">
+          <thead>
+            <tr>
+              {['Pos', 'Driver', 'Gap', 'Int', 'Last', 'Best', 'S1', 'S2', 'S3', 'Tyre', 'Pits'].map((h) => (
+                <th key={h} scope="col">
+                  {h}
                 </th>
-                <GapCell gap={r.gap} id={`tower-gap-${r.driver.number}`} />
-                <GapCell gap={r.interval} id={`tower-int-${r.driver.number}`} />
-                <td className={flag(line.LastLapTime)}>{r.last}</td>
-                <td>{r.best}</td>
-                {SECTORS.map((i) => (
-                  <Sector key={i} s={line.Sectors?.[i]} />
-                ))}
-                <td>
-                  {r.tyre && (
-                    <span className={`cmp cmp-${compound}`} title={r.tyre.Compound}>
-                      {compound?.[0]?.toUpperCase()}
-                    </span>
-                  )}
-                  {r.tyre?.TotalLaps}
-                </td>
-                <td>
-                  {line.NumberOfPitStops}
-                  {line.InPit && <span className="badge">IN PIT</span>}
-                  {line.PitOut && <span className="badge">OUT</span>}
-                </td>
-              </tr>
-            );
-          })}
-        </tbody>
-      </table>
-    </div>
+              ))}
+            </tr>
+          </thead>
+          <tbody>
+            {rows.map((r) => {
+              const { line } = r;
+              const compound = r.tyre && (compoundOf(r.tyre.Compound ?? null) ?? 'unknown');
+              return (
+                <tr key={r.driver.number} className={line.Retired || line.Stopped ? 'out' : undefined}>
+                  <td>{r.position}</td>
+                  <th scope="row" className="drv" style={teamStyle(r.driver)} title={r.driver.name ?? undefined}>
+                    {r.driver.acronym}
+                  </th>
+                  <GapCell gap={r.gap} id={`tower-gap-${r.driver.number}`} />
+                  <GapCell gap={r.interval} id={`tower-int-${r.driver.number}`} />
+                  <td className={flag(line.LastLapTime)}>{r.last}</td>
+                  <td>{r.best}</td>
+                  {SECTORS.map((i) => (
+                    <Sector key={i} s={line.Sectors?.[i]} />
+                  ))}
+                  <td>
+                    {r.tyre && (
+                      <span className={`cmp cmp-${compound}`} title={r.tyre.Compound}>
+                        {compound?.[0]?.toUpperCase()}
+                      </span>
+                    )}
+                    {r.tyre?.TotalLaps}
+                  </td>
+                  <td>
+                    {line.NumberOfPitStops}
+                    {line.InPit && <span className="badge">IN PIT</span>}
+                    {line.PitOut && <span className="badge">OUT</span>}
+                  </td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
+    </>
   );
 }
