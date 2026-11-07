@@ -126,7 +126,7 @@ function Cell({
     const diff = value - (own?.[FIELD[metric]] ?? value);
     boxed = diff === 0;
     heat = own ? deltaStep(diff, own[FIELD[metric]] ?? value) : 0;
-    body = diff === 0 ? 'best' : fmtDelta(diff, 2);
+    body = diff === 0 ? 'best' : fmtDelta(diff, diff < 10 ? 3 : 2); // never +0.00 for a slower lap
   }
 
   return (

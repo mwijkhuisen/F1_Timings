@@ -444,6 +444,8 @@ describe('Δ to own best', () => {
     lap(44, 3, [[40150, 'yellow']]),
     lap(44, 4, [[41000, 'yellow']]),
     lap(44, 5, [[50000, 'yellow']]),
+    lap(44, 6, [[40003, 'yellow']]),
+    lap(44, 7, [[40010, 'yellow']]),
   ];
 
   it('shows the gap with its step, and best in the server colour', () => {
@@ -455,12 +457,17 @@ describe('Δ to own best', () => {
       '+0.15',
       '+1.00',
       '<span class="muted">VSC</span>',
+      // Under 10 ms a third digit, so a slower lap never reads +0.00.
+      '+0.003',
+      '+0.01',
     ]);
     expect(got.map((c) => c.cls.filter((n) => n.startsWith('heat-') || n.startsWith('t-')))).toEqual([
       ['t-purple'],
       ['heat-2'],
       [],
       ['heat-3'],
+      [],
+      [],
       [],
     ]);
     expect(html).toContain(
