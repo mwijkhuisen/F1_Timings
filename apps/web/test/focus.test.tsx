@@ -4,7 +4,7 @@ import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { navigate, replace, useHeadingFocus, useRoute } from '../src/lib/routes.ts';
 
-// The focus rule (A§13): a navigation moves focus to the page's h1; the first load and a redirect do not.
+// The focus rule (A§13): a navigation moves focus to the page's h1; the first load, a redirect and back/forward do not.
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -50,6 +50,20 @@ describe('useHeadingFocus', () => {
     expect(h1()).toBeNull();
     render(true);
     await vi.waitFor(() => expect(document.activeElement).toBe(h1()));
+  });
+
+  // `/also-not-found` keeps the route (null), so only the flag stops the wait for the h1.
+  it.each(['/2026', '/also-not-found'])('no focus after back/forward to %s from a page without an h1', async (back) => {
+    render(false);
+    act(() => navigate('/not-found'));
+    act(() => {
+      history.replaceState(null, '', back);
+      window.dispatchEvent(new PopStateEvent('popstate'));
+    });
+    render(true);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(h1()).not.toBeNull();
+    expect(document.activeElement).not.toBe(h1());
   });
 
   it('leaves focus alone after replace()', () => {

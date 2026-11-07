@@ -109,7 +109,7 @@ export const sessionPath = (year: number, meeting: Named, session: Named, view: 
 
 const NAVIGATE = 'f1:navigate';
 
-/** Set by `navigate()` to a new path, cleared once `useHeadingFocus` has focused the h1 (A§13). */
+/** Set by `navigate()` to a new path, cleared once `useHeadingFocus` has focused the h1 or by back/forward (A§13). */
 let focusPending = false;
 
 /** Replace the current URL without a history entry (a redirect or a canonical URL). */
@@ -126,10 +126,15 @@ export function navigate(path: string): void {
 }
 
 function subscribe(onChange: () => void): () => void {
-  window.addEventListener('popstate', onChange);
+  // A navigation to a page without an h1 (Not found, an error) leaves the flag set: back/forward must not focus.
+  const onPop = () => {
+    focusPending = false;
+    onChange();
+  };
+  window.addEventListener('popstate', onPop);
   window.addEventListener(NAVIGATE, onChange);
   return () => {
-    window.removeEventListener('popstate', onChange);
+    window.removeEventListener('popstate', onPop);
     window.removeEventListener(NAVIGATE, onChange);
   };
 }
@@ -141,13 +146,16 @@ export function useRoute(): Route | null {
 
 /**
  * After a `navigate()`, focus `main h1`, waiting for it to mount. `replace()`, popstate and the first load never
- * set the flag; a pending focus survives a redirect by `replace()`, so it lands on the page the redirect shows.
+ * set the flag, and popstate clears it; a pending focus survives a redirect by `replace()`, so it lands on the page
+ * the redirect shows.
  */
 export function useHeadingFocus(route: Route | null): void {
   // biome-ignore lint/correctness/useExhaustiveDependencies: the route is the trigger, a page change.
   useEffect(() => {
     if (!focusPending) return;
+    // True ends the wait: also once back/forward has cleared the flag (the route may not change: two Not found pages).
     const focus = () => {
+      if (!focusPending) return true;
       const h1 = document.querySelector<HTMLElement>('main h1');
       h1?.focus();
       if (h1) focusPending = false;
