@@ -1,22 +1,42 @@
 /*
- * Themes (D9): dark timing-screen tokens by default, light ones under
- * prefers-color-scheme. Purple, green, yellow, --fg and --muted are text on
- * --bg and reach WCAG AA 4.5:1 in both (apps/web/test/contrast.test.ts).
- * No inline styles anywhere: React sets only the custom properties --team,
- * --x and --w, through CSSOM.
+ * The design system (A§13, P4a). Dark timing-screen tokens on :root by default, light ones under
+ * prefers-color-scheme. Colour is data, with no brand accent: purple is the overall best, green a
+ * personal best, "other" times are plain text; --live is live, a red flag or a failure; --amber is SC
+ * and VSC. Every text token reaches 4.5:1 on --bg, --panel and --raised and every mini-sector fill
+ * 3:1 on --bg, and purple, green and --fg stay apart for colour-blind vision (test/contrast.test.ts).
+ * Team colours go through .drv and --tc: --team, or on the light theme --team-l (lib/session.ts).
+ * Type (px): 11 badge and compound · 12 label (upper case) · 14 body and tables · 15 tower · 17 heads ·
+ * 20 clock · 26 title, the titles and the clock in the installed --display stack (no font file).
+ * Cues are outlines and borders, never shadows, so forced colours keep them.
+ * No inline styles anywhere: React sets only the custom properties --team, --team-l, --x and --w,
+ * through CSSOM.
  */
 :root {
   color-scheme: dark light;
+  accent-color: var(--fg);
+  /* Surfaces and lines. */
   --bg: #15151e;
+  --panel: #1b1b26;
+  --raised: #242430;
+  --line: #30303d;
+  --line-soft: #252531;
+  /* Text: --fg, --muted and --dim reach 4.5:1 on every surface. */
   --fg: #f0f0f5;
-  --muted: #9b9ba8;
-  --line: #34343f;
-  --raised: #20202b;
+  --muted: #a3a3b2;
+  --dim: #8b8b9b;
+  /* Timing colours: purple the overall best, green a personal best; "other" is plain text. */
   --purple: #c48cff;
   --green: #3ccf6e;
-  --yellow: #ffd23f;
-  /* The mini-sector pit-lane fill (D7); the other fills reuse the timing colours and --muted. */
+  /* The mini-sector pit-lane fill (D7) and "other" fill, at least 3:1 on --bg. */
   --pit: #4da6ff;
+  --ms-other: #b0952f;
+  /* Red: live, a red flag or a failure only. Amber: SC and VSC only. */
+  --live: #ff6b6b;
+  --amber: #ffb020;
+  /* One-hue steps behind a value (P4b). */
+  --heat-1: rgb(255 210 63 / 0.1);
+  --heat-2: rgb(255 210 63 / 0.2);
+  --heat-3: rgb(255 210 63 / 0.32);
   /* Compounds: a fill with --on-cmp text, the same in both themes (contrast-tested). */
   --on-cmp: #000000;
   --soft: #ff5050;
@@ -25,19 +45,41 @@
   --intermediate: #4cd964;
   --wet: #4da6ff;
   --unknown: #b4b4bc;
+  --cmp-ring: transparent;
+  /* Installed fonts only, for titles and the clock: no font file. */
+  --display: "DIN Alternate", Bahnschrift, system-ui, sans-serif;
+}
+
+/* Every team colour goes through .drv and --tc: --team in the dark theme, --team-l in the light one. */
+.drv {
+  --tc: var(--team, var(--muted));
 }
 
 @media (prefers-color-scheme: light) {
   :root {
     --bg: #ffffff;
+    --panel: #f6f6f9;
+    --raised: #eeeef3;
+    --line: #d9d9e1;
+    --line-soft: #e8e8ee;
     --fg: #15151e;
-    --muted: #5f5f6b;
-    --line: #d8d8de;
-    --raised: #f2f2f5;
+    --muted: #5c5c6a;
+    --dim: #64646f;
     --purple: #7d2fc2;
-    --green: #18803a;
-    --yellow: #8a6400;
+    --green: #0f7553;
     --pit: #1f5fbf;
+    --ms-other: #9a7d1f;
+    --live: #c0262d;
+    --amber: #a24b00;
+    --heat-1: rgb(162 75 0 / 0.08);
+    --heat-2: rgb(162 75 0 / 0.16);
+    --heat-3: rgb(162 75 0 / 0.26);
+    --cmp-ring: #64646f;
+  }
+
+  /* The light theme's team colour: a copy darkened to 3:1 on --bg, hue kept (lib/session.ts clampForLight). */
+  .drv {
+    --tc: var(--team-l, var(--muted));
   }
 }
 
@@ -50,8 +92,9 @@ body {
   background: var(--bg);
   color: var(--fg);
   font-family: system-ui, sans-serif;
-  font-variant-numeric: tabular-nums;
+  font-size: 14px;
   line-height: 1.4;
+  font-variant-numeric: tabular-nums;
 }
 
 main {
@@ -59,13 +102,16 @@ main {
 }
 
 h1 {
-  font-size: 1.3rem;
   margin: 16px 0 4px;
+  font-family: var(--display);
+  font-size: 26px;
+  font-weight: 800;
+  line-height: 1.15;
 }
 
 h2,
 h3 {
-  font-size: 1.05rem;
+  font-size: 17px;
   margin: 24px 0 4px;
 }
 
@@ -75,6 +121,22 @@ a {
 
 .muted {
   color: var(--muted);
+}
+
+/* Words for a screen reader only (", overall best", "soft tyres, "). */
+.vh {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
+/* Focus (A§13): a 3 px outline, inset inside a scroll box so its overflow never clips it. */
+:focus-visible {
+  outline: 3px solid var(--fg);
+  outline-offset: 2px;
 }
 
 /* Tap targets (D14): every link, button and select at least 44 px. */
@@ -94,7 +156,7 @@ button,
 select {
   font: inherit;
   color: inherit;
-  background: var(--raised);
+  background: var(--panel);
   border: 1px solid var(--line);
   border-radius: 6px;
   padding: 0 12px;
@@ -103,6 +165,7 @@ select {
 button[aria-pressed="true"] {
   background: var(--fg);
   color: var(--bg);
+  border-color: var(--fg);
 }
 
 header {
@@ -143,7 +206,7 @@ header {
   flex-wrap: wrap;
   gap: 8px;
   margin: 0 0 12px;
-  font-size: 0.85em;
+  font-size: 12px;
 }
 
 .legend span {
@@ -170,12 +233,35 @@ header {
 }
 
 /* Tables scroll inside their box, never the page (D14); the box scrolls both
-   ways so the sticky header row and first column hold. */
+   ways so the sticky header row and first column hold. It is a focusable, named
+   region (ui/Scroll.tsx); scroll-padding keeps a focused cell clear of the sticky
+   header row and columns. It is the containing block of the .vh words inside, so
+   they never widen the page. */
 .scroll {
+  position: relative;
   overflow: auto;
   max-width: 100%;
   max-height: 75dvh;
   border: 1px solid var(--line);
+  scroll-padding: 44px 0 0 5em;
+}
+
+.scroll:focus-visible,
+.scroll :focus-visible {
+  outline-offset: -3px;
+}
+
+/* The tower freezes Pos and Driver; the deltas have two header rows; columns mode freezes only the lap number. */
+.scroll:has(.tower) {
+  scroll-padding-left: 7em;
+}
+
+.scroll:has(.deltas) {
+  scroll-padding-top: 88px;
+}
+
+.scroll:has(.cols) {
+  scroll-padding-left: 3em;
 }
 
 table {
@@ -188,14 +274,15 @@ td {
   height: 44px;
   padding: 0 8px;
   white-space: nowrap;
-  border-bottom: 1px solid var(--line);
+  border-bottom: 1px solid var(--line-soft);
 }
 
 thead th {
   position: sticky;
   top: 0;
   z-index: 1;
-  background: var(--bg);
+  background: var(--panel);
+  border-bottom-color: var(--line);
 }
 
 tbody th {
@@ -210,35 +297,43 @@ thead th:first-child {
   z-index: 2;
 }
 
+/* One label grammar: small, bold, upper case, tracked, muted (table heads, eyebrows, strip labels). */
+thead th,
+.counts dt,
+.label {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
 .laps td {
   text-align: right;
 }
 
-/* The driver: acronym plus a 4 px team-colour bar (D9). */
+/* The driver: acronym plus a 4 px team-colour bar (D9), in --tc (set at the top). */
 .drv {
-  box-shadow: inset 4px 0 0 var(--team, var(--muted));
-  padding-left: 12px;
-}
-
-.cols .drv {
-  box-shadow: inset 0 -4px 0 var(--team, var(--muted));
+  border-left: 4px solid var(--tc);
   padding-left: 8px;
 }
 
-/* Colour is never the only cue (D9): purple is also boxed, green also bold; the legend says so. */
+.cols .drv {
+  border-left: 0;
+  border-bottom: 4px solid var(--tc);
+}
+
+/* Colour is never the only cue (D9): purple is also boxed (a 2 px inset outline), green also bold; the legend says so. */
 .t-purple {
   color: var(--purple);
   font-weight: 700;
-  box-shadow: inset 0 0 0 2px currentColor;
+  outline: 2px solid currentColor;
+  outline-offset: -2px;
 }
 
 .t-green {
   color: var(--green);
   font-weight: 700;
-}
-
-.t-yellow {
-  color: var(--yellow);
 }
 
 td.deleted {
@@ -271,7 +366,8 @@ td.deleted {
   border: 1px solid var(--line);
   border-radius: 3px;
   color: var(--muted);
-  font-size: 0.7em;
+  font-size: 11px;
+  font-weight: 700;
 }
 
 .cmp,
@@ -283,13 +379,14 @@ td.deleted {
 .cmp {
   display: inline-grid;
   place-items: center;
-  width: 1.3em;
-  height: 1.3em;
+  width: 18px;
+  height: 18px;
   margin-right: 4px;
   border-radius: 50%;
-  box-shadow: 0 0 0 1px var(--line);
-  font-size: 0.75em;
-  font-weight: 700;
+  outline: 1px solid var(--cmp-ring);
+  outline-offset: -1px;
+  font-size: 11px;
+  font-weight: 800;
   vertical-align: middle;
 }
 
@@ -354,7 +451,7 @@ td.deleted {
   white-space: nowrap;
   border: 1px solid var(--line);
   border-radius: 4px;
-  font-size: 0.8em;
+  font-size: 12px;
   container-type: inline-size;
 }
 
@@ -399,10 +496,6 @@ td.deleted {
   font-size: 1.3rem;
 }
 
-.counts dt {
-  color: var(--muted);
-}
-
 /* The lap-time chart (D3): its size comes from here, never from a style attribute. */
 .chart {
   width: 100%;
@@ -419,6 +512,11 @@ td.deleted {
   border: 0;
 }
 
+/* A pressed chip keeps its team bar. */
+.picker .drv {
+  border-left-color: var(--tc);
+}
+
 .picker legend {
   padding: 0;
   margin-bottom: 4px;
@@ -429,10 +527,6 @@ td.deleted {
 .deltas th,
 .deltas td {
   padding: 0 6px;
-}
-
-.deltas .drv {
-  padding-left: 10px;
 }
 
 /* The sector deltas have two header rows: the whole thead sticks instead of each cell. */
@@ -451,8 +545,10 @@ td.deleted {
   left: 0;
 }
 
-/* Mini-sectors (D6): one box per segment. Colour is never the only cue: each box has a
-   title, purple is also boxed, and "no data" is an empty outline. */
+/* Mini-sectors (D6): one box per segment, and a shape per class, so colour is never the only cue (A§13).
+   Other (--ms-other) and unknown codes (--muted) fill the lower half; a personal best (--green) is full
+   height; an overall best (--purple) is full height with a ring; the pit lane is hatched --pit with a thin
+   frame; no data is a dashed outline. Every fill reaches 3:1 on --bg (contrast.test.ts). */
 .ms {
   display: inline-block;
   width: 12px;
@@ -460,7 +556,7 @@ td.deleted {
   margin-right: 2px;
   border-radius: 2px;
   vertical-align: middle;
-  background: var(--ms);
+  background: linear-gradient(to top, var(--ms) 50%, transparent 0);
 }
 
 .legend .ms {
@@ -468,20 +564,22 @@ td.deleted {
 }
 
 .ms-purple {
-  --ms: var(--purple);
-  box-shadow: inset 0 0 0 2px var(--fg);
+  background: var(--purple);
+  outline: 1.5px solid var(--fg);
 }
 
 .ms-green {
-  --ms: var(--green);
+  background: var(--green);
 }
 
 .ms-yellow {
-  --ms: var(--yellow);
+  --ms: var(--ms-other);
 }
 
 .ms-pit {
-  --ms: var(--pit);
+  background: repeating-linear-gradient(45deg, var(--pit) 0 2px, transparent 2px 4px);
+  outline: 1px solid var(--pit);
+  outline-offset: -1px;
 }
 
 .ms-grey {
@@ -489,8 +587,9 @@ td.deleted {
 }
 
 .ms-none {
-  --ms: transparent;
-  box-shadow: inset 0 0 0 1px var(--muted);
+  background: none;
+  outline: 1px dashed var(--dim);
+  outline-offset: -1px;
 }
 
 .minisectors td.segs {
@@ -499,7 +598,8 @@ td.deleted {
 
 .banner {
   padding: 8px 12px;
-  border: 1px solid var(--yellow);
+  background: var(--panel);
+  border: 1px solid var(--line);
   border-radius: 6px;
 }
 
@@ -509,6 +609,10 @@ header .links {
 }
 
 /* The timing tower (A§13): Pos and driver stay put while the table scrolls inside .scroll. */
+.tower {
+  font-size: 15px;
+}
+
 .tower td:first-child {
   position: sticky;
   left: 0;
@@ -561,8 +665,13 @@ header .links {
 .player .controls button {
   flex: 1 1 0;
   padding: 0;
-  font-size: 0.875rem; /* "Pause" and "+30 s" fit 47.7 px */
+  font-size: 14px; /* "Pause" and "+30 s" fit 47.7 px */
   white-space: nowrap;
+}
+
+.clock time {
+  font-family: var(--display);
+  font-size: 20px;
 }
 
 .player label {
@@ -598,10 +707,28 @@ header .links {
   background: var(--fg);
 }
 
+/* Green means a best, so the start is --fg and taller than the chequered flag; a red flag is --live. */
 .m-start {
-  background: var(--green);
+  height: 16px;
 }
 
 .m-red {
-  background: var(--soft);
+  background: var(--live);
+}
+
+/* Forced colours (A§13): the shapes and fills that carry meaning keep their own colours; a pressed button
+   uses the system highlight. Every cue is an outline or a border, which forced colours keep; a shadow would vanish. */
+@media (forced-colors: active) {
+  .ms,
+  .marker,
+  .cmp,
+  .seg {
+    forced-color-adjust: none;
+  }
+
+  button[aria-pressed="true"] {
+    background: Highlight;
+    color: HighlightText;
+    border-color: Highlight;
+  }
 }

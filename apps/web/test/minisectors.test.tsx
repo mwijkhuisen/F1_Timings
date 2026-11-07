@@ -2,7 +2,7 @@ import type { Lap } from '@f1/contracts';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, expect, it } from 'vitest';
 import type { Driver } from '../src/lib/session.ts';
-import { MiniSectors, segClass } from '../src/views/MiniSectors.tsx';
+import { MiniSectors, MsLegend, segClass } from '../src/views/MiniSectors.tsx';
 
 // The mini-sector grid and the speed traps (D6), rendered statically (A§15).
 
@@ -140,7 +140,9 @@ describe('the mini-sector grid', () => {
   it('shows the speed traps in km/h, — for a null speed', () => {
     expect(ver1?.speeds).toEqual(['—', '250', '310']);
     expect(nor1?.speeds).toEqual(['290', '250', '—']);
-    expect(html).toContain('aria-label="Mini-sectors and speed traps (km/h)"');
+    expect(html).toContain(
+      '<div class="scroll" tabindex="0" role="region" aria-label="Mini-sectors and speed traps (km/h)"><table',
+    );
   });
 
   it('strikes a deleted lap and badges in- and out-laps, laps in order', () => {
@@ -152,17 +154,29 @@ describe('the mini-sector grid', () => {
   it('groups the laps per selected driver, in pick order, with the team bar', () => {
     const heads = [...html.matchAll(/<th scope="rowgroup" colSpan="7" class="drv"([^>]*)>(\w+)</g)];
     expect(heads.map(([, attrs, a]) => [a, attrs])).toEqual([
-      ['VER', ' style="--team:#3671C6"'],
+      ['VER', ' style="--team:#3671C6;--team-l:#3671C6"'],
       ['NOR', ''],
     ]);
     expect(lapRows(render([NOR, VER]))[0]?.speeds).toEqual(['290', '250', '—']);
     expect(lapRows(render([NOR]))).toHaveLength(1);
   });
 
-  it('shows the legend above the grid, inside a scroll box', () => {
-    expect(html).toMatch(/<p class="legend">[\s\S]*<div class="scroll"><table/);
-    for (const text of ['overall best', 'personal best', 'other', 'pit lane', 'unknown code', 'no data'])
-      expect(html).toContain(`</span> ${text}</span>`);
+  it('shows the legend above the grid: each shape class, its box hidden, then its name', () => {
+    expect(html).toMatch(/<p class="legend">[\s\S]*<div class="scroll"[^>]*><table/);
+    const legend = /<p class="legend">([\s\S]*?)<\/p>/.exec(html)?.[1] ?? '';
+    expect(
+      [...legend.matchAll(/<span class="ms (ms-\w+)" aria-hidden="true"><\/span> ([\w ]+)<\/span>/g)].map(
+        ([, c, t]) => [c, t],
+      ),
+    ).toEqual([
+      ['ms-purple', 'overall best'],
+      ['ms-green', 'personal best'],
+      ['ms-yellow', 'other'],
+      ['ms-pit', 'pit lane'],
+      ['ms-grey', 'unknown code'],
+      ['ms-none', 'no data'],
+    ]);
+    expect(renderToStaticMarkup(<MsLegend />)).toBe(/<p class="legend">[\s\S]*?<\/p>/.exec(html)?.[0]);
   });
 
   it('shows the race banner only in a Race-type session', () => {

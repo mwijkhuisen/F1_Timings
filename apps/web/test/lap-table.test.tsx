@@ -153,7 +153,7 @@ const grid = (metric: Metric, columns = false) =>
   renderToStaticMarkup(<LapGrid detail={detail} laps={laps} metric={metric} columns={columns} />);
 const colourOf = (c: Cell) => c.cls.find((n) => n.startsWith('t-'))?.slice(2) ?? null;
 
-// Rows mode: HAM laps 1–3, then NOR laps 1–3.
+// Rows mode: HAM laps 1–3, then NOR laps 1–3. The server's colour per cell; only purple and green are drawn.
 const COLOURS: Record<Metric, (string | null)[]> = {
   lap: [null, 'purple', 'yellow', 'green', 'yellow', 'yellow'],
   s1: [null, 'purple', 'yellow', 'green', 'yellow', null],
@@ -165,15 +165,31 @@ const TITLES = { purple: 'overall best', green: 'personal best', yellow: 'slower
 const UNRANKED = new Set([2, 4, 5]);
 
 describe('the lap grid', () => {
-  it.each(Object.entries(COLOURS))('colours %s by its own colour field, none for null', (metric, colours) => {
+  it.each(Object.entries(COLOURS))('colours %s by its own colour field, "other" as plain text', (metric, colours) => {
     const got = cells(grid(metric as Metric));
-    expect(got.map(colourOf)).toEqual(colours);
+    expect(got.map(colourOf)).toEqual(colours.map((c) => (c === 'yellow' ? null : c)));
     got.forEach((c, i) => {
-      const colour = colourOf(c);
-      expect(c.title, `cell ${i}`).toBe(
-        colour === null || UNRANKED.has(i) ? null : TITLES[colour as keyof typeof TITLES],
-      );
+      const colour = colours[i] as keyof typeof TITLES | null;
+      const ranked = colour !== null && !UNRANKED.has(i);
+      expect(c.title, `cell ${i}`).toBe(ranked ? TITLES[colour] : null);
+      // A screen reader hears the words only on a ranked purple or green value.
+      const words = [...c.body.matchAll(/<span class="vh">, ([\w ]+)<\/span>/g)].map(([, w]) => w);
+      expect(words, `cell ${i}`).toEqual(ranked && colour !== 'yellow' ? [TITLES[colour]] : []);
     });
+  });
+
+  it('leaves "other" values plain: no class, no colour', () => {
+    for (const metric of ['lap', 's1', 's2', 's3'] as const) {
+      const html = grid(metric);
+      expect(html).not.toContain('t-yellow');
+      cells(html).forEach((c, i) => {
+        if (COLOURS[metric][i] === 'yellow')
+          expect(
+            c.cls.filter((n) => n.startsWith('t-')),
+            `cell ${i}`,
+          ).toEqual([]);
+      });
+    }
   });
 
   it('formats lap and sector times', () => {
@@ -219,16 +235,19 @@ describe('the lap grid', () => {
   });
 
   it('puts the compound dot only at the start of a run', () => {
+    // The dot is hidden from a screen reader, which hears the compound's words instead.
     const dots = cells(grid('lap')).map((c) =>
-      /<span class="cmp (cmp-\w+)" title="(\w+)">(\w)</.exec(c.body)?.slice(1),
+      /<span class="cmp (cmp-\w+)" title="(\w+)" aria-hidden="true">(\w)<\/span><span class="vh">([\w ,]+)<\/span>/
+        .exec(c.body)
+        ?.slice(1),
     );
     expect(dots).toEqual([
-      ['cmp-soft', 'SOFT', 'S'],
+      ['cmp-soft', 'SOFT', 'S', 'soft tyres, '],
       undefined,
       undefined,
-      ['cmp-soft', 'SOFT', 'S'],
+      ['cmp-soft', 'SOFT', 'S', 'soft tyres, '],
       undefined,
-      ['cmp-medium', 'MEDIUM', 'M'],
+      ['cmp-medium', 'MEDIUM', 'M', 'medium tyres, '],
     ]);
   });
 
@@ -242,7 +261,8 @@ describe('the lap grid', () => {
 
   it('sets the team colour only from six hex digits', () => {
     const html = grid('lap');
-    expect(html).toMatch(/<th scope="row" class="drv" style="--team:#E80020"[^>]*>HAM</);
+    // #E80020 already reaches 3:1 on white, so its light copy is the same.
+    expect(html).toMatch(/<th scope="row" class="drv" style="--team:#E80020;--team-l:#E80020"[^>]*>HAM</);
     expect(html).toMatch(/<th scope="row" class="drv">NOR</);
   });
 
@@ -251,18 +271,23 @@ describe('the lap grid', () => {
     expect([...html.matchAll(/<th scope="col"[^>]*>(\w+)</g)].map(([, a]) => a)).toEqual(['Lap', 'HAM', 'NOR']);
     expect([...html.matchAll(/<th scope="row">(\d+)</g)].map(([, n]) => n)).toEqual(['1', '2', '3']);
     // Lap 1 of HAM and NOR, then lap 2, then lap 3.
-    expect(cells(html).map(colourOf)).toEqual([null, 'green', 'purple', 'yellow', 'yellow', 'yellow']);
-    expect(html).toContain('class="laps cols"');
+    expect(cells(html).map(colourOf)).toEqual([null, 'green', 'purple', null, null, null]);
+    expect(html).toContain(
+      '<div class="scroll" tabindex="0" role="region" aria-label="Lap times"><table class="laps cols"',
+    );
+    expect(grid('s2')).toContain('aria-label="S2 times"><table class="laps" aria-label="S2 times">');
   });
 
   it('starts on the lap time, drivers as rows, and says when there are no laps', () => {
     const html = renderToStaticMarkup(<LapTable detail={detail} laps={laps} />);
     expect(html).toMatch(/<button type="button" aria-pressed="true">Lap<\/button>/);
     expect(html).toMatch(/aria-pressed="false">Drivers as columns</);
-    expect(html).toContain('<table class="laps" aria-label="Lap times">');
-    // The non-colour cue is explained next to the switch (styles.css boxes purple and bolds green).
     expect(html).toContain(
-      '<p class="legend"><span class="t-purple">overall best</span> <span class="t-green">personal best</span> <span class="t-yellow">other</span></p>',
+      '<div class="scroll" tabindex="0" role="region" aria-label="Lap times"><table class="laps" aria-label="Lap times">',
+    );
+    // The non-colour cue is explained next to the switch (styles.css boxes purple and bolds green); "other" is plain.
+    expect(html).toContain(
+      '<p class="legend"><span class="t-purple">overall best</span> <span class="t-green">personal best</span> <span>other</span></p>',
     );
     expect(renderToStaticMarkup(<LapTable detail={detail} laps={[]} />)).toBe('<p>No laps yet.</p>');
   });

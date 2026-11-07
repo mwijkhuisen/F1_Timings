@@ -3,6 +3,7 @@ import { useState } from 'react';
 import { compoundOf, type Driver, orderDrivers, teamStyle } from '../lib/session.ts';
 import { fmtLap, fmtSector } from '../lib/time.ts';
 import { Note } from '../ui/Note.tsx';
+import { Scroll } from '../ui/Scroll.tsx';
 
 // The lap table (D1, D10): a drivers × laps matrix with one metric per cell.
 
@@ -11,7 +12,8 @@ export type Metric = 'lap' | 's1' | 's2' | 's3';
 const LABEL: Record<Metric, string> = { lap: 'Lap', s1: 'S1', s2: 'S2', s3: 'S3' };
 const FIELD = { lap: 'lap_ms', s1: 's1_ms', s2: 's2_ms', s3: 's3_ms' } as const;
 // The colour's meaning as a title. Colour is never the only cue (D9): styles.css also boxes
-// purple and bolds green, and the legend says so.
+// purple and bolds green, the legend says so, and a screen reader hears the words. "Other"
+// (the server's yellow) is plain text (A§13, O1).
 const COLOUR_TITLE = { purple: 'overall best', green: 'personal best', yellow: 'slower than personal best' } as const;
 
 /**
@@ -82,15 +84,19 @@ function Cell({
   const shown = lap.deleted ? <s>{text}</s> : text;
   // The server makes every value of a deleted, in- or out-lap yellow (A§9): it is not ranked, so no title.
   const ranked = !lap.deleted && !lap.is_pit_in && !lap.is_pit_out;
+  const best = colour === 'purple' || colour === 'green' ? colour : null;
   return (
     <td
-      className={classes(colour && `t-${colour}`, lap.deleted && 'deleted')}
+      className={classes(best && `t-${best}`, lap.deleted && 'deleted')}
       title={colour && ranked ? COLOUR_TITLE[colour] : undefined}
     >
       {dot && (
-        <span className={`cmp cmp-${dot}`} title={lap.compound ?? undefined}>
-          {dot[0]?.toUpperCase()}
-        </span>
+        <>
+          <span className={`cmp cmp-${dot}`} title={lap.compound ?? undefined} aria-hidden="true">
+            {dot[0]?.toUpperCase()}
+          </span>
+          <span className="vh">{dot} tyres, </span>
+        </>
       )}
       {reason === null ? (
         shown
@@ -99,6 +105,7 @@ function Cell({
           {shown}
         </Note>
       )}
+      {best && ranked && <span className="vh">, {COLOUR_TITLE[best]}</span>}
       {lap.is_pit_in && <span className="badge">IN</span>}
       {lap.is_pit_out && <span className="badge">OUT</span>}
     </td>
@@ -136,7 +143,7 @@ export function LapGrid({
     />
   );
   return (
-    <div className="scroll">
+    <Scroll label={`${LABEL[metric]} times`}>
       <table className={columns ? 'laps cols' : 'laps'} aria-label={`${LABEL[metric]} times`}>
         {columns ? (
           <>
@@ -180,7 +187,7 @@ export function LapGrid({
           </>
         )}
       </table>
-    </div>
+    </Scroll>
   );
 }
 
@@ -204,8 +211,7 @@ export function LapTable({ detail, laps }: { detail: SessionDetail; laps: Laps }
         </button>
       </div>
       <p className="legend">
-        <span className="t-purple">overall best</span> <span className="t-green">personal best</span>{' '}
-        <span className="t-yellow">other</span>
+        <span className="t-purple">overall best</span> <span className="t-green">personal best</span> <span>other</span>
       </p>
       <LapGrid detail={detail} laps={laps} metric={metric} columns={columns} />
     </>
