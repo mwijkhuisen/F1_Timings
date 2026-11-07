@@ -139,7 +139,7 @@ describe('access', () => {
 
   // A failure the middleware cancels is framed (HttpResponse.text sets Content-Length), as a real
   // server's is: msw ends an unframed body a tick later, so the cancel would abort the exchange in
-  // flight, and fetch then dials again for the aborted request (test/offline.setup.ts).
+  // flight, and fetch then dials again for the aborted request (test/offline.ts closes that one).
   it.each([
     ['a 500', () => HttpResponse.text('boom', { status: 500 })],
     ['a 204', () => new HttpResponse(null, { status: 204 })],
