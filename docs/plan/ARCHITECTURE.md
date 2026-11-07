@@ -575,6 +575,7 @@ The limits stay **[U]** until the P2f follow-up PR tunes them from the Las Vegas
 
 ## 15. Testing
 
+- **Offline:** msw (`test/msw.setup.ts`, `onUnhandledFrame: 'error'`) answers or fails every HTTP request and WebSocket, and in unit tests no hostname resolves (`test/offline.setup.ts`), so a connection that msw passes through to the real host (Node's fetch opens one, request-less, after an aborted request) fails without reaching the network (A§12.1 invariant 4).
 - **Unit:** parsers, timing rules, the rate limiter (fake timers), and live delta merging (P2b, `apps/server/test/live.test.ts`, `live-laps.test.ts`; fixtures are synthetic, `apps/server/test/fixtures/live/*.jsonl`):
   - the A§15 merge property, a fast-check test: "A§15: merging a snapshot then the remaining deltas equals merging every delta from empty";
   - reconnects: "reconnect duplicates and a mid-session full state give the same rows" (`practice-reconnect.jsonl`) and the property "a reconnect at any point k, with any m recent messages repeated, gives the clean rows";
