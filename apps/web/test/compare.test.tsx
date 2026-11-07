@@ -83,12 +83,26 @@ describe('lapChartOption', () => {
       null,
     ]);
     expect(series('PER')?.data).toEqual([null, 81500, null, null, null]);
-    for (const s of option.series) expect(s).toMatchObject({ connectNulls: false, clip: true, symbol: 'circle' });
+    for (const s of option.series) expect(s).toMatchObject({ connectNulls: false, clip: true });
   });
 
-  it('marks a deleted lap with a hollow symbol', () => {
+  it('marks a deleted lap with a hollow symbol and an ordinary lap with none', () => {
+    for (const s of option.series) expect(s.symbol).toBe('none');
     expect(series('VER')?.data[3]).toEqual({ value: 80000, symbol: 'emptyCircle', symbolSize: 8 });
-    expect(series('NOR')?.data[2]).toEqual({ value: 81200, symbol: 'emptyCircle', symbolSize: 8 });
+    // An ordinary lap is a bare value, so it takes the series' symbol.
+    expect(series('NOR')?.data).toEqual([
+      95000,
+      81000,
+      { value: 81200, symbol: 'emptyCircle', symbolSize: 8 },
+      82000,
+      80900,
+    ]);
+  });
+
+  it('shows every symbol, so ECharts never thins a deleted lap away', () => {
+    // ECharts' default showAllSymbol 'auto' keeps only the symbols on labelled laps once a lap is
+    // narrower than 1.5 symbols: at 390 px, about one lap in four of a 57-lap race.
+    for (const s of option.series) expect(s.showAllSymbol).toBe(true);
   });
 
   it('windows the y-axis from the best valid lap − 1 s to 107 %, in whole seconds', () => {
@@ -123,6 +137,17 @@ describe('lapChartOption', () => {
   it('labels the y-axis in whole milliseconds, also on a fractional tick', () => {
     expect(option.yAxis.axisLabel.formatter(80499.6)).toBe('1:20.500');
     expect(option.yAxis.axisLabel.formatter(79000)).toBe('1:19.000');
+  });
+
+  it('keeps the axis labels inside the grid margins through outerBounds, not the deprecated containLabel', () => {
+    expect(option.grid).toEqual({
+      left: 8,
+      right: 16,
+      top: 40,
+      bottom: 8,
+      outerBoundsMode: 'same',
+      outerBoundsContain: 'axisLabel',
+    });
   });
 
   it('uses a rich-text tooltip with a plain-text formatter, and no HTML anywhere', () => {
