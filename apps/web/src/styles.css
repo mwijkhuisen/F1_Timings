@@ -138,7 +138,7 @@ a {
   white-space: nowrap;
 }
 
-/* Focus (A§13): a 3 px outline, inset inside a scroll box so its overflow never clips it. */
+/* Focus (A§13): a 3 px outline. A scroll box's own ring sits outside it (its sticky header row and first column would paint over an inset one); a ring inside a box is inset so the box's overflow never clips it. */
 :focus-visible {
   outline: 3px solid var(--fg);
   outline-offset: 2px;
@@ -251,25 +251,28 @@ header {
   max-width: 100%;
   max-height: 75dvh;
   border: 1px solid var(--line);
-  scroll-padding: 44px 0 0 5em;
+  scroll-padding: 44px 0 0 80px;
 }
 
-.scroll:focus-visible,
+.scroll:focus-visible {
+  outline-offset: 2px;
+}
+
 .scroll :focus-visible {
   outline-offset: -3px;
 }
 
-/* The tower freezes Pos and Driver; the deltas have two header rows; columns mode freezes only the lap number. */
+/* Scroll padding clears the frozen columns (measured, a few px over): lap table rows 70.7 and mini-sectors 73.3 (default 80), columns mode 43.9 (50), the tower's Pos and Driver 119 (126), the deltas' Best-lap cell 96 with two drivers (100) and two header rows (88 top). */
 .scroll:has(.tower) {
-  scroll-padding-left: 7em;
+  scroll-padding-left: 126px;
 }
 
 .scroll:has(.deltas) {
-  scroll-padding-top: 88px;
+  scroll-padding: 88px 0 0 100px;
 }
 
 .scroll:has(.cols) {
-  scroll-padding-left: 3em;
+  scroll-padding-left: 50px;
 }
 
 table {
@@ -624,16 +627,22 @@ header .links {
   font-size: 15px;
 }
 
+/* Pos is a fixed 48 px (fits "POS" in the label style and two digits), so the driver column's left is a px that agrees in the head (12 px) and the body (15 px). */
+.tower thead tr:first-child th:first-child,
+.tower td:first-child {
+  width: 48px;
+  min-width: 48px;
+}
+
 .tower td:first-child {
   position: sticky;
   left: 0;
-  min-width: 3em;
   background: var(--bg);
 }
 
 .tower tbody th,
 .tower thead th:nth-child(2) {
-  left: 3em;
+  left: 48px;
 }
 
 .tower thead th:nth-child(2) {
