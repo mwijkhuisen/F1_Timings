@@ -169,11 +169,11 @@ function BestCell({ own, metric, driver }: { own: Lap | undefined; metric: Metri
       </td>
     );
   const colour = own.colour[metric];
+  const best = colour === 'purple' || colour === 'green' ? colour : null;
   return (
     <td className="best" title={`Lap ${own.lap_number}`}>
-      <span className={colour === 'purple' || colour === 'green' ? `t-${colour}` : undefined}>
-        {fmt(metric, value)}
-      </span>
+      <span className={best ? `t-${best}` : undefined}>{fmt(metric, value)}</span>
+      {best && <span className="vh">, {COLOUR_TITLE[best]}</span>}
       <small>L{own.lap_number}</small>
     </td>
   );

@@ -342,10 +342,10 @@ describe('the P4b cues', () => {
     expect(html).toContain('<th scope="col">Driver</th><th scope="col" class="best">Best</th>');
     // The own best right after the driver, in the server colour, with its lap.
     expect(html).toMatch(
-      /HAM<\/th><td class="best" title="Lap 2"><span class="t-purple">1:23.456<\/span><small>L2<\/small><\/td>/,
+      /HAM<\/th><td class="best" title="Lap 2"><span class="t-purple">1:23.456<\/span><span class="vh">, overall best<\/span><small>L2<\/small><\/td>/,
     );
     expect(html).toMatch(
-      /NOR<\/th><td class="best" title="Lap 1"><span class="t-green">1:25.000<\/span><small>L1<\/small><\/td>/,
+      /NOR<\/th><td class="best" title="Lap 1"><span class="t-green">1:25.000<\/span><span class="vh">, personal best<\/span><small>L1<\/small><\/td>/,
     );
     // Sticky right of a fixed-width driver column.
     const width = /\bwidth: (\d+px);/.exec(rule('.lap-grid:not(.cols) tbody th'))?.[1];
@@ -385,6 +385,18 @@ describe('the P4b cues', () => {
     ).toEqual([]);
   });
 
+  it('gives a purple or green own best the same hidden words as a lap cell, a plain one none', () => {
+    const seen = new Set<string | null>();
+    for (const metric of ['lap', 's1', 's2', 's3'] as const)
+      for (const [, cls, words] of grid(metric).matchAll(
+        /<td class="best" title="Lap \d+"><span(?: class="t-(\w+)")?>[^<]*<\/span>(?:<span class="vh">, ([\w ]+)<\/span>)?<small>/g,
+      )) {
+        seen.add(cls ?? null);
+        expect(words ?? null, metric).toBe(cls ? TITLES[cls as keyof typeof TITLES] : null);
+      }
+    expect(seen).toEqual(new Set(['purple', 'green', null]));
+  });
+
   it('shows — with a reason when a driver has no valid value', () => {
     const outOnly = [lap(44, 1, [[90000, null]], { is_pit_out: true })];
     const html = grid('lap', false, 'times', [], outOnly);
@@ -397,7 +409,7 @@ describe('the P4b cues', () => {
     const html = grid('lap', true);
     const thead = /<thead>([\s\S]*)<\/thead>/.exec(html)?.[1] ?? '';
     expect(thead).toMatch(
-      /<tr><th scope="row" class="best">Best<\/th><td class="best" title="Lap 2"><span class="t-purple">1:23.456<\/span><small>L2<\/small><\/td><td class="best" title="Lap 1">/,
+      /<tr><th scope="row" class="best">Best<\/th><td class="best" title="Lap 2"><span class="t-purple">1:23.456<\/span><span class="vh">, overall best<\/span><small>L2<\/small><\/td><td class="best" title="Lap 1">/,
     );
     expect(rule('.laps.cols thead')).toContain('position: sticky;');
     expect(css).toMatch(/\.scroll:has\(\.laps\.cols\) \{\s*scroll-padding-top: 88px;/);
