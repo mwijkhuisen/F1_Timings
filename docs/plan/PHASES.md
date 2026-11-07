@@ -314,13 +314,15 @@ Remaining 2026 weekends (OpenF1 schedule): Austin (race 25 Oct) · Mexico City 3
 
 - **Goal:** the live and replay screen tells the story of the session at a glance.
 - **Scope in:**
-  - a status strip above the tower: the lap, the time left (counting down locally while `Extrapolating`), the track status in words with a flag shape, the weather, and the latest race-control message (text only)
+  - a status strip above the tower: the session light, the lap, the time left (counting down locally while `Extrapolating`), the weather, and the latest race-control message (text only)
+  - the session light (owner, 2026-11-07) at the front of the strip: red, yellow and green lamps in fixed positions, the lit one named in words (Track clear, Yellow flag, Safety car, VSC, VSC ending, Red flag, Stopped, Chequered flag, Not started, or "Track status unknown" for a code it does not know), from `SessionStatus` and `TrackStatus`; while a session runs, the tab title starts with the same word
   - beside the tower (below it on a phone): race control up to T, newest first, with category filters and counts; "within a second" pairs from the intervals (races only); the fastest lap so far
   - the tower: "Leader" instead of the leader's lap count; places since the start (`GridPos`) as ▲ or ▼ with a number, in `--fg` and `--muted`, never green or red; the sector time over its mini-sector strip (6 × 8 px, the P4a shapes) with a legend; tyre with age and new or used; IN PIT and OUT tags; a tap on a driver focuses that row
   - [U] the tower per session type: the practice and qualifying gap and interval fields (reportedly `TimeDiffToFastest`, `TimeDiffToPositionAhead`, and `Stats` per qualifying part) checked on a recording, typed in `packages/contracts/src/live.ts`, `—` with a reason where a gap does not exist
 - **Scope out:** the player bar (P4e).
 - **Acceptance:**
   - [CI] unit tests on synthetic states: the strip (clear, SC, VSC, red), race control by T and category, the within-a-second pairs, places since the start.
+  - [CI] the session light for every `TrackStatus` code, an unknown code and the `SessionStatus` values (not started, stopped, finished), each with its word; the tab title's prefix while a session runs.
   - [CI] the tower fills Gap and Int for synthetic practice, qualifying and race lines.
   - [CI] feed text renders as text only: a message holding markup stays text.
   - [box] the practice and qualifying gap fields are checked on a real recording with a command the PR supplies, and the fact is written into A§11.

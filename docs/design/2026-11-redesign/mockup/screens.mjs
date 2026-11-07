@@ -433,9 +433,54 @@ function towerTable() {
   return `<div class="scroll" tabindex="0" role="region" aria-label="Timing tower"><table class="tt tower" aria-label="Timing tower at lap ${tower.LapCount.CurrentLap}"><thead><tr><th scope="col">Driver</th><th scope="col" class="hide-s" title="Places since the start">±</th><th scope="col">Gap</th><th scope="col">Int</th><th scope="col">Last</th><th scope="col" class="hide-s">Best</th><th scope="col" class="hide-s">S1</th><th scope="col" class="hide-s">S2</th><th scope="col" class="hide-s">S3</th><th scope="col">Tyre</th><th scope="col" class="hide-s">Pits</th></tr></thead><tbody>${rows.join('')}</tbody></table></div>`;
 }
 
+// The session light (owner, 2026-11-07): red, yellow and green lamps in fixed positions, the lit one named in words,
+// from the feed's SessionStatus and TrackStatus (A§11.1). Position and the word carry the state, not only the colour.
+const LIGHTS = {
+  off: ['', 'Not started'],
+  clear: ['g', 'Track clear'],
+  yellow: ['y', 'Yellow flag'],
+  sc: ['y', 'Safety car'],
+  vsc: ['y', 'VSC'],
+  vscEnding: ['y', 'VSC ending'],
+  red: ['r', 'Red flag'],
+  stopped: ['r', 'Stopped'],
+  finished: ['chq', 'Chequered flag'],
+  unknown: ['', 'Track status unknown'],
+};
+
+/** The light for a SessionStatus and a TrackStatus code; an unknown code says so instead of guessing. */
+export function lightOf(sessionStatus, trackStatus) {
+  if (['Finished', 'Finalised', 'Ends'].includes(sessionStatus)) return 'finished';
+  if (sessionStatus === 'Aborted') return 'stopped';
+  if (sessionStatus !== 'Started') return 'off';
+  return { 1: 'clear', 2: 'yellow', 4: 'sc', 5: 'red', 6: 'vsc', 7: 'vscEnding' }[trackStatus] ?? 'unknown';
+}
+
+export function sessionLight(key, big = true) {
+  const [lamp, word] = LIGHTS[key];
+  return `<span class="light${big ? ' big' : ''}" data-l="${lamp}"><span class="lamps" aria-hidden="true"><i class="r"></i><i class="y"></i><i class="g"></i></span><span class="lw">${word}</span></span>`;
+}
+
+/** Every state of the light, each with the feed codes it comes from. */
+export function lightGallery() {
+  const states = [
+    ['Started', '1', 'TrackStatus 1'],
+    ['Started', '2', 'TrackStatus 2'],
+    ['Started', '4', 'TrackStatus 4'],
+    ['Started', '6', 'TrackStatus 6'],
+    ['Started', '7', 'TrackStatus 7'],
+    ['Started', '5', 'TrackStatus 5'],
+    ['Aborted', '5', 'SessionStatus Aborted'],
+    ['Inactive', '1', 'SessionStatus Inactive'],
+    ['Finished', '1', 'SessionStatus Finished'],
+  ];
+  return `<ul class="lightgallery" aria-label="Session light states">${states.map(([s, t, from]) => `<li>${sessionLight(lightOf(s, t), false)}<small>${from}</small></li>`).join('')}</ul>`;
+}
+
 function strip() {
   const latest = Object.values(tower.RaceControlMessages.Messages).at(-1);
-  return `<dl class="strip" aria-label="Session state"><div><dt>LAP</dt><dd class="v num">${tower.LapCount.CurrentLap} / ${tower.LapCount.TotalLaps}</dd></div><div><dt>LEFT</dt><dd class="v num">${tower.ExtrapolatedClock.Remaining.replace(/^00:/, '')}</dd></div><div><dt>TRACK</dt><dd class="v"><span class="flag">Clear</span></dd></div><div class="hide-s"><dt>WEATHER</dt><dd class="v">${tower.WeatherData.AirTemp}° air · ${tower.WeatherData.TrackTemp}° track · dry</dd></div><div class="msg hide-s"><dt>RACE CONTROL · L${latest.Lap}</dt><dd class="v" title="${esc(latest.Message)}">${esc(latest.Message)}</dd></div></dl>`;
+  const light = sessionLight(lightOf(tower.SessionStatus.Status, tower.TrackStatus.Status));
+  return `<dl class="strip" aria-label="Session state"><div class="lightcell"><dt>SESSION</dt><dd>${light}</dd></div><div><dt>LAP</dt><dd class="v num">${tower.LapCount.CurrentLap} / ${tower.LapCount.TotalLaps}</dd></div><div><dt>LEFT</dt><dd class="v num">${tower.ExtrapolatedClock.Remaining.replace(/^00:/, '')}</dd></div><div class="hide-s"><dt>WEATHER</dt><dd class="v">${tower.WeatherData.AirTemp}° air · ${tower.WeatherData.TrackTemp}° track · dry</dd></div><div class="msg hide-s"><dt>RACE CONTROL · L${latest.Lap}</dt><dd class="v" title="${esc(latest.Message)}">${esc(latest.Message)}</dd></div></dl>`;
 }
 
 function side() {

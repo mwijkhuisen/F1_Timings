@@ -4,7 +4,20 @@ Five independent critics, one discipline each (visual design, UX and information
 
 **The interactive review, with Keep/Tweak/Drop voting and comments:** https://claude.ai/artifact/96WFVvKAJdPZtL8BsiJ4m8 (private to the owner until shared from its Share menu). It also holds the captures of both sites, which stay out of git.
 
-Status: a proposal. Nothing in the app changes until the owner picks proposals; four of them change a rule of A§13 and are marked **owner's call**.
+Status: **approved.** On 2026-11-07 the owner kept all ten proposals (four of them change a rule of A§13, marked **owner's call**) and added a session light to the pit wall (R2). The build is planned as phases P4a–P4f in `docs/plan/PHASES.md` §3, tracked in [#46](https://github.com/mwijkhuisen/F1_Timings/issues/46).
+
+## Build plan
+
+| Phase | Proposals | Issue |
+|---|---|---|
+| P4a: Design system and accessibility base | R9, R5 | [#47](https://github.com/mwijkhuisen/F1_Timings/issues/47) |
+| P4b: Session views: lap table, tiles and qualifying | R4, R3 | [#48](https://github.com/mwijkhuisen/F1_Timings/issues/48) |
+| P4c: Wayfinding and a spoiler-safe start | R7, R1 | [#49](https://github.com/mwijkhuisen/F1_Timings/issues/49) |
+| P4d: The pit wall (with the session light) | R2, R3 | [#50](https://github.com/mwijkhuisen/F1_Timings/issues/50) |
+| P4e: The player | R2, R1, R10, R5 | [#51](https://github.com/mwijkhuisen/F1_Timings/issues/51) |
+| P4f: Compare and stints | R6, R8, R10 | [#52](https://github.com/mwijkhuisen/F1_Timings/issues/52) |
+
+Each issue holds the phase's scope, tagged acceptance criteria, models and effort, and its build, code-review and security-review prompts. P4a goes first; P4d can run next to P4b and P4c.
 
 ![The six mock-up screens in the dark theme, desktop and phone](renders/overview-dark.webp)
 
@@ -106,7 +119,8 @@ Mock-up: [desktop](renders/season-desktop-dark.webp) · [phone](renders/season-p
 
 *From: UX and IA, F1 user, Visual.*
 
-- A status strip above the tower: lap, time left, track status, weather and the latest race-control message.
+- A session light leads the strip (the owner's suggestion, 2026-11-07): red, yellow and green lamps in fixed positions, the lit one named in words (Track clear, Yellow flag, Safety car, VSC, Red flag, Chequered flag, Not started). While a session runs, the tab title starts with the same word.
+- The rest of the strip: lap, time left, weather and the latest race-control message.
 - A race-control panel with filters, a "within a second" list from the intervals, and the fastest lap so far.
 - One control model around the session time T: every nudge moves T, so −5 is always earlier (live: 5 s more delay). The clock line sits in the player.
 - A compact transport (−30, −5, Play, +5, +30) instead of seven stretched buttons.
@@ -219,11 +233,11 @@ Mock-up: [desktop](renders/replay-desktop-dark.webp) · [phone](renders/replay-p
 - **Track map, telemetry traces, standings.** Non-goals in A§1.
 - **A canvas-rendered UI.** No DOM text means no find, zoom or screen reader.
 
-## Found in passing (separate fixes, not design)
+## Found in passing (folded into the phases)
 
-1. **Compare chart: a deleted lap can lose its hollow point.** `apps/web/src/views/lap-chart-option.ts` sets `symbol: 'emptyCircle'` per deleted lap but leaves `showAllSymbol` at ECharts 6.1's default `'auto'`, which thins symbols that would overlap (the data-viz critic's server-side render kept every fourth symbol at 390 px for a 57-lap race). Fix: `showAllSymbol: true` with `symbol: 'none'` on ordinary laps. Also, ECharts' default `symbolSize` is 6 (`LineSeries.js`), so A§13's "8 px, twice the default" is off.
-2. **Live tower outside races [U].** `apps/web/src/views/Tower.tsx` reads only `GapToLeader` and `IntervalToPositionAhead`. In practice and qualifying the feed reportedly sends `TimeDiffToFastest` and `TimeDiffToPositionAhead` (qualifying per part, under `Stats`), which `packages/contracts/src/live.ts` does not type, so Gap and Int may stay blank there. Check against a practice and a qualifying recording in `fixtures-private/`.
-3. **Contrast test gap.** `apps/web/test/contrast.test.ts` checks text on `--bg` only; the light theme's green `#18803a` is 4.49:1 on `--raised`.
+1. **Compare chart: a deleted lap can lose its hollow point.** `apps/web/src/views/lap-chart-option.ts` sets `symbol: 'emptyCircle'` per deleted lap but leaves `showAllSymbol` at ECharts 6.1's default `'auto'`, which thins symbols that would overlap (the data-viz critic's server-side render kept every fourth symbol at 390 px for a 57-lap race). Fix: `showAllSymbol: true` with `symbol: 'none'` on ordinary laps. Also, ECharts' default `symbolSize` is 6 (`LineSeries.js`), so A§13's "8 px, twice the default" is off. Now part of P4f ([#52](https://github.com/mwijkhuisen/F1_Timings/issues/52)).
+2. **Live tower outside races [U].** `apps/web/src/views/Tower.tsx` reads only `GapToLeader` and `IntervalToPositionAhead`. In practice and qualifying the feed reportedly sends `TimeDiffToFastest` and `TimeDiffToPositionAhead` (qualifying per part, under `Stats`), which `packages/contracts/src/live.ts` does not type, so Gap and Int may stay blank there. Check against a practice and a qualifying recording in `fixtures-private/`. Now part of P4d ([#50](https://github.com/mwijkhuisen/F1_Timings/issues/50)).
+3. **Contrast test gap.** `apps/web/test/contrast.test.ts` checks text on `--bg` only; the light theme's green `#18803a` is 4.49:1 on `--raised`. Now part of P4a ([#47](https://github.com/mwijkhuisen/F1_Timings/issues/47)).
 
 ## The mock-up
 
@@ -238,6 +252,7 @@ Static HTML on invented data: 22 drivers on a 2026-like grid, a 71-lap race with
 | stints | [dark](renders/stints-desktop-dark.webp) · [light](renders/stints-desktop-light.webp) | [dark](renders/stints-phone-dark.webp) · [light](renders/stints-phone-light.webp) |
 | season | [dark](renders/season-desktop-dark.webp) · [light](renders/season-desktop-light.webp) | [dark](renders/season-phone-dark.webp) · [light](renders/season-phone-light.webp) |
 | laps, Δ to own best | [dark](renders/laps-desktop-dark-delta.webp) | [dark](renders/laps-phone-dark-delta.webp) |
+| session light, every state | [dark](renders/session-light-dark.webp) · [light](renders/session-light-light.webp) | (same) |
 
 Regenerate (Node 26; `render.cjs` needs Playwright with Chromium, preinstalled in Claude Code cloud sessions and not a dependency of this repository):
 

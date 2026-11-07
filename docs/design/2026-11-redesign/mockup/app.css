@@ -828,11 +828,11 @@
   gap: 1px;
   min-height: 54px;
   padding: 6px 14px;
-  border-right: 1px solid var(--line-soft);
 }
 
-.strip > div:last-child {
-  border-right: 0;
+/* Dividers on the left of each following cell, so cells hidden on a phone leave no stray line. */
+.strip > div + div {
+  border-left: 1px solid var(--line-soft);
 }
 
 .strip dt {
@@ -2051,5 +2051,104 @@
     grid-column: 1 / -1;
     grid-row: 2;
     font-size: 12.5px;
+  }
+}
+
+/* ---------------------------------------------------------------- the session light (owner, 2026-11-07) */
+
+/* Fixed lamp positions (red, yellow, green) and the state in words: position and text carry it, not only hue. */
+.light {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.lamps {
+  display: inline-flex;
+  gap: 4px;
+  padding: 3px;
+  border-radius: 999px;
+  background: var(--bg);
+  outline: 1px solid var(--line);
+  outline-offset: -1px;
+}
+
+.lamps i {
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  background: var(--raised);
+  outline: 1px solid var(--line);
+  outline-offset: -1px;
+}
+
+.light.big .lamps i {
+  width: 16px;
+  height: 16px;
+}
+
+.light[data-l="r"] .lamps i.r {
+  background: var(--live);
+  outline-color: var(--live);
+  box-shadow: 0 0 10px var(--live);
+}
+
+.light[data-l="y"] .lamps i.y {
+  background: var(--amber);
+  outline-color: var(--amber);
+  box-shadow: 0 0 10px var(--amber);
+}
+
+.light[data-l="g"] .lamps i.g {
+  background: var(--green);
+  outline-color: var(--green);
+  box-shadow: 0 0 10px var(--green);
+}
+
+.light[data-l="chq"] .lamps i {
+  background: repeating-conic-gradient(var(--fg) 0 25%, var(--bg) 0 50%) 0 0 / 6px 6px;
+  outline-color: var(--fg);
+}
+
+.lw {
+  font-family: var(--display);
+  font-size: 18px;
+  font-weight: 800;
+  white-space: nowrap;
+}
+
+.light:not(.big) .lw {
+  font-size: 14px;
+}
+
+.strip .lightcell {
+  padding-right: 18px;
+}
+
+.lightgallery {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px 24px;
+  margin: 0;
+  padding: 14px;
+  list-style: none;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--panel);
+}
+
+.lightgallery li {
+  display: grid;
+  gap: 4px;
+}
+
+.lightgallery small {
+  color: var(--muted);
+  font-size: 11px;
+}
+
+@media (forced-colors: active) {
+  .lamps i {
+    forced-color-adjust: none;
   }
 }
