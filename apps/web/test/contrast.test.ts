@@ -65,3 +65,8 @@ it('draws compound text and fills only from those tokens', () => {
   for (const [, name, value] of css.matchAll(/\.cmp-([\w-]+)\s*\{\s*--cmp:\s*([^;]+);/g))
     expect(value, name).toBe(`var(--${name})`);
 });
+
+// Forced colours drop box-shadow, so every cue is an outline or a border (A§13).
+it('draws no cue with box-shadow', () => {
+  expect(css).not.toContain('box-shadow');
+});
