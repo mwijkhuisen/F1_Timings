@@ -242,7 +242,8 @@ describe('the lap grid', () => {
 
   it('sets the team colour only from six hex digits', () => {
     const html = grid('lap');
-    expect(html).toMatch(/<th scope="row" class="drv" style="--team:#E80020"[^>]*>HAM</);
+    // #E80020 already reaches 3:1 on white, so its light copy is the same.
+    expect(html).toMatch(/<th scope="row" class="drv" style="--team:#E80020;--team-l:#E80020"[^>]*>HAM</);
     expect(html).toMatch(/<th scope="row" class="drv">NOR</);
   });
 

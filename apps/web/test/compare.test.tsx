@@ -269,6 +269,8 @@ describe('the driver picker', () => {
       ['NOR', 'true'],
       ['PER', 'false'],
     ]);
-    expect(html).toContain('class="drv" style="--team:#3671C6"');
+    expect(html).toContain('class="drv" style="--team:#3671C6;--team-l:#3671C6"');
+    // Papaya is below 3:1 on white: the light theme gets a darker copy.
+    expect(html).toContain('class="drv" style="--team:#FF8000;--team-l:#e97400"');
   });
 });

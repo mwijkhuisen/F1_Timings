@@ -152,7 +152,7 @@ describe('the mini-sector grid', () => {
   it('groups the laps per selected driver, in pick order, with the team bar', () => {
     const heads = [...html.matchAll(/<th scope="rowgroup" colSpan="7" class="drv"([^>]*)>(\w+)</g)];
     expect(heads.map(([, attrs, a]) => [a, attrs])).toEqual([
-      ['VER', ' style="--team:#3671C6"'],
+      ['VER', ' style="--team:#3671C6;--team-l:#3671C6"'],
       ['NOR', ''],
     ]);
     expect(lapRows(render([NOR, VER]))[0]?.speeds).toEqual(['290', '250', '—']);
