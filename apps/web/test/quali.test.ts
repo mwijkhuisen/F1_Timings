@@ -103,11 +103,12 @@ describe('qualiPhases', () => {
 });
 
 describe('phaseName', () => {
-  it('names sprint qualifying phases SQ', () => {
-    expect([phaseName('Sprint Qualifying', 1), phaseName('Qualifying', 3), phaseName(null, 2)]).toEqual([
-      'SQ1',
-      'Q3',
-      'Q2',
-    ]);
+  it('names sprint qualifying phases SQ, the 2023 Sprint Shootout included', () => {
+    expect([
+      phaseName('Sprint Qualifying', 1),
+      phaseName('Sprint Shootout', 3),
+      phaseName('Qualifying', 3),
+      phaseName(null, 2),
+    ]).toEqual(['SQ1', 'SQ3', 'Q3', 'Q2']);
   });
 });

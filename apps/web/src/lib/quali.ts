@@ -73,5 +73,6 @@ export const margin = (cell: PhaseCell, phase: Phase): number | null => {
   return best === null || cut === null ? null : best - cut;
 };
 
+/** Sprint Qualifying (Sprint Shootout in 2023) names its phases SQ1–SQ3. */
 export const phaseName = (sessionName: string | null, p: number): string =>
-  `${sessionName === 'Sprint Qualifying' ? 'SQ' : 'Q'}${p}`;
+  `${sessionName?.startsWith('Sprint') ? 'SQ' : 'Q'}${p}`;
