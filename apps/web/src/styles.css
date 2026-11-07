@@ -735,16 +735,18 @@ header .links {
   margin: 0 0 12px;
   border: 1px solid var(--line);
   border-radius: 6px;
-  background: var(--line);
+  background: var(--panel);
   overflow: hidden;
 }
 
+/* Each tile's 1 px outline fills the gap as a rule, so an odd count leaves an empty --panel cell, not a --line block. */
 .tiles > div {
   display: grid;
   align-content: start;
   gap: 2px;
   padding: 8px 12px;
   background: var(--panel);
+  outline: 1px solid var(--line);
 }
 
 .tiles dd {
@@ -771,6 +773,12 @@ header .links {
   color: var(--muted);
   font-size: 11px;
   line-height: 1.1;
+}
+
+/* A note in a two-line cell (DEL) keeps its 44 px target without pushing the margin line down. */
+.quali td .note {
+  margin-block: -12px;
+  vertical-align: middle;
 }
 
 .quali tr.cut > * {
@@ -814,6 +822,11 @@ header .links {
 .band {
   color: var(--band);
   border-bottom: 3px solid var(--band);
+}
+
+/* The label after the lap number: 11 px, the floor (a bare <small> would be 10 px). */
+.band small {
+  font-size: 11px;
 }
 
 .cols .band {
