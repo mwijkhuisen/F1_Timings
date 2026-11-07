@@ -38,3 +38,34 @@ const clock = new Intl.DateTimeFormat('en-GB', {
 
 /** Epoch ms as Amsterdam wall-clock time, `HH:mm:ss`. */
 export const fmtClock = (ms: number): string => clock.format(ms);
+
+const weekday = (timeZone: string) => new Intl.DateTimeFormat('en-GB', { timeZone, weekday: 'short' });
+const utcDay = weekday('UTC');
+const amsterdamDay = weekday('Europe/Amsterdam');
+const OFFSET = /^(-?)(\d{2}):([0-5]\d)(?::([0-5]\d))?$/;
+
+/**
+ * An instant as wall time at the track, "HH:mm", from the meeting's `gmt_offset` (OpenF1's `[-]HH:MM:SS`, no `+`),
+ * with the track's weekday first when it differs from Amsterdam's ("Sat 22:00"); null without a valid offset.
+ * ponytail: one offset per meeting, so a DST change at the track mid-weekend shows the later sessions an hour off;
+ * store each session's own gmt_offset if that matters.
+ */
+export function fmtTrack(iso: string, gmtOffset: string | null): string | null {
+  const m = OFFSET.exec(gmtOffset ?? '');
+  if (!m || Number(m[2]) > 14) return null;
+  const sign = m[1] === '-' ? -1 : 1;
+  const at = Date.parse(iso);
+  const track = new Date(at + sign * (Number(m[2]) * 3600 + Number(m[3]) * 60 + Number(m[4] ?? 0)) * 1000);
+  const hm = `${pad(track.getUTCHours(), 2)}:${pad(track.getUTCMinutes(), 2)}`;
+  const day = utcDay.format(track);
+  return day === amsterdamDay.format(at) ? hm : `${day} ${hm}`;
+}
+
+/** Time left, minutes rounded up: "now", "M min", "H h M min" under 48 h, then "D days H h". */
+export function fmtCountdown(ms: number): string {
+  if (ms <= 0) return 'now';
+  const min = Math.ceil(ms / 60_000);
+  if (min < 60) return `${min} min`;
+  const h = Math.floor(min / 60);
+  return h < 48 ? `${h} h ${min % 60} min` : `${Math.floor(h / 24)} days ${h % 24} h`;
+}
