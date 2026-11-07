@@ -21,6 +21,9 @@ export default defineConfig({
           name: 'unit',
           include: [...testFiles, ...componentFiles],
           exclude: ['**/*.int.test.ts', '**/node_modules/**'],
+          // Added to msw's (arrays merge): no hostname resolves, so a connection msw passes through
+          // fails offline. Not for integration: they reach PostgreSQL at the host DATABASE_URL names.
+          setupFiles: ['test/offline.setup.ts'],
         },
       },
       {
