@@ -235,7 +235,7 @@ export function LapGrid({
   const name = tableName(metric, show);
   return (
     <Scroll label={name}>
-      <table className={columns ? 'laps cols' : 'laps'} aria-label={name}>
+      <table className={columns ? 'laps lap-grid cols' : 'laps lap-grid'} aria-label={name}>
         {columns ? (
           <>
             <thead>

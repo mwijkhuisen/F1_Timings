@@ -300,9 +300,9 @@ describe('the lap grid', () => {
     // Lap 1 of HAM and NOR, then lap 2, then lap 3.
     expect(cells(html).map(colourOf)).toEqual([null, 'green', 'purple', null, null, null]);
     expect(html).toContain(
-      '<div class="scroll" tabindex="0" role="region" aria-label="Lap times"><table class="laps cols"',
+      '<div class="scroll" tabindex="0" role="region" aria-label="Lap times"><table class="laps lap-grid cols"',
     );
-    expect(grid('s2')).toContain('aria-label="S2 times"><table class="laps" aria-label="S2 times">');
+    expect(grid('s2')).toContain('aria-label="S2 times"><table class="laps lap-grid" aria-label="S2 times">');
   });
 
   it('starts on the lap time, drivers as rows, and says when there are no laps', () => {
@@ -310,7 +310,7 @@ describe('the lap grid', () => {
     expect(html).toMatch(/<button type="button" aria-pressed="true">Lap<\/button>/);
     expect(html).toMatch(/aria-pressed="false">Drivers as columns</);
     expect(html).toContain(
-      '<div class="scroll" tabindex="0" role="region" aria-label="Lap times"><table class="laps" aria-label="Lap times">',
+      '<div class="scroll" tabindex="0" role="region" aria-label="Lap times"><table class="laps lap-grid" aria-label="Lap times">',
     );
     // The non-colour cues are explained next to the switches (styles.css boxes purple and bolds green); "other" is plain.
     expect(html).toContain(
@@ -348,12 +348,41 @@ describe('the P4b cues', () => {
       /NOR<\/th><td class="best" title="Lap 1"><span class="t-green">1:25.000<\/span><small>L1<\/small><\/td>/,
     );
     // Sticky right of a fixed-width driver column.
-    const width = /\bwidth: (\d+px);/.exec(rule('.laps:not(.cols) tbody th'))?.[1];
-    expect(rule('.laps:not(.cols) tbody th')).toContain(`min-width: ${width};`);
-    const best = rule('.laps:not(.cols) .best');
+    const width = /\bwidth: (\d+px);/.exec(rule('.lap-grid:not(.cols) tbody th'))?.[1];
+    expect(rule('.lap-grid:not(.cols) tbody th')).toContain(`min-width: ${width};`);
+    const best = rule('.lap-grid:not(.cols) .best');
     expect(best).toContain('position: sticky;');
     expect(best).toContain(`left: ${width};`);
     expect(best).toContain('background: var(--bg);');
+  });
+
+  it.each([
+    ['deltas', ['laps', 'deltas']],
+    ['minisectors', ['laps', 'minisectors']],
+  ])('keeps the frozen columns and their scroll padding off the %s table', (own, classes) => {
+    // Every rule of styles.css whose table compound (.laps, .lap-grid, .cols, …) matches a <table class="…">.
+    const tableish = /\.(?:laps|lap-grid|cols|deltas|minisectors)\b/;
+    const matches = (selector: string) => {
+      const compounds = (selector.match(/(?:\.[\w-]+|:not\([^)]*\))+/g) ?? []).filter((c) => tableish.test(c));
+      return (
+        compounds.length > 0 &&
+        compounds.every((c) => {
+          const not = [...c.matchAll(/:not\(([^)]*)\)/g)].flatMap(([, s]) => s?.match(/[\w-]+/g) ?? []);
+          const has = [...c.replace(/:not\([^)]*\)/g, '').matchAll(/\.([\w-]+)/g)].map(([, n]) => n);
+          return has.every((n) => n && classes.includes(n)) && !not.some((n) => classes.includes(n));
+        })
+      );
+    };
+    const rules = [...css.replace(/\/\*[\s\S]*?\*\//g, '').matchAll(/([^{}]+)\{([^{}]*)\}/g)].flatMap(([, s, body]) =>
+      (s ?? '').split(/,(?![^(]*\))/).map((sel) => ({ sel: sel.trim(), body: body ?? '' })),
+    );
+    const hits = rules.filter((r) => matches(r.sel));
+    expect(hits.length).toBeGreaterThan(0);
+    // No rows-mode frozen-column rule, and scroll padding only from the table's own rule (or the 80 px default).
+    expect(hits.filter((r) => r.sel.includes(':not(.cols)')).map((r) => r.sel)).toEqual([]);
+    expect(
+      hits.filter((r) => r.body.includes('scroll-padding') && !r.sel.includes(`.${own}`)).map((r) => r.sel),
+    ).toEqual([]);
   });
 
   it('shows — with a reason when a driver has no valid value', () => {
@@ -422,7 +451,9 @@ describe('Δ to own best', () => {
       ['heat-3'],
       [],
     ]);
-    expect(html).toContain('aria-label="Lap Δ to own best"><table class="laps" aria-label="Lap Δ to own best">');
+    expect(html).toContain(
+      'aria-label="Lap Δ to own best"><table class="laps lap-grid" aria-label="Lap Δ to own best">',
+    );
   });
 
   it('says deleted, in or out instead, and keeps the reasons', () => {

@@ -866,13 +866,13 @@ header .links {
 }
 
 /* Frozen columns in rows mode: Driver at a fixed 72 px, Best stuck right of it. */
-.laps:not(.cols) tbody th {
+.lap-grid:not(.cols) tbody th {
   width: 72px;
   min-width: 72px;
   box-sizing: border-box;
 }
 
-.laps:not(.cols) .best {
+.lap-grid:not(.cols) .best {
   position: sticky;
   left: 72px;
   z-index: 1;
@@ -881,7 +881,7 @@ header .links {
   border-right: 1px solid var(--line);
 }
 
-.laps:not(.cols) thead .best {
+.lap-grid:not(.cols) thead .best {
   z-index: 2;
   background: var(--panel);
 }
@@ -914,7 +914,7 @@ header .links {
 }
 
 /* Focus clear of the frozen Driver and Best (72 + 112 px) and of the two header rows of columns mode. */
-.scroll:has(.laps:not(.cols)) {
+.scroll:has(.lap-grid:not(.cols)) {
   scroll-padding-left: 190px;
 }
 
@@ -928,11 +928,11 @@ header .links {
     display: none;
   }
 
-  .laps:not(.cols) .best {
+  .lap-grid:not(.cols) .best {
     min-width: 80px;
   }
 
-  .scroll:has(.laps:not(.cols)) {
+  .scroll:has(.lap-grid:not(.cols)) {
     scroll-padding-left: 158px;
   }
 }
