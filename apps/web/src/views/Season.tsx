@@ -87,7 +87,7 @@ export function SeasonView({
       </>
     );
   const rounds = roundNumbers(season);
-  const weekend = thisWeekend(season, now);
+  const weekend = thisWeekend(season, now, live);
   const next = nextSession(season, now);
   const nextKey = next?.session.session_key ?? null;
   const upNext = weekend && next?.meeting.meeting_key === weekend.meeting_key ? next.session : null;

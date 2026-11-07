@@ -41,12 +41,16 @@ function slots(season: Season): Slot[] {
     );
 }
 
-/** The meeting in progress, else the next one to start, else null; spans run over the non-cancelled sessions. */
-export function thisWeekend(season: Season, now: number): Meeting | null {
+/**
+ * The meeting in progress, else the next one to start, else null; spans run over the non-cancelled sessions. While
+ * `live` names an open recording of a session, its meeting's span reaches `now` (a race that overruns `date_end`).
+ */
+export function thisWeekend(season: Season, now: number, live: Live | null): Meeting | null {
+  const liveKey = isOpen(live) ? live?.session?.session_key : undefined;
   const spans = new Map<Meeting, { start: number; end: number }>();
   for (const { meeting, session } of slots(season)) {
     const span = spans.get(meeting) ?? { start: Date.parse(session.date_start), end: -Infinity };
-    span.end = Math.max(span.end, Date.parse(session.date_end));
+    span.end = Math.max(span.end, Date.parse(session.date_end), session.session_key === liveKey ? now : -Infinity);
     spans.set(meeting, span);
   }
   let next: { meeting: Meeting; start: number } | null = null;

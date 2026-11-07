@@ -129,7 +129,7 @@ describe('startPath: the / decision', () => {
 });
 
 describe('thisWeekend: the weekend choice', () => {
-  const weekend = (now: string) => thisWeekend(season, at(now))?.meeting_key ?? null;
+  const weekend = (now: string, l: Live | null = null) => thisWeekend(season, at(now), l)?.meeting_key ?? null;
 
   it('picks the meeting in progress, from its first session start to its last session end', () => {
     expect(weekend('2026-03-06T01:30:00.000Z')).toBe(1001);
@@ -154,7 +154,15 @@ describe('thisWeekend: the weekend choice', () => {
   it('spans a meeting whose race is cancelled over its open sessions, and is null after the last meeting', () => {
     expect(weekend('2026-11-27T14:00:00.000Z')).toBe(1005);
     expect(weekend('2026-11-27T14:30:01.000Z')).toBeNull();
-    expect(thisWeekend([], at('2026-01-01T00:00:00.000Z'))).toBeNull();
+    expect(thisWeekend([], at('2026-01-01T00:00:00.000Z'), null)).toBeNull();
+  });
+
+  it('keeps the weekend while its race is recording past date_end, and moves on once it ends', () => {
+    expect(weekend('2026-04-19T09:30:00.000Z', live(34, null))).toBe(1003);
+    expect(weekend('2026-04-19T09:30:00.000Z')).toBe(1004);
+    expect(weekend('2026-04-19T09:30:00.000Z', live(34, '2026-04-19T09:25:00.000Z'))).toBe(1004);
+    // An open recording of a session the season does not know changes nothing.
+    expect(weekend('2026-04-19T09:30:00.000Z', live(999, null))).toBe(1004);
   });
 });
 

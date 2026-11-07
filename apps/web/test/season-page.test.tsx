@@ -13,8 +13,8 @@ import { live, NOW, recordings, season, seasons } from './season-data.ts';
 // The season page (A§13, P4c): this weekend first with every state in words, Up next, the other meetings as cards,
 // and never a result. The static renders run in happy-dom too, which renderToStaticMarkup does not mind.
 
-const render = (now: number) =>
-  renderToStaticMarkup(<SeasonView year={2026} season={season} live={live} recordings={recordings} now={now} />);
+const render = (now: number, l: Live | null = live) =>
+  renderToStaticMarkup(<SeasonView year={2026} season={season} live={l} recordings={recordings} now={now} />);
 
 describe('the season page', () => {
   // Countdown reads the clock itself.
@@ -80,7 +80,8 @@ describe('the season page', () => {
   });
 
   it('has no weekend and no Up next after the last race', () => {
-    const after = render(Date.parse('2026-12-01T00:00:00.000Z'));
+    // Nothing recording: an open recording would keep its weekend in progress.
+    const after = render(Date.parse('2026-12-01T00:00:00.000Z'), null);
     expect(after).not.toContain('This weekend');
     expect(after).not.toContain('Up next');
     expect(after).toContain('<h2 class="eyebrow sect">Meetings</h2>');
