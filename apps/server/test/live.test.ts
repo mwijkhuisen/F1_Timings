@@ -327,4 +327,44 @@ describe('view', () => {
     expect(view(feed.state, 'SessionInfo')).toBeUndefined();
     expect(view(feed.state, 'LapCount')).toBeUndefined();
   });
+
+  it("types practice's and qualifying's gap fields; qualifying's per-part lists become records (synthetic)", () => {
+    const feed = createFeed();
+    const part = { TimeDiffToFastest: '', TimeDifftoPositionAhead: '' };
+    feed.apply({
+      t: 0,
+      topic: 'TimingData',
+      payload: {
+        SessionPart: 1,
+        Lines: {
+          '1': { Stats: [part, part, part], BestLapTimes: [{ Value: '' }, { Value: '' }, { Value: '' }] },
+          '2': { TimeDiffToFastest: '+0.400', TimeDiffToPositionAhead: 0.4 },
+        },
+      },
+    });
+    feed.apply({
+      t: 1,
+      topic: 'TimingData',
+      payload: {
+        SessionPart: 2,
+        Lines: {
+          '1': {
+            Stats: { '1': { TimeDiffToFastest: '+0.120' } },
+            BestLapTimes: { '1': { Value: '1:28.000', Lap: 'x' } },
+          },
+        },
+      },
+    });
+
+    const timing = view(feed.state, 'TimingData');
+    expect(timing?.SessionPart).toBe(2);
+    expect(timing?.Lines?.['1']?.Stats).toEqual({
+      '0': part,
+      '1': { ...part, TimeDiffToFastest: '+0.120' },
+      '2': part,
+    });
+    expect(timing?.Lines?.['1']?.BestLapTimes?.['1']).toEqual({ Value: '1:28.000', Lap: undefined });
+    expect(timing?.Lines?.['2']?.TimeDiffToFastest).toBe('+0.400');
+    expect(timing?.Lines?.['2']?.TimeDiffToPositionAhead).toBeUndefined(); // a number is no string
+  });
 });
