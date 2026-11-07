@@ -507,10 +507,10 @@ describe('Player', () => {
 
     button('Laps');
     const lapHeads = () => [...host.querySelectorAll('table.laps thead th')].map((x) => x.textContent);
-    expect(lapHeads()).toEqual(['Driver', '1']);
+    expect(lapHeads()).toEqual(['Driver', 'Best', '1']);
     last().emit('laps', { t: t + 2_000, laps: [lap(1, 2), lap(44, 1)], stints: [] });
     advance(250);
-    expect(lapHeads()).toEqual(['Driver', '1', '2']);
+    expect(lapHeads()).toEqual(['Driver', 'Best', '1', '2']);
     // Drivers come from the stream's DriverList, ordered by its TimingData positions.
     expect([...host.querySelectorAll('table.laps tbody th')].map((x) => x.textContent)).toEqual(['VER', 'HAM']);
   });

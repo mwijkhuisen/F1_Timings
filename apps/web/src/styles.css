@@ -7,7 +7,10 @@
  * Team colours go through .drv and --tc: --team, or on the light theme --team-l (lib/session.ts).
  * Type (px): 11 badge and compound · 12 label (upper case) · 14 body and tables · 15 tower · 17 heads ·
  * 20 clock · 26 title, the titles and the clock in the installed --display stack (no font file).
- * Cues are outlines and borders, never shadows, so forced colours keep them.
+ * Cues are outlines and borders, never shadows, so forced colours keep them. The lap table (P4b): purple
+ * boxed on --purple-wash, green bold, in- and out-laps --dim, a --line rule at a new run, an --amber (SC,
+ * VSC) or --live (red) header band, the --heat steps behind a Δ, and a frozen Driver (72 px) and Best
+ * column; the tiles are a grid of --panel cells; qualifying's knock-out lines are 2 px --fg.
  * No inline styles anywhere: React sets only the custom properties --team, --team-l, --x and --w,
  * through CSSOM.
  */
@@ -26,6 +29,7 @@
   --dim: #8b8b9b;
   /* Timing colours: purple the overall best, green a personal best; "other" is plain text. */
   --purple: #c48cff;
+  --purple-wash: rgb(196 140 255 / 0.16);
   --green: #3ccf6e;
   /* The mini-sector pit-lane fill (D7) and "other" fill, at least 3:1 on --bg. */
   --pit: #4da6ff;
@@ -66,6 +70,7 @@
     --muted: #5c5c6a;
     --dim: #64646f;
     --purple: #7d2fc2;
+    --purple-wash: rgb(125 47 194 / 0.1);
     --green: #0f7553;
     --pit: #1f5fbf;
     --ms-other: #9a7d1f;
@@ -204,8 +209,11 @@ header {
 .legend {
   display: flex;
   flex-wrap: wrap;
+  align-items: center;
   gap: 8px;
   margin: 0 0 12px;
+  padding: 0;
+  list-style: none;
   font-size: 12px;
 }
 
@@ -300,6 +308,8 @@ thead th:first-child {
 /* One label grammar: small, bold, upper case, tracked, muted (table heads, eyebrows, strip labels). */
 thead th,
 .counts dt,
+.tiles dt,
+.cutlabel span,
 .label {
   color: var(--muted);
   font-size: 12px;
@@ -323,9 +333,10 @@ thead th,
   border-bottom: 4px solid var(--tc);
 }
 
-/* Colour is never the only cue (D9): purple is also boxed (a 2 px inset outline), green also bold; the legend says so. */
+/* Colour is never the only cue (D9): purple is also boxed (a 2 px inset outline) and tinted, green also bold; the legend says so. */
 .t-purple {
   color: var(--purple);
+  background: var(--purple-wash);
   font-weight: 700;
   outline: 2px solid currentColor;
   outline-offset: -2px;
@@ -714,6 +725,201 @@ header .links {
 
 .m-red {
   background: var(--live);
+}
+
+/* Session tiles (P4b): value first, its holder beneath; 6 or 3 across on a desktop, 2 on a phone. */
+.tiles {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(10rem, 1fr));
+  gap: 1px;
+  margin: 0 0 12px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--line);
+  overflow: hidden;
+}
+
+.tiles > div {
+  display: grid;
+  align-content: start;
+  gap: 2px;
+  padding: 8px 12px;
+  background: var(--panel);
+}
+
+.tiles dd {
+  margin: 0;
+}
+
+.tiles .v {
+  font-size: 17px;
+  font-weight: 700;
+}
+
+.tiles .who {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+/* Qualifying by phase: the margin under each time, and a 2 px --fg knock-out line with its label (owner D4). */
+.quali td {
+  text-align: right;
+}
+
+.quali .margin {
+  display: block;
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.1;
+}
+
+.quali tr.cut > * {
+  border-bottom: 2px solid var(--fg);
+}
+
+.quali tr.cutlabel td {
+  text-align: left;
+}
+
+.cutlabel span {
+  position: sticky;
+  left: 8px;
+}
+
+/* In- and out-laps are dimmed; a new run after the first gets a rule (left in rows, top in columns). */
+.laps td.io,
+.legend .io {
+  color: var(--dim);
+}
+
+.laps td.stint {
+  border-left: 2px solid var(--line);
+}
+
+.laps.cols td.stint {
+  border-left: 0;
+  border-top: 2px solid var(--line);
+}
+
+/* SC, VSC (--amber) and red-flag (--live) laps: a 3 px band under the lap number, left of it in columns. */
+.band-sc,
+.band-vsc {
+  --band: var(--amber);
+}
+
+.band-red {
+  --band: var(--live);
+}
+
+.band {
+  color: var(--band);
+  border-bottom: 3px solid var(--band);
+}
+
+.cols .band {
+  border-bottom: 1px solid var(--line-soft);
+  border-left: 3px solid var(--band);
+}
+
+/* Δ to own best: a one-hue step behind the value (owner D3); the text carries the value. */
+.heat-1 {
+  background: var(--heat-1);
+}
+
+.heat-2 {
+  background: var(--heat-2);
+}
+
+.heat-3 {
+  background: var(--heat-3);
+}
+
+.sw {
+  display: inline-block;
+  width: 12px;
+  height: 12px;
+  margin-right: 4px;
+  border: 1px solid var(--line);
+  vertical-align: middle;
+}
+
+/* Frozen columns in rows mode: Driver at a fixed 72 px, Best stuck right of it. */
+.laps:not(.cols) tbody th {
+  width: 72px;
+  min-width: 72px;
+  box-sizing: border-box;
+}
+
+.laps:not(.cols) .best {
+  position: sticky;
+  left: 72px;
+  z-index: 1;
+  min-width: 112px;
+  background: var(--bg);
+  border-right: 1px solid var(--line);
+}
+
+.laps:not(.cols) thead .best {
+  z-index: 2;
+  background: var(--panel);
+}
+
+.best small {
+  margin-left: 4px;
+  color: var(--dim);
+  font-size: 12px;
+}
+
+/* Columns mode has two header rows (drivers, Best): the whole thead sticks, as in .deltas. */
+.laps.cols thead {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+}
+
+.laps.cols thead th {
+  position: static;
+}
+
+.laps.cols thead tr th:first-child {
+  position: sticky;
+  left: 0;
+}
+
+.laps.cols thead td {
+  background: var(--panel);
+  border-bottom-color: var(--line);
+}
+
+/* Focus clear of the frozen Driver and Best (72 + 112 px) and of the two header rows of columns mode. */
+.scroll:has(.laps:not(.cols)) {
+  scroll-padding-left: 190px;
+}
+
+.scroll:has(.laps.cols) {
+  scroll-padding-top: 88px;
+}
+
+/* A phone drops the lap number after the best (its title keeps it), so Best narrows. */
+@media (max-width: 600px) {
+  .best small {
+    display: none;
+  }
+
+  .laps:not(.cols) .best {
+    min-width: 80px;
+  }
+
+  .scroll:has(.laps:not(.cols)) {
+    scroll-padding-left: 158px;
+  }
+}
+
+/* The lap-table legend's badge, dot and swatch keep their own size. */
+.legend .badge,
+.legend .cmp,
+.legend .sw {
+  padding: 0 3px;
 }
 
 /* Forced colours (A§13): the shapes and fills that carry meaning keep their own colours; a pressed button
