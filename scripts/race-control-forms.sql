@@ -2,7 +2,8 @@
 -- 2023–2026 race and sprint (session.type = 'Race', not cancelled). Written into A§6.1.
 --
 -- Read-only: it runs as f1_api (SELECT only) inside a READ ONLY transaction that is rolled back, and it
--- prints counts and digit-masked forms, never a raw message. Stewards' notes are left out.
+-- prints counts, and in query 2 each distinct message of the period-class rows (safety car, VSC, red flag,
+-- restart, chequered flag) with only its digits masked. Stewards' notes are left out.
 --
 -- On the VM:
 --   sudo docker compose -p f1 -f /etc/f1/compose.yaml --env-file /srv/f1/state/current.env exec -T db \
