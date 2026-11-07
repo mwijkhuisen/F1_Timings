@@ -40,7 +40,7 @@ export const useSeasons = () =>
     staleTime: STALE_MS,
   });
 
-/** Also fetched imperatively, when `/` walks the seasons. */
+/** Also used by the header, with `enabled` off on routes without a year. */
 export const seasonQuery = (year: number) =>
   queryOptions({
     queryKey: ['season', year],

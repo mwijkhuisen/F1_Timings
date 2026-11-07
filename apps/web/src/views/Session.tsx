@@ -1,14 +1,14 @@
 import type { SessionDetail } from '@f1/contracts';
 import { useEffect, useMemo, useState } from 'react';
 import { useLaps, useSession } from '../lib/api.ts';
-import { Link, replace, sessionPath, type View } from '../lib/routes.ts';
+import { Link, replace, sessionPath, VIEW_LABEL, type View } from '../lib/routes.ts';
 import { orderDrivers } from '../lib/session.ts';
-import { fmtInstant } from '../lib/time.ts';
 import { Pending } from '../ui/ErrorView.tsx';
 import { Compare } from './Compare.tsx';
 import { DriverPicker } from './DriverPicker.tsx';
 import { LapTable } from './LapTable.tsx';
 import { MiniSectors } from './MiniSectors.tsx';
+import { SessionHeadLoader } from './SessionHead.tsx';
 import { StintsTab } from './Stints.tsx';
 
 const pathOf = (d: SessionDetail, view: View) =>
@@ -42,25 +42,15 @@ export function Session({ session, view }: { session: number; view: View }) {
   const toggle = (n: number) => setPicked(numbers.includes(n) ? numbers.filter((x) => x !== n) : [...numbers, n]);
 
   if (!d) return <Pending error={detail.error} />;
-  const tab = (v: View, label: string) => (
-    <Link to={pathOf(d, v)} aria-current={v === view ? 'page' : undefined}>
-      {label}
-    </Link>
-  );
   return (
     <>
-      <h1>
-        {d.meeting.name} · {d.session.name}
-      </h1>
-      <p className="muted">
-        {fmtInstant(d.session.date_start)}
-        {d.meeting.circuit_short_name && ` · ${d.meeting.circuit_short_name}`}
-      </p>
+      <SessionHeadLoader detail={d} view={view} />
       <nav className="tabs">
-        {tab('laps', 'Laps')}
-        {tab('compare', 'Compare')}
-        {tab('minisectors', 'Mini-sectors')}
-        {tab('stints', 'Stints')}
+        {(Object.keys(VIEW_LABEL) as View[]).map((v) => (
+          <Link key={v} to={pathOf(d, v)} aria-current={v === view ? 'page' : undefined}>
+            {VIEW_LABEL[v]}
+          </Link>
+        ))}
       </nav>
       {(view === 'compare' || view === 'minisectors') && laps.data && (
         <DriverPicker drivers={order} selected={numbers} onToggle={toggle} />
