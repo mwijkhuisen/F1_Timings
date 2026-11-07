@@ -137,8 +137,11 @@ describe('access', () => {
     expect(fetches.n).toBe(2);
   });
 
+  // A failure the middleware cancels is framed (HttpResponse.text sets Content-Length), as a real
+  // server's is: msw ends an unframed body a tick later, so the cancel would abort the exchange in
+  // flight, and fetch then dials again for the aborted request (test/offline.ts closes that one).
   it.each([
-    ['a 500', () => new HttpResponse('boom', { status: 500 })],
+    ['a 500', () => HttpResponse.text('boom', { status: 500 })],
     ['a 204', () => new HttpResponse(null, { status: 204 })],
     ['a network error', () => HttpResponse.error()],
     ['no keys', () => HttpResponse.json({ keys: [] })],
@@ -172,8 +175,9 @@ describe('access', () => {
     vi.useFakeTimers({ toFake: ['Date'] });
     const at = (time: string) => vi.setSystemTime(new Date(`2026-10-26T${time}Z`));
     let up = true;
+    // The 502 is framed, as the failures above are.
     const fetches = serveCerts([key.pub], () =>
-      up ? HttpResponse.json({ keys: [key.pub] }) : new HttpResponse(null, { status: 502 }),
+      up ? HttpResponse.json({ keys: [key.pub] }) : HttpResponse.text(null, { status: 502 }),
     );
     const app = appWith();
     const status = async () => (await get(app, assertion(await jwt(key.priv)))).status;
