@@ -106,8 +106,9 @@ export function openStream(params: StreamParams, h: Handlers, ES: typeof EventSo
 
 export type Marker = { kind: 'start' | 'red' | 'chequered'; t: number };
 
-// A feed Utc as UTC, with or without its Z.
-const utc = (v: string | undefined) => (v === undefined ? Number.NaN : Date.parse(v.endsWith('Z') ? v : `${v}Z`));
+/** A feed Utc in epoch ms, read as UTC with or without its Z; NaN when absent or unparsable. */
+export const utc = (v: string | undefined) =>
+  v === undefined ? Number.NaN : Date.parse(v.endsWith('Z') ? v : `${v}Z`);
 
 /**
  * The session's start, red flags and chequered flags so far, from `SessionData.StatusSeries` alone (A§13). A Started

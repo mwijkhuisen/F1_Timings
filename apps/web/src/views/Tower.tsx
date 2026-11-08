@@ -11,8 +11,8 @@ type Stint = NonNullable<
   NonNullable<NonNullable<NonNullable<Views['TimingAppData']['Lines']>[string]>['Stints']>[string]
 >;
 
-/** A gap or interval: the feed's text, or why there is none (shown as — with the reason, A§2). */
-export type Gap = { value: string } | { reason: string };
+/** A gap or interval: the feed's text, the race leader's "Leader", or why there is none (— with the reason, A§2). */
+export type Gap = { value: string } | { leader: true } | { reason: string };
 
 export type TowerRow = {
   driver: Driver;
@@ -23,6 +23,10 @@ export type TowerRow = {
   best: string | undefined;
   /** The driver's latest stint. */
   tyre: Stint | undefined;
+  /** In a race, grid position minus position; 'none' without a usable grid position; undefined outside races. */
+  places: number | 'none' | undefined;
+  /** In a race, the interval to the car ahead is under a second (not the first row, not retired or stopped). */
+  close: boolean;
   /** The whole typed line, for the columns built on it. */
   line: Line;
 };
@@ -76,6 +80,8 @@ function noGaps(s: Session): string {
 }
 
 function gaps(line: Line, s: Session): [Gap, Gap] {
+  // The race leader has no gap and no car ahead (its feed values are its lap count, "LAP 12").
+  if (s.type === 'Race' && line.Position === '1') return [{ leader: true }, { reason: 'Leader: no car ahead' }];
   const feed = feedGaps(line, s);
   const pick = (what: Kind): Gap => {
     if (feed === undefined) return { reason: noGaps(s) };
@@ -86,6 +92,25 @@ function gaps(line: Line, s: Session): [Gap, Gap] {
 }
 
 const NUMBER = /^\d{1,3}$/;
+const CLOSE = /^\+0\.\d+$/;
+const PLACE = /^\d{1,2}$/;
+
+/** Places gained since the start (GridPos − Position), 'none' when the grid position is no number from 1 to 99. */
+function placesOf(grid: string | undefined, position: string | undefined): number | 'none' | undefined {
+  if (grid === undefined || !PLACE.test(grid) || Number(grid) < 1) return 'none';
+  return position !== undefined && PLACE.test(position) ? Number(grid) - Number(position) : undefined;
+}
+
+/** A driver from the DriverList entry of number `n`: Tla, full name and team colour, the number when unknown. */
+export function driverOf(list: Views['DriverList'], n: string): Driver {
+  const d = list[n];
+  return {
+    number: Number(n),
+    acronym: d?.Tla ?? n,
+    name: d?.FullName ?? null,
+    team: teamColour(d?.TeamColour ?? null),
+  };
+}
 
 /** TimingData lines ordered by `Line` (then number), with the DriverList's Tla and team colour. */
 export function towerRows(state: Obj): TowerRow[] {
@@ -103,16 +128,11 @@ export function towerRows(state: Obj): TowerRow[] {
   return Object.entries(lines)
     .flatMap(([n, line]) => (line && NUMBER.test(n) ? [{ n: Number(n), line }] : []))
     .sort((a, b) => (a.line.Line ?? 999) - (b.line.Line ?? 999) || a.n - b.n)
-    .map(({ n, line }) => {
-      const d = list[n];
+    .map(({ n, line }, i) => {
       const [gap, interval] = gaps(line, session);
       return {
-        driver: {
-          number: n,
-          acronym: d?.Tla ?? String(n),
-          name: d?.FullName ?? null,
-          team: teamColour(d?.TeamColour ?? null),
-        },
+        driver: driverOf(list, String(n)),
+        places: session.type === 'Race' ? placesOf(apps[n]?.GridPos, line.Position) : undefined,
         position: line.Position,
         gap,
         interval,
@@ -122,6 +142,13 @@ export function towerRows(state: Obj): TowerRow[] {
           .filter(([i]) => NUMBER.test(i))
           .sort((a, b) => Number(a[0]) - Number(b[0]))
           .at(-1)?.[1],
+        close:
+          session.type === 'Race' &&
+          i > 0 &&
+          !line.Retired &&
+          !line.Stopped &&
+          'value' in interval &&
+          CLOSE.test(interval.value),
         line,
       };
     });
@@ -161,11 +188,13 @@ function Sector({ s }: { s: NonNullable<Line['Sectors']>[string] }) {
   );
 }
 
-/** The feed's gap text, or — with the reason behind a tap (ui/Note.tsx); `id` is unique on the page. */
-const GapCell = ({ gap, id }: { gap: Gap; id: string }) => (
-  <td>
+/** The feed's gap text, the leader's muted "Leader", or — with the reason behind a tap (ui/Note.tsx); `id` is unique on the page. */
+const GapCell = ({ gap, id, className }: { gap: Gap; id: string; className?: string | undefined }) => (
+  <td className={className}>
     {'value' in gap ? (
       gap.value
+    ) : 'leader' in gap ? (
+      <span className="muted">Leader</span>
     ) : (
       <Note id={id} text={gap.reason}>
         —
@@ -174,39 +203,147 @@ const GapCell = ({ gap, id }: { gap: Gap; id: string }) => (
   </td>
 );
 
-export function Tower({ state, sessionKey }: { state: Obj; sessionKey?: number | undefined }) {
+const plural = (n: number) => `${n} place${n === 1 ? '' : 's'}`;
+
+/** Places since the start: ▲ gained in --fg, ▼ lost and – no change muted; the glyphs are hidden, the words say it. */
+function PlacesCell({ places, number }: { places: TowerRow['places']; number: number }) {
+  if (places === 'none')
+    return (
+      <td className="pc">
+        <Note id={`tower-pc-${number}`} text="No grid position in the feed">
+          —
+        </Note>
+      </td>
+    );
+  if (places === undefined) return <td className="pc" />;
+  const [glyph, words] =
+    places > 0
+      ? [`▲${places}`, `gained ${plural(places)}`]
+      : places < 0
+        ? [`▼${-places}`, `lost ${plural(-places)}`]
+        : ['–', 'no change'];
+  return (
+    <td className="pc">
+      <span className={places > 0 ? undefined : 'muted'}>
+        <span aria-hidden="true">{glyph}</span>
+        <span className="vh">{words}</span>
+      </span>
+    </td>
+  );
+}
+
+const COMPOUND_NAME: Record<string, string> = {
+  soft: 'Soft',
+  medium: 'Medium',
+  hard: 'Hard',
+  intermediate: 'Intermediate',
+  wet: 'Wet',
+};
+
+/** The latest stint: the compound dot (a dashed outline on a used set), its words, and its age in laps. */
+function TyreCell({ tyre }: { tyre: Stint | undefined }) {
+  if (!tyre) return <td />;
+  const compound = compoundOf(tyre.Compound ?? null) ?? 'unknown';
+  // The feed sends New as a string: "true" a new set, "false" a used one; anything else says neither.
+  const set = tyre.New === 'true' ? 'new set' : tyre.New === 'false' ? 'used set' : undefined;
+  const name = COMPOUND_NAME[compound] ?? tyre.Compound;
+  return (
+    <td>
+      <span
+        className={`cmp cmp-${compound}${set === 'used set' ? ' used' : ''}`}
+        title={[name, set].filter(Boolean).join(', ') || undefined}
+        aria-hidden="true"
+      >
+        {compound[0]?.toUpperCase()}
+      </span>
+      <span className="vh">
+        {compound} tyres, {set && `${set}, `}
+      </span>
+      {tyre.TotalLaps}
+    </td>
+  );
+}
+
+export function Tower({
+  state,
+  sessionKey,
+  focus = null,
+  onFocus,
+}: {
+  state: Obj;
+  sessionKey?: number | undefined;
+  /** The focused driver's number: its row is raised and its button pressed. */
+  focus?: string | null | undefined;
+  /** Without it the driver cells are plain text. */
+  onFocus?: ((n: string) => void) | undefined;
+}) {
   // After a session switch the feed shows the previous session until the new one's SessionInfo arrives.
   if (sessionKey !== undefined && view(state, 'SessionInfo')?.Key !== sessionKey)
     return <p className="muted">Waiting for the session: the feed still shows the previous one.</p>;
   const rows = towerRows(state);
   if (rows.length === 0) return <p className="muted">No timing yet.</p>;
+  // Places since the start: in races, once any line has a grid position.
+  const places = rows.some((r) => typeof r.places === 'number');
+  const head = (h: string) => (
+    <th key={h} scope="col">
+      {h}
+    </th>
+  );
   return (
     <>
-      <MsLegend />
+      <MsLegend>
+        {places && (
+          <span>
+            <span aria-hidden="true">▲</span> places since the start
+          </span>
+        )}
+        <span>
+          <span className="cmp used" aria-hidden="true" /> used set
+        </span>
+      </MsLegend>
       <Scroll label="Timing tower">
         <table className="list tower" aria-label="Timing tower">
           <thead>
             <tr>
-              {['Pos', 'Driver', 'Gap', 'Int', 'Last', 'Best', 'S1', 'S2', 'S3', 'Tyre', 'Pits'].map((h) => (
-                <th key={h} scope="col">
-                  {h}
+              {['Pos', 'Driver'].map(head)}
+              {places && (
+                <th scope="col" title="Places since the start">
+                  <span aria-hidden="true">±</span>
+                  <span className="vh">Places since the start</span>
                 </th>
-              ))}
+              )}
+              {['Gap', 'Int', 'Last', 'Best', 'S1', 'S2', 'S3', 'Tyre', 'Pits'].map(head)}
             </tr>
           </thead>
           <tbody>
             {rows.map((r) => {
               const { line } = r;
-              const compound = r.tyre && (compoundOf(r.tyre.Compound ?? null) ?? 'unknown');
+              const n = String(r.driver.number);
               const last = flag(line.LastLapTime);
+              const focused = focus === n;
+              const cls = [line.Retired || line.Stopped ? 'out' : '', focused ? 'focus' : ''].filter(Boolean).join(' ');
               return (
-                <tr key={r.driver.number} className={line.Retired || line.Stopped ? 'out' : undefined}>
+                <tr key={n} className={cls || undefined}>
                   <td>{r.position}</td>
                   <th scope="row" className="drv" style={teamStyle(r.driver)} title={r.driver.name ?? undefined}>
-                    {r.driver.acronym}
+                    {onFocus ? (
+                      <button type="button" aria-pressed={focused} onClick={() => onFocus(n)}>
+                        {r.driver.acronym}
+                      </button>
+                    ) : (
+                      r.driver.acronym
+                    )}
                   </th>
-                  <GapCell gap={r.gap} id={`tower-gap-${r.driver.number}`} />
-                  <GapCell gap={r.interval} id={`tower-int-${r.driver.number}`} />
+                  {places && <PlacesCell places={r.places} number={r.driver.number} />}
+                  <GapCell gap={r.gap} id={`tower-gap-${n}`} />
+                  {r.close && 'value' in r.interval ? (
+                    <td className="int close">
+                      {r.interval.value}
+                      <span className="vh">, within a second</span>
+                    </td>
+                  ) : (
+                    <GapCell gap={r.interval} id={`tower-int-${n}`} />
+                  )}
                   <td className={last?.className}>
                     {r.last}
                     <Words f={last} />
@@ -215,23 +352,14 @@ export function Tower({ state, sessionKey }: { state: Obj; sessionKey?: number |
                   {SECTORS.map((i) => (
                     <Sector key={i} s={line.Sectors?.[i]} />
                   ))}
-                  <td>
-                    {r.tyre && (
-                      <>
-                        <span className={`cmp cmp-${compound}`} title={r.tyre.Compound} aria-hidden="true">
-                          {compound?.[0]?.toUpperCase()}
-                        </span>
-                        <span className="vh">
-                          {compound} tyres{(r.tyre.StartLaps ?? 0) > 0 ? ', used set' : ''},{' '}
-                        </span>
-                      </>
-                    )}
-                    {r.tyre?.TotalLaps}
-                  </td>
+                  <TyreCell tyre={r.tyre} />
                   <td>
                     {line.NumberOfPitStops}
-                    {line.InPit && <span className="badge">IN PIT</span>}
-                    {line.PitOut && <span className="badge">OUT</span>}
+                    {line.InPit ? (
+                      <span className="badge">IN PIT</span>
+                    ) : (
+                      line.PitOut && <span className="badge">OUT</span>
+                    )}
                   </td>
                 </tr>
               );

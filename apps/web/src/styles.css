@@ -312,6 +312,7 @@ thead th:first-child {
 thead th,
 .counts dt,
 .tiles dt,
+.strip dt,
 .cutlabel span,
 .label {
   color: var(--muted);
@@ -649,10 +650,25 @@ header .links {
   z-index: 2;
 }
 
+.tower td.sector {
+  line-height: 1.2;
+}
+
+/* The sector value on its own line, the mini-sectors beneath as a thin strip of 6 × 8 px boxes (P4d). */
 .tower td.sector > span:first-child {
-  display: inline-block;
+  display: block;
   min-width: 4.5em;
-  margin-right: 4px;
+}
+
+.tower .ms {
+  width: 6px;
+  height: 8px;
+  margin-right: 1px;
+  vertical-align: top;
+}
+
+.tower .ms-purple {
+  outline-width: 1px;
 }
 
 .tower tr.out {
@@ -1309,5 +1325,288 @@ header .links {
     grid-column: 1 / -1;
     grid-row: 2;
     font-size: 12.5px;
+  }
+}
+
+/* The pit wall (P4d, A§13). The tower's driver is a toggle: the focused row is raised and its name underlined. It fills the cell's content box (about 51 px, set by the "Driver" head), so it keeps the global 44 × 44 px and the column its width. */
+.tower .drv button {
+  width: 100%;
+  padding: 0;
+  text-align: left;
+  border: 0;
+  background: none;
+  color: inherit;
+}
+
+.tower .drv button[aria-pressed="true"] {
+  background: none;
+  color: inherit;
+  text-decoration: underline 2px;
+  text-underline-offset: 3px;
+}
+
+.tower tr.focus > * {
+  background: var(--raised);
+}
+
+/* Places since the start: ▲ in --fg, ▼ and – muted (the words say it). */
+.tower .pc {
+  min-width: 2.4em;
+  font-size: 12px;
+}
+
+/* An interval under a second in a race: bold, after a dot. */
+.tower td.int.close {
+  font-weight: 700;
+}
+
+.tower td.int.close::before {
+  content: "";
+  display: inline-block;
+  width: 6px;
+  height: 6px;
+  margin-right: 6px;
+  border-radius: 50%;
+  background: var(--fg);
+  vertical-align: 2px;
+}
+
+/* A used set: the compound dot gets a dashed outline, a shape that forced colours keep. */
+.cmp.used {
+  outline: 1px dashed var(--fg);
+  outline-offset: 1px;
+}
+
+/* The status strip: labelled cells on --panel; on a phone it wraps and hides nothing (D3), the message on one line. */
+.strip {
+  display: flex;
+  flex-wrap: wrap;
+  margin: 12px 0;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--panel);
+}
+
+.strip > div {
+  display: grid;
+  align-content: center;
+  gap: 1px;
+  min-height: 54px;
+  padding: 6px 14px;
+}
+
+.strip > div + div {
+  border-left: 1px solid var(--line-soft);
+}
+
+.strip dd {
+  margin: 0;
+}
+
+.strip .v,
+.lw {
+  font-family: var(--display);
+  font-size: 18px;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.strip .msg {
+  flex: 1 1 18rem;
+  grid-template-columns: minmax(0, 1fr);
+  min-width: 0;
+}
+
+.strip .msg .v {
+  overflow: hidden;
+  font-family: inherit;
+  font-size: 13px;
+  font-weight: 500;
+  text-overflow: ellipsis;
+}
+
+/* The session light: red, yellow and green lamps in fixed places and the state in words. No glow: a shadow would
+   vanish under forced colours (contrast.test.ts). */
+.light {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.lamps {
+  display: inline-flex;
+  gap: 4px;
+  padding: 3px;
+  border-radius: 999px;
+  background: var(--bg);
+  outline: 1px solid var(--line);
+  outline-offset: -1px;
+}
+
+.lamps i {
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: var(--raised);
+  outline: 1px solid var(--line);
+  outline-offset: -1px;
+}
+
+.lamp-r .lamps i.r {
+  background: var(--live);
+  outline-color: var(--live);
+}
+
+.lamp-y .lamps i.y {
+  background: var(--amber);
+  outline-color: var(--amber);
+}
+
+.lamp-g .lamps i.g {
+  background: var(--green);
+  outline-color: var(--green);
+}
+
+.lamp-chq .lamps i {
+  background: repeating-conic-gradient(var(--fg) 0 25%, var(--bg) 0 50%) 0 0 / 6px 6px;
+  outline-color: var(--fg);
+}
+
+/* The tower and the side panel: one column, the panel below the tower; side by side from 1100 px. */
+.pitwall {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 16px;
+  align-items: start;
+}
+
+@media (min-width: 1100px) {
+  .pitwall {
+    grid-template-columns: minmax(0, 1fr) 320px;
+  }
+}
+
+.side {
+  display: grid;
+  gap: 12px;
+}
+
+.card {
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--panel);
+}
+
+.card h2 {
+  margin: 0 0 8px;
+  font-size: 14px;
+}
+
+.card p {
+  margin: 0;
+}
+
+.card .rows {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.card .rows li,
+.card p.rows {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+  min-height: 26px;
+}
+
+.chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin: 0 0 8px;
+  padding: 0;
+  border: 0;
+}
+
+.side .chips button {
+  padding: 0 10px;
+  border-radius: 999px;
+  font-size: 13px;
+}
+
+/* The race-control list is its own bounded scroll box (ui/Scroll.tsx), so a long session never stretches the page. */
+.side .scroll {
+  max-height: 24rem;
+  scroll-padding: 0;
+}
+
+.feed {
+  margin: 0;
+  padding: 0 4px;
+  list-style: none;
+}
+
+.side .feed li {
+  display: grid;
+  grid-template-columns: 3em minmax(0, 1fr);
+  gap: 8px;
+  padding: 8px 0;
+  border-top: 1px solid var(--line-soft);
+  font-size: 13px;
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+
+.feed li:first-child {
+  border-top: 0;
+}
+
+.feed .lap {
+  color: var(--muted);
+  font-weight: 600;
+}
+
+.feed .cat {
+  display: inline-block;
+  margin-right: 6px;
+  padding: 0 4px;
+  border-radius: 3px;
+  background: var(--raised);
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.03em;
+}
+
+/* Forced colours: the lamps keep their places, the lit one filled with CanvasText, the others Canvas with a
+   CanvasText ring; the word carries the state. The close-interval dot keeps its fill. */
+@media (forced-colors: active) {
+  .lamps i,
+  .tower td.int.close::before {
+    forced-color-adjust: none;
+  }
+
+  .lamps i {
+    background: Canvas;
+    outline-color: CanvasText;
+  }
+
+  .lamp-r .lamps i.r,
+  .lamp-y .lamps i.y,
+  .lamp-g .lamps i.g {
+    background: CanvasText;
+    outline-color: CanvasText;
+  }
+
+  .lamp-chq .lamps i {
+    background: repeating-conic-gradient(CanvasText 0 25%, Canvas 0 50%) 0 0 / 6px 6px;
+    outline-color: CanvasText;
+  }
+
+  .tower td.int.close::before {
+    background: CanvasText;
   }
 }

@@ -90,6 +90,44 @@ export function titleOf(route: Route | null, names?: Names): string {
   return page === null ? 'F1 Timings' : `${page} · F1 Timings`;
 }
 
+/** A word in front of a page's title (D1), such as the pit wall's session light: "Safety car · Live · F1 Timings". */
+export const withWord = (word: string | null, title: string): string => (word ? `${word} · ${title}` : title);
+
+// The title word: a tiny external store, so a page (views/Player.tsx) can set it while App stays the one writer of
+// `document.title`.
+let titleWord: string | null = null;
+const wordSubs = new Set<() => void>();
+
+/** Sets the word in front of the title, or clears it with null. */
+export function setTitleWord(word: string | null): void {
+  if (word === titleWord) return;
+  titleWord = word;
+  for (const f of wordSubs) f();
+}
+
+function subscribeWord(onChange: () => void): () => void {
+  wordSubs.add(onChange);
+  return () => {
+    wordSubs.delete(onChange);
+  };
+}
+
+/**
+ * Writes `document.title` (A§13), one writer per route (App's Title): the page's title, with the title word in front
+ * while one is set.
+ */
+export function useTitle(title: string): void {
+  const word = useSyncExternalStore(
+    subscribeWord,
+    () => titleWord,
+    () => titleWord,
+  );
+  const full = withWord(word, title);
+  useEffect(() => {
+    document.title = full;
+  }, [full]);
+}
+
 /** Lower case, diacritics stripped, every run of other characters one `-`, trimmed. */
 export const slug = (name: string | null): string =>
   (name ?? '')

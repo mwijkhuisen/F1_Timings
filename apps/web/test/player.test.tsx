@@ -4,11 +4,14 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { useTitle } from '../src/lib/routes.ts';
 import { markers, streamUrl } from '../src/lib/stream.ts';
 import { Live } from '../src/views/Live.tsx';
 import { Player, type PlayerRecording } from '../src/views/Player.tsx';
+import { raceState } from './feed-state.ts';
 
-// `view` (a zod parse of a topic) counts what the tower, the clock line's info and the markers derive from the state.
+// `view` (a zod parse of a topic) counts what the tower, the pit wall, the clock line's info and the markers derive from
+// the state.
 vi.mock('@f1/contracts', async (load) => {
   const m = await load<typeof import('@f1/contracts')>();
   return { ...m, view: vi.fn(m.view) };
@@ -357,17 +360,26 @@ describe('Player', () => {
     const StatusSeries = { '0': { Utc: new Date(S + 600_000).toISOString(), SessionStatus: 'Started' } };
     last().emit('snapshot', {
       t: start,
-      state: { SessionData: { StatusSeries }, TimingData: { Lines: { '1': { Line: 1, Position: '1' } } } },
+      state: {
+        SessionData: { StatusSeries },
+        TimingData: { Lines: { '1': { Line: 1, Position: '1' } } },
+        ExtrapolatedClock: { Utc: new Date(start).toISOString(), Remaining: '00:10:00', Extrapolating: true },
+      },
       laps: [],
       stints: [],
     });
     advance(250);
     const clockText = () => host.querySelector('.clock time')?.textContent;
+    const left = () =>
+      [...host.querySelectorAll('.strip > div')].find((d) => d.querySelector('dt')?.textContent === 'Left')
+        ?.textContent;
     const before = clockText();
+    expect(left()).toBe('Left09:59'); // 250 ms after the snapshot's T
     const calls = vi.mocked(view).mock.calls.length;
     expect(calls).toBeGreaterThan(0);
     advance(5_000);
     expect(clockText()).not.toBe(before); // the clock ticked
+    expect(left()).toBe('Left09:54'); // and so did the strip's LEFT cell
     expect(vi.mocked(view).mock.calls.length).toBe(calls);
   });
 
@@ -404,6 +416,29 @@ describe('Player', () => {
     button('Play');
     expect(atOf(last())).toBe(String(start - 5_000));
     expect(host.textContent).not.toContain(hint);
+  });
+
+  it('a seek while paused leaves LEFT where the tower stands', () => {
+    const start = S + 3_600_000;
+    render({ recording: ended, start, sessionKey: 9100 });
+    const clock = { Utc: new Date(start).toISOString(), Remaining: '01:00:00', Extrapolating: true };
+    last().emit('snapshot', {
+      t: start,
+      state: raceState({ extra: { ExtrapolatedClock: clock } }),
+      laps: [],
+      stints: [],
+    });
+    advance(10_000);
+    const left = () => [...host.querySelectorAll('.strip div')].find((d) => d.textContent?.startsWith('Left'));
+    expect(left()?.textContent).toBe('Left59:50');
+    button('Pause');
+    slide('Position', start + 10_000 + 300_000);
+    expect(host.textContent).toContain('Press Play to load this position.');
+    expect(left()?.textContent).toBe('Left59:50');
+    advance(400);
+    expect(left()?.textContent).toBe('Left59:50');
+    button('Play');
+    expect(left()?.textContent).toBe('Left54:50');
   });
 
   it('/live: a refetch that sets ended_at keeps the player and its stream', () => {
@@ -566,4 +601,109 @@ const detail = SessionDetail.parse({
   },
   drivers: [],
   results: [],
+});
+
+// App's title writer, as App mounts it for /live: the page title with the title word in front.
+function Title() {
+  useTitle('Live · F1 Timings');
+  return null;
+}
+
+describe('the pit wall in the player', () => {
+  const withTitle = (props: Partial<Parameters<typeof Player>[0]>) =>
+    act(() =>
+      root.render(
+        <>
+          <Title />
+          <Player recording={open} start="live" detail={undefined} {...props} />
+        </>,
+      ),
+    );
+  const snapshot = (state: object) => {
+    last().emit('snapshot', { t: NOW - 1_000, state, laps: [], stints: [] });
+    advance(250);
+  };
+
+  it('puts the light in front of the tab title while the session runs', () => {
+    withTitle({ sessionKey: 9100 });
+    expect(document.title).toBe('Live · F1 Timings');
+    snapshot(raceState({ track: '4' }));
+    expect(document.title).toBe('Safety car · Live · F1 Timings');
+    last().emit('delta', { t: NOW, topic: 'TrackStatus', data: { Status: '5' } });
+    advance(250);
+    expect(document.title).toBe('Red flag · Live · F1 Timings');
+    last().emit('delta', { t: NOW, topic: 'SessionStatus', data: { Status: 'Aborted' } });
+    advance(250);
+    expect(document.title).toBe('Stopped · Live · F1 Timings');
+    last().emit('delta', { t: NOW, topic: 'SessionStatus', data: { Status: 'Finished' } });
+    advance(250);
+    expect(document.title).toBe('Live · F1 Timings');
+    expect(host.querySelector('.strip .lw')?.textContent).toBe('Chequered flag');
+  });
+
+  it('shows no light, strip or panel while the feed shows another session', () => {
+    withTitle({ sessionKey: 9999 });
+    snapshot(raceState({ track: '4' }));
+    expect(document.title).toBe('Live · F1 Timings');
+    expect(host.querySelector('.strip')).toBeNull();
+    expect(host.querySelector('.side')).toBeNull();
+    expect(host.textContent).toContain('Waiting for the session');
+  });
+
+  it('clears the title word when the player unmounts', () => {
+    withTitle({ sessionKey: 9100 });
+    snapshot(raceState({ track: '6' }));
+    expect(document.title).toBe('VSC · Live · F1 Timings');
+    act(() => root.render(<Title />));
+    expect(document.title).toBe('Live · F1 Timings');
+  });
+
+  it('shows the strip above the view switch and the panel beside the tower', () => {
+    render({ sessionKey: 9100, detail });
+    snapshot(raceState({ msgs: [[2, 'Flag', 'GREEN LIGHT - PIT EXIT OPEN']] }));
+    const strip = $('.strip');
+    expect(strip.compareDocumentPosition($('fieldset.segmented')) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect($('.pitwall .side').textContent).toContain('GREEN LIGHT - PIT EXIT OPEN');
+    button('Laps');
+    expect(host.querySelector('.side')).toBeNull();
+    expect(host.querySelector('.strip')).not.toBeNull(); // on both tabs
+  });
+
+  it('filters race control by kind', () => {
+    render({ sessionKey: 9100 });
+    snapshot(
+      raceState({
+        msgs: [
+          [2, 'Flag', 'GREEN LIGHT - PIT EXIT OPEN'],
+          [5, 'SafetyCar', 'SAFETY CAR DEPLOYED'],
+        ],
+      }),
+    );
+    const feed = () => [...host.querySelectorAll('.feed li')].map((li) => li.textContent);
+    expect(feed()).toEqual(['L5SCSAFETY CAR DEPLOYED', 'L2FLAGGREEN LIGHT - PIT EXIT OPEN']);
+    button('Flags 1');
+    expect(feed()).toEqual(['L2FLAGGREEN LIGHT - PIT EXIT OPEN']);
+    button('Incidents 0');
+    expect(host.textContent).toContain('No messages of this kind yet.');
+    button('All 2');
+    expect(feed()).toHaveLength(2);
+  });
+
+  it('a tap on a driver focuses the row, a second tap clears it', () => {
+    render({ sessionKey: 9100 });
+    snapshot(raceState());
+    const driver = (tla: string) =>
+      [...host.querySelectorAll<HTMLButtonElement>('.tower tbody th button')].find((b) => b.textContent === tla);
+    const focused = () => [...host.querySelectorAll('.tower tr.focus th')].map((th) => th.textContent);
+    expect(driver('BBB')?.getAttribute('aria-pressed')).toBe('false');
+    act(() => driver('BBB')?.click());
+    expect(driver('BBB')?.getAttribute('aria-pressed')).toBe('true');
+    expect(focused()).toEqual(['BBB']);
+    act(() => driver('CCC')?.click());
+    expect(focused()).toEqual(['CCC']);
+    expect(driver('BBB')?.getAttribute('aria-pressed')).toBe('false');
+    act(() => driver('CCC')?.click());
+    expect(focused()).toEqual([]);
+    expect(host.querySelectorAll('.tower [aria-pressed="true"]')).toHaveLength(0);
+  });
 });
