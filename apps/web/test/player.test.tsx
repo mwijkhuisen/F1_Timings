@@ -418,6 +418,29 @@ describe('Player', () => {
     expect(host.textContent).not.toContain(hint);
   });
 
+  it('a seek while paused leaves LEFT where the tower stands', () => {
+    const start = S + 3_600_000;
+    render({ recording: ended, start, sessionKey: 9100 });
+    const clock = { Utc: new Date(start).toISOString(), Remaining: '01:00:00', Extrapolating: true };
+    last().emit('snapshot', {
+      t: start,
+      state: raceState({ extra: { ExtrapolatedClock: clock } }),
+      laps: [],
+      stints: [],
+    });
+    advance(10_000);
+    const left = () => [...host.querySelectorAll('.strip div')].find((d) => d.textContent?.startsWith('Left'));
+    expect(left()?.textContent).toBe('Left59:50');
+    button('Pause');
+    slide('Position', start + 10_000 + 300_000);
+    expect(host.textContent).toContain('Press Play to load this position.');
+    expect(left()?.textContent).toBe('Left59:50');
+    advance(400);
+    expect(left()?.textContent).toBe('Left59:50');
+    button('Play');
+    expect(left()?.textContent).toBe('Left54:50');
+  });
+
   it('/live: a refetch that sets ended_at keeps the player and its stream', () => {
     // No query fetches (msw would fail it): the data is put into the cache by hand.
     const client = new QueryClient({ defaultOptions: { queries: { enabled: false } } });

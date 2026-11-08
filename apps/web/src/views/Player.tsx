@@ -274,6 +274,8 @@ export function Player({
   const now = () => seek ?? nowT();
   // A seek while paused only moves T (the sync flow: pause, seek, Play on both screens); the tower stays at `held`.
   const moved = !playing && held !== null && now() !== held;
+  // The strip shows the time the state stands at: T while playing, `held` while paused (LEFT agrees with the tower).
+  const stateNow = () => (playing ? now() : (held ?? now()));
   const feed = snap.feed;
   const state = feed?.state;
   // Rebuilt only when the lap rows change (a snapshot or a `laps` event), so the lap table skips deltas.
@@ -344,7 +346,7 @@ export function Player({
           </p>
         )
       )}
-      {wall && <Strip strip={wall.strip} now={now} playing={playing} />}
+      {wall && <Strip strip={wall.strip} now={stateNow} playing={playing} />}
       {detail && (
         <fieldset className="segmented" aria-label="View">
           <button type="button" aria-pressed={tab === 'tower'} onClick={() => setTab('tower')}>
