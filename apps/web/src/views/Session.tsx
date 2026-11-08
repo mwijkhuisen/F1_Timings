@@ -49,7 +49,7 @@ export function Session({ session, view }: { session: number; view: View }) {
   const picks = view === 'compare' || view === 'minisectors';
   // Written back on Compare and Mini-sectors only, without a history entry; the other tabs keep their own URL.
   useEffect(() => {
-    if (picks && chosen !== null) history.replaceState(history.state, '', location.pathname + search);
+    if (picks && chosen !== null) history.replaceState(history.state, '', location.pathname + search + location.hash);
   }, [picks, chosen, search]);
 
   if (!d) return <Pending error={detail.error} />;

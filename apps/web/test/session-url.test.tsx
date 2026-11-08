@@ -84,4 +84,11 @@ describe('Session: the picks in ?d=', () => {
     click(host.querySelector('[aria-label="Remove VER"]'));
     expect(location.search).toBe('?d=3');
   });
+
+  it('keeps the hash when it writes a pick back', () => {
+    render(`${PATH}/minisectors?d=63,3#top`);
+    click(host.querySelector('[aria-label="Remove RUS"]'));
+    expect(location.search).toBe('?d=3');
+    expect(location.hash).toBe('#top');
+  });
 });

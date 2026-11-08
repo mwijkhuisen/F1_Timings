@@ -139,7 +139,7 @@ describe('the stints bars', () => {
       stints={Stints.parse([
         stint(4, 1, 1, 10, 'MEDIUM', 0),
         stint(4, 2, 11, 40, 'HARD', 3),
-        stint(81, 1, 1, 30, 'NEW', null),
+        stint(81, 1, 1, 30, 'x onclick', null),
         stint(81, 2, null, null, 'HARD', null),
       ])}
       periods={[
@@ -162,6 +162,12 @@ describe('the stints bars', () => {
 
   it('marks an unknown compound and orders the drivers as the lap table does', () => {
     expect(html).toContain('<span class="seg cmp-unknown"');
+    // The API's raw compound never reaches a class name: only the five known ones or unknown, in the legend too.
+    expect(html).toContain('<span class="cmp cmp-unknown" aria-hidden="true">?</span>unknown');
+    expect(new Set([...html.matchAll(/cmp-([\w-]+)/g)].map(([, c]) => c))).toEqual(
+      new Set(['medium', 'hard', 'unknown']),
+    );
+    expect(html).not.toContain('onclick');
     expect([...html.matchAll(/class="drv"[^>]*>(\w+)</g)].map(([, a]) => a)).toEqual(['NOR', '81']);
   });
 
