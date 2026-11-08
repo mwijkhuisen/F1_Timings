@@ -186,7 +186,8 @@ describe('the popover position (#72)', () => {
     expect(pop).toContain('position-anchor: auto;');
     expect(pop).toContain('position-area: bottom span-right;');
     expect(pop).toMatch(/position-try-fallbacks:[^;]*flip-inline[^;]*flip-block/);
-    expect(pop).toContain('margin: 4px 0;');
+    expect(pop).toContain('inset: auto;');
+    expect(pop).toContain('margin: 4px 8px 4px 0;');
     // An unsupported browser keeps the browser's centred popover.
     expect(rule('.pop')).not.toMatch(/position-|inset|margin/);
   });
