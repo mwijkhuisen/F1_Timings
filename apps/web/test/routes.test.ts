@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { type Route, routeOf, sessionPath, slug, titleOf, withWord } from '../src/lib/routes.ts';
+import { formatD, parseD, type Route, routeOf, sessionPath, slug, titleOf, withWord } from '../src/lib/routes.ts';
 
 describe('routeOf', () => {
   it.each([
@@ -125,5 +125,41 @@ describe('withWord: the title word in front (D1)', () => {
     ).toBe('Safety car · Replay: Mexico City Grand Prix · Race · F1 Timings');
     expect(withWord(null, 'Live · F1 Timings')).toBe('Live · F1 Timings');
     expect(withWord('', 'Live · F1 Timings')).toBe('Live · F1 Timings');
+  });
+});
+
+describe('parseD and formatD: the picks in ?d= (C4)', () => {
+  const drivers = [{ number: 1 }, { number: 3 }, { number: 63 }, { number: 44 }];
+
+  it('keeps the order and drops unknown and repeated numbers', () => {
+    expect(parseD('63,3', drivers)).toEqual([63, 3]);
+    expect(parseD('3,99,63,3,1', drivers)).toEqual([3, 63, 1]);
+    expect(parseD('44', drivers)).toEqual([44]);
+  });
+
+  it.each([
+    ['missing', null],
+    ['empty', ''],
+    ['another separator', '3;63'],
+    ['not a number', 'a'],
+    ['an empty item', '3,,63'],
+    ['a trailing comma', '3,63,'],
+    ['over 100 characters', `${'1,'.repeat(50)}1`],
+    ['only unknown numbers', '7,99'],
+  ])('is null (the default pick) for %s', (_, param) => {
+    expect(parseD(param, drivers)).toBeNull();
+  });
+
+  it('reads 100 characters but no more', () => {
+    const hundred = `${'0'.repeat(98)}63`;
+    expect(hundred).toHaveLength(100);
+    expect(parseD(hundred, drivers)).toEqual([63]);
+    expect(parseD(`0${hundred}`, drivers)).toBeNull();
+  });
+
+  it('formatD joins the numbers with commas, round trip', () => {
+    expect(formatD([63, 3])).toBe('63,3');
+    expect(formatD([])).toBe('');
+    expect(parseD(formatD([44, 1]), drivers)).toEqual([44, 1]);
   });
 });
