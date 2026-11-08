@@ -1,4 +1,5 @@
 import type { Lap } from '@f1/contracts';
+import type { ReactNode } from 'react';
 import { type Driver, teamStyle } from '../lib/session.ts';
 import { Scroll } from '../ui/Scroll.tsx';
 
@@ -37,14 +38,16 @@ const SPEEDS = ['i1_kph', 'i2_kph', 'st_kph'] as const;
 
 const LEGEND = ['ms-purple', 'ms-green', 'ms-yellow', 'ms-pit', 'ms-grey', 'ms-none'];
 
-/** The mini-sector legend: each class's shape with its name (the boxes are decoration, the words say it). */
-export const MsLegend = () => (
+/** The mini-sector legend: each class's shape with its name (the boxes are decoration, the words say it), then any
+ * items of the caller's own. */
+export const MsLegend = ({ children }: { children?: ReactNode }) => (
   <p className="legend">
     {LEGEND.map((c) => (
       <span key={c}>
         <span className={`ms ${c}`} aria-hidden="true" /> {TITLE[c] ?? 'unknown code'}
       </span>
     ))}
+    {children}
   </p>
 );
 

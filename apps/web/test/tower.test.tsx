@@ -2,6 +2,7 @@ import type { Obj } from '@f1/contracts';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, expect, it } from 'vitest';
 import { Tower, towerRows } from '../src/views/Tower.tsx';
+import { practiceState, qualifyingState, raceState } from './feed-state.ts';
 
 // The timing tower (A§13) on hand-built, synthetic feed states.
 
@@ -49,11 +50,11 @@ const state: Obj = {
       '1': {
         Stints: {
           '0': { Compound: 'HARD', TotalLaps: 20 },
-          '1': { Compound: 'SOFT', TotalLaps: 7, StartLaps: 0 },
+          '1': { Compound: 'SOFT', TotalLaps: 7, StartLaps: 0, New: 'true' },
         },
       },
       '2': { Stints: { '0': { Compound: 'MYSTERY', TotalLaps: 3 } } },
-      '4': { Stints: { '0': { Compound: 'SOFT', TotalLaps: 12, StartLaps: 3 } } },
+      '4': { Stints: { '0': { Compound: 'SOFT', TotalLaps: 12, StartLaps: 3, New: 'false' } } },
     },
   },
 };
@@ -104,9 +105,9 @@ describe('Gap and Int in a race', () => {
     },
   };
 
-  it('reads GapToLeader and IntervalToPositionAhead, the leader its lap and a lapped car its laps', () => {
+  it('reads GapToLeader and IntervalToPositionAhead, the leader is "Leader" and a lapped car shows its laps', () => {
     expect(gaps(race)).toEqual([
-      [1, value('LAP 12'), value('LAP 12')],
+      [1, { leader: true }, reason('Leader: no car ahead')],
       [2, value('+2.345'), value('+2.345')],
       [3, value('1L'), value('+40.100')],
       [4, reason('Retired'), reason('Retired')],
@@ -266,7 +267,10 @@ describe('the tower', () => {
   });
 
   it('shows the gap and interval as text, and — with its reason in the title and the popover', () => {
-    expect(row('AAA')).toContain('<td>LAP 5</td><td>LAP 5</td>');
+    expect(row('AAA')).toContain(
+      '<td><span class="muted">Leader</span></td><td><button type="button" class="note" popoverTarget="tower-int-1" ' +
+        'aria-describedby="tower-int-1" title="Leader: no car ahead">—</button>',
+    );
     expect(row('BBB')).toContain('<td>+1.5</td><td>+1.5</td>');
     expect(row('DDD')).toContain(
       '<td><button type="button" class="note" popoverTarget="tower-gap-4" aria-describedby="tower-gap-4" ' +
@@ -279,7 +283,7 @@ describe('the tower', () => {
 
   it('gives every note a unique id', () => {
     const ids = [...html.matchAll(/ id="([^"]+)"/g)].map(([, id]) => id);
-    expect(ids).toEqual(['tower-gap-4', 'tower-int-4']);
+    expect(ids).toEqual(['tower-int-1', 'tower-gap-4', 'tower-int-4']);
   });
 
   it('shows the mini-sector legend above its scroll box', () => {
@@ -297,19 +301,47 @@ describe('the tower', () => {
     expect(row('AAA')).toContain('ms-grey');
   });
 
-  it('shows the tyre as a hidden compound dot, its words and its laps', () => {
-    const dot = '<span class="cmp cmp-soft" title="SOFT" aria-hidden="true">S</span>';
-    expect(row('AAA')).toContain(`${dot}<span class="vh">soft tyres, </span>7`);
-    expect(row('DDD')).toContain(`${dot}<span class="vh">soft tyres, used set, </span>12`);
+  // New or used comes from the stint's New ("true" or "false"), no longer from StartLaps (P4d).
+  it('shows the tyre as a hidden compound dot, its words and its laps, a used set dashed', () => {
+    expect(row('AAA')).toContain(
+      '<span class="cmp cmp-soft" title="Soft, new set" aria-hidden="true">S</span><span class="vh">soft tyres, new set, </span>7',
+    );
+    expect(row('DDD')).toContain(
+      '<span class="cmp cmp-soft used" title="Soft, used set" aria-hidden="true">S</span><span class="vh">soft tyres, used set, </span>12',
+    );
     expect(row('BBB')).toContain(
       '<span class="cmp cmp-unknown" title="MYSTERY" aria-hidden="true">U</span><span class="vh">unknown tyres, </span>3',
     );
+  });
+
+  it('says neither new nor used without a New of "true" or "false"', () => {
+    const stint = (New: unknown) =>
+      renderToStaticMarkup(
+        <Tower
+          state={{
+            ...state,
+            TimingAppData: {
+              Lines: { '1': { Stints: { '0': { Compound: 'HARD', TotalLaps: 4, StartLaps: 9, New } } } },
+            },
+          }}
+        />,
+      );
+    for (const New of [undefined, 'yes', true])
+      expect(stint(New)).toContain(
+        '<span class="cmp cmp-hard" title="Hard" aria-hidden="true">H</span><span class="vh">hard tyres, </span>4',
+      );
   });
 
   it('shows the pit stops with the IN PIT and OUT badges', () => {
     expect(row('AAA')).toContain('2<span class="badge">IN PIT</span>');
     expect(row('BBB')).toContain('0<span class="badge">OUT</span>');
     expect(row('CCC')).not.toContain('badge');
+    // IN PIT wins over a stale OUT.
+    const both = renderToStaticMarkup(
+      <Tower state={{ ...state, TimingData: { Lines: { '1': { Line: 1, InPit: true, PitOut: true } } } }} />,
+    );
+    expect(both).toContain('<span class="badge">IN PIT</span>');
+    expect(both).not.toContain('>OUT<');
   });
 
   it('mutes a retired or stopped driver', () => {
@@ -339,5 +371,111 @@ describe('the tower', () => {
     );
     expect(evil).toContain('&lt;b&gt;');
     expect(evil).toContain('<td>&lt;i&gt;</td><td>&amp;x</td>');
+  });
+});
+
+describe('places since the start (races only)', () => {
+  it('is GridPos − Position in a race, and none without a usable grid position', () => {
+    expect(towerRows(raceState()).map((r) => [r.driver.acronym, r.places])).toEqual([
+      ['AAA', 2],
+      ['BBB', -1],
+      ['CCC', -1],
+      ['DDD', 'none'],
+      ['EEE', 0],
+    ]);
+    for (const GridPos of ['0', '100', 'P3', undefined]) {
+      const s = raceState({ extra: { TimingAppData: { Lines: { '1': { GridPos } } } } });
+      expect(towerRows(s)[0]?.places).toBe('none');
+    }
+  });
+
+  it('is undefined in practice and qualifying, and the column is hidden there', () => {
+    for (const s of [practiceState(), qualifyingState()]) {
+      expect(towerRows(s).map((r) => r.places)).toEqual([undefined, undefined]);
+      const html = renderToStaticMarkup(<Tower state={s} />);
+      expect(html).not.toContain('Places since the start');
+      expect(html).not.toContain('class="pc"');
+    }
+  });
+
+  it('hides the column in a race without any grid position', () => {
+    const html = renderToStaticMarkup(<Tower state={raceState({ extra: { TimingAppData: { Lines: {} } } })} />);
+    expect(html).not.toContain('Places since the start');
+    expect(html).not.toContain('tower-pc-');
+  });
+
+  const html = renderToStaticMarkup(<Tower state={raceState()} />);
+  const row = (tla: string) => html.split('<tr').find((r) => r.includes(`>${tla}</th>`)) ?? '';
+
+  it('shows ▲ gained in --fg, ▼ lost and – muted, the glyphs hidden and the words for a screen reader', () => {
+    expect(html).toContain(
+      '<th scope="col" title="Places since the start"><span aria-hidden="true">±</span><span class="vh">Places since the start</span></th>',
+    );
+    expect(row('AAA')).toContain(
+      '<td class="pc"><span><span aria-hidden="true">▲2</span><span class="vh">gained 2 places</span></span></td>',
+    );
+    expect(row('BBB')).toContain(
+      '<td class="pc"><span class="muted"><span aria-hidden="true">▼1</span><span class="vh">lost 1 place</span></span></td>',
+    );
+    expect(row('EEE')).toContain(
+      '<td class="pc"><span class="muted"><span aria-hidden="true">–</span><span class="vh">no change</span></span></td>',
+    );
+    expect(row('DDD')).toContain(
+      '<td class="pc"><button type="button" class="note" popoverTarget="tower-pc-4" aria-describedby="tower-pc-4" ' +
+        'title="No grid position in the feed">—</button>',
+    );
+  });
+
+  it('adds the column to the legend, with the used set', () => {
+    expect(html).toMatch(
+      /<p class="legend">.*<span><span aria-hidden="true">▲<\/span> places since the start<\/span><span><span class="cmp used" aria-hidden="true"><\/span> used set<\/span><\/p>/,
+    );
+    const practice = renderToStaticMarkup(<Tower state={practiceState()} />);
+    expect(practice).not.toContain('places since the start');
+    expect(practice).toContain('used set</span></p>');
+  });
+});
+
+describe('the tower in a race', () => {
+  const html = renderToStaticMarkup(<Tower state={raceState()} />);
+  const row = (tla: string) => html.split('<tr').find((r) => r.includes(`>${tla}</th>`)) ?? '';
+
+  it('names the leader "Leader", muted, with an Int reason', () => {
+    expect(row('AAA')).toContain('<td><span class="muted">Leader</span></td>');
+    expect(row('AAA')).toContain('<div popover="auto" id="tower-int-1" class="pop">Leader: no car ahead</div>');
+  });
+
+  it('marks an Int under a second bold with a dot and the words, not 1.000 s, a lapped or a retired car', () => {
+    expect(row('BBB')).toContain('<td class="int close">+0.400<span class="vh">, within a second</span></td>');
+    expect(html.match(/within a second/g)).toHaveLength(1);
+    expect(row('CCC')).toContain('<td>+1.000</td>');
+    expect(row('EEE')).toContain('<td>+0.200</td>');
+  });
+
+  it('marks nothing within a second outside races', () => {
+    expect(renderToStaticMarkup(<Tower state={practiceState()} />)).not.toContain('within a second');
+  });
+
+  it('shows practice and qualifying leaders as "Fastest…", not "Leader"', () => {
+    expect(renderToStaticMarkup(<Tower state={practiceState()} />)).not.toContain('Leader');
+    expect(renderToStaticMarkup(<Tower state={qualifyingState()} />)).toContain('Fastest in Q2: no gap');
+  });
+});
+
+describe('focus', () => {
+  it('makes each driver a toggle button when the page handles focus, and raises the focused row', () => {
+    const html = renderToStaticMarkup(<Tower state={raceState()} focus="2" onFocus={() => {}} />);
+    expect(html).toContain('<button type="button" aria-pressed="false">AAA</button>');
+    expect(html).toContain('<tr class="focus"><td>2</td>');
+    expect(html).toContain('<button type="button" aria-pressed="true">BBB</button>');
+    expect(html.match(/aria-pressed="true"/g)).toHaveLength(1);
+    // A retired, focused row keeps both classes.
+    expect(renderToStaticMarkup(<Tower state={raceState()} focus="5" onFocus={() => {}} />)).toContain(
+      '<tr class="out focus">',
+    );
+  });
+
+  it('keeps the driver as text without a handler', () => {
+    expect(renderToStaticMarkup(<Tower state={raceState()} focus="2" />)).not.toContain('aria-pressed');
   });
 });
