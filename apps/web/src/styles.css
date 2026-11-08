@@ -675,11 +675,40 @@ header .links {
   color: var(--muted);
 }
 
-/* The player bar (A§13): sticky at the bottom, within thumb reach; every target 44 px; it never scrolls. */
+/* What the view does not show (p.since): a 3 px --fg rule at the left, muted text, the dismiss button at the end. */
+.since {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 10px;
+  margin: 0 0 12px;
+  padding: 4px 4px 4px 12px;
+  border-left: 3px solid var(--fg);
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.since b {
+  color: var(--fg);
+}
+
+.since button {
+  margin-left: auto;
+  padding: 0;
+  border: 0;
+  background: none;
+}
+
+/* The player bar (A§13, P4e): sticky at the bottom, within thumb reach; every target 44 px; it never scrolls. Wide: the
+   clock line across, then transport | seek bar | jump-back chips, then the delay and announce rows. A phone stacks them. */
 .player {
   position: sticky;
   bottom: 0;
   z-index: 3;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  align-items: center;
+  gap: 4px 16px;
   margin: 12px -16px 0;
   padding: 8px 16px;
   background: var(--raised);
@@ -692,29 +721,93 @@ header .links {
   margin: 0;
 }
 
-/* Seven equal buttons in one row at 390 px: (358 − 6 × 4) / 7 ≈ 47.7 px each, so every one stays ≥ 44 px wide. */
-.player .controls {
+/* The clock line: the clock in the display face, the rest muted, the mode as a pill with a dot (a shape beside the word). */
+.clockline {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 4px 16px;
   margin: 0;
-  gap: 4px;
+  color: var(--muted);
+  font-size: 13px;
 }
 
-.player .controls button {
-  flex: 1 1 0;
-  padding: 0;
-  font-size: 14px; /* "Pause" and "+30 s" fit 47.7 px */
+.clockline time {
+  color: var(--fg);
+  font-family: var(--display);
+  font-size: 20px;
+}
+
+.pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 2px 8px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
   white-space: nowrap;
 }
 
-.clock time {
-  font-family: var(--display);
-  font-size: 20px;
+.pill .dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--muted);
+}
+
+.pill.live {
+  border-color: var(--live);
+  color: var(--fg);
+}
+
+.pill.live .dot {
+  background: var(--live);
+}
+
+/* Transport: a compact cluster at its own widths, Play emphasised; "Live" is one more button. */
+.transport {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
+.transport button {
+  padding: 0 8px;
+  font-size: 13px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.transport .play {
+  min-width: 56px;
+  background: var(--fg);
+  color: var(--bg);
+  border-color: var(--fg);
 }
 
 .player label {
   display: flex;
   align-items: center;
   gap: 8px;
+  min-height: 44px;
   white-space: nowrap;
+}
+
+.player label input[type="checkbox"] {
+  flex: none;
+  width: 20px;
+  height: 20px;
+  margin: 0;
+}
+
+.player label.delay input[type="range"] {
+  flex: 1;
+  min-width: 0;
 }
 
 /* Markers on the seek bar, placed by --x (a custom property: CSP-safe). */
@@ -732,24 +825,112 @@ header .links {
   pointer-events: none;
 }
 
+/* Markers by shape (A§13, P4e), above the thumb's 14 to 30 px so it stays visible: a tick (start), a striped band
+   (SC, VSC amber; red flag --live; open while running, with no right edge) and an 8 px checker (the finish). */
 .marker {
   position: absolute;
-  top: 0;
+  top: 4px;
   left: var(--x);
-  width: 3px;
-  height: 10px;
-  transform: translateX(-50%);
   pointer-events: none;
+}
+
+.m-start {
+  top: 0;
+  width: 3px;
+  height: 16px;
+  margin-left: -1px;
   background: var(--fg);
 }
 
-/* Green means a best, so the start is --fg and taller than the chequered flag; a red flag is --live. */
-.m-start {
-  height: 16px;
+.m-band {
+  width: max(4px, var(--w));
+  height: 8px;
+  background: repeating-linear-gradient(90deg, var(--band) 0 2px, transparent 2px 3px);
+  border: 1px solid var(--band);
+}
+
+.m-band.open {
+  border-right: 0;
+}
+
+.m-sc,
+.m-vsc {
+  --band: var(--amber);
 }
 
 .m-red {
-  background: var(--live);
+  --band: var(--live);
+}
+
+.m-chequered {
+  top: 3px;
+  width: 8px;
+  height: 8px;
+  margin-left: -4px;
+  background: repeating-conic-gradient(var(--fg) 0 25%, transparent 0 50%) 0 0 / 4px 4px;
+  outline: 1px solid var(--fg);
+}
+
+/* Wide: the clock line across, then transport | seek bar | chips, then the delay and announce toggles on one row (the announce
+   toggle starts at the left when there is no delay). */
+@media (min-width: 641px) {
+  .player {
+    grid-template-columns: auto minmax(0, 1fr) auto;
+  }
+
+  .clockline {
+    grid-column: 1 / -1;
+  }
+
+  .transport {
+    grid-column: 1;
+    grid-row: 2;
+  }
+
+  .player .seek {
+    grid-column: 2;
+    grid-row: 2;
+  }
+
+  .player .chips {
+    grid-column: 3;
+    grid-row: 2;
+  }
+
+  .player label.delay {
+    grid-column: 1;
+    grid-row: 3;
+  }
+
+  .player label.announce {
+    grid-column: 2 / -1;
+    grid-row: 3;
+  }
+
+  .player label.announce:not(.delay + .announce) {
+    grid-column: 1 / -1;
+  }
+}
+
+/* A phone stacks the bar: clock line, seek bar, seven equal buttons ((358 − 6 × 4) / 7 ≈ 47.7 px each, so "−30" and "Pause" fit), Live on its own row, chips, delay, announce. */
+@media (max-width: 640px) {
+  .clockline time {
+    font-size: 17px;
+  }
+
+  .transport button {
+    flex: 1 1 0;
+    padding: 0;
+    font-size: 14px;
+  }
+
+  .transport .play {
+    min-width: 44px;
+  }
+
+  .transport .golive {
+    flex: 1 1 100%;
+  }
 }
 
 /* Session tiles (P4b): value first, its holder beneath; 6 or 3 across on a desktop, 2 on a phone. */
@@ -1534,6 +1715,18 @@ header .links {
 .side .chips button {
   padding: 0 10px;
   border-radius: 999px;
+  font-size: 13px;
+}
+
+/* The player's Back to chips (after the global .chips): the jump chips, 44 px tall, wrapping. */
+.player .chips {
+  align-items: center;
+  gap: 4px;
+  margin: 0;
+}
+
+.player .chips button {
+  padding: 0 10px;
   font-size: 13px;
 }
 
