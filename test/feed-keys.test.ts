@@ -119,12 +119,55 @@ describe('census', () => {
     expect(printed.slice(2)).toEqual(['session ? ?: TimingData 1 messages', '  a?[2J 1']);
   });
 
+  it('lists the codes per key path with --codes, and a message text as <text>', async () => {
+    const feed = join(mkdtempSync(join(tmpdir(), 'f1-keys-')), 'feed.jsonl');
+    writeFileSync(
+      feed,
+      [
+        line(1_000, 'TrackStatus', { Status: '1', Message: 'AllClear' }, null),
+        line(2_000, 'TrackStatus', { Status: '4', Message: 'SCDeployed' }, null),
+        line(3_000, 'TrackStatus', { Status: '1', Message: 'AllClear' }, null),
+        line(4_000, 'RaceControlMessages', {
+          Messages: [{ Utc: '2026-01-10T11:00:04', Lap: 3, Category: 'Other', Message: 'CAR 7 (XYZ) TIME DELETED' }],
+        }),
+      ].join('\n'),
+    );
+    const lines: string[] = [];
+    expect(await feedKeys(['--topic', 'TrackStatus', '--codes', feed], (l) => lines.push(l))).toBe(0);
+    expect(lines.slice(2)).toEqual([
+      'session ? ?: TrackStatus 3 messages',
+      '  Message 3',
+      '    = AllClear 2',
+      '    = SCDeployed 1',
+      '  Status 3',
+      '    = 1 2',
+      '    = 4 1',
+    ]);
+    const rc: string[] = [];
+    expect(await feedKeys(['--codes', '--topic', 'RaceControlMessages', feed], (l) => rc.push(l))).toBe(0);
+    expect(rc.slice(2)).toEqual([
+      'session ? ?: RaceControlMessages 1 messages',
+      '  Messages.#.Category 1',
+      '    = Other 1',
+      '  Messages.#.Lap 1',
+      '    = 3 1',
+      '  Messages.#.Message 1',
+      '    = <text> 1',
+      '  Messages.#.Utc 1',
+      '    = <text> 1',
+    ]);
+    // Without --codes, no value prints.
+    const plain: string[] = [];
+    await feedKeys(['--topic', 'TrackStatus', feed], (l) => plain.push(l));
+    expect(plain.slice(2)).toEqual(['session ? ?: TrackStatus 3 messages', '  Message 3', '  Status 3']);
+  });
+
   it('exits 64 without an input and 1 on an unreadable one', async () => {
     const lines: string[] = [];
     expect(await feedKeys([], (l) => lines.push(l))).toBe(64);
     expect(await feedKeys(['--nope'], (l) => lines.push(l))).toBe(64);
     expect(await feedKeys([join(tmpdir(), 'f1-keys-missing', 'feed.jsonl')], (l) => lines.push(l))).toBe(1);
-    expect(lines[0]).toBe('usage: feed-keys.ts [--topic <name>] <feed.jsonl | recording dir | archive dir>…');
+    expect(lines[0]).toBe('usage: feed-keys.ts [--topic <name>] [--codes] <feed.jsonl | recording dir | archive dir>…');
     expect(lines.at(-1)).toBe('feed-keys: input (unreadable, or an archive without a Heartbeat t0)');
   });
 });
