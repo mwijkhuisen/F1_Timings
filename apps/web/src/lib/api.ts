@@ -1,4 +1,4 @@
-import { Laps, Live, Recordings, Season, Seasons, SessionDetail, Status, Stints } from '@f1/contracts';
+import { Laps, Live, RaceControl, Recordings, Season, Seasons, SessionDetail, Status, Stints } from '@f1/contracts';
 import { QueryClient, queryOptions, useQuery } from '@tanstack/react-query';
 import { ZodError } from 'zod';
 
@@ -69,6 +69,15 @@ export const useStints = (key: number) =>
     queryKey: ['stints', key],
     queryFn: ({ signal }) => getJson(`/api/v1/sessions/${key}/stints`, Stints, signal),
     staleTime: STALE_MS,
+  });
+
+/** Races only (`enabled`): the SC, VSC and red-flag bands (lib/track.ts). */
+export const useRaceControl = (key: number, enabled: boolean) =>
+  useQuery({
+    queryKey: ['race-control', key],
+    queryFn: ({ signal }) => getJson(`/api/v1/sessions/${key}/race-control`, RaceControl, signal),
+    staleTime: STALE_MS,
+    enabled,
   });
 
 /** `refetchMs`: poll, such as every 60 s on `/live`. */

@@ -1,8 +1,12 @@
+import { readFileSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
 import { type Lap, Laps, SessionDetail } from '@f1/contracts';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, expect, it } from 'vitest';
 import { teamColour } from '../src/lib/session.ts';
-import { LapGrid, LapTable, type Metric, missingReason } from '../src/views/LapTable.tsx';
+import type { Period } from '../src/lib/track.ts';
+import { LapGrid, LapTable, Legend, type Metric, missingReason, type Show } from '../src/views/LapTable.tsx';
+import { rc } from './laps.ts';
 
 // D10's cell rules on a hand-built race: 2 drivers × 3 laps, rendered statically (D4).
 
@@ -143,14 +147,25 @@ const detail = SessionDetail.parse({
 });
 
 type Cell = { cls: string[]; title: string | null; body: string };
-const cells = (html: string): Cell[] =>
+const allCells = (html: string): Cell[] =>
   [...html.matchAll(/<td([^>]*)>([\s\S]*?)<\/td>/g)].map(([, attrs = '', body = '']) => ({
     cls: /class="([^"]*)"/.exec(attrs)?.[1]?.split(' ') ?? [],
     title: /title="([^"]*)"/.exec(attrs)?.[1] ?? null,
     body,
   }));
-const grid = (metric: Metric, columns = false) =>
-  renderToStaticMarkup(<LapGrid detail={detail} laps={laps} metric={metric} columns={columns} />);
+/** The lap cells, without the Best column. */
+const cells = (html: string): Cell[] => allCells(html).filter((c) => !c.cls.includes('best'));
+const grid = (metric: Metric, columns = false, show: Show = 'times', periods: Period[] = [], rows: Laps = laps) =>
+  renderToStaticMarkup(
+    <LapGrid detail={detail} laps={rows} metric={metric} columns={columns} show={show} periods={periods} />,
+  );
+const css = readFileSync(fileURLToPath(new URL('../src/styles.css', import.meta.url)), 'utf8');
+/** The declarations of the rule whose selector list is exactly `selector`. */
+const rule = (selector: string) => {
+  const at = css.indexOf(`\n${selector} {`);
+  expect(at, selector).toBeGreaterThanOrEqual(0);
+  return css.slice(at, css.indexOf('}', at));
+};
 const colourOf = (c: Cell) => c.cls.find((n) => n.startsWith('t-'))?.slice(2) ?? null;
 
 // Rows mode: HAM laps 1–3, then NOR laps 1–3. The server's colour per cell; only purple and green are drawn.
@@ -229,9 +244,21 @@ describe('the lap grid', () => {
     expect(ids).toEqual(['n-44-1-s1', 'n-1-2-s1', 'n-1-3-s1']);
   });
 
-  it('badges in-laps IN and out-laps OUT', () => {
-    const badges = cells(grid('lap')).map((c) => [...c.body.matchAll(/class="badge">(\w+)</g)].map(([, b]) => b));
-    expect(badges).toEqual([[], [], ['IN'], [], ['IN'], ['OUT']]);
+  it('dims in- and out-laps, badges IN, and OUT only without a compound dot', () => {
+    const got = cells(grid('lap'));
+    const badges = got.map((c) => [...c.body.matchAll(/class="badge">(\w+)</g)].map(([, b]) => b));
+    // NOR 3 is an out-lap on a new set: its medium dot says so, so no OUT.
+    expect(badges).toEqual([[], [], ['IN'], [], ['IN'], []]);
+    expect(got.map((c) => c.cls.includes('io'))).toEqual([false, false, true, false, true, true]);
+    // An out-lap with an unknown compound has no dot, so it gets OUT.
+    const out = cells(
+      grid('lap', false, 'times', [], [lap(44, 1, [[90000, null]], { is_pit_out: true, compound: null })]),
+    );
+    expect(out[0]?.body).toContain('<span class="badge">OUT</span>');
+  });
+
+  it("rules a new run after the driver's first lap", () => {
+    expect(cells(grid('lap')).map((c) => c.cls.includes('stint'))).toEqual([false, false, false, false, false, true]);
   });
 
   it('puts the compound dot only at the start of a run', () => {
@@ -273,9 +300,9 @@ describe('the lap grid', () => {
     // Lap 1 of HAM and NOR, then lap 2, then lap 3.
     expect(cells(html).map(colourOf)).toEqual([null, 'green', 'purple', null, null, null]);
     expect(html).toContain(
-      '<div class="scroll" tabindex="0" role="region" aria-label="Lap times"><table class="laps cols"',
+      '<div class="scroll" tabindex="0" role="region" aria-label="Lap times"><table class="laps lap-grid cols"',
     );
-    expect(grid('s2')).toContain('aria-label="S2 times"><table class="laps" aria-label="S2 times">');
+    expect(grid('s2')).toContain('aria-label="S2 times"><table class="laps lap-grid" aria-label="S2 times">');
   });
 
   it('starts on the lap time, drivers as rows, and says when there are no laps', () => {
@@ -283,13 +310,207 @@ describe('the lap grid', () => {
     expect(html).toMatch(/<button type="button" aria-pressed="true">Lap<\/button>/);
     expect(html).toMatch(/aria-pressed="false">Drivers as columns</);
     expect(html).toContain(
-      '<div class="scroll" tabindex="0" role="region" aria-label="Lap times"><table class="laps" aria-label="Lap times">',
+      '<div class="scroll" tabindex="0" role="region" aria-label="Lap times"><table class="laps lap-grid" aria-label="Lap times">',
     );
-    // The non-colour cue is explained next to the switch (styles.css boxes purple and bolds green); "other" is plain.
+    // The non-colour cues are explained next to the switches (styles.css boxes purple and bolds green); "other" is plain.
     expect(html).toContain(
-      '<p class="legend"><span class="t-purple">overall best</span> <span class="t-green">personal best</span> <span>other</span></p>',
+      '<ul class="legend" aria-label="Legend"><li><span class="t-purple">overall best</span></li><li><span class="t-green">personal best</span></li><li>other</li><li><span class="io">in-lap</span><span class="badge">IN</span></li><li><span class="cmp cmp-hard" aria-hidden="true">H</span>new stint</li><li><s>deleted</s></li></ul>',
+    );
+    expect(html).toMatch(
+      /aria-pressed="true">Times<\/button><button type="button" aria-pressed="false">Δ to own best</,
     );
     expect(renderToStaticMarkup(<LapTable detail={detail} laps={[]} />)).toBe('<p>No laps yet.</p>');
+  });
+});
+
+describe('the P4b cues', () => {
+  it('boxes and tints purple, bolds green and leaves other plain', () => {
+    const got = cells(grid('lap'));
+    expect(got[1]?.cls).toContain('t-purple');
+    expect(got[3]?.cls).toContain('t-green');
+    expect(got[0]?.cls.filter((n) => n.startsWith('t-'))).toEqual([]);
+    const purple = rule('.t-purple');
+    expect(purple).toContain('color: var(--purple);');
+    expect(purple).toContain('background: var(--purple-wash);');
+    expect(purple).toContain('outline: 2px solid currentColor;');
+    expect(purple).toContain('outline-offset: -2px;');
+    expect(rule('.t-green')).toContain('font-weight: 700;');
+  });
+
+  it('freezes the driver and their own best in rows mode', () => {
+    const html = grid('lap');
+    expect(html).toContain('<th scope="col">Driver</th><th scope="col" class="best">Best</th>');
+    // The own best right after the driver, in the server colour, with its lap.
+    expect(html).toMatch(
+      /HAM<\/th><td class="best" title="Lap 2"><span class="t-purple">1:23.456<\/span><span class="vh">, overall best<\/span><small>L2<\/small><\/td>/,
+    );
+    expect(html).toMatch(
+      /NOR<\/th><td class="best" title="Lap 1"><span class="t-green">1:25.000<\/span><span class="vh">, personal best<\/span><small>L1<\/small><\/td>/,
+    );
+    // Sticky right of a fixed-width driver column.
+    const width = /\bwidth: (\d+px);/.exec(rule('.lap-grid:not(.cols) tbody th'))?.[1];
+    expect(rule('.lap-grid:not(.cols) tbody th')).toContain(`min-width: ${width};`);
+    const best = rule('.lap-grid:not(.cols) .best');
+    expect(best).toContain('position: sticky;');
+    expect(best).toContain(`left: ${width};`);
+    expect(best).toContain('background: var(--bg);');
+  });
+
+  it.each([
+    ['deltas', ['laps', 'deltas']],
+    ['minisectors', ['laps', 'minisectors']],
+  ])('keeps the frozen columns and their scroll padding off the %s table', (own, classes) => {
+    // Every rule of styles.css whose table compound (.laps, .lap-grid, .cols, …) matches a <table class="…">.
+    const tableish = /\.(?:laps|lap-grid|cols|deltas|minisectors)\b/;
+    const matches = (selector: string) => {
+      const compounds = (selector.match(/(?:\.[\w-]+|:not\([^)]*\))+/g) ?? []).filter((c) => tableish.test(c));
+      return (
+        compounds.length > 0 &&
+        compounds.every((c) => {
+          const not = [...c.matchAll(/:not\(([^)]*)\)/g)].flatMap(([, s]) => s?.match(/[\w-]+/g) ?? []);
+          const has = [...c.replace(/:not\([^)]*\)/g, '').matchAll(/\.([\w-]+)/g)].map(([, n]) => n);
+          return has.every((n) => n && classes.includes(n)) && !not.some((n) => classes.includes(n));
+        })
+      );
+    };
+    const rules = [...css.replace(/\/\*[\s\S]*?\*\//g, '').matchAll(/([^{}]+)\{([^{}]*)\}/g)].flatMap(([, s, body]) =>
+      (s ?? '').split(/,(?![^(]*\))/).map((sel) => ({ sel: sel.trim(), body: body ?? '' })),
+    );
+    const hits = rules.filter((r) => matches(r.sel));
+    expect(hits.length).toBeGreaterThan(0);
+    // No rows-mode frozen-column rule, and scroll padding only from the table's own rule (or the 80 px default).
+    expect(hits.filter((r) => r.sel.includes(':not(.cols)')).map((r) => r.sel)).toEqual([]);
+    expect(
+      hits.filter((r) => r.body.includes('scroll-padding') && !r.sel.includes(`.${own}`)).map((r) => r.sel),
+    ).toEqual([]);
+  });
+
+  it('gives a purple or green own best the same hidden words as a lap cell, a plain one none', () => {
+    const seen = new Set<string | null>();
+    for (const metric of ['lap', 's1', 's2', 's3'] as const)
+      for (const [, cls, words] of grid(metric).matchAll(
+        /<td class="best" title="Lap \d+"><span(?: class="t-(\w+)")?>[^<]*<\/span>(?:<span class="vh">, ([\w ]+)<\/span>)?<small>/g,
+      )) {
+        seen.add(cls ?? null);
+        expect(words ?? null, metric).toBe(cls ? TITLES[cls as keyof typeof TITLES] : null);
+      }
+    expect(seen).toEqual(new Set(['purple', 'green', null]));
+  });
+
+  it('shows — with a reason when a driver has no valid value', () => {
+    const outOnly = [lap(44, 1, [[90000, null]], { is_pit_out: true })];
+    const html = grid('lap', false, 'times', [], outOnly);
+    expect(html).toMatch(/<td class="best"><button[^>]*popoverTarget="nb-44-lap"[^>]*>—<\/button>/);
+    expect(html).toContain('>No valid lap time</div>');
+    expect(grid('s1', false, 'times', [], outOnly)).toContain('>No valid S1 time</div>');
+  });
+
+  it('puts the Best row in the sticky thead in columns mode', () => {
+    const html = grid('lap', true);
+    const thead = /<thead>([\s\S]*)<\/thead>/.exec(html)?.[1] ?? '';
+    expect(thead).toMatch(
+      /<tr><th scope="row" class="best">Best<\/th><td class="best" title="Lap 2"><span class="t-purple">1:23.456<\/span><span class="vh">, overall best<\/span><small>L2<\/small><\/td><td class="best" title="Lap 1">/,
+    );
+    expect(rule('.laps.cols thead')).toContain('position: sticky;');
+    expect(css).toMatch(/\.scroll:has\(\.laps\.cols\) \{\s*scroll-padding-top: 88px;/);
+  });
+
+  it('bands VSC, SC and red-flag laps in the header, the most severe first', () => {
+    const vsc = grid('lap', false, 'times', [{ kind: 'vsc', from: 2, to: 2 }]);
+    expect(vsc).toContain('<th scope="col" class="band band-vsc" title="Virtual safety car">2<small> VSC</small></th>');
+    expect(vsc).toContain('<th scope="col">3</th>');
+    const red = grid('lap', false, 'times', [{ kind: 'red', from: 3, to: 3 }]);
+    expect(red).toContain('<th scope="col" class="band band-red" title="Red flag">3<small> RED</small></th>');
+    const both: Period[] = [
+      { kind: 'vsc', from: 1, to: 2 },
+      { kind: 'sc', from: 2, to: 3 },
+    ];
+    expect(grid('lap', false, 'times', both)).toContain(
+      '<th scope="col" class="band band-sc" title="Safety car, virtual safety car">2<small> SC</small></th>',
+    );
+    // Columns mode bands the lap row headers.
+    expect(grid('lap', true, 'times', both)).toContain(
+      '<th scope="row" class="band band-vsc" title="Virtual safety car">1<small> VSC</small></th>',
+    );
+    expect(rule('.band')).toContain('border-bottom: 3px solid var(--band);');
+  });
+});
+
+describe('Δ to own best', () => {
+  // Own best 40.000 s; the steps are < 0.5 %, < 1 %, < 2 % and ≥ 2 % (owner D3).
+  const run = [
+    lap(44, 1, [[40000, 'purple']]),
+    lap(44, 2, [[40410, 'yellow']]),
+    lap(44, 3, [[40150, 'yellow']]),
+    lap(44, 4, [[41000, 'yellow']]),
+    lap(44, 5, [[50000, 'yellow']]),
+    lap(44, 6, [[40003, 'yellow']]),
+    lap(44, 7, [[40010, 'yellow']]),
+  ];
+
+  it('shows the gap with its step, and best in the server colour', () => {
+    const html = grid('lap', false, 'delta', [{ kind: 'vsc', from: 5, to: 5 }], run);
+    const got = cells(html);
+    expect(got.map((c) => c.body.replace(/<span class="cmp[\s\S]*?tyres, <\/span>/, ''))).toEqual([
+      'best<span class="vh">, overall best</span>',
+      '+0.41',
+      '+0.15',
+      '+1.00',
+      '<span class="muted">VSC</span>',
+      // Under 10 ms a third digit, so a slower lap never reads +0.00.
+      '+0.003',
+      '+0.01',
+    ]);
+    expect(got.map((c) => c.cls.filter((n) => n.startsWith('heat-') || n.startsWith('t-')))).toEqual([
+      ['t-purple'],
+      ['heat-2'],
+      [],
+      ['heat-3'],
+      [],
+      [],
+      [],
+    ]);
+    expect(html).toContain(
+      'aria-label="Lap Δ to own best"><table class="laps lap-grid" aria-label="Lap Δ to own best">',
+    );
+  });
+
+  it('says deleted, in or out instead, and keeps the reasons', () => {
+    const got = cells(grid('lap', false, 'delta'));
+    // HAM 1 (no time), HAM 2 (best), HAM 3 (in), NOR 1 (best), NOR 2 (deleted), NOR 3 (out).
+    expect(got[0]?.body).toContain('>Lap 1 from the grid: no time in the OpenF1 data</div>');
+    expect(got[1]?.body).toContain('best');
+    expect(got[2]?.body).toContain('<span class="muted">in</span>');
+    expect(got[3]?.cls).toContain('t-green');
+    expect(got[4]?.body).toContain('<span class="muted">deleted</span>');
+    expect(got[4]?.body).toContain('>Deleted: TRACK LIMITS AT TURN 16</div>');
+    expect(got[5]?.body).toContain('<span class="muted">out</span>');
+    expect(got.some((c) => c.body.includes('badge'))).toBe(false);
+  });
+
+  it('has a legend of the steps', () => {
+    expect(renderToStaticMarkup(<Legend show="delta" periods={[]} />)).toBe(
+      '<ul class="legend" aria-label="Legend"><li><span class="sw" aria-hidden="true"></span>&lt; 0.5 %</li><li><span class="sw heat-1" aria-hidden="true"></span>&lt; 1 %</li><li><span class="sw heat-2" aria-hidden="true"></span>&lt; 2 %</li><li><span class="sw heat-3" aria-hidden="true"></span>≥ 2 % slower than own best</li></ul>',
+    );
+  });
+});
+
+describe('the legend and the unplaced rows', () => {
+  it('lists the bands only when there are periods', () => {
+    const vsc = renderToStaticMarkup(<Legend show="times" periods={[{ kind: 'vsc', from: 1, to: 2 }]} />);
+    expect(vsc).toContain('<li><span class="band band-sc">SC / VSC lap</span></li>');
+    expect(vsc).not.toContain('red-flag');
+    const red = renderToStaticMarkup(<Legend show="times" periods={[{ kind: 'red', from: 1, to: 2 }]} />);
+    expect(red).toContain('<li><span class="band band-red">red-flag lap</span></li>');
+    expect(red).not.toContain('SC / VSC');
+  });
+
+  it('lists race-control rows without a lap number as text', () => {
+    const unplaced = [rc(null, 'SAFETY CAR DEPLOYED <b>', { date: '2026-10-11T12:34:56.000Z' })];
+    const html = renderToStaticMarkup(<LapTable detail={detail} laps={laps} track={{ periods: [], unplaced }} />);
+    expect(html).toContain(
+      '<div class="muted"><p>No lap number in the data, not banded:</p><ul><li>14:34:56 SAFETY CAR DEPLOYED &lt;b&gt;</li></ul></div>',
+    );
   });
 });
 

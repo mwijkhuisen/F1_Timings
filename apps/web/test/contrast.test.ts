@@ -32,7 +32,9 @@ const TEXT = ['fg', 'muted', 'dim', 'purple', 'green', 'live', 'amber'];
 const FILLS = ['purple', 'green', 'ms-other', 'pit', 'muted', 'dim'];
 const COMPOUNDS = ['soft', 'medium', 'hard', 'intermediate', 'wet', 'unknown'];
 // Lines, washes and rings: drawn next to text, never as text or a meaning of their own.
-const DECORATION = ['line', 'line-soft', 'heat-1', 'heat-2', 'heat-3', 'cmp-ring', 'on-cmp', 'display'];
+const DECORATION = ['line', 'line-soft', 'cmp-ring', 'on-cmp', 'display'];
+// Translucent washes behind text (`rgb(r g b / a)`), checked composited over --bg.
+const WASHES = ['purple-wash', 'heat-1', 'heat-2', 'heat-3'];
 
 // ---- the oracle
 
@@ -108,6 +110,21 @@ const lch = (h: string) => {
   return { c: Math.hypot(a, b), h: (Math.atan2(b, a) * 180) / Math.PI };
 };
 
+/** `rgb(r g b / a)` over an opaque hex background, as the browser blends it (in sRGB), as hex. */
+const over = (wash: string, bg: string) => {
+  const m = /^rgb\((\d+) (\d+) (\d+) \/ ([\d.]+)\)$/.exec(wash);
+  expect(m, wash).not.toBeNull();
+  const [r = 0, g = 0, b = 0, a = 0] = (m ?? []).slice(1).map(Number);
+  return `#${[r, g, b]
+    .map((c, i) => {
+      const under = Number.parseInt(bg.slice(1 + 2 * i, 3 + 2 * i), 16);
+      return Math.round(c * a + under * (1 - a))
+        .toString(16)
+        .padStart(2, '0');
+    })
+    .join('')}`;
+};
+
 describe('the oracle', () => {
   it('computes the WCAG ratio', () => {
     expect(contrast('#000000', '#ffffff')).toBeCloseTo(21);
@@ -115,6 +132,11 @@ describe('the oracle', () => {
   });
 
   // The figures of docs/design/2026-11-redesign/README.md.
+  it('composites a wash over a background', () => {
+    expect(over('rgb(255 255 255 / 0.5)', '#000000')).toBe('#808080');
+    expect(over('rgb(0 0 0 / 0)', '#15151e')).toBe('#15151e');
+  });
+
   it('reproduces the review: the old light green and yellow, and dark green against --fg', () => {
     expect(deltaE('#18803a', '#8a6400')).toBeCloseTo(13.8, 1);
     expect(deltaE('#18803a', '#8a6400', 'deutan')).toBeCloseTo(4.6, 1);
@@ -124,7 +146,7 @@ describe('the oracle', () => {
 
 describe('the tokens', () => {
   it('classifies every token, so none skips a check', () => {
-    const known = new Set([...SURFACES, ...TEXT, ...FILLS, ...COMPOUNDS, ...DECORATION]);
+    const known = new Set([...SURFACES, ...TEXT, ...FILLS, ...COMPOUNDS, ...DECORATION, ...WASHES]);
     for (const k of [...Object.keys(darkOwn), ...Object.keys(lightOwn)]) expect(known.has(k), `--${k}`).toBe(true);
     for (const k of known) expect(darkOwn, `--${k}`).toHaveProperty(k);
   });
@@ -159,6 +181,17 @@ describe.each([
     it.each(TEXT)('--%s reaches 4.5:1', (token) => {
       expect(contrast(hex(theme, token), hex(theme, surface))).toBeGreaterThanOrEqual(4.5);
     });
+  });
+
+  // The overall best is purple text on its wash; a Δ is --fg text on its step (P4b).
+  it('--purple reaches 4.5:1 on --purple-wash over --bg', () => {
+    const bg = hex(theme, 'bg');
+    expect(contrast(hex(theme, 'purple'), over(theme['purple-wash'] ?? '', bg))).toBeGreaterThanOrEqual(4.5);
+  });
+
+  it.each(['heat-1', 'heat-2', 'heat-3'])('--fg reaches 4.5:1 on --%s over --bg', (token) => {
+    const bg = hex(theme, 'bg');
+    expect(contrast(hex(theme, 'fg'), over(theme[token] ?? '', bg))).toBeGreaterThanOrEqual(4.5);
   });
 
   it.each(FILLS)('the mini-sector fill --%s reaches 3:1 on --bg', (token) => {

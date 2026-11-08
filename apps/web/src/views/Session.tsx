@@ -6,7 +6,7 @@ import { orderDrivers } from '../lib/session.ts';
 import { Pending } from '../ui/ErrorView.tsx';
 import { Compare } from './Compare.tsx';
 import { DriverPicker } from './DriverPicker.tsx';
-import { LapTable } from './LapTable.tsx';
+import { LapsTab } from './LapsTab.tsx';
 import { MiniSectors } from './MiniSectors.tsx';
 import { SessionHeadLoader } from './SessionHead.tsx';
 import { StintsTab } from './Stints.tsx';
@@ -58,7 +58,7 @@ export function Session({ session, view }: { session: number; view: View }) {
       {!laps.data ? (
         <Pending error={laps.error} />
       ) : view === 'laps' ? (
-        <LapTable detail={d} laps={laps.data} />
+        <LapsTab session={session} detail={d} laps={laps.data} />
       ) : view === 'compare' ? (
         <Compare drivers={selected} laps={laps.data} />
       ) : view === 'minisectors' ? (
