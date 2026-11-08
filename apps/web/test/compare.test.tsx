@@ -244,6 +244,22 @@ describe('lapChartOption', () => {
     });
   });
 
+  it("drops the end label when the driver's last lap with a time is outside the window; the legend keeps the name", () => {
+    // VER's last lap with a time is lap 4 (lap 5 is missing), inside the window: labelled, as above.
+    const endOn = (ms: number) => {
+      // A yellow lap 6, so the window stays 1:19–1:23.
+      const six = lap(4, 6, ms, [null, null, null], 'yellow');
+      const o = lapChartOption([VER, NOR], [...laps, six], tokens, fit);
+      return [o.series[1], o.legend.data];
+    };
+    expect(endOn(82000)).toMatchObject([{ endLabel: { show: true } }, ['VER', 'NOR']]);
+    expect(endOn(90000)).toMatchObject([{ endLabel: { show: false } }, ['VER', 'NOR']]);
+    expect(endOn(78000)).toMatchObject([{ endLabel: { show: false } }, ['VER', 'NOR']]);
+    // A later lap without a time does not count.
+    const untimed = lapChartOption([NOR], [...laps, lap(4, 6, null, [null, null, null], null)], tokens, fit);
+    expect(untimed.series[0]).toMatchObject({ endLabel: { show: true } });
+  });
+
   it('uses a rich-text tooltip: the lap, then per driver its time, Δ to the reference, compound and flags', () => {
     expect(option.tooltip).toMatchObject({
       trigger: 'axis',
@@ -266,6 +282,11 @@ describe('lapChartOption', () => {
     );
     expect(tip([{ dataIndex: 1 }])).toBe(
       'Lap 2\nVER 1:20.500 · Soft\nNOR 1:21.000 · +0.500 · Soft\nPER 1:21.500 · +1.000 · Soft',
+    );
+    // A deleted lap more than 1 s faster than the best valid lap is below the window.
+    const fast = laps.map((l) => (l.driver_number === 4 && l.lap_number === 3 ? { ...l, lap_ms: 78500 } : l));
+    expect(lapChartOption([VER, NOR], fast, tokens, fit).tooltip.formatter({ dataIndex: 2 })).toBe(
+      'Lap 3\nVER —\nNOR 1:18.500 · Soft · deleted, below the window',
     );
     // An unknown compound is left out.
     const odd = lapChartOption([PER], [{ ...(laps.at(-1) as Lap), compound: 'UNKNOWN' }], tokens, fit);
@@ -498,6 +519,23 @@ describe('the lap chart at 390 px', () => {
     // Without moveOverlap they sit on each other, so the check can fail.
     const stacked = { ...option, series: option.series.map((s) => ({ ...s, labelLayout: undefined })) };
     expect(apart(labels(stacked))).toBe(false);
+  });
+
+  it('drops the end label of a driver whose last lap is outside the window, which would sit off the plot', () => {
+    // ECharts places an endLabel with ignoreClip: NOR's last lap, 2:00, far above the Fit window.
+    const off = race.map((l) => (l.driver_number === 4 && l.lap_number === 57 ? { ...l, lap_ms: 120000 } : l));
+    const labels = (o: object) =>
+      draw(o)
+        .filter((d) => d.endLabel)
+        .map((d) => ({ text: d.el.style.text, y: d.box.y }));
+    const o = lapChartOption(pick, off, tokens, fit);
+    // Drawn anyway, it sits above the grid's 40 px top: the test can fail.
+    const forced = {
+      ...o,
+      series: o.series.map((s) => ('endLabel' in s ? { ...s, endLabel: { ...s.endLabel, show: true } } : s)),
+    };
+    expect(labels(forced).find((l) => l.text === 'NOR')?.y).toBeLessThan(40);
+    expect(labels(o).map((l) => l.text)).toEqual(['VER']);
   });
 });
 

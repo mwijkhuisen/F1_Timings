@@ -93,8 +93,8 @@ export const grid = {
 };
 
 /** The acronym at the end of the line, in --fg, moved apart from the others (F3). */
-export const endLabel = (name: string, tokens: ChartTokens) => ({
-  endLabel: { show: true, formatter: name, color: tokens.fg },
+export const endLabel = (name: string, tokens: ChartTokens, show = true) => ({
+  endLabel: { show, formatter: name, color: tokens.fg },
   labelLayout: { moveOverlap: 'shiftY' as const },
 });
 
@@ -142,6 +142,7 @@ export function lapChartOption(
   const bounded = Number.isFinite(best);
   const range = bounded ? { min, max, interval: 1000 } : { minInterval: 1000 };
   const above = (ms: number | null) => bounded && ms !== null && ms > max;
+  const below = (ms: number | null) => bounded && ms !== null && ms < min;
 
   const styles = lineStyles(drivers, tokens);
   // The own best: the lap coloured purple or green, as DeltaTable's bestOf.
@@ -153,6 +154,8 @@ export function lapChartOption(
   const lines = drivers.map((d, i) => {
     const { color, type } = styles[i] as (typeof styles)[number];
     const name = plain(d.acronym);
+    // ECharts draws an end label unclipped, so one at a last lap outside the window would sit off the plot.
+    const lastMs = lapNumbers.map((n) => at(d, n)?.lap_ms ?? null).findLast((ms) => ms !== null) ?? null;
     return {
       type: 'line' as const,
       name,
@@ -185,7 +188,7 @@ export function lapChartOption(
       }),
       connectNulls: false,
       clip: true,
-      ...endLabel(name, tokens),
+      ...endLabel(name, tokens, !above(lastMs) && !below(lastMs)),
     };
   });
 
@@ -222,6 +225,7 @@ export function lapChartOption(
       l.is_pit_in && 'IN',
       l.is_pit_out && 'OUT',
       above(l.lap_ms) && 'above the window',
+      below(l.lap_ms) && 'below the window',
     ].filter(Boolean);
     if (flags.length > 0) parts.push(flags.join(', '));
     return parts.join(' · ');
