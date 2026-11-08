@@ -3,7 +3,7 @@
 # digest. Build context: the repository root, through the allowlist in
 # /.dockerignore:
 #   docker build -f deploy/server/Dockerfile --build-arg F1_REVISION=<sha> .
-FROM node:26.12.0-trixie-slim@sha256:e556a144463cc8dc53afe8de6d2fa0db5c132fd39ffa232c17641bd40df2bf11 AS build
+FROM node:26.12.1-trixie-slim@sha256:94816674c62774da0d099a947bf4613b9e1972a2733abd0d0cd80e795f8411d0 AS build
 # The `migrate` role runs the dbmate release binary, checked against its pinned
 # sha256 (the same pin as .github/workflows/ci.yml).
 ARG DBMATE_VERSION=2.36.0
