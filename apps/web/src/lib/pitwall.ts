@@ -165,8 +165,10 @@ export function withinASecond(state: Obj): Pair[] {
   });
 }
 
+export type Fastest = { driver: Driver; value: string; lap?: number | undefined };
+
 /** The fastest lap so far: the TimingStats line ranked 1 on its personal best (the feed ranks it, deletions included). */
-export function fastestSoFar(state: Obj): { driver: Driver; value: string; lap?: number | undefined } | undefined {
+export function fastestSoFar(state: Obj): Fastest | undefined {
   const lines = Object.entries(view(state, 'TimingStats')?.Lines ?? {});
   const hit = lines.find(([n, l]) => /^\d{1,3}$/.test(n) && l?.PersonalBestLapTime?.Position === 1);
   const pb = hit?.[1]?.PersonalBestLapTime;

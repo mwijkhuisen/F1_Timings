@@ -5,19 +5,22 @@ import {
   type ReactNode,
   useEffect,
   useMemo,
-  useReducer,
   useRef,
   useState,
   useSyncExternalStore,
 } from 'react';
+import { fastestSoFar, LIGHT, raceControl, running, stripOf, withinASecond } from '../lib/pitwall.ts';
+import { setTitleWord } from '../lib/routes.ts';
 import { createStore, type Marker, openStream } from '../lib/stream.ts';
 import { fmtClock } from '../lib/time.ts';
 import { LapTable } from './LapTable.tsx';
+import { Panel, Strip, useTick } from './PitWall.tsx';
 import { Tower } from './Tower.tsx';
 
 // The player (A§13): one playback stream at a time, the clock, the delay slider (live), the seek bar with markers
 // and play/pause. `at` is the open stream's start: 'live', epoch ms (replay), or null while paused. Only the clock line
-// and the seek bar tick each second; the tower and everything else derived from the state render on a store flush.
+// and the seek bar tick each second (and the strip's LEFT cell, from values derived per flush); the tower, the pit wall
+// and everything else derived from the state render on a store flush.
 
 /** A SessionDetail whose drivers and results come from the stream: OpenF1 has no drivers during a live session. */
 function streamDetail(detail: SessionDetail, state: Obj): SessionDetail {
@@ -52,6 +55,7 @@ function streamDetail(detail: SessionDetail, state: Obj): SessionDetail {
 }
 
 const Laps = memo(LapTable);
+const SidePanel = memo(Panel);
 
 export const MAX_DELAY = 120;
 const DELAY_KEY = 'f1.delay';
@@ -79,16 +83,6 @@ function writeDelay(s: number) {
 const clamp = (v: number, lo: number, hi: number) => Math.min(hi, Math.max(lo, v));
 const signed = (s: number) => `${s > 0 ? '+' : '−'}${Math.abs(s)} s`;
 const FAILING = 5; // consecutive errors without a snapshot before the reload hint
-
-/** Re-renders the calling component every second while `on`. */
-function useTick(on: boolean) {
-  const [, tick] = useReducer((n: number) => n + 1, 0);
-  useEffect(() => {
-    if (!on) return;
-    const id = setInterval(tick, 1000);
-    return () => clearInterval(id);
-  }, [on]);
-}
 
 /** The clock line: T, ticking locally; `children` is the rest of the line, from the state. */
 function Clock({ now, playing, children }: { now: () => number; playing: boolean; children: ReactNode }) {
@@ -175,6 +169,8 @@ export function Player({
   const setAt = (a: number | 'live' | null) => setOpen({ at: a });
   const [seek, setSeek] = useState<number | null>(null); // a pending seek, shown on the bar
   const [tab, setTab] = useState<'tower' | 'laps'>('tower');
+  // The focused driver's number (a tap on the tower's driver cell); page state that the player bar reads (P4e).
+  const [focus, setFocus] = useState<string | null>(null);
   const [fails, setFails] = useState(0); // errors since the last snapshot
   const [held, setHeld] = useState<number | null>(null); // T at a pause or `end`: where the tower stands
   const [store] = useState(() => createStore());
@@ -288,8 +284,30 @@ export function Player({
   // The state is mutated in place: what is derived from it is keyed on the snapshot, a new object per store flush.
   const tower = useMemo(() => {
     const s = snap.feed?.state;
-    return s && <Tower state={s} sessionKey={sessionKey} />;
+    return (
+      s && (
+        <Tower state={s} sessionKey={sessionKey} focus={focus} onFocus={(n) => setFocus((f) => (f === n ? null : n))} />
+      )
+    );
+  }, [snap, sessionKey, focus]);
+  // The pit wall, once the feed shows this session (as the tower waits): the previous session's chequered flag would
+  // otherwise light up.
+  const wall = useMemo(() => {
+    const s = snap.feed?.state;
+    if (!s || (sessionKey !== undefined && view(s, 'SessionInfo')?.Key !== sessionKey)) return undefined;
+    return {
+      strip: stripOf(s),
+      running: running(view(s, 'SessionStatus')?.Status),
+      race: view(s, 'SessionInfo')?.Type === 'Race',
+      rc: raceControl(s),
+      pairs: withinASecond(s),
+      fastest: fastestSoFar(s),
+    };
   }, [snap, sessionKey]);
+  // The tab title carries the light while the session runs (D1); App writes it.
+  const word = wall?.running ? LIGHT[wall.strip.light].word : null;
+  useEffect(() => setTitleWord(word), [word]);
+  useEffect(() => () => setTitleWord(null), []);
   const info = useMemo(() => {
     const s = snap.feed?.state;
     if (!s) return null;
@@ -326,6 +344,7 @@ export function Player({
           </p>
         )
       )}
+      {wall && <Strip strip={wall.strip} now={now} playing={playing} />}
       {detail && (
         <fieldset className="segmented" aria-label="View">
           <button type="button" aria-pressed={tab === 'tower'} onClick={() => setTab('tower')}>
@@ -336,7 +355,18 @@ export function Player({
           </button>
         </fieldset>
       )}
-      {!state ? <p className="muted">Connecting…</p> : tab === 'laps' && lapTable ? lapTable : tower}
+      {!state ? (
+        <p className="muted">Connecting…</p>
+      ) : tab === 'laps' && lapTable ? (
+        lapTable
+      ) : wall ? (
+        <div className="pitwall">
+          <div>{tower}</div>
+          <SidePanel rc={wall.rc} pairs={wall.pairs} fastest={wall.fastest} race={wall.race} />
+        </div>
+      ) : (
+        tower
+      )}
       <section className="player" aria-label="Playback controls">
         <Seek now={now} playing={playing} lo={lo} hi={hi} marks={snap.marks} onSeek={seekTo} />
         {at === 'live' && (
