@@ -26,3 +26,19 @@ CHECKS (from the #m JSON, shots.log)
   (d) canvases: compare, compare3, compare-add = 2 (one per .chart box: [1,1]); stints = 0; laps = 0.
   (e) /assets/echarts-*.js requested: yes on all compare/compare3/compare-add shots; no on stints (all 5) and on laps-390-dark.
   (f) location.search after load: compare = ?d=3,63, compare3 = ?d=3,63,1 (unchanged).
+
+Re-shot after the review fixes (dist built from 0fa01ed)
+  Folder fix/: same 15 shots, same targets, same stand-in (PNG + .txt + shots.log).
+  CHECKS
+    (a) errs == [] on all 15 shots (no CSP violations).
+    (b) scrollWidth == clientWidth on all 15 (390/390, 1280/1280).
+    (c) compare-390 (dark, light, add) with two drivers: table.deltas .scroll 356/356, fits. compare3-390: 485/356 (scrolls sideways, as designed).
+    (d) canvases: compare, compare3, compare-add = 2; stints (all 5) = 0; laps = 0.
+    (e) echarts chunk requested: true only on compare/compare3/compare-add; false on stints and laps.
+    (f) location.search kept: ?d=3,63 and ?d=3,63,1.
+  VISUAL
+    stints-1280-light, stints-390-dark: tick labels (10, 20, ...) sit centred on their hairlines; the last label (71) ends at the lanes' right edge.
+      No "· used" label spills into the next stint (HAD, LIN, COL at 1280 fit their segments; at 390 the label is just "S 17"). The data has no one-lap stint, so that point
+      is not exercised here; the shortest stints (S 12) are as wide as their laps.
+    compare-1280-dark: the Lap times card now fills its row; its chart box is 732x490 (was 732x320), no empty band under the chart (compare3-1280: 732x666).
+    compare-390-dark: layout unchanged (chart boxes 332x320, deltas box 356/356).
