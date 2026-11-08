@@ -52,7 +52,7 @@ export function StatusPanel({ status }: { status: StatusData }) {
   const counts: [string, number][] = [...Object.entries(status.states), ['cancelled', status.cancelled]];
   return (
     <>
-      <h1>Status</h1>
+      <h1 tabIndex={-1}>Status</h1>
       <h2>Ingest</h2>
       <dl className="counts">
         {counts.map(([state, n]) => (

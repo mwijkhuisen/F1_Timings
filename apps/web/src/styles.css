@@ -960,3 +960,354 @@ header .links {
     border-color: Highlight;
   }
 }
+
+/* Wayfinding (P4c, A§13): the header's switcher and links, the session head, the season page. */
+
+/* The header wraps: at 390 px the switcher takes the first row and Live · Replays · Status the second. */
+header {
+  flex-wrap: wrap;
+  gap: 0 8px;
+}
+
+.crumbs {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 2px;
+  min-width: 0;
+}
+
+.crumbs button[popovertarget] {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0 8px;
+  background: none;
+  border-color: transparent;
+  white-space: nowrap;
+}
+
+.crumbs button:hover,
+.crumbs .step:hover,
+.links a:hover,
+.menu a:hover {
+  background: var(--panel);
+}
+
+.crumbs .step {
+  justify-content: center;
+  width: 44px;
+  border-radius: 6px;
+  color: var(--muted);
+  font-size: 20px;
+  text-decoration: none;
+}
+
+.crumbs .sep {
+  color: var(--dim);
+}
+
+.caret {
+  color: var(--muted);
+  font-size: 11px;
+}
+
+header .links {
+  margin-left: auto;
+  gap: 2px;
+}
+
+.links a {
+  padding: 0 10px;
+  border-radius: 6px;
+  text-decoration: none;
+}
+
+.links a[aria-current="page"],
+.menu a[aria-current="page"] {
+  font-weight: 700;
+  text-decoration: underline 2px;
+  text-underline-offset: 6px;
+}
+
+/* A switcher popover (ui/Menu.tsx): a list of 44 px links; a ring inside it is inset so the scroll never clips it. */
+.menu {
+  min-width: min(90vw, 16rem);
+  max-height: 80dvh;
+  overflow: auto;
+  padding: 4px 0;
+}
+
+.menu ul {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.menu a,
+.menu s {
+  display: flex;
+  align-items: center;
+  min-height: 44px;
+  padding: 0 16px;
+}
+
+.menu a {
+  text-decoration: none;
+}
+
+.menu s {
+  color: var(--muted);
+}
+
+.menu :focus-visible {
+  outline-offset: -3px;
+}
+
+/* The eyebrow: the label grammar (see .label). */
+.eyebrow {
+  margin: 0;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.eyebrow.sect {
+  margin: 20px 0 8px;
+}
+
+/* The session head: the session boxed beside the meeting, then the weekend's sessions as pills. */
+.head {
+  margin: 16px 0 12px;
+}
+
+.head h1 {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 12px;
+  margin: 4px 0 0;
+}
+
+.head h1 .kind {
+  padding: 2px 8px;
+  border: 1.5px solid var(--fg);
+  border-radius: 4px;
+  font-family: system-ui, sans-serif;
+  font-size: 12px;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+}
+
+.head > .muted {
+  margin: 4px 0 0;
+}
+
+.wk {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-top: 12px;
+}
+
+.wk a,
+.wk s {
+  display: inline-flex;
+  align-items: center;
+  min-height: 44px;
+  padding: 0 12px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  color: var(--muted);
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.wk a {
+  text-decoration: none;
+}
+
+.wk a[aria-current="page"] {
+  border-color: var(--fg);
+  color: var(--fg);
+}
+
+.wk s {
+  color: var(--dim);
+}
+
+/* The season page: this weekend first, Up next beside it, then the other meetings as cards. */
+.weekend {
+  display: grid;
+  grid-template-columns: minmax(0, 1.4fr) minmax(0, 1fr);
+  gap: 16px;
+  margin: 16px 0;
+  padding: 16px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--panel);
+}
+
+.weekend h2 {
+  margin: 4px 0 2px;
+  font-family: var(--display);
+  font-size: 24px;
+  font-weight: 800;
+}
+
+.weekend p {
+  margin: 0;
+}
+
+.upnext {
+  display: grid;
+  align-content: center;
+  justify-items: start;
+  gap: 4px;
+  padding-left: 16px;
+  border-left: 1px solid var(--line);
+}
+
+.upnext .count {
+  font-family: var(--display);
+  font-size: 32px;
+  font-weight: 800;
+}
+
+.btnlink {
+  margin-top: 8px;
+  padding: 0 14px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  font-weight: 700;
+  text-decoration: none;
+}
+
+.sess {
+  margin: 12px 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.sess li {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 0 12px;
+  min-height: 44px;
+  border-top: 1px solid var(--line-soft);
+}
+
+.sess.full li {
+  grid-template-columns: minmax(0, 1fr) auto auto;
+}
+
+.sess a {
+  font-weight: 600;
+  text-decoration: none;
+}
+
+.sess s,
+.sess .when {
+  color: var(--muted);
+}
+
+/* The state in words, with a dot as decoration only (forced colours drop the fills; the words stay): an outline
+   for what is still to come, --green for laps ready, --fg for recorded, --live only for live now. */
+.state {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 9.5em;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.state::before {
+  content: "";
+  flex: none;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  outline: 1.5px solid currentColor;
+  outline-offset: -1.5px;
+}
+
+.state.ready::before {
+  background: var(--green);
+  outline: 0;
+}
+
+.state.recorded::before {
+  background: var(--fg);
+  outline: 0;
+}
+
+.state.live {
+  color: var(--fg);
+  font-weight: 700;
+}
+
+.state.live::before {
+  background: var(--live);
+  outline: 0;
+}
+
+.state.cancelled::before {
+  content: none;
+}
+
+.state a {
+  font-weight: 700;
+  text-decoration: underline;
+}
+
+.meetings {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(min(100%, 300px), 1fr));
+  gap: 12px;
+}
+
+.meeting {
+  padding: 12px 14px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+}
+
+.meeting h3 {
+  margin: 2px 0 0;
+  font-size: 15px;
+}
+
+.meeting .muted {
+  margin: 0;
+}
+
+@media (max-width: 640px) {
+  .crumbs .sep {
+    display: none;
+  }
+
+  .weekend {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .upnext {
+    padding: 12px 0 0;
+    border-left: 0;
+    border-top: 1px solid var(--line);
+  }
+
+  .sess.full li {
+    grid-template-columns: minmax(0, 1fr) auto;
+    padding: 4px 0;
+  }
+
+  .sess.full .when {
+    grid-column: 1 / -1;
+    grid-row: 2;
+    font-size: 12.5px;
+  }
+}

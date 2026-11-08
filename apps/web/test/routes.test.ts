@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { routeOf, sessionPath, slug } from '../src/lib/routes.ts';
+import { type Route, routeOf, sessionPath, slug, titleOf } from '../src/lib/routes.ts';
 
 describe('routeOf', () => {
   it.each([
@@ -7,6 +7,7 @@ describe('routeOf', () => {
     ['/2026', { id: 'year', year: 2026 }],
     ['/status', { id: 'status' }],
     ['/live', { id: 'live' }],
+    ['/replay', { id: 'replays' }],
     ['/replay/7', { id: 'replay', recording: 7 }],
     ['/replay/123456789', { id: 'replay', recording: 123456789 }],
     ['/2026/1290/9965', { id: 'session', year: 2026, meeting: 1290, session: 9965, view: null }],
@@ -44,8 +45,8 @@ describe('routeOf', () => {
     '/2026/1234567890/9965/laps',
     '/status/x',
     '/live/x',
-    '/replay',
     '/replay/',
+    '/replay/x',
     '/replay/abc',
     '/replay/1234567890',
     '/replay/7/x',
@@ -74,5 +75,41 @@ describe('slug and sessionPath', () => {
 
   it('keeps a bare key when there is no name', () => {
     expect(sessionPath(2026, { key: 1, name: null }, { key: 2, name: '' }, 'stints')).toBe('/2026/1/2/stints');
+  });
+});
+
+describe('titleOf: the title for every route', () => {
+  const session: Route = { id: 'session', year: 2026, meeting: 1290, session: 9965, view: 'laps' };
+  const names = { meeting: 'Mexico City Grand Prix', session: 'Race' };
+
+  it.each<[Route | null, string, string]>([
+    [{ id: 'latest' }, 'F1 Timings', 'F1 Timings'],
+    [{ id: 'year', year: 2026 }, '2026 · F1 Timings', '2026 · F1 Timings'],
+    [session, '2026 · F1 Timings', 'Mexico City Grand Prix · Race · Laps · F1 Timings'],
+    [{ ...session, view: null }, '2026 · F1 Timings', 'Mexico City Grand Prix · Race · Laps · F1 Timings'],
+    [{ ...session, view: 'compare' }, '2026 · F1 Timings', 'Mexico City Grand Prix · Race · Compare · F1 Timings'],
+    [
+      { ...session, view: 'minisectors' },
+      '2026 · F1 Timings',
+      'Mexico City Grand Prix · Race · Mini-sectors · F1 Timings',
+    ],
+    [{ ...session, view: 'stints' }, '2026 · F1 Timings', 'Mexico City Grand Prix · Race · Stints · F1 Timings'],
+    [{ id: 'status' }, 'Status · F1 Timings', 'Status · F1 Timings'],
+    [{ id: 'live' }, 'Live · F1 Timings', 'Live · F1 Timings'],
+    [{ id: 'replays' }, 'Replays · F1 Timings', 'Replays · F1 Timings'],
+    [{ id: 'replay', recording: 7 }, 'Replay · F1 Timings', 'Replay: Mexico City Grand Prix · Race · F1 Timings'],
+    [null, 'Not found · F1 Timings', 'Not found · F1 Timings'],
+  ])('%j', (route, bare, named) => {
+    expect(titleOf(route)).toBe(bare);
+    expect(titleOf(route, names)).toBe(named);
+    // Names only, never a result: no lap time, gap or position.
+    for (const title of [bare, named]) expect(title).not.toMatch(/\d:\d\d\.\d{3}|[+−-]\d+\.\d{3}|\bP\d+\b/);
+  });
+
+  it('shows a missing name as a dash', () => {
+    expect(titleOf(session, { meeting: null, session: 'Race' })).toBe('— · Race · Laps · F1 Timings');
+    expect(titleOf({ id: 'replay', recording: 7 }, { meeting: 'Mexico City Grand Prix', session: null })).toBe(
+      'Replay: Mexico City Grand Prix · — · F1 Timings',
+    );
   });
 });
