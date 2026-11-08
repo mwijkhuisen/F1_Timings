@@ -2041,6 +2041,17 @@ header .links {
   margin-bottom: 12px;
 }
 
+/* The lap card fills its row: the chart grows from its 20rem; one column on a phone, where the row is its own. */
+.cgrid > .card {
+  align-self: stretch;
+  display: flex;
+  flex-direction: column;
+}
+
+.cgrid > .card > .chart {
+  flex: 1 0 auto;
+}
+
 .panel-title {
   display: flex;
   flex-wrap: wrap;
