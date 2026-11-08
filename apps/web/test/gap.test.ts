@@ -97,9 +97,10 @@ describe('gapChartOption', () => {
     ...run(11, [2, 92, 182], [90, 90, null]),
   ];
   const option = gapChartOption([VER, NOR, PER], laps, tokens, [{ kind: 'vsc', from: 3, to: 3 }]);
+  const lines = option.series.filter((s) => 'endLabel' in s);
 
   it('draws one line per other driver, in seconds, with the lap chart’s styles and end labels', () => {
-    expect(option.series.map((s) => [s.name, s.color, s.lineStyle.type])).toEqual([
+    expect(lines.map((s) => [s.name, s.color, s.lineStyle.type])).toEqual([
       ['NOR', '#FF8000', 'solid'],
       // PER is VER's teammate: dashed, as on the lap chart.
       ['PER', '#3671C6', 'dashed'],
@@ -119,7 +120,7 @@ describe('gapChartOption', () => {
       [4, null],
       [5, null],
     ]);
-    for (const s of option.series)
+    for (const s of lines)
       expect(s).toMatchObject({
         symbol: 'none',
         connectNulls: false,
@@ -130,11 +131,14 @@ describe('gapChartOption', () => {
     expect(option.legend.data).toEqual(['NOR', 'PER']);
   });
 
-  it('bands the periods on the first series, as the lap chart', () => {
-    expect(option.series[0]?.markArea?.data).toEqual([
+  it('bands the periods on a data-less series of their own, out of the legend, as the lap chart', () => {
+    const [, , band] = option.series;
+    expect(option.series).toHaveLength(3);
+    expect(band).toMatchObject({ type: 'line', data: [], silent: true, tooltip: { show: false } });
+    expect(band && 'markArea' in band && band.markArea.data).toEqual([
       [{ name: 'VSC', xAxis: 2.5, itemStyle: { color: tokens.amber, opacity: 0.15 } }, { xAxis: 3.5 }],
     ]);
-    expect(option.series[1]).not.toHaveProperty('markArea');
+    expect(option.series.slice(0, 2).some((s) => 'markArea' in s)).toBe(false);
   });
 
   it('labels the y-axis "+10", "0", "−10" and the tooltip "RUS +3.2 s"', () => {

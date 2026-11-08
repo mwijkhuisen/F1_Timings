@@ -53,19 +53,33 @@ export const lapAxis = (last: number, tokens: ChartTokens) => ({
   splitLine: { show: false },
 });
 
-/** SC, VSC and red-flag bands, each from half a lap before its first lap to half a lap after its last. */
-export const bands = (periods: readonly Period[], tokens: ChartTokens) => ({
-  silent: true,
-  label: { color: tokens.fg, position: 'insideTop' as const },
-  data: periods.map((p) => [
-    {
-      name: KIND_LABEL[p.kind],
-      xAxis: p.from - 0.5,
-      itemStyle: { color: p.kind === 'red' ? tokens.live : tokens.amber, opacity: 0.15 },
-    },
-    { xAxis: p.to + 0.5 },
-  ]),
-});
+/**
+ * SC, VSC and red-flag bands, each from half a lap before its first lap to half a lap after its last. They sit on a
+ * series of their own, without data, silent and out of the legend and tooltip, so hiding a driver keeps them.
+ */
+export const bandSeries = (periods: readonly Period[], tokens: ChartTokens) =>
+  periods.length === 0
+    ? []
+    : [
+        {
+          type: 'line' as const,
+          data: [],
+          silent: true,
+          tooltip: { show: false },
+          markArea: {
+            silent: true,
+            label: { color: tokens.fg, position: 'insideTop' as const },
+            data: periods.map((p) => [
+              {
+                name: KIND_LABEL[p.kind],
+                xAxis: p.from - 0.5,
+                itemStyle: { color: p.kind === 'red' ? tokens.live : tokens.amber, opacity: 0.15 },
+              },
+              { xAxis: p.to + 0.5 },
+            ]),
+          },
+        },
+      ];
 
 /** The axis labels fit inside these margins (ECharts 6's replacement for the deprecated `containLabel`). */
 export const grid = {
@@ -172,7 +186,6 @@ export function lapChartOption(
       connectNulls: false,
       clip: true,
       ...endLabel(name, tokens),
-      ...(i === 0 && periods.length > 0 ? { markArea: bands(periods, tokens) } : {}),
     };
   });
 
@@ -231,6 +244,6 @@ export function lapChartOption(
     },
     // "Lap 12", then one line per driver in pick order.
     tooltip: tooltip(tokens, (i) => [`Lap ${i + 1}`, ...drivers.map((d) => line(d, i + 1))]),
-    series: [...lines, ...triangles],
+    series: [...lines, ...triangles, ...bandSeries(periods, tokens)],
   };
 }

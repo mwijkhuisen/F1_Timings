@@ -2,7 +2,16 @@ import type { Lap } from '@f1/contracts';
 import type { Driver } from '../lib/session.ts';
 import { fmtDelta } from '../lib/time.ts';
 import type { Period } from '../lib/track.ts';
-import { bands, type ChartTokens, endLabel, grid, lapAxis, lineStyles, plain, tooltip } from './lap-chart-option.ts';
+import {
+  bandSeries,
+  type ChartTokens,
+  endLabel,
+  grid,
+  lapAxis,
+  lineStyles,
+  plain,
+  tooltip,
+} from './lap-chart-option.ts';
 
 // The gap chart (P4f): each other driver's gap to the reference, after each lap, from the times they cross the line.
 // Pure: no ECharts import at runtime, no HTML.
@@ -80,7 +89,6 @@ export function gapChartOption(
       connectNulls: false,
       clip: true,
       ...endLabel(name, tokens),
-      ...(i === 0 && periods.length > 0 ? { markArea: bands(periods, tokens) } : {}),
     };
   });
 
@@ -104,6 +112,6 @@ export function gapChartOption(
         return `${plain(d.acronym)} ${g == null ? '—' : `${fmtDelta(g, 1)} s`}`;
       }),
     ]),
-    series,
+    series: [...series, ...bandSeries(periods, tokens)],
   };
 }

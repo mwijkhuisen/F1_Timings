@@ -36,8 +36,9 @@ const letterOf = (compound: string | null) => compound?.[0]?.toUpperCase() ?? '?
 export function stintLayout(drivers: readonly Driver[], laps: Laps, stints: Stints): StintLayout {
   // The session's highest lap number; a stint that runs past it still fits.
   const total = Math.max(...laps.map((l) => l.lap_number), ...stints.map((s) => s.lap_end ?? 0));
+  // Every 10 laps, but none within 3 laps of the total, whose label would crowd it (51: …, 40, 51).
   const ticks = [];
-  for (let k = 10; k < total; k += 10) ticks.push(k);
+  for (let k = 10; k < total - 3; k += 10) ticks.push(k);
   ticks.push(total);
   const last = new Map<number, number>();
   for (const l of laps) last.set(l.driver_number, Math.max(last.get(l.driver_number) ?? 0, l.lap_number));

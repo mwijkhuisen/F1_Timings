@@ -83,8 +83,10 @@ const fit = { window: 'fit', periods: [] } as const;
 
 describe('lapChartOption', () => {
   const option = lapChartOption([VER, NOR, PER], laps, tokens, fit);
-  // Each driver has its line, then (after all the lines) its triangles under the same name.
-  const [verLine, norLine, perLine, verUp, norUp, perUp] = option.series;
+  // Each driver has its line, then (after all the lines) its triangles under the same name; the bands' series (none
+  // here) has no line style.
+  const drawn = option.series.filter((s) => 'lineStyle' in s);
+  const [verLine, norLine, perLine, verUp, norUp, perUp] = drawn;
   const items = (s: (typeof option.series)[number] | undefined) => s?.data ?? [];
 
   it('plots dense [lap, ms] pairs on a value axis from lap 0.5 to the last lap + 0.5 (F2)', () => {
@@ -190,18 +192,28 @@ describe('lapChartOption', () => {
     ] as const;
     const banded = lapChartOption([VER, NOR], laps, tokens, { window: 'fit', periods });
     const area = (c: string) => ({ color: c, opacity: 0.15 });
-    expect(banded.series[0]).toHaveProperty('markArea', {
+    // On a series of their own after the lines and triangles: no data, silent, no tooltip, not in the legend, so
+    // hiding the reference in the legend keeps the bands.
+    expect(banded.series).toHaveLength(5);
+    expect(banded.series[4]).toEqual({
+      type: 'line',
+      data: [],
       silent: true,
-      label: { color: tokens.fg, position: 'insideTop' },
-      data: [
-        [{ name: 'SC', xAxis: 1.5, itemStyle: area(tokens.amber) }, { xAxis: 3.5 }],
-        // A one-lap VSC is a lap wide.
-        [{ name: 'VSC', xAxis: 3.5, itemStyle: area(tokens.amber) }, { xAxis: 4.5 }],
-        [{ name: 'RED', xAxis: 4.5, itemStyle: area(tokens.live) }, { xAxis: 5.5 }],
-      ],
+      tooltip: { show: false },
+      markArea: {
+        silent: true,
+        label: { color: tokens.fg, position: 'insideTop' },
+        data: [
+          [{ name: 'SC', xAxis: 1.5, itemStyle: area(tokens.amber) }, { xAxis: 3.5 }],
+          // A one-lap VSC is a lap wide.
+          [{ name: 'VSC', xAxis: 3.5, itemStyle: area(tokens.amber) }, { xAxis: 4.5 }],
+          [{ name: 'RED', xAxis: 4.5, itemStyle: area(tokens.live) }, { xAxis: 5.5 }],
+        ],
+      },
     });
-    // On the first series only, and none without a period.
-    expect(banded.series.slice(1).some((s) => 'markArea' in s)).toBe(false);
+    expect(banded.legend.data).toEqual(['VER', 'NOR']);
+    // On no driver's series, and no band series without a period.
+    expect(banded.series.slice(0, 4).some((s) => 'markArea' in s)).toBe(false);
     expect(option.series.some((s) => 'markArea' in s)).toBe(false);
   });
 
@@ -262,13 +274,13 @@ describe('lapChartOption', () => {
   it('strips rich-text markup {|} from data strings', () => {
     const odd = lapChartOption([driver(1, '{a|VER}', null)], laps, tokens, fit);
     expect(odd.series[0]).toMatchObject({ name: 'aVER', endLabel: { formatter: 'aVER' } });
-    expect(odd.series[1]?.name).toBe('aVER');
+    expect(odd.series.filter((s) => 'lineStyle' in s)[1]?.name).toBe('aVER');
     expect(odd.legend.data).toEqual(['aVER']);
     expect(odd.tooltip.formatter({ dataIndex: 1 })).toBe('Lap 2\naVER 1:20.500 · Soft');
   });
 
   it('draws each line with lineStyles', () => {
-    expect(option.series.slice(0, 3).map((s) => [s.name, s.color, s.lineStyle])).toEqual([
+    expect(drawn.slice(0, 3).map((s) => [s.name, s.color, s.lineStyle])).toEqual([
       ['VER', '#3671C6', { type: 'solid' }],
       ['NOR', '#FF8000', { type: 'solid' }],
       ['PER', '#3671C6', { type: 'dashed' }],
@@ -450,6 +462,24 @@ describe('the lap chart at 390 px', () => {
     expect(symbols(auto).hollow).toBe(4);
     const category = { ...auto, xAxis: { type: 'category', data: Array.from({ length: 58 }, (_, i) => i) } };
     expect(symbols(category).hollow).toBeLessThan(4);
+  });
+
+  it('keeps the bands when the reference is hidden in the legend, as they sit on their own series', () => {
+    const periods = [{ kind: 'sc', from: 34, to: 35 }] as const;
+    const banded = lapChartOption(pick, race, tokens, { window: 'fit', periods });
+    const hideVer = (o: { legend: object }) => ({ ...o, legend: { ...o.legend, selected: { VER: false } } });
+    const bandsDrawn = (o: object) => draw(o).filter(({ el }) => el.style.fill === tokens.amber).length;
+    expect(bandsDrawn(banded)).toBe(1);
+    expect(bandsDrawn(hideVer(banded))).toBe(1);
+    // The P4d-era place, on the first driver's series, loses them: the test can fail.
+    const [verLine, ...rest] = banded.series;
+    const band = rest.at(-1);
+    const onFirst = {
+      ...banded,
+      series: [{ ...verLine, markArea: band && 'markArea' in band ? band.markArea : undefined }, ...rest.slice(0, -1)],
+    };
+    expect(bandsDrawn(onFirst)).toBe(1);
+    expect(bandsDrawn(hideVer(onFirst))).toBe(0);
   });
 
   it('keeps the two end labels apart when both drivers end on the same time (F3)', () => {

@@ -121,10 +121,14 @@ describe('the stints bars', () => {
       expect(row?.segs.map((s) => s.letter)).toEqual(['I', 'W', '?']);
     });
 
-    it('ticks every 10 laps below the total, and the total', () => {
+    it('ticks every 10 laps below the total, and the total, dropping one within 3 laps of it', () => {
       const ticks = (n: number) => stintLayout([nor], Laps.parse(lapsOf(4, n)), Stints.parse([])).ticks;
       expect(ticks(57)).toEqual([10, 20, 30, 40, 50, 57]);
       expect(ticks(60)).toEqual([10, 20, 30, 40, 50, 60]);
+      // A tick within 3 laps of the total goes: its label would crowd the total's.
+      expect(ticks(51)).toEqual([10, 20, 30, 40, 51]);
+      expect(ticks(53)).toEqual([10, 20, 30, 40, 53]);
+      expect(ticks(54)).toEqual([10, 20, 30, 40, 50, 54]);
     });
   });
 
