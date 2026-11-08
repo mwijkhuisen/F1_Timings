@@ -23,6 +23,8 @@ export type TowerRow = {
   best: string | undefined;
   /** The driver's latest stint. */
   tyre: Stint | undefined;
+  /** In a race, the interval to the car ahead is under a second (not the first row, not retired or stopped). */
+  close: boolean;
   /** The whole typed line, for the columns built on it. */
   line: Line;
 };
@@ -86,6 +88,18 @@ function gaps(line: Line, s: Session): [Gap, Gap] {
 }
 
 const NUMBER = /^\d{1,3}$/;
+const CLOSE = /^\+0\.\d+$/;
+
+/** A driver from the DriverList entry of number `n`: Tla, full name and team colour, the number when unknown. */
+export function driverOf(list: Views['DriverList'], n: string): Driver {
+  const d = list[n];
+  return {
+    number: Number(n),
+    acronym: d?.Tla ?? n,
+    name: d?.FullName ?? null,
+    team: teamColour(d?.TeamColour ?? null),
+  };
+}
 
 /** TimingData lines ordered by `Line` (then number), with the DriverList's Tla and team colour. */
 export function towerRows(state: Obj): TowerRow[] {
@@ -103,16 +117,10 @@ export function towerRows(state: Obj): TowerRow[] {
   return Object.entries(lines)
     .flatMap(([n, line]) => (line && NUMBER.test(n) ? [{ n: Number(n), line }] : []))
     .sort((a, b) => (a.line.Line ?? 999) - (b.line.Line ?? 999) || a.n - b.n)
-    .map(({ n, line }) => {
-      const d = list[n];
+    .map(({ n, line }, i) => {
       const [gap, interval] = gaps(line, session);
       return {
-        driver: {
-          number: n,
-          acronym: d?.Tla ?? String(n),
-          name: d?.FullName ?? null,
-          team: teamColour(d?.TeamColour ?? null),
-        },
+        driver: driverOf(list, String(n)),
         position: line.Position,
         gap,
         interval,
@@ -122,6 +130,13 @@ export function towerRows(state: Obj): TowerRow[] {
           .filter(([i]) => NUMBER.test(i))
           .sort((a, b) => Number(a[0]) - Number(b[0]))
           .at(-1)?.[1],
+        close:
+          session.type === 'Race' &&
+          i > 0 &&
+          !line.Retired &&
+          !line.Stopped &&
+          'value' in interval &&
+          CLOSE.test(interval.value),
         line,
       };
     });
