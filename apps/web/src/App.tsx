@@ -35,9 +35,7 @@ function Page({ route }: { route: Route | null }) {
   }
 }
 
-// `document.title` (A§13), one writer per route (useTitle, with the title word in front). The session and replay names
-// come from the queries their pages make anyway (the same cache keys, so no extra request).
-
+// The title per route: the session and replay names come from the queries their pages make anyway (no extra request).
 function SessionTitle({ route }: { route: Extract<Route, { id: 'session' }> }) {
   const d = useSession(route.session).data;
   useTitle(titleOf(route, d && { meeting: d.meeting.name, session: d.session.name }));

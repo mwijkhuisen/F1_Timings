@@ -112,7 +112,10 @@ function subscribeWord(onChange: () => void): () => void {
   };
 }
 
-/** Writes `document.title` (A§13): the page's title, with the title word in front while one is set. */
+/**
+ * Writes `document.title` (A§13), one writer per route (App's Title): the page's title, with the title word in front
+ * while one is set.
+ */
 export function useTitle(title: string): void {
   const word = useSyncExternalStore(
     subscribeWord,
