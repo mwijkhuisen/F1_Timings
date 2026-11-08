@@ -2,11 +2,13 @@ import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import fc from 'fast-check';
 import { describe, expect, it } from 'vitest';
+import { deltaE, linear, oklab, type Vision } from '../src/lib/colour.ts';
 import { clampForLight } from '../src/lib/session.ts';
 
 // A§13 (P4a): every text token on every surface, the mini-sector fills, the compound letters, the colour
-// separation of the timing colours and the light-theme team clamp, in both themes. The colour maths here is
-// the test's own oracle (WCAG 2.x, OKLab, Machado 2009); it shares nothing with the app's.
+// separation of the timing colours and the light-theme team clamp, in both themes. The WCAG maths here is the
+// test's own; OKLab and Machado 2009 come from src/lib/colour.ts (the chart's line types use them too), pinned
+// below against the review's figures.
 
 const css = readFileSync(fileURLToPath(new URL('../src/styles.css', import.meta.url)), 'utf8');
 
@@ -38,12 +40,6 @@ const WASHES = ['purple-wash', 'heat-1', 'heat-2', 'heat-3'];
 
 // ---- the oracle
 
-const linear = (h: string) =>
-  [1, 3, 5].map((i) => {
-    const c = Number.parseInt(h.slice(i, i + 2), 16) / 255;
-    return c <= 0.04045 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4;
-  }) as [number, number, number];
-
 // WCAG 2.x relative luminance and contrast ratio.
 const luminance = (h: string) => {
   const [r, g, b] = linear(h);
@@ -54,55 +50,8 @@ const contrast = (a: string, b: string) => {
   return (hi + 0.05) / (lo + 0.05);
 };
 
-type Vec = [number, number, number];
-const mul = (m: Vec[], v: Vec) => m.map(([a, b, c]) => a * v[0] + b * v[1] + c * v[2]) as Vec;
-
-// OKLab (Ottosson 2020) from linear sRGB.
-const oklab = (lin: Vec): Vec => {
-  const lms = mul(
-    [
-      [0.4122214708, 0.5363325363, 0.0514459929],
-      [0.2119034982, 0.6806995451, 0.1073969566],
-      [0.0883024619, 0.2817188376, 0.6299787005],
-    ],
-    lin,
-  ).map(Math.cbrt) as Vec;
-  return mul(
-    [
-      [0.2104542553, 0.793617785, -0.0040720468],
-      [1.9779984951, -2.428592205, 0.4505937099],
-      [0.0259040371, 0.7827717662, -0.808675766],
-    ],
-    lms,
-  );
-};
-
-// Machado, Oliveira and Fernandes 2009, severity 1.0, applied to linear RGB and clamped to [0, 1].
-const VISION: Record<string, Vec[] | null> = {
-  normal: null,
-  deutan: [
-    [0.367322, 0.860646, -0.227968],
-    [0.280085, 0.672501, 0.047413],
-    [-0.01182, 0.04294, 0.968881],
-  ],
-  protan: [
-    [0.152286, 1.052583, -0.204868],
-    [0.114503, 0.786281, 0.099216],
-    [-0.003882, -0.048116, 1.051998],
-  ],
-};
-const seen = (h: string, vision: string): Vec => {
-  const m = VISION[vision];
-  const lin = linear(h);
-  return oklab(m ? (mul(m, lin).map((c) => Math.min(1, Math.max(0, c))) as Vec) : lin);
-};
-/** ΔE in OKLab × 100, as the vision sees the two colours. */
-const deltaE = (a: string, b: string, vision = 'normal') => {
-  const [x, y] = [seen(a, vision), seen(b, vision)];
-  return Math.hypot(x[0] - y[0], x[1] - y[1], x[2] - y[2]) * 100;
-};
 /** The smallest ΔE between any two colours of a set. */
-const minDeltaE = (set: string[], vision: string) =>
+const minDeltaE = (set: string[], vision: Vision) =>
   Math.min(...set.flatMap((a, i) => set.slice(i + 1).map((b) => deltaE(a, b, vision))));
 
 const lch = (h: string) => {
@@ -141,6 +90,13 @@ describe('the oracle', () => {
     expect(deltaE('#18803a', '#8a6400')).toBeCloseTo(13.8, 1);
     expect(deltaE('#18803a', '#8a6400', 'deutan')).toBeCloseTo(4.6, 1);
     expect(deltaE('#3ccf6e', '#f0f0f5', 'protan')).toBeCloseTo(19.8, 1);
+  });
+
+  // The README's pair, rounded as the README prints it: lib/colour.ts is the app's copy of this maths.
+  it('pins lib/colour.ts to the README: #18803a against #8a6400 is 13.8, and 4.6 for deutan vision', () => {
+    const round = (x: number) => Math.round(x * 10) / 10;
+    expect(round(deltaE('#18803a', '#8a6400'))).toBe(13.8);
+    expect(round(deltaE('#18803a', '#8a6400', 'deutan'))).toBe(4.6);
   });
 });
 
@@ -208,7 +164,7 @@ describe.each([
     ['normal', 15],
     ['deutan', 8],
     ['protan', 8],
-  ])('purple, green and --fg are at least ΔE %s %s apart', (vision, bar) => {
+  ] as [Vision, number][])('purple, green and --fg are at least ΔE %s %s apart', (vision, bar) => {
     const set = ['purple', 'green', 'fg'].map((t) => hex(theme, t));
     expect(minDeltaE(set, vision)).toBeGreaterThanOrEqual(bar);
   });
