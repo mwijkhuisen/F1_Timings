@@ -1,5 +1,6 @@
 import type { SessionDetail } from '@f1/contracts';
 import type { CSSProperties } from 'react';
+import { linear } from './colour.ts';
 
 // Helpers shared by the lap table and the stints view.
 
@@ -17,7 +18,6 @@ const HEX = /^[0-9A-Fa-f]{6}$/;
 export const teamColour = (colour: string | null): string | null =>
   colour !== null && HEX.test(colour) ? `#${colour}` : null;
 
-const toLinear = (c: number) => (c <= 0.04045 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4);
 const toSrgb = (c: number) => (c <= 0.0031308 ? c * 12.92 : 1.055 * c ** (1 / 2.4) - 0.055);
 
 /**
@@ -28,8 +28,8 @@ const toSrgb = (c: number) => (c <= 0.0031308 ? c * 12.92 : 1.055 * c ** (1 / 2.
  * keeps Y below 0.3.
  */
 export function clampForLight(hex: string): string {
-  const lin = [1, 3, 5].map((i) => toLinear(Number.parseInt(hex.slice(i, i + 2), 16) / 255));
-  const [r = 0, g = 0, b = 0] = lin;
+  const lin = linear(hex);
+  const [r, g, b] = lin;
   const y = 0.2126 * r + 0.7152 * g + 0.0722 * b;
   if (y <= 0.3) return hex;
   return `#${lin

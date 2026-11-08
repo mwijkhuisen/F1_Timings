@@ -1,3 +1,5 @@
+import { readFileSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
 import { SessionDetail } from '@f1/contracts';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, expect, it } from 'vitest';
@@ -165,5 +167,28 @@ describe('the session head', () => {
     const bare = head({ season: null });
     expect(bare).toContain('<p class="eyebrow">2026 · Interlagos</p>');
     expect(bare).not.toContain('class="wk"');
+  });
+});
+
+describe('the popover position (#72)', () => {
+  const css = readFileSync(fileURLToPath(new URL('../src/styles.css', import.meta.url)), 'utf8');
+  /** The declarations of the rule whose selector is exactly `selector`, from `from`. */
+  const rule = (selector: string, from = 0) => {
+    const at = css.indexOf(`\n${selector} {`, from);
+    expect(at, selector).toBeGreaterThanOrEqual(0);
+    return css.slice(at, css.indexOf('}', at));
+  };
+
+  it('anchors at the button under @supports, and leaves the base rule centred', () => {
+    const at = css.indexOf('@supports (position-area: bottom) {');
+    expect(at).toBeGreaterThanOrEqual(0);
+    const pop = rule('  .pop', at);
+    expect(pop).toContain('position-anchor: auto;');
+    expect(pop).toContain('position-area: bottom span-right;');
+    expect(pop).toMatch(/position-try-fallbacks:[^;]*flip-inline[^;]*flip-block/);
+    expect(pop).toContain('inset: auto;');
+    expect(pop).toContain('margin: 4px 8px 4px 0;');
+    // An unsupported browser keeps the browser's centred popover.
+    expect(rule('.pop')).not.toMatch(/position-|inset|margin/);
   });
 });

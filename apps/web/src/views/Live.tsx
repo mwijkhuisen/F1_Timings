@@ -14,17 +14,27 @@ function Watch({
   recording,
   sessionKey,
   start,
+  keepT = false,
 }: {
   title: string;
   recording: PlayerRecording;
   sessionKey: number;
   start: number | 'live';
+  /** Replay only: T lives in the URL (`?t=`). */
+  keepT?: boolean;
 }) {
   const session = useSession(sessionKey);
   return (
     <>
       <h1 tabIndex={-1}>{title}</h1>
-      <Player key={recording.id} recording={recording} sessionKey={sessionKey} start={start} detail={session.data} />
+      <Player
+        key={recording.id}
+        recording={recording}
+        sessionKey={sessionKey}
+        start={start}
+        detail={session.data}
+        keepT={keepT}
+      />
     </>
   );
 }
@@ -111,5 +121,5 @@ export function Replay({ recording: id }: { recording: number }) {
   // The session's scheduled start, clamped into what was recorded.
   const end = r.ended_at === null ? Date.now() : Date.parse(r.ended_at);
   const start = Math.min(end, Math.max(Date.parse(r.started_at), Date.parse(r.date_start)));
-  return <Watch title={titleOf(r)} recording={r} sessionKey={r.session_key} start={start} />;
+  return <Watch title={titleOf(r)} recording={r} sessionKey={r.session_key} start={start} keepT />;
 }

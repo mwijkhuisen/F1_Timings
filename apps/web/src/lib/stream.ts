@@ -8,7 +8,6 @@ import {
   PlaybackPing,
   PlaybackSnapshot,
   type Stints,
-  view,
 } from '@f1/contracts';
 
 // The playback stream (A§10, A§11.3): state at T over SSE, framework-free. Every event is parsed with its contract;
@@ -104,56 +103,27 @@ export function openStream(params: StreamParams, h: Handlers, ES: typeof EventSo
   return close;
 }
 
-export type Marker = { kind: 'start' | 'red' | 'chequered'; t: number };
-
 /** A feed Utc in epoch ms, read as UTC with or without its Z; NaN when absent or unparsable. */
 export const utc = (v: string | undefined) =>
   v === undefined ? Number.NaN : Date.parse(v.endsWith('Z') ? v : `${v}Z`);
 
 /**
- * The session's start, red flags and chequered flags so far, from `SessionData.StatusSeries` alone (A§13). A Started
- * followed within 60 s by the next entry with a SessionStatus is the race's 2 s blip (A§11.1); a TrackStatus-only entry
- * does not count. Red is every TrackStatus Red, chequered every SessionStatus Finished. RaceControl is not read: a red
- * flag can arrive without its `Flag: RED` (A§11.3).
- */
-export function markers(state: Obj): Marker[] {
-  const out: Marker[] = [];
-  const series = Object.values(view(state, 'SessionData')?.StatusSeries ?? {})
-    .flatMap((s) => (s ? [{ ...s, t: utc(s.Utc) }] : []))
-    .filter((s) => !Number.isNaN(s.t))
-    .sort((a, b) => a.t - b.t);
-  series.forEach((s, i) => {
-    if (s.TrackStatus === 'Red') out.push({ kind: 'red', t: s.t });
-    if (s.SessionStatus === 'Finished') out.push({ kind: 'chequered', t: s.t });
-    if (s.SessionStatus !== 'Started') return;
-    const next = series.slice(i + 1).find((n) => n.SessionStatus !== undefined);
-    if (!(next && next.t - s.t <= 60_000)) out.push({ kind: 'start', t: s.t });
-  });
-  return out;
-}
-
-/**
  * What React renders: a new object per flush, so it is the key for everything derived from the state. `laps` is a new
- * array only when the rows changed; `marks` is every marker seen since the store was made (the page visit): the stream
- * delivers nothing ahead of T, so none is a spoiler.
+ * array only when the rows changed.
  */
-export type Snap = { rev: number; feed: Feed | undefined; laps: Lap[]; marks: Marker[] };
+export type Snap = { rev: number; feed: Feed | undefined; laps: Lap[] };
 
 /** Holds the latest feed and notifies at most every `everyMs`, so a burst of deltas is one render. */
 export function createStore(everyMs = 250) {
-  let snap: Snap = { rev: 0, feed: undefined, laps: [], marks: [] };
+  let snap: Snap = { rev: 0, feed: undefined, laps: [] };
   let pending: Feed | undefined;
   let lapsDirty = false;
   let timer: ReturnType<typeof setTimeout> | undefined;
-  const seen = new Map<string, Marker>();
   const subs = new Set<() => void>();
   const flush = () => {
     timer = undefined;
     const laps = lapsDirty && pending ? [...pending.laps.values()] : snap.laps;
-    const before = seen.size;
-    if (pending) for (const m of markers(pending.state)) seen.set(`${m.kind}:${m.t}`, m);
-    const marks = seen.size === before ? snap.marks : [...seen.values()];
-    snap = { rev: snap.rev + 1, feed: pending, laps, marks };
+    snap = { rev: snap.rev + 1, feed: pending, laps };
     lapsDirty = false;
     for (const f of subs) f();
   };

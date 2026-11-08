@@ -1,15 +1,16 @@
-import type { Laps } from '@f1/contracts';
 import { useEffect, useRef, useState } from 'react';
-import type { Driver } from '../lib/session.ts';
 import { Pending } from '../ui/ErrorView.tsx';
-import { type ChartTokens, lapChartOption } from './lap-chart-option.ts';
+import type { ChartTokens } from './lap-chart-option.ts';
 
-type Chart = ReturnType<typeof import('../lib/echarts.ts')['init']>;
+type EChart = ReturnType<typeof import('../lib/echarts.ts')['init']>;
 
-/** An ECharts line chart on a canvas. The library is a lazy chunk, loaded on first render (D3). */
-export function LapChart({ drivers, laps }: { drivers: readonly Driver[]; laps: Laps }) {
+/**
+ * An ECharts chart on a canvas, drawn from `option(tokens)`; pass a memoised builder, as each new one redraws.
+ * The library is a lazy chunk, loaded on first render (D3), and the only importer of lib/echarts.ts.
+ */
+export function Chart({ label, option }: { label: string; option: (t: ChartTokens) => object }) {
   const box = useRef<HTMLDivElement>(null);
-  const chart = useRef<Chart | null>(null);
+  const chart = useRef<EChart | null>(null);
   const [state, setState] = useState<'loading' | 'failed' | ChartTokens>('loading');
 
   useEffect(() => {
@@ -28,7 +29,15 @@ export function LapChart({ drivers, laps }: { drivers: readonly Driver[]; laps: 
         // ponytail: the theme is read once; a live prefers-color-scheme switch needs a reload (A§13 follow-up).
         const css = getComputedStyle(el);
         const token = (name: string) => css.getPropertyValue(`--${name}`).trim();
-        setState({ fg: token('fg'), muted: token('muted'), line: token('line'), bg: token('bg') });
+        setState({
+          fg: token('fg'),
+          muted: token('muted'),
+          line: token('line'),
+          bg: token('bg'),
+          amber: token('amber'),
+          live: token('live'),
+          light: matchMedia('(prefers-color-scheme: light)').matches,
+        });
       })
       .catch(() => {
         if (!gone) setState('failed');
@@ -42,20 +51,15 @@ export function LapChart({ drivers, laps }: { drivers: readonly Driver[]; laps: 
   }, []);
 
   useEffect(() => {
-    if (typeof state === 'object') chart.current?.setOption(lapChartOption(drivers, laps, state), { notMerge: true });
-  }, [state, drivers, laps]);
+    if (typeof state === 'object')
+      chart.current?.setOption(option(state) as Parameters<EChart['setOption']>[0], { notMerge: true });
+  }, [state, option]);
 
   return (
     <>
       {state === 'loading' && <Pending error={null} />}
       {state === 'failed' && <p role="alert">Chart failed to load: reload the page.</p>}
-      <div
-        ref={box}
-        className="chart"
-        role="img"
-        aria-label={`Lap times: ${drivers.map((d) => d.acronym).join(', ')}`}
-        hidden={state === 'failed'}
-      />
+      <div ref={box} className="chart" role="img" aria-label={label} hidden={state === 'failed'} />
     </>
   );
 }

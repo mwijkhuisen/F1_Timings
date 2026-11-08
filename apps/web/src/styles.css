@@ -55,7 +55,8 @@
 }
 
 /* Every team colour goes through .drv and --tc: --team in the dark theme, --team-l in the light one. */
-.drv {
+.drv,
+.duel .fill {
   --tc: var(--team, var(--muted));
 }
 
@@ -83,7 +84,8 @@
   }
 
   /* The light theme's team colour: a copy darkened to 3:1 on --bg, hue kept (lib/session.ts clampForLight). */
-  .drv {
+  .drv,
+  .duel .fill {
     --tc: var(--team-l, var(--muted));
   }
 }
@@ -375,6 +377,27 @@ td.deleted {
   text-align: left;
 }
 
+/* A popover opens at what opened it (owner, 2026-11-08, #72): its popovertarget button is the implicit anchor.
+   Below it, left edges aligned, 4 px apart and 8 px clear of the window's edge; flipped left, then up, when
+   the window has no room. A browser without anchor positioning keeps its centred popover. */
+@supports (position-area: bottom) {
+  .pop {
+    position-anchor: auto;
+    position-area: bottom span-right;
+    position-try-fallbacks:
+      flip-inline,
+      flip-block,
+      flip-block flip-inline;
+    inset: auto;
+    margin: 4px 8px 4px 0;
+  }
+
+  /* A text popover shrinks into the room left instead of overflowing, so it needs a floor to flip at the edge. */
+  .pop:not(.menu) {
+    min-width: min(12rem, 90vw);
+  }
+}
+
 .badge {
   margin-left: 4px;
   padding: 0 3px;
@@ -425,54 +448,187 @@ td.deleted {
   --cmp: var(--wet);
 }
 
-/* Stints (D11): one bar per driver, each stint at --x with width --w. */
-.stints {
-  list-style: none;
-  margin: 0;
-  padding: 0;
+/* Stints on a lap scale (P4f, A§13): a stint at --x, --w of the lanes; the left column is the driver, the right one the stops. */
+.stintbox {
+  display: grid;
+  gap: 4px;
 }
 
-.stints li {
-  display: flex;
+.laxis,
+.stints .row {
+  display: grid;
+  grid-template-columns: 4.5em minmax(0, 1fr) 5em;
   align-items: center;
   gap: 8px;
+}
+
+.laxis {
+  color: var(--muted);
+}
+
+.laxis .ticks,
+.lanes {
+  position: relative;
+}
+
+.laxis .ticks {
+  height: 16px;
+}
+
+.tick {
+  position: absolute;
+  left: var(--x);
+  transform: translateX(-50%);
+  /* Here, not on .laxis: its columns are in em and must match the rows' and .rules'. */
+  font-size: 11px;
+}
+
+/* The last label ends at the end of the scale. */
+.tick-end {
+  transform: translateX(-100%);
+}
+
+/* Over the lanes' middle column; the lines are borders, which forced colours keep. */
+.rules {
+  position: absolute;
+  inset: 0 calc(5em + 8px) 0 calc(4.5em + 8px);
+  pointer-events: none;
+}
+
+.rules .rule {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: var(--x);
+  width: 0;
+  border-left: 1px solid var(--line-soft);
+}
+
+.rules .vscline {
+  position: absolute;
+  z-index: 2;
+  top: -6px;
+  bottom: 0;
+  left: var(--x);
+  width: var(--w);
+  border-left: 1px dashed var(--amber);
+  border-right: 1px dashed var(--amber);
+}
+
+.stints {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.stints > li {
+  border-bottom: 1px solid var(--line-soft);
+}
+
+.stints .row {
+  width: 100%;
   min-height: 44px;
-  border-bottom: 1px solid var(--line);
+  padding: 0;
+  text-align: left;
+  background: none;
+  border: 0;
+  border-radius: 0;
 }
 
 .stints .drv {
-  flex: 0 0 3.5em;
   align-self: stretch;
   display: flex;
   align-items: center;
 }
 
-.bar {
+.lane {
   position: relative;
-  flex: 1;
-  height: 28px;
+  height: 24px;
+}
+
+/* The line runs to the driver's last lap, so a hole in the stints shows as bare line. */
+.lane .trackline {
+  position: absolute;
+  top: 11px;
+  left: 0;
+  width: var(--w);
+  border-top: 2px solid var(--line);
 }
 
 .seg {
   position: absolute;
+  z-index: 1;
+  top: 0;
+  bottom: 0;
   left: var(--x);
-  width: var(--w);
-  height: 100%;
+  width: calc(var(--w) - 2px);
   display: flex;
   align-items: center;
-  gap: 4px;
-  padding: 0 4px;
-  overflow: hidden;
-  white-space: nowrap;
-  border: 1px solid var(--line);
+  gap: 6px;
   border-radius: 4px;
+  outline: 1px solid var(--cmp-ring);
+  outline-offset: -1px;
   font-size: 12px;
+  white-space: nowrap;
   container-type: inline-size;
 }
 
-/* The lap range only where it fits. */
-@container (max-width: 4.5rem) {
-  .range {
+.seg b {
+  margin-left: 4px;
+}
+
+.seg small {
+  font-size: inherit;
+  font-weight: 500;
+}
+
+/* No clipping: "· used" goes first, then the number, then the letter. */
+@container (max-width: 80px) {
+  .seg .used {
+    display: none;
+  }
+}
+
+@container (max-width: 48px) {
+  .seg small {
+    display: none;
+  }
+}
+
+@container (max-width: 16px) {
+  .seg b {
+    display: none;
+  }
+}
+
+.stints .stop {
+  color: var(--muted);
+  font-size: 12px;
+  text-align: right;
+}
+
+.dash {
+  display: inline-block;
+  width: 14px;
+  height: 12px;
+  margin-right: 6px;
+  vertical-align: middle;
+  border-left: 1px dashed var(--amber);
+  border-right: 1px dashed var(--amber);
+}
+
+@media (max-width: 640px) {
+  .laxis,
+  .stints .row {
+    grid-template-columns: 3.5em minmax(0, 1fr);
+  }
+
+  .rules {
+    inset: 0 0 0 calc(3.5em + 8px);
+  }
+
+  .stints .stop,
+  .laxis > :last-child {
     display: none;
   }
 }
@@ -675,11 +831,48 @@ header .links {
   color: var(--muted);
 }
 
-/* The player bar (A§13): sticky at the bottom, within thumb reach; every target 44 px; it never scrolls. */
+/* What the view does not show (p.since): a 3 px --fg rule at the left, muted text; the label over the counts in column 1
+   and the dismiss button top right in column 2, across both lines, so a phone gets no empty block when the text wraps. */
+.since {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: start;
+  gap: 0 10px;
+  margin: 0 0 12px;
+  padding: 4px 4px 4px 12px;
+  border-left: 3px solid var(--fg);
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.since b,
+.since span {
+  grid-column: 1;
+}
+
+.since b {
+  color: var(--fg);
+}
+
+.since button {
+  grid-column: 2;
+  grid-row: 1 / span 2;
+  padding: 0;
+  border: 0;
+  background: none;
+}
+
+/* The player bar (A§13, P4e): sticky at the bottom, within thumb reach; every target 44 px; it never scrolls. Wide: the
+   clock line across, then transport | seek bar, then the chips with the announce toggle at the end, then the delay
+   (live). A phone stacks them. */
 .player {
   position: sticky;
   bottom: 0;
   z-index: 3;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  align-items: center;
+  gap: 4px 16px;
   margin: 12px -16px 0;
   padding: 8px 16px;
   background: var(--raised);
@@ -692,29 +885,93 @@ header .links {
   margin: 0;
 }
 
-/* Seven equal buttons in one row at 390 px: (358 − 6 × 4) / 7 ≈ 47.7 px each, so every one stays ≥ 44 px wide. */
-.player .controls {
+/* The clock line: the clock in the display face, the rest muted, the mode as a pill with a dot (a shape beside the word). */
+.clockline {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 4px 16px;
   margin: 0;
-  gap: 4px;
+  color: var(--muted);
+  font-size: 13px;
 }
 
-.player .controls button {
-  flex: 1 1 0;
-  padding: 0;
-  font-size: 14px; /* "Pause" and "+30 s" fit 47.7 px */
+.clockline time {
+  color: var(--fg);
+  font-family: var(--display);
+  font-size: 20px;
+}
+
+.pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 2px 8px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
   white-space: nowrap;
 }
 
-.clock time {
-  font-family: var(--display);
-  font-size: 20px;
+.pill .dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--muted);
+}
+
+.pill.live {
+  border-color: var(--live);
+  color: var(--fg);
+}
+
+.pill.live .dot {
+  background: var(--live);
+}
+
+/* Transport: a compact cluster at its own widths, Play emphasised; "Live" is one more button. */
+.transport {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
+.transport button {
+  padding: 0 8px;
+  font-size: 13px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.transport .play {
+  min-width: 56px;
+  background: var(--fg);
+  color: var(--bg);
+  border-color: var(--fg);
 }
 
 .player label {
   display: flex;
   align-items: center;
   gap: 8px;
+  min-height: 44px;
   white-space: nowrap;
+}
+
+.player label input[type="checkbox"] {
+  flex: none;
+  width: 20px;
+  height: 20px;
+  margin: 0;
+}
+
+.player label.delay input[type="range"] {
+  flex: 1;
+  min-width: 0;
 }
 
 /* Markers on the seek bar, placed by --x (a custom property: CSP-safe). */
@@ -732,24 +989,111 @@ header .links {
   pointer-events: none;
 }
 
+/* Markers by shape (A§13, P4e), above the thumb's 14 to 30 px so it stays visible: a tick (start), a striped band
+   (SC, VSC amber; red flag --live; open while running, with no right edge) and an 8 px checker (the finish). */
 .marker {
   position: absolute;
-  top: 0;
+  top: 4px;
   left: var(--x);
-  width: 3px;
-  height: 10px;
-  transform: translateX(-50%);
   pointer-events: none;
+}
+
+.m-start {
+  top: 0;
+  width: 3px;
+  height: 16px;
+  margin-left: -1px;
   background: var(--fg);
 }
 
-/* Green means a best, so the start is --fg and taller than the chequered flag; a red flag is --live. */
-.m-start {
-  height: 16px;
+.m-band {
+  width: max(4px, var(--w));
+  height: 8px;
+  background: repeating-linear-gradient(90deg, var(--band) 0 2px, transparent 2px 3px);
+  border: 1px solid var(--band);
+}
+
+.m-band.open {
+  border-right: 0;
+}
+
+.m-sc,
+.m-vsc {
+  --band: var(--amber);
 }
 
 .m-red {
-  background: var(--live);
+  --band: var(--live);
+}
+
+.m-chequered {
+  top: 3px;
+  width: 8px;
+  height: 8px;
+  margin-left: -4px;
+  background: repeating-conic-gradient(var(--fg) 0 25%, transparent 0 50%) 0 0 / 4px 4px;
+  outline: 1px solid var(--fg);
+}
+
+/* Wide: row 1 the clock line; row 2 transport | seek bar, which gets all the rest (columns 2 and 3); row 3 the chips from
+   column 1 and the announce toggle in column 3, at the right end; row 4 the delay (live). The chips never take width
+   from the seek bar. */
+@media (min-width: 641px) {
+  .player {
+    grid-template-columns: auto minmax(0, 1fr) auto;
+  }
+
+  .clockline {
+    grid-column: 1 / -1;
+    grid-row: 1;
+  }
+
+  .transport {
+    grid-column: 1;
+    grid-row: 2;
+  }
+
+  .player .seek {
+    grid-column: 2 / -1;
+    grid-row: 2;
+  }
+
+  .player .chips {
+    grid-column: 1 / 3;
+    grid-row: 3;
+  }
+
+  .player label.announce {
+    grid-column: 3;
+    grid-row: 3;
+    justify-self: end;
+  }
+
+  .player label.delay {
+    grid-column: 1 / -1;
+    grid-row: 4;
+  }
+}
+
+/* A phone stacks the bar: clock line, seek bar, seven equal buttons ((358 − 6 × 4) / 7 ≈ 47.7 px each, so "−30" and "Pause" fit), Live on its own row, chips, delay, announce. */
+@media (max-width: 640px) {
+  .clockline time {
+    font-size: 17px;
+  }
+
+  .transport button {
+    flex: 1 1 0;
+    padding: 0;
+    font-size: 14px;
+  }
+
+  .transport .play {
+    min-width: 44px;
+  }
+
+  .transport .golive {
+    flex: 1 1 100%;
+  }
 }
 
 /* Session tiles (P4b): value first, its holder beneath; 6 or 3 across on a desktop, 2 on a phone. */
@@ -974,6 +1318,11 @@ header .links {
     background: Highlight;
     color: HighlightText;
     border-color: Highlight;
+  }
+  /* The duel's and the deltas' bars would lose their fill: the value carries the number, the bar stays visible. */
+  .duel .fill,
+  .deltas .db {
+    background: CanvasText;
   }
 }
 
@@ -1537,6 +1886,19 @@ header .links {
   font-size: 13px;
 }
 
+/* The player's Back to chips (after the global .chips, which resets the fieldset): the jump chips, 44 px tall, wrapping. */
+.player .chips {
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+  margin: 0;
+}
+
+.player .chips button {
+  padding: 0 10px;
+  font-size: 13px;
+}
+
 /* The race-control list is its own bounded scroll box (ui/Scroll.tsx), so a long session never stretches the page. */
 .side .scroll {
   max-height: 24rem;
@@ -1608,5 +1970,253 @@ header .links {
 
   .tower td.int.close::before {
     background: CanvasText;
+  }
+}
+
+/* Compare (P4f, C3): the picked drivers as chips in pick order, then "Add driver", a disclosure holding the toggles. */
+.picked {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  margin: 0 0 12px;
+  padding: 0;
+  border: 0;
+}
+
+/* The team bar is a 4 × 20 px pill in --tc, not .drv's left border, which the round chip would bend. */
+.chip.drv {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0 0 0 10px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: var(--panel);
+  font-weight: 700;
+}
+
+.chip.drv::before {
+  content: "";
+  width: 4px;
+  height: 20px;
+  border-radius: 2px;
+  background: var(--tc);
+}
+
+.chip .ref {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 500;
+}
+
+/* 44 px, from the rule for every button. */
+.chip.drv button {
+  border: 0;
+  border-radius: 50%;
+  background: none;
+  color: var(--muted);
+  padding: 0;
+}
+
+.add > summary {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 44px;
+  padding: 0 14px;
+  border: 1px dashed var(--line);
+  border-radius: 999px;
+  cursor: pointer;
+  list-style: none;
+}
+
+.add > summary::-webkit-details-marker {
+  display: none;
+}
+
+.add > summary::before {
+  content: "+";
+}
+
+.add[open] > summary::before {
+  content: "−";
+}
+
+/* Open, the toggles take a row of their own. */
+.add[open] {
+  flex-basis: 100%;
+}
+
+.add .picker {
+  margin: 8px 0 0;
+}
+
+/* The lap chart beside the gap chart and the duel; one column on a phone. */
+.cgrid {
+  display: grid;
+  grid-template-columns: minmax(0, 1.6fr) minmax(0, 1fr);
+  gap: 16px;
+  align-items: start;
+  margin-bottom: 12px;
+}
+
+/* The lap card fills its row: the chart grows from its 20rem; one column on a phone, where the row is its own. */
+.cgrid > .card {
+  align-self: stretch;
+  display: flex;
+  flex-direction: column;
+}
+
+.cgrid > .card > .chart {
+  flex: 1 0 auto;
+}
+
+.panel-title {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 4px 12px;
+  margin: 0 0 8px;
+}
+
+.card .panel-title h2 {
+  margin: 0;
+}
+
+.panel-title p,
+.card .keys {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.card .keys {
+  margin: 0 0 6px;
+}
+
+.controls > .label {
+  align-self: center;
+}
+
+/* The duel (C7): per sector a bar from the centre toward the faster driver, in its --tc (set at the top). */
+.duelbox + .duelbox {
+  margin-top: 12px;
+  padding-top: 12px;
+  border-top: 1px solid var(--line-soft);
+}
+
+.duelbox h3 {
+  margin: 0 0 8px;
+  font-size: 13px;
+  font-weight: 400;
+}
+
+.duel {
+  display: grid;
+  gap: 10px;
+  margin: 0;
+}
+
+dl.duel > div {
+  display: grid;
+  grid-template-columns: 2.2em minmax(0, 1fr) 4.6em;
+  align-items: center;
+  gap: 8px;
+}
+
+.duel dt {
+  color: var(--muted);
+  font-weight: 700;
+}
+
+.duel dd {
+  margin: 0;
+}
+
+.duel .track {
+  position: relative;
+  height: 14px;
+  background: linear-gradient(var(--line), var(--line)) center / 1px 100% no-repeat;
+}
+
+.duel .fill {
+  position: absolute;
+  top: 1px;
+  bottom: 1px;
+  width: var(--w);
+  border-radius: 3px;
+  background: var(--tc, var(--muted));
+}
+
+.duel .fill.l {
+  right: 50%;
+}
+
+.duel .fill.r {
+  left: 50%;
+}
+
+.duel .val {
+  text-align: right;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+}
+
+.card .duelaxis {
+  display: flex;
+  justify-content: space-between;
+  margin: 6px 5.1em 0 2.7em;
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.card .foot {
+  margin-top: 8px;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+/* In-cell delta bars: 4 px of --muted from a centre hairline, left when faster than the reference. Absolute, so they
+   add no width: two drivers still fit 390 px. A positioned cell would paint over the sticky first column. */
+.deltas td.dc {
+  position: relative;
+}
+
+.deltas tbody th[scope="row"] {
+  z-index: 1;
+}
+
+.deltas .db {
+  position: absolute;
+  bottom: 5px;
+  height: 4px;
+  width: var(--w);
+  border-radius: 2px;
+  background: var(--muted);
+}
+
+.deltas .db.neg {
+  right: 50%;
+}
+
+.deltas .db.pos {
+  left: 50%;
+}
+
+.deltas td.dc::after {
+  content: "";
+  position: absolute;
+  left: 50%;
+  bottom: 3px;
+  width: 1px;
+  height: 8px;
+  background: var(--line);
+}
+
+@media (max-width: 640px) {
+  .cgrid {
+    grid-template-columns: minmax(0, 1fr);
   }
 }

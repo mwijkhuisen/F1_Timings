@@ -40,6 +40,33 @@ const clock = new Intl.DateTimeFormat('en-GB', {
 /** Epoch ms as Amsterdam wall-clock time, `HH:mm:ss`. */
 export const fmtClock = (ms: number): string => clock.format(ms);
 
+const HMS = /^([01]\d|2[0-3]):([0-5]\d):([0-5]\d)$/;
+const DAY = 86_400_000;
+
+/**
+ * `fmtClock`'s inverse inside a recording (the replay's `?t=`): the one instant in [started_at, ended_at ?? now] that
+ * Amsterdam shows as `param`, or null. Each UTC day of the span (± 1) is tried at UTC+1 and UTC+2, so a recording
+ * across midnight works, the spring-forward gap gives none and the fall-back hour two (null when both are inside).
+ */
+export function parseT(
+  param: string | null,
+  rec: { started_at: string; ended_at: string | null },
+  now = Date.now(),
+): number | null {
+  const m = HMS.exec(param ?? '');
+  if (!m) return null;
+  const [, h, min, s] = m.map(Number) as [number, number, number, number];
+  const lo = Date.parse(rec.started_at);
+  const hi = rec.ended_at === null ? now : Date.parse(rec.ended_at);
+  const found: number[] = [];
+  for (let day = Math.floor(lo / DAY) * DAY - DAY; day <= hi + DAY; day += DAY)
+    for (const off of [3_600_000, 7_200_000]) {
+      const c = day + ((h * 60 + min) * 60 + s) * 1000 - off;
+      if (c >= lo && c <= hi && fmtClock(c) === param) found.push(c);
+    }
+  return found.length === 1 ? (found[0] ?? null) : null;
+}
+
 const weekday = (timeZone: string) => new Intl.DateTimeFormat('en-GB', { timeZone, weekday: 'short' });
 const utcDay = weekday('UTC');
 const amsterdamDay = weekday('Europe/Amsterdam');

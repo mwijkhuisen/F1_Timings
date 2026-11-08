@@ -145,6 +145,22 @@ const segment = (key: number, name: string) => (name === '' ? `${key}` : `${key}
 export const sessionPath = (year: number, meeting: Named, session: Named, view: View): string =>
   `/${year}/${segment(meeting.key, slug(meeting.name?.replace(/ Grand Prix$/i, '') ?? null))}/${segment(session.key, slug(session.name))}/${view}`;
 
+const D_PARAM = /^\d+(,\d+)*$/;
+
+/**
+ * The picked drivers of `?d=` (C4), in the given order: unknown and repeated numbers dropped. Null, meaning the
+ * default pick, for a missing, malformed or over-long (> 100 characters) param, or one with no known driver.
+ */
+export function parseD(param: string | null, drivers: readonly { number: number }[]): number[] | null {
+  if (param === null || param.length > 100 || !D_PARAM.test(param)) return null;
+  const known = new Set(drivers.map((d) => d.number));
+  const out = [...new Set(param.split(',').map(Number))].filter((n) => known.has(n));
+  return out.length > 0 ? out : null;
+}
+
+/** The value of `?d=`: the numbers in pick order, joined with ','. */
+export const formatD = (numbers: readonly number[]): string => numbers.join(',');
+
 const NAVIGATE = 'f1:navigate';
 
 /** Set by `navigate()` to a new path, cleared once `useHeadingFocus` has focused the h1 or by back/forward (A§13). */
@@ -157,7 +173,8 @@ export function replace(path: string): void {
 }
 
 export function navigate(path: string): void {
-  if (path !== location.pathname) focusPending = true;
+  // The query is part of the page (`?d=` on Compare), not a new page: no focus move for it alone.
+  if (path.split('?')[0] !== location.pathname) focusPending = true;
   history.pushState(null, '', path);
   window.dispatchEvent(new Event(NAVIGATE));
   window.scrollTo(0, 0);

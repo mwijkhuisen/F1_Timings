@@ -3,7 +3,7 @@ import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, expect, it } from 'vitest';
 import { Next, RecordingsList } from '../src/views/Live.tsx';
 import { RecorderWarnings, StatusPanel } from '../src/views/Status.tsx';
-import { StintBars } from '../src/views/Stints.tsx';
+import { StintBars, stintLayout } from '../src/views/Stints.tsx';
 
 // The stints bars (D11) and the status panel (D12), on hand-built data.
 
@@ -61,37 +61,145 @@ describe('the stints bars', () => {
   const stint = (
     driver_number: number,
     stint_number: number,
-    lap_start: number,
-    lap_end: number,
-    compound: string,
-  ) => ({
-    driver_number,
-    stint_number,
-    lap_start,
-    lap_end,
-    compound,
-    tyre_age_at_start: 0,
+    lap_start: number | null,
+    lap_end: number | null,
+    compound: string | null,
+    tyre_age_at_start: number | null = 0,
+  ) => ({ driver_number, stint_number, lap_start, lap_end, compound, tyre_age_at_start });
+  const nor = { number: 4, acronym: 'NOR', name: null, team: null };
+  const layout = (n: number, rows: ReturnType<typeof stint>[], lapN = n) =>
+    stintLayout([nor], Laps.parse(lapsOf(4, lapN)), Stints.parse(rows)).rows[0];
+
+  describe('stintLayout', () => {
+    it('puts a stint at its first lap over the total, and a used set apart from a new or unknown one', () => {
+      const row = layout(40, [
+        stint(4, 1, 1, 10, 'MEDIUM', 0),
+        stint(4, 2, 11, 30, 'HARD', 3),
+        stint(4, 3, 31, 40, 'SOFT', null),
+      ]);
+      expect(
+        row?.segs.map(({ x, w, letter, compound, laps, used }) => ({ x, w, letter, compound, laps, used })),
+      ).toEqual([
+        { x: 0, w: 0.25, letter: 'M', compound: 'medium', laps: 10, used: false },
+        { x: 0.25, w: 0.5, letter: 'H', compound: 'hard', laps: 20, used: true },
+        { x: 0.75, w: 0.25, letter: 'S', compound: 'soft', laps: 10, used: false },
+      ]);
+      expect(row?.stops).toBe(2);
+    });
+
+    it('lets the track run to the last lap, so a hole after the last stint shows', () => {
+      const row = layout(40, [stint(4, 1, 1, 10, 'MEDIUM'), stint(4, 2, 11, 30, 'HARD')]);
+      expect(row?.track).toBe(1);
+      expect(row?.segs.at(-1)).toMatchObject({ x: 0.25, w: 0.5 });
+    });
+
+    it('lists a stint without lap bounds and draws none for it', () => {
+      const row = layout(40, [
+        stint(4, 1, 1, 20, 'HARD'),
+        stint(4, 2, null, null, 'MEDIUM'),
+        stint(4, 3, 21, null, 'SOFT'),
+      ]);
+      expect(row?.segs).toHaveLength(1);
+      expect(row?.unplaced.map((u) => [u.stint, u.compound, u.letter])).toEqual([
+        [2, 'medium', 'M'],
+        [3, 'soft', 'S'],
+      ]);
+      expect(row?.stops).toBe(2);
+    });
+
+    it('counts no stop for no stint or one', () => {
+      expect(layout(10, [], 10)?.stops).toBe(0);
+      expect(layout(10, [stint(4, 1, 1, 10, 'HARD')])?.stops).toBe(0);
+    });
+
+    it('letters I, W and ? for intermediate, wet and unknown compounds', () => {
+      const row = layout(30, [
+        stint(4, 1, 1, 10, 'INTERMEDIATE'),
+        stint(4, 2, 11, 20, 'WET'),
+        stint(4, 3, 21, 30, 'NEW'),
+      ]);
+      expect(row?.segs.map((s) => s.letter)).toEqual(['I', 'W', '?']);
+    });
+
+    it('ticks every 10 laps below the total, and the total, dropping one within 3 laps of it', () => {
+      const ticks = (n: number) => stintLayout([nor], Laps.parse(lapsOf(4, n)), Stints.parse([])).ticks;
+      expect(ticks(57)).toEqual([10, 20, 30, 40, 50, 57]);
+      expect(ticks(60)).toEqual([10, 20, 30, 40, 50, 60]);
+      // A tick within 3 laps of the total goes: its label would crowd the total's.
+      expect(ticks(51)).toEqual([10, 20, 30, 40, 51]);
+      expect(ticks(53)).toEqual([10, 20, 30, 40, 53]);
+      expect(ticks(54)).toEqual([10, 20, 30, 40, 50, 54]);
+    });
   });
+
   const html = renderToStaticMarkup(
     <StintBars
       detail={detail}
       laps={Laps.parse([...lapsOf(81, 40), ...lapsOf(4, 40)])}
-      stints={Stints.parse([stint(4, 1, 1, 10, 'MEDIUM'), stint(4, 2, 11, 40, 'HARD'), stint(81, 1, 1, 40, 'NEW')])}
+      stints={Stints.parse([
+        stint(4, 1, 1, 10, 'MEDIUM', 0),
+        stint(4, 2, 11, 40, 'HARD', 3),
+        stint(81, 1, 1, 30, 'x onclick', null),
+        stint(81, 2, null, null, 'HARD', null),
+      ])}
+      periods={[
+        { kind: 'sc', from: 12, to: 13 },
+        { kind: 'vsc', from: 20, to: 20 },
+      ]}
     />,
   );
 
-  it('sizes each stint by its laps over the session laps', () => {
+  it('draws each stint at its place on the lap scale, with no title', () => {
     expect(html).toContain(
-      '<span class="seg cmp-medium" style="--x:0.000%;--w:25.000%" title="MEDIUM, laps 1–10, tyre age 0 at start (may be wrong for a used set)"><b>M</b> <span class="range">1–10</span></span>',
+      '<span class="seg cmp-medium" style="--x:0.000%;--w:25.000%"><b>M</b><small>10</small></span>',
     );
     expect(html).toContain(
-      'style="--x:25.000%;--w:75.000%" title="HARD, laps 11–40, tyre age 0 at start (may be wrong for a used set)"><b>H</b>',
+      '<span class="seg cmp-hard" style="--x:25.000%;--w:75.000%"><b>H</b><small>30<span class="used"> · used</span></small></span>',
     );
+    expect(html).not.toContain('title=');
+    expect(html).toContain('<span class="trackline" style="--w:100.000%">');
   });
 
   it('marks an unknown compound and orders the drivers as the lap table does', () => {
     expect(html).toContain('<span class="seg cmp-unknown"');
+    // The API's raw compound never reaches a class name: only the five known ones or unknown, in the legend too.
+    expect(html).toContain('<span class="cmp cmp-unknown" aria-hidden="true">?</span>unknown');
+    expect(new Set([...html.matchAll(/cmp-([\w-]+)/g)].map(([, c]) => c))).toEqual(
+      new Set(['medium', 'hard', 'unknown']),
+    );
+    expect(html).not.toContain('onclick');
     expect([...html.matchAll(/class="drv"[^>]*>(\w+)</g)].map(([, a]) => a)).toEqual(['NOR', '81']);
+  });
+
+  it('makes each row a button for its popover, named for a screen reader', () => {
+    expect(html).toContain('popoverTarget="stints-4"');
+    expect(html).toContain('popoverTarget="stints-81"');
+    expect(html).toContain('aria-label="NOR, 1 stop: medium laps 1 to 10, hard laps 11 to 40"');
+    expect(html).toContain('aria-label="81, 1 stop: unknown compound laps 1 to 30, hard laps unknown"');
+    expect(html).toContain('<span class="stop">1 stop</span>');
+  });
+
+  it('lists the stints in the popover', () => {
+    expect(html).toContain('<div popover="auto" id="stints-4" class="pop">');
+    expect(html).toContain('<li>Medium, laps 1–10 (10 laps), new set</li>');
+    expect(html).toContain(
+      '<li>Hard, laps 11–40 (30 laps), used set, 3 laps old at the start (may be wrong for a used set)</li>',
+    );
+    expect(html).toContain('<li>Unknown compound, laps 1–30 (30 laps)</li>');
+    expect(html).toContain('<li>Hard, laps unknown</li>');
+  });
+
+  it('draws the ticks, the SC and VSC lines and the legend', () => {
+    expect(html).toContain('<span class="tick" style="--x:25.000%">10</span>');
+    expect(html).toContain('<span class="tick tick-end" style="--x:100.000%">40</span>');
+    expect(html).toContain('<i class="rule" style="--x:25.000%"></i>');
+    expect(html).toContain('<i class="vscline" style="--x:27.500%;--w:5.000%"></i>');
+    expect(html).toContain('<i class="vscline" style="--x:47.500%;--w:2.500%"></i>');
+    expect(html).toContain('SC, laps 12–13');
+    expect(html).toContain('VSC, lap 20');
+    expect(html).not.toContain('RED');
+    expect(html).toContain('number: laps in the stint');
+    expect(html).toContain('<span class="cmp cmp-medium" aria-hidden="true">M</span>medium');
   });
 });
 

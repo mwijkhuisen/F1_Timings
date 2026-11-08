@@ -39,6 +39,30 @@ describe('the scan patterns', () => {
   });
 });
 
+describe('the ECharts importer', () => {
+  // No build needed: the source files, by what they import.
+  const src = fileURLToPath(new URL('../src', import.meta.url));
+  const files = readdirSync(src, { recursive: true, withFileTypes: true })
+    .filter((e) => e.isFile() && /\.tsx?$/.test(e.name))
+    .map((e) =>
+      join(e.parentPath, e.name)
+        .slice(src.length + 1)
+        .replaceAll('\\', '/'),
+    );
+  const importing = (target: RegExp) =>
+    files.filter((f) =>
+      [...readFileSync(join(src, f), 'utf8').matchAll(/(?:from|import\()\s*['"]([^'"]+)['"]/g)].some(([, m = '']) =>
+        target.test(m),
+      ),
+    );
+
+  it('is views/Chart.tsx alone, which only views/Compare.tsx uses', () => {
+    expect(files).toContain('lib/echarts.ts');
+    expect(importing(/(^|\/)echarts\.ts$/)).toEqual(['views/Chart.tsx']);
+    expect(importing(/(^|\/)Chart\.tsx$/)).toEqual(['views/Compare.tsx']);
+  });
+});
+
 describe('web build', () => {
   const out = join(tmp, 'dist');
   const page = (p: string) => readFileSync(join(out, p), 'utf8');
