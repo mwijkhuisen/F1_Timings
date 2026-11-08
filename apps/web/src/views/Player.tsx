@@ -55,7 +55,6 @@ function streamDetail(detail: SessionDetail, state: Obj): SessionDetail {
 }
 
 const Laps = memo(LapTable);
-const SidePanel = memo(Panel);
 
 export const MAX_DELAY = 120;
 const DELAY_KEY = 'f1.delay';
@@ -364,7 +363,7 @@ export function Player({
       ) : wall ? (
         <div className="pitwall">
           <div>{tower}</div>
-          <SidePanel rc={wall.rc} pairs={wall.pairs} fastest={wall.fastest} race={wall.race} />
+          <Panel rc={wall.rc} pairs={wall.pairs} fastest={wall.fastest} race={wall.race} />
         </div>
       ) : (
         tower
