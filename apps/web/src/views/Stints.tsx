@@ -187,7 +187,10 @@ export function StintBars({
                           style={vars({ '--x': pct(s.x), '--w': pct(s.w) })}
                         >
                           <b>{s.letter}</b>
-                          <small>{s.used ? `${s.laps} · used` : s.laps}</small>
+                          <small>
+                            {s.laps}
+                            {s.used && <span className="used"> · used</span>}
+                          </small>
                         </span>
                       ))}
                     </span>

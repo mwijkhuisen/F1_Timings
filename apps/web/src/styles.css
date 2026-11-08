@@ -443,7 +443,6 @@ td.deleted {
 
 .laxis {
   color: var(--muted);
-  font-size: 11px;
 }
 
 .laxis .ticks,
@@ -459,6 +458,8 @@ td.deleted {
   position: absolute;
   left: var(--x);
   transform: translateX(-50%);
+  /* Here, not on .laxis: its columns are in em and must match the rows' and .rules'. */
+  font-size: 11px;
 }
 
 /* The last label ends at the end of the scale. */
@@ -543,7 +544,6 @@ td.deleted {
   display: flex;
   align-items: center;
   gap: 6px;
-  padding: 0 4px;
   border-radius: 4px;
   outline: 1px solid var(--cmp-ring);
   outline-offset: -1px;
@@ -552,12 +552,22 @@ td.deleted {
   container-type: inline-size;
 }
 
+.seg b {
+  margin-left: 4px;
+}
+
 .seg small {
   font-size: inherit;
   font-weight: 500;
 }
 
-/* No clipping: the number goes first, then the letter. */
+/* No clipping: "· used" goes first, then the number, then the letter. */
+@container (max-width: 80px) {
+  .seg .used {
+    display: none;
+  }
+}
+
 @container (max-width: 48px) {
   .seg small {
     display: none;

@@ -154,7 +154,7 @@ describe('the stints bars', () => {
       '<span class="seg cmp-medium" style="--x:0.000%;--w:25.000%"><b>M</b><small>10</small></span>',
     );
     expect(html).toContain(
-      '<span class="seg cmp-hard" style="--x:25.000%;--w:75.000%"><b>H</b><small>30 · used</small></span>',
+      '<span class="seg cmp-hard" style="--x:25.000%;--w:75.000%"><b>H</b><small>30<span class="used"> · used</span></small></span>',
     );
     expect(html).not.toContain('title=');
     expect(html).toContain('<span class="trackline" style="--w:100.000%">');
