@@ -145,21 +145,42 @@ describe('census', () => {
     ]);
     const rc: string[] = [];
     expect(await feedKeys(['--codes', '--topic', 'RaceControlMessages', feed], (l) => rc.push(l))).toBe(0);
+    // A real message (spaces) is <text>; Lap and Utc are no status-like keys, so they print no value.
     expect(rc.slice(2)).toEqual([
       'session ? ?: RaceControlMessages 1 messages',
       '  Messages.#.Category 1',
       '    = Other 1',
       '  Messages.#.Lap 1',
-      '    = 3 1',
       '  Messages.#.Message 1',
       '    = <text> 1',
       '  Messages.#.Utc 1',
-      '    = <text> 1',
     ]);
     // Without --codes, no value prints.
     const plain: string[] = [];
     await feedKeys(['--topic', 'TrackStatus', feed], (l) => plain.push(l));
     expect(plain.slice(2)).toEqual(['session ? ?: TrackStatus 3 messages', '  Message 3', '  Status 3']);
+    // No --codes, no values collected.
+    const events = [{ t: 1, topic: 'TrackStatus', payload: { Status: '1' } }];
+    expect(census(events, 'TrackStatus', false).get('? ?')?.codes.size).toBe(0);
+  });
+
+  it('prints no value with --codes for keys that are not status-like (DriverList, TimingData)', async () => {
+    const feed = join(mkdtempSync(join(tmpdir(), 'f1-keys-')), 'feed.jsonl');
+    writeFileSync(
+      feed,
+      [
+        line(1_000, 'DriverList', { '4': { FirstName: 'Lando', Tla: 'NOR', RacingNumber: '4', TeamColour: 'FF8000' } }),
+        line(2_000, 'TimingData', {
+          Lines: { '4': { Position: '1', NumberOfLaps: 12, Sectors: { '0': { Value: '30.1' } } } },
+        }),
+      ].join('\n'),
+    );
+    for (const topic of ['DriverList', 'TimingData']) {
+      const lines: string[] = [];
+      expect(await feedKeys(['--codes', '--topic', topic, feed], (l) => lines.push(l))).toBe(0);
+      expect(lines.slice(2).filter((l) => l.startsWith('    ='))).toEqual([]);
+      expect(lines.join('\n')).not.toMatch(/Lando|NOR|FF8000|30\.1/);
+    }
   });
 
   it('exits 64 without an input and 1 on an unreadable one', async () => {
@@ -167,7 +188,10 @@ describe('census', () => {
     expect(await feedKeys([], (l) => lines.push(l))).toBe(64);
     expect(await feedKeys(['--nope'], (l) => lines.push(l))).toBe(64);
     expect(await feedKeys([join(tmpdir(), 'f1-keys-missing', 'feed.jsonl')], (l) => lines.push(l))).toBe(1);
-    expect(lines[0]).toBe('usage: feed-keys.ts [--topic <name>] [--codes] <feed.jsonl | recording dir | archive dir>…');
+    expect(lines[0]).toMatch(
+      /^usage: feed-keys\.ts \[--topic <name>\] \[--codes\] <feed\.jsonl \| recording dir \| archive dir>…\n/,
+    );
+    expect(lines[0]).toContain('status-like keys only (Status, Started, Message, Category, Flag, Mode, Scope)');
     expect(lines.at(-1)).toBe('feed-keys: input (unreadable, or an archive without a Heartbeat t0)');
   });
 });
