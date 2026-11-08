@@ -55,7 +55,8 @@
 }
 
 /* Every team colour goes through .drv and --tc: --team in the dark theme, --team-l in the light one. */
-.drv {
+.drv,
+.duel .fill {
   --tc: var(--team, var(--muted));
 }
 
@@ -83,7 +84,8 @@
   }
 
   /* The light theme's team colour: a copy darkened to 3:1 on --bg, hue kept (lib/session.ts clampForLight). */
-  .drv {
+  .drv,
+  .duel .fill {
     --tc: var(--team-l, var(--muted));
   }
 }
@@ -1286,6 +1288,11 @@ header .links {
     color: HighlightText;
     border-color: Highlight;
   }
+  /* The duel's and the deltas' bars would lose their fill: the value carries the number, the bar stays visible. */
+  .duel .fill,
+  .deltas .db {
+    background: CanvasText;
+  }
 }
 
 /* Wayfinding (P4c, A§13): the header's switcher and links, the session head, the season page. */
@@ -1932,5 +1939,242 @@ header .links {
 
   .tower td.int.close::before {
     background: CanvasText;
+  }
+}
+
+/* Compare (P4f, C3): the picked drivers as chips in pick order, then "Add driver", a disclosure holding the toggles. */
+.picked {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  margin: 0 0 12px;
+  padding: 0;
+  border: 0;
+}
+
+/* The team bar is a 4 × 20 px pill in --tc, not .drv's left border, which the round chip would bend. */
+.chip.drv {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0 0 0 10px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: var(--panel);
+  font-weight: 700;
+}
+
+.chip.drv::before {
+  content: "";
+  width: 4px;
+  height: 20px;
+  border-radius: 2px;
+  background: var(--tc);
+}
+
+.chip .ref {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 500;
+}
+
+/* 44 px, from the rule for every button. */
+.chip.drv button {
+  border: 0;
+  border-radius: 50%;
+  background: none;
+  color: var(--muted);
+  padding: 0;
+}
+
+.add > summary {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 44px;
+  padding: 0 14px;
+  border: 1px dashed var(--line);
+  border-radius: 999px;
+  cursor: pointer;
+  list-style: none;
+}
+
+.add > summary::-webkit-details-marker {
+  display: none;
+}
+
+.add > summary::before {
+  content: "+";
+}
+
+.add[open] > summary::before {
+  content: "−";
+}
+
+/* Open, the toggles take a row of their own. */
+.add[open] {
+  flex-basis: 100%;
+}
+
+.add .picker {
+  margin: 8px 0 0;
+}
+
+/* The lap chart beside the gap chart and the duel; one column on a phone. */
+.cgrid {
+  display: grid;
+  grid-template-columns: minmax(0, 1.6fr) minmax(0, 1fr);
+  gap: 16px;
+  align-items: start;
+  margin-bottom: 12px;
+}
+
+.panel-title {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 4px 12px;
+  margin: 0 0 8px;
+}
+
+.card .panel-title h2 {
+  margin: 0;
+}
+
+.panel-title p,
+.card .keys {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.card .keys {
+  margin: 0 0 6px;
+}
+
+.controls > .label {
+  align-self: center;
+}
+
+/* The duel (C7): per sector a bar from the centre toward the faster driver, in its --tc (set at the top). */
+.duelbox + .duelbox {
+  margin-top: 12px;
+  padding-top: 12px;
+  border-top: 1px solid var(--line-soft);
+}
+
+.duelbox h3 {
+  margin: 0 0 8px;
+  font-size: 13px;
+  font-weight: 400;
+}
+
+.duel {
+  display: grid;
+  gap: 10px;
+  margin: 0;
+}
+
+dl.duel > div {
+  display: grid;
+  grid-template-columns: 2.2em minmax(0, 1fr) 4.6em;
+  align-items: center;
+  gap: 8px;
+}
+
+.duel dt {
+  color: var(--muted);
+  font-weight: 700;
+}
+
+.duel dd {
+  margin: 0;
+}
+
+.duel .track {
+  position: relative;
+  height: 14px;
+  background: linear-gradient(var(--line), var(--line)) center / 1px 100% no-repeat;
+}
+
+.duel .fill {
+  position: absolute;
+  top: 1px;
+  bottom: 1px;
+  width: var(--w);
+  border-radius: 3px;
+  background: var(--tc, var(--muted));
+}
+
+.duel .fill.l {
+  right: 50%;
+}
+
+.duel .fill.r {
+  left: 50%;
+}
+
+.duel .val {
+  text-align: right;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+}
+
+.card .duelaxis {
+  display: flex;
+  justify-content: space-between;
+  margin: 6px 5.1em 0 2.7em;
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.card .foot {
+  margin-top: 8px;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+/* In-cell delta bars: 4 px of --muted from a centre hairline, left when faster than the reference. Absolute, so they
+   add no width: two drivers still fit 390 px. A positioned cell would paint over the sticky first column. */
+.deltas td.dc {
+  position: relative;
+}
+
+.deltas tbody th[scope="row"] {
+  z-index: 1;
+}
+
+.deltas .db {
+  position: absolute;
+  bottom: 5px;
+  height: 4px;
+  width: var(--w);
+  border-radius: 2px;
+  background: var(--muted);
+}
+
+.deltas .db.neg {
+  right: 50%;
+}
+
+.deltas .db.pos {
+  left: 50%;
+}
+
+.deltas td.dc::after {
+  content: "";
+  position: absolute;
+  left: 50%;
+  bottom: 3px;
+  width: 1px;
+  height: 8px;
+  background: var(--line);
+}
+
+@media (max-width: 640px) {
+  .cgrid {
+    grid-template-columns: minmax(0, 1fr);
   }
 }

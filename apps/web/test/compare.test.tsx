@@ -1,4 +1,5 @@
 import type { Lap } from '@f1/contracts';
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { use } from 'echarts/core';
 import { SVGRenderer } from 'echarts/renderers';
 import { renderToStaticMarkup } from 'react-dom/server';
@@ -7,9 +8,10 @@ import { init } from '../src/lib/echarts.ts';
 import type { Driver } from '../src/lib/session.ts';
 import { fmtDelta } from '../src/lib/time.ts';
 import { Compare } from '../src/views/Compare.tsx';
-import { DeltaTable } from '../src/views/DeltaTable.tsx';
+import { DeltaTable, Duel } from '../src/views/DeltaTable.tsx';
 import { DriverPicker } from '../src/views/DriverPicker.tsx';
 import { type ChartTokens, lapChartOption, lineStyles } from '../src/views/lap-chart-option.ts';
+import { sessionDetail } from './laps.ts';
 
 // The comparison (E1–E4, D2, D4, D5) on hand-built laps, rendered statically (A§15).
 
@@ -513,7 +515,12 @@ describe('fmtDelta', () => {
 /** The table's rows as [row header, ...cells]. */
 const rows = (html: string) =>
   [...html.matchAll(/<tr>([\s\S]*?)<\/tr>/g)]
-    .map(([, row = '']) => [...row.matchAll(/<t([hd])[^>]*>([\s\S]*?)<\/t\1>/g)].map(([, , text]) => text))
+    .map(([, row = '']) =>
+      // The delta bars (<i>, aria-hidden) are checked on their own below.
+      [...row.matchAll(/<t([hd])[^>]*>([\s\S]*?)<\/t\1>/g)].map(([, , text = '']) =>
+        text.replace(/<i [^>]*><\/i>/g, ''),
+      ),
+    )
     .filter((r) => r.length > 0);
 const table = (drivers: Driver[]) => renderToStaticMarkup(<DeltaTable drivers={drivers} laps={laps} />);
 
@@ -583,30 +590,160 @@ describe('the delta table', () => {
   });
 });
 
-describe('the comparison', () => {
-  it('asks for a second driver', () => {
-    expect(renderToStaticMarkup(<Compare drivers={[VER]} laps={laps} />)).toBe('<p>Pick at least 2 drivers.</p>');
+describe('the delta-cell bars', () => {
+  const html = table([VER, NOR]);
+  const cells = [...html.matchAll(/<td([^>]*)>([\s\S]*?)<\/td>/g)].map(([, attrs, inner]) => [attrs, inner]);
+
+  it('draws a bar from the centre, left (neg) when faster than the reference, 500 ms to the half, capped', () => {
+    // Best lap: NOR − VER = +0.050 S1, so right (pos), 50 / 500 × 50 % = 5 %.
+    expect(cells[0]).toEqual([' class="dc"', '+0.050<i class="db pos" aria-hidden="true" style="--w:5.0%"></i>']);
+    // Lap 1 S1: −5.000, left and capped at the half.
+    expect(cells[3]).toEqual([' class="dc"', '−5.000<i class="db neg" aria-hidden="true" style="--w:50.0%"></i>']);
   });
 
-  it('shows the chart box, sized by CSS, and the delta table', () => {
-    const html = renderToStaticMarkup(<Compare drivers={[VER, NOR]} laps={laps} />);
+  it('has no bar for a zero and none, nor the dc class, for —', () => {
+    expect(cells[4]).toEqual([' class="dc"', '+0.000']);
+    // Lap 2 S2: NOR has no S2.
+    expect(cells[7]).toEqual(['', '—']);
+  });
+});
+
+const duel = (drivers: Driver[], l: Lap[] = laps) => renderToStaticMarkup(<Duel drivers={drivers} laps={l} />);
+/** Each duel row as [sector, fill class or null, --w or null, the fill's --team or null, value]. */
+const duelRows = (html: string) =>
+  [
+    ...html.matchAll(
+      /<div><dt>(S\d)<\/dt><dd class="track" aria-hidden="true">(?:<span class="([^"]+)" style="--team:([^;]+);[^"]*--w:([^"]+)"><\/span>)?<\/dd><dd class="val">([^<]+)<\/dd><\/div>/g,
+    ),
+  ].map(([, s, cls = null, team = null, w = null, v]) => [s, cls, w, team, v]);
+
+describe('the duel (C7)', () => {
+  it('heads each block with both best laps, coloured as the server did, the other driver first', () => {
+    const html = duel([VER, NOR]);
+    expect(html).toContain(
+      '<h3>NOR L5 <span class="t-green">1:20.900</span> vs VER L2 <span class="t-purple">1:20.500</span></h3>',
+    );
+    expect(html).toContain('<p class="duelaxis"><span>◀ VER faster</span><span>NOR faster ▶</span></p>');
+    expect(html).toContain('<p class="foot">Lap +0.400</p>');
+  });
+
+  it('grows the bar toward the faster driver, in its colour, 300 ms to the half', () => {
+    // NOR − VER: +50, +150, +200 ms: VER is faster, so left, in VER's colour.
+    expect(duelRows(duel([VER, NOR]))).toEqual([
+      ['S1', 'fill l', '8.3%', '#3671C6', '+0.050'],
+      ['S2', 'fill l', '25.0%', '#3671C6', '+0.150'],
+      ['S3', 'fill l', '33.3%', '#3671C6', '+0.200'],
+    ]);
+    // VER − PER: −300, −300, −400 ms: VER is faster, now on the right, capped at the half.
+    expect(duelRows(duel([PER, VER]))).toEqual([
+      ['S1', 'fill r', '50.0%', '#3671C6', '−0.300'],
+      ['S2', 'fill r', '50.0%', '#3671C6', '−0.300'],
+      ['S3', 'fill r', '50.0%', '#3671C6', '−0.400'],
+    ]);
+  });
+
+  it('shows — and no bar for a missing sector, and the other side in the other colour', () => {
+    const l = [lap(1, 1, 80000, [28000, null, 22000], 'purple'), lap(4, 1, 80100, [28100, 30000, 21900], 'green')];
+    expect(duelRows(duel([VER, NOR], l))).toEqual([
+      ['S1', 'fill l', '16.7%', '#3671C6', '+0.100'],
+      ['S2', null, null, null, '—'],
+      ['S3', 'fill r', '16.7%', '#FF8000', '−0.100'],
+    ]);
+  });
+
+  it('gives one block per other driver, and one muted line where a best lap is missing', () => {
+    expect([...duel([VER, NOR, PER]).matchAll(/<h3>(\w+)/g)].map(([, a]) => a)).toEqual(['NOR', 'PER']);
+    const noBest = laps.filter((l) => !(l.driver_number === 4 && l.lap_number === 5));
+    expect(duel([VER, NOR], noBest)).toBe('<p class="muted">NOR vs VER: no best lap to compare.</p>');
+  });
+});
+
+const compare = (drivers: Driver[]) =>
+  renderToStaticMarkup(
+    <QueryClientProvider client={new QueryClient()}>
+      <Compare
+        session={11000}
+        detail={sessionDetail('Practice', 'Practice 1')}
+        drivers={drivers}
+        laps={laps}
+        onReference={() => {}}
+      />
+    </QueryClientProvider>,
+  );
+
+describe('the comparison', () => {
+  it('asks for a second driver', () => {
+    expect(compare([VER])).toBe('<p>Pick at least 2 drivers.</p>');
+  });
+
+  it('shows the lap chart beside the gap chart and the duel, then the delta table', () => {
+    const html = compare([VER, NOR]);
+    expect(html).toMatch(/^<div class="cgrid"><section class="card"><div class="panel-title"><h2>Lap times<\/h2>/);
     expect(html).toContain('<div class="chart" role="img" aria-label="Lap times: VER, NOR"></div>');
+    expect(html).toContain('<div class="side"><section class="card"><div class="panel-title"><h2>Gap to VER</h2>');
+    expect(html).toContain('<div class="chart" role="img" aria-label="Gap to VER: NOR"></div>');
+    expect(html).toContain('<h2>Best laps, sector by sector</h2>');
     expect(html).toContain('Loading…');
     expect(html).toContain('aria-label="Sector deltas"');
+    // The symbols are not read; the words are.
+    expect(html).toContain(
+      '<p class="keys"><span aria-hidden="true">●</span> own best · <span aria-hidden="true">○</span> deleted · <span aria-hidden="true">▲</span> above the window</p>',
+    );
+  });
+
+  it('starts on the Fit window and marks the reference, the first driver, pressed', () => {
+    const html = compare([NOR, VER, PER]);
+    const pressed = (label: string) =>
+      [
+        ...(
+          html.match(new RegExp(`<fieldset class="segmented" aria-label="${label}">(.*?)</fieldset>`))?.[1] ?? ''
+        ).matchAll(/aria-pressed="(\w+)">([^<]+)</g),
+      ].map(([, p, text]) => [text, p]);
+    expect(pressed('Window')).toEqual([
+      ['Fit', 'true'],
+      ['107 %', 'false'],
+    ]);
+    expect(pressed('Reference')).toEqual([
+      ['NOR', 'true'],
+      ['VER', 'false'],
+      ['PER', 'false'],
+    ]);
+    expect(html).toContain('<h2>Gap to NOR</h2>');
   });
 });
 
 describe('the driver picker', () => {
-  it('toggles each driver with aria-pressed, in the given order, with the team bar', () => {
-    const html = renderToStaticMarkup(<DriverPicker drivers={[VER, NOR, PER]} selected={[4, 1]} onToggle={() => {}} />);
-    expect(html).toMatch(/^<fieldset class="picker"><legend>Drivers<\/legend>/);
-    expect([...html.matchAll(/aria-pressed="(\w+)"[^>]*>(\w+)</g)].map(([, p, a]) => [a, p])).toEqual([
+  const picker = (selected: number[], showReference = false) =>
+    renderToStaticMarkup(
+      <DriverPicker drivers={[VER, NOR, PER]} selected={selected} onToggle={() => {}} showReference={showReference} />,
+    );
+
+  it('shows the picked drivers as chips in pick order, each with a Remove button and the team bar', () => {
+    const html = picker([4, 1]);
+    expect(html).toMatch(/^<fieldset class="picked" aria-label="Drivers"><span class="chip drv"/);
+    expect([...html.matchAll(/<span class="chip drv"[^>]*>(\w+)/g)].map(([, a]) => a)).toEqual(['NOR', 'VER']);
+    expect([...html.matchAll(/aria-label="(Remove \w+)"/g)].map(([, a]) => a)).toEqual(['Remove NOR', 'Remove VER']);
+    // Papaya is below 3:1 on white: the light theme gets a darker copy.
+    expect(html).toContain('<span class="chip drv" style="--team:#FF8000;--team-l:#e97400">NOR<button type="button"');
+    expect(html).not.toContain('reference');
+  });
+
+  it('says "reference" on the first chip only, and only on Compare', () => {
+    const html = picker([4, 1], true);
+    expect(html).toContain('NOR<span class="ref">reference</span><button');
+    expect(html.match(/reference/g)).toHaveLength(1);
+  });
+
+  it('keeps every driver as an aria-pressed toggle, in the given order, inside "Add driver"', () => {
+    const html = picker([4, 1]);
+    const add =
+      html.match(/<details class="add"><summary>Add driver<\/summary>(.*)<\/details><\/fieldset>$/)?.[1] ?? '';
+    expect(add).toMatch(/^<fieldset class="picker"><legend>All drivers<\/legend>/);
+    expect([...add.matchAll(/aria-pressed="(\w+)"[^>]*>(\w+)</g)].map(([, p, a]) => [a, p])).toEqual([
       ['VER', 'true'],
       ['NOR', 'true'],
       ['PER', 'false'],
     ]);
-    expect(html).toContain('class="drv" style="--team:#3671C6;--team-l:#3671C6"');
-    // Papaya is below 3:1 on white: the light theme gets a darker copy.
-    expect(html).toContain('class="drv" style="--team:#FF8000;--team-l:#e97400"');
+    expect(add).toContain('class="drv" style="--team:#3671C6;--team-l:#3671C6"');
   });
 });
