@@ -21,7 +21,7 @@ The plan is binding: `docs/plan/ARCHITECTURE.md` (cited A§x), `docs/plan/PHASES
 - P2b archive and lap check (the owner's machine only; both refuse under `CI`):
   - `node scripts/fetch-archive.ts <year> <session_key> --token-file <path> [--path <year/meeting/session/>]` writes the session's F1 archive files to the gitignored `fixtures-private/archive/<key>/` (A§6.2).
   - `node scripts/compare-laps.ts <recording dir | feed.jsonl | archive dir>…` is the [box] comparison against OpenF1 (A§11.3). Never run it during a live session: OpenF1 then answers 401.
-  - `node scripts/feed-keys.ts [--topic <name>] <recording dir | feed.jsonl | archive dir>…` prints the key paths of one topic's messages (TimingData by default) with message counts per session, never a value, for [U] checks of the feed format (A§11.3). It reads local files only.
+  - `node scripts/feed-keys.ts [--topic <name>] [--codes] <recording dir | feed.jsonl | archive dir>…` prints the key paths of one topic's messages (TimingData by default) with message counts per session, never a value, for [U] checks of the feed format (A§11.3). `--codes` adds `= <code> <count>` under each path for the distinct code-like leaf values (any other value is `<text>`). A P2c recorder directory is read as `<(zcat <dir>/feed-*.jsonl.gz)`. It reads local files only.
 
 ## Security invariants (A§12.1)
 
