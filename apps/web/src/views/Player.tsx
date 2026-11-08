@@ -9,18 +9,41 @@ import {
   useState,
   useSyncExternalStore,
 } from 'react';
-import { fastestSoFar, LIGHT, raceControl, running, stripOf, withinASecond } from '../lib/pitwall.ts';
+import {
+  fastestSoFar,
+  fmtLeft,
+  LIGHT,
+  leftAt,
+  raceControl,
+  running,
+  type Strip as StripData,
+  stripOf,
+  withinASecond,
+} from '../lib/pitwall.ts';
+import {
+  lastStop,
+  type Mark,
+  type MarkKind,
+  markersUpTo,
+  type Status,
+  skipped,
+  skippedText,
+  statusSeries,
+} from '../lib/replay.ts';
 import { setTitleWord } from '../lib/routes.ts';
-import { createStore, type Marker, openStream } from '../lib/stream.ts';
-import { fmtClock } from '../lib/time.ts';
+import { createStore, type Feed, openStream, type Snap } from '../lib/stream.ts';
+import { fmtClock, parseT } from '../lib/time.ts';
+import { KIND_LABEL, KIND_NAME, type Kind } from '../lib/track.ts';
 import { LapTable } from './LapTable.tsx';
 import { Panel, Strip, useTick } from './PitWall.tsx';
-import { Tower } from './Tower.tsx';
+import { driverOf, Tower } from './Tower.tsx';
 
-// The player (A§13): one playback stream at a time, the clock, the delay slider (live), the seek bar with markers
-// and play/pause. `at` is the open stream's start: 'live', epoch ms (replay), or null while paused. Only the clock line
-// and the seek bar tick each second (and the strip's LEFT cell, from values derived per flush); the tower, the pit wall
-// and everything else derived from the state render on a store flush.
+// The player (A§13): one playback stream at a time; the bar holds the clock line, the seek bar with the marks at or
+// before T, the transport, the "Back to" chips, the delay slider (live) and the announcements toggle. `open.at` is the
+// open stream's start: 'live', epoch ms (replay), or null while paused; a `still` stream only fetches the state at a
+// paused T and closes on its snapshot. Only the clock line, the seek bar, the chips and the strip's LEFT cell tick each
+// second, from values derived per flush; the tower, the pit wall and everything else derived from the state render on
+// a store flush.
 
 /** A SessionDetail whose drivers and results come from the stream: OpenF1 has no drivers during a live session. */
 function streamDetail(detail: SessionDetail, state: Obj): SessionDetail {
@@ -58,7 +81,10 @@ const Laps = memo(LapTable);
 
 export const MAX_DELAY = 120;
 const DELAY_KEY = 'f1.delay';
+const ANNOUNCE_KEY = 'f1.announce';
 const DEBOUNCE_MS = 400;
+const WRITE_T_MS = 15_000;
+const SAY_GAP_MS = 5_000;
 const NUDGES = [-30, -5, -1, 1, 5, 30];
 
 /** The stored delay in s, or 0 when it is missing, invalid or storage throws. */
@@ -79,70 +105,211 @@ function writeDelay(s: number) {
   }
 }
 
+/** Announcements are on only when stored as '1'; off when storage throws. */
+function readAnnounce(): boolean {
+  try {
+    return localStorage.getItem(ANNOUNCE_KEY) === '1';
+  } catch {
+    return false;
+  }
+}
+
+function writeAnnounce(on: boolean) {
+  try {
+    localStorage.setItem(ANNOUNCE_KEY, on ? '1' : '0');
+  } catch {
+    // As for the delay: not remembered.
+  }
+}
+
+/** T in the replay's URL (`?t=HH:mm:ss`): replaceState only, so the route stays and nothing is dispatched. */
+function writeT(t: number) {
+  history.replaceState(history.state, '', `${location.pathname}?t=${fmtClock(t)}`);
+}
+
+/** At most one line per `SAY_GAP_MS`: a line that comes sooner replaces the waiting one, said when the gap is over. */
+function createVoice(show: (line: string) => void) {
+  let on = false;
+  let last = Number.NEGATIVE_INFINITY;
+  let next = '';
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const emit = () => {
+    timer = undefined;
+    last = Date.now();
+    show(next);
+  };
+  return {
+    set(v: boolean) {
+      on = v;
+      clearTimeout(timer);
+      timer = undefined;
+      if (!v) show('');
+    },
+    say(line: string) {
+      if (!on) return;
+      next = line;
+      const wait = last + SAY_GAP_MS - Date.now();
+      if (wait <= 0) emit();
+      else timer ??= setTimeout(emit, wait);
+    },
+  };
+}
+
 const clamp = (v: number, lo: number, hi: number) => Math.min(hi, Math.max(lo, v));
-const signed = (s: number) => `${s > 0 ? '+' : '−'}${Math.abs(s)} s`;
+const signed = (s: number) => `${s > 0 ? '+' : '−'}${Math.abs(s)}`;
+const nudgeLabel = (s: number) =>
+  `${Math.abs(s)} ${Math.abs(s) === 1 ? 'second' : 'seconds'} ${s < 0 ? 'earlier' : 'later'}`;
+const hhmm = (t: number) => fmtClock(t).slice(0, 5);
 const FAILING = 5; // consecutive errors without a snapshot before the reload hint
 
-/** The clock line: T, ticking locally; `children` is the rest of the line, from the state. */
-function Clock({ now, playing, children }: { now: () => number; playing: boolean; children: ReactNode }) {
+const MARK_NAME: Record<MarkKind, string> = { start: 'Start', ...KIND_NAME, chequered: 'Chequered flag' };
+/** The chips, in this order: one per kind, for its latest mark at or before T. */
+const CHIPS: [MarkKind, string][] = [
+  ['start', 'Start'],
+  ['sc', KIND_LABEL.sc],
+  ['vsc', KIND_LABEL.vsc],
+  ['red', KIND_NAME.red],
+  ['chequered', 'Chequered flag'],
+];
+const isBand = (k: MarkKind): k is Kind => k === 'sc' || k === 'vsc' || k === 'red';
+const markClass = (m: Mark) =>
+  isBand(m.kind) ? `marker m-band m-${m.kind}${m.open ? ' open' : ''}` : `marker m-${m.kind}`;
+
+/** The clock line: T, ticking locally, the time left and the lap (from the strip's values), then the mode. */
+function Clock({
+  now,
+  stateNow,
+  playing,
+  strip,
+  children,
+}: {
+  now: () => number;
+  /** The T the state stands at, for the time left (as the strip's LEFT). */
+  stateNow: () => number;
+  playing: boolean;
+  strip: StripData | undefined;
+  children: ReactNode;
+}) {
   useTick(playing);
   const T = now();
   return (
-    <p className="clock" aria-live="off">
+    <p className="clockline" aria-live="off">
       <time dateTime={new Date(T).toISOString()}>{fmtClock(T)}</time>
+      {strip?.clock && <span>{fmtLeft(leftAt(strip.clock, stateNow()))} left</span>}
+      {strip?.lap && (
+        <span>
+          Lap {strip.lap.current}
+          {strip.lap.total !== undefined && `/${strip.lap.total}`}
+        </span>
+      )}
       {children}
     </p>
   );
 }
 
-/** The seek bar over [lo, hi()], ticking with the clock; only markers inside it are drawn. */
+/** The seek bar over [lo, hi()], ticking with the clock; the marks at or before T inside it, from the parsed series. */
 function Seek({
   now,
   playing,
   lo,
   hi,
-  marks,
+  series,
   onSeek,
 }: {
   now: () => number;
   playing: boolean;
   lo: number;
   hi: () => number;
-  marks: Marker[];
+  series: Status[];
   onSeek(t: number): void;
 }) {
   useTick(playing);
   const T = now();
   const top = Math.max(lo, hi());
-  const x = (t: number) => ({ '--x': `${((clamp(t, lo, top) - lo) / Math.max(1, top - lo)) * 100}%` }) as CSSProperties;
+  const pct = (t: number) => ((clamp(t, lo, top) - lo) / Math.max(1, top - lo)) * 100;
   return (
     <div className="seek">
       <input
         type="range"
         aria-label="Position"
-        aria-valuetext={fmtClock(T)}
+        // Per minute while playing (a per-second change would be read out), per second while paused.
+        aria-valuetext={playing ? hhmm(T) : fmtClock(T)}
         min={lo}
         max={top}
         step={1000}
         value={clamp(T, lo, top)}
         onChange={(e) => onSeek(Number(e.target.value))}
       />
-      {/* A marker outside the recording (a status left over from the day before) is not drawn. */}
+      {/* A mark outside the recording (a status left over from the day before) is not drawn. */}
       <div className="marks">
-        {marks
-          .filter((m) => m.t >= lo && m.t <= top)
-          .map((m) => (
-            <span
-              key={`${m.kind}:${m.t}`}
-              className={`marker m-${m.kind}`}
-              style={x(m.t)}
-              title={`${m.kind === 'start' ? 'Start' : m.kind === 'red' ? 'Red flag' : 'Chequered flag'} ${fmtClock(m.t)}`}
-            />
-          ))}
+        {markersUpTo(series, T, [lo, top]).map((m) => (
+          <span
+            key={`${m.kind}:${m.t}`}
+            className={markClass(m)}
+            style={
+              {
+                '--x': `${pct(m.t)}%`,
+                ...(m.end !== undefined && { '--w': `${pct(m.end) - pct(m.t)}%` }),
+              } as CSSProperties
+            }
+            title={`${MARK_NAME[m.kind]} ${fmtClock(m.t)}`}
+          />
+        ))}
       </div>
     </div>
   );
 }
+
+/** "Back to": the latest mark of each kind at or before T, and the focused driver's last stop; seeks only go back. */
+function BackTo({
+  now,
+  playing,
+  lo,
+  hi,
+  series,
+  laps,
+  focused,
+  onSeek,
+}: {
+  now: () => number;
+  playing: boolean;
+  lo: number;
+  hi: () => number;
+  series: Status[];
+  laps: Snap['laps'];
+  focused: { n: number; tla: string } | null;
+  onSeek(t: number): void;
+}) {
+  useTick(playing);
+  const T = now();
+  // Sorted by time, so the last of each kind wins.
+  const latest = new Map(markersUpTo(series, T, [lo, Math.max(lo, hi())]).map((m) => [m.kind, m.t]));
+  const stop = focused && lastStop(laps, focused.n, T);
+  if (latest.size === 0 && !stop) return null;
+  return (
+    // biome-ignore lint/a11y/useSemanticElements: jump buttons with a visible label, not a form's fields; a named group is what a screen reader needs.
+    <div className="chips" role="group" aria-label="Back to">
+      <span className="label">Back to</span>
+      {CHIPS.map(([kind, label]) => {
+        const t = latest.get(kind);
+        return (
+          t !== undefined && (
+            <button key={kind} type="button" onClick={() => onSeek(t)}>
+              {label} {hhmm(t)}
+            </button>
+          )
+        );
+      })}
+      {stop && (
+        <button type="button" onClick={() => onSeek(stop.t)}>
+          {focused?.tla} stop L{stop.lap}
+        </button>
+      )}
+    </div>
+  );
+}
+
+type Open = { at: number | 'live' | null; still?: true };
 
 export type PlayerRecording = { id: number; started_at: string; ended_at: string | null };
 
@@ -151,6 +318,7 @@ export function Player({
   sessionKey,
   start,
   detail,
+  keepT = false,
 }: {
   recording: PlayerRecording;
   /** The recording's session: the tower waits until the feed shows it. */
@@ -159,23 +327,38 @@ export function Player({
   start: number | 'live';
   /** The session from the API; without it there is only the tower. */
   detail: SessionDetail | undefined;
+  /** The replay keeps T in the URL (`?t=`) and resumes from it on load; `/live` never does. */
+  keepT?: boolean;
 }) {
+  // A valid ?t, read once on mount: the player resumes paused there (a still frame) until Play.
+  const [resumed, setResumed] = useState(() =>
+    keepT ? parseT(new URLSearchParams(location.search).get('t'), recording) : null,
+  );
   const [delay, setDelay] = useState(readDelay); // shown at once
   const [streamDelay, setStreamDelay] = useState(delay); // the open stream's, 400 ms later
   // A new object (re)opens the stream, even at the same `at` (a reopen after an error).
-  const [open, setOpen] = useState<{ at: number | 'live' | null }>({ at: start });
+  const [open, setOpen] = useState<Open>(() => (resumed === null ? { at: start } : { at: resumed, still: true }));
   const at = open.at;
-  const setAt = (a: number | 'live' | null) => setOpen({ at: a });
+  const playing = at !== null && !open.still;
   const [seek, setSeek] = useState<number | null>(null); // a pending seek, shown on the bar
   const [tab, setTab] = useState<'tower' | 'laps'>('tower');
-  // The focused driver's number (a tap on the tower's driver cell); page state that the player bar reads (P4e).
+  // The focused driver's number (a tap on the tower's driver cell); page state that the player bar reads.
   const [focus, setFocus] = useState<string | null>(null);
   const [fails, setFails] = useState(0); // errors since the last snapshot
-  const [held, setHeld] = useState<number | null>(null); // T at a pause or `end`: where the tower stands
+  const [since, setSince] = useState<string | null>(null); // what the last forward seek skipped
+  const [announce, setAnnounce] = useState(readAnnounce);
+  const [said, setSaid] = useState('');
+  const [voice] = useState(() => createVoice(setSaid));
   const [store] = useState(() => createStore());
   const snap = useSyncExternalStore(store.subscribe, store.get);
   // T = clock.t + the wall time since clock.wall while playing; resynced to every event's t.
-  const clock = useRef({ t: start === 'live' ? Date.now() - delay * 1000 : start, wall: Date.now() });
+  const clock = useRef({ t: resumed ?? (start === 'live' ? Date.now() - delay * 1000 : start), wall: Date.now() });
+  // The T the state stands at while not playing: the pause, the end, or a still frame's snapshot.
+  const stood = useRef(clock.current.t);
+  const lastFeed = useRef<Feed | undefined>(undefined);
+  // Set by a seek commit for its snapshot: `from` is the feed before the seek (its stream is closed by then); `skipped`
+  // counts only when the seek went forward.
+  const jump = useRef<{ from: Feed | undefined } | undefined>(undefined);
   const backoff = useRef(1000);
   const timers = useRef<{ delay?: ReturnType<typeof setTimeout>; seek?: ReturnType<typeof setTimeout> }>({});
   // The bounds for a reopen after an error, without reopening when a refetch changes the row.
@@ -185,7 +368,6 @@ export function Player({
   }, [recording]);
   const liveDelay = at === 'live' ? streamDelay : 0;
 
-  const playing = at !== null;
   const nowT = () => (playing ? clock.current.t + Math.max(0, Date.now() - clock.current.wall) : clock.current.t);
   const lo = Date.parse(recording.started_at);
   // A replay ignores the delay (A§13): an open recording's bar ends at now, or now − delay while live.
@@ -196,19 +378,33 @@ export function Player({
   };
 
   useEffect(() => {
-    const from = open.at;
+    const { at: from, still } = open;
     if (from === null) return;
     let retry: ReturnType<typeof setTimeout> | undefined;
     const close = openStream(
       { recording: recording.id, at: from, delay: liveDelay },
       {
         onData(feed, kind) {
-          if (kind === 'snapshot') {
-            backoff.current = 1000;
-            setFails(0);
-          }
           clock.current = { t: feed.t, wall: Date.now() };
+          stood.current = feed.t;
           store.update(feed, kind);
+          lastFeed.current = feed;
+          if (kind !== 'snapshot') return;
+          backoff.current = 1000;
+          setFails(0);
+          const j = jump.current;
+          if (j) {
+            jump.current = undefined;
+            const s = j.from && skipped(j.from, feed);
+            const text = s ? skippedText(s) : '';
+            setSince(text || null);
+            voice.say(`At ${fmtClock(feed.t)}.${text ? ` Before this point: ${text}.` : ''}`);
+          }
+          // A still frame has what it came for: it closes itself (the cleanup's second close is a no-op).
+          if (still) {
+            close();
+            setOpen({ at: null });
+          }
         },
         onError() {
           setFails((n) => n + 1);
@@ -218,12 +414,17 @@ export function Player({
             const t = clock.current.t + Math.max(0, Date.now() - clock.current.wall);
             const { started_at, ended_at } = rec.current;
             const end = ended_at === null ? Date.now() : Date.parse(ended_at);
-            setOpen({ at: from === 'live' ? 'live' : Math.round(clamp(t, Date.parse(started_at), end)) });
+            // A still frame retries as a still at its own T, which does not run.
+            setOpen(
+              still
+                ? { at: from, still }
+                : { at: from === 'live' ? 'live' : Math.round(clamp(t, Date.parse(started_at), end)) },
+            );
           }, wait);
         },
         onEnd(t) {
           clock.current = { t, wall: Date.now() };
-          setHeld(t);
+          stood.current = t;
           setOpen({ at: null });
         },
       },
@@ -232,7 +433,7 @@ export function Player({
       close();
       clearTimeout(retry);
     };
-  }, [recording.id, open, liveDelay, store]);
+  }, [recording.id, open, liveDelay, store, voice]);
 
   useEffect(
     () => () => {
@@ -241,6 +442,17 @@ export function Player({
     },
     [],
   );
+  useEffect(() => {
+    voice.set(announce);
+    return () => voice.set(false);
+  }, [voice, announce]);
+
+  // While playing, the replay's URL follows T every 15 s (a reload then resumes near it).
+  useEffect(() => {
+    if (!keepT || !playing) return;
+    const id = setInterval(() => writeT(clock.current.t + Math.max(0, Date.now() - clock.current.wall)), WRITE_T_MS);
+    return () => clearInterval(id);
+  }, [keepT, playing]);
 
   const changeDelay = (s: number) => {
     const v = clamp(Math.round(s), 0, MAX_DELAY);
@@ -250,31 +462,48 @@ export function Player({
     timers.current.delay = setTimeout(() => setStreamDelay(v), DEBOUNCE_MS);
   };
 
-  // A seek or a nudge: shown at once; 400 ms after the last one, T moves there and, while playing, the stream reopens.
+  // A seek, a nudge or a chip: shown at once; 400 ms after the last one, T moves there and the stream reopens there,
+  // or, while paused, a still frame fetches the state at that T. A pending still frame closes at the first input.
   const seekTo = (t: number) => {
     const v = Math.round(clamp(t, lo, hi()));
     setSeek(v);
+    setOpen((o) => (o.still ? { at: null } : o));
     clearTimeout(timers.current.seek);
     timers.current.seek = setTimeout(() => {
+      jump.current = { from: lastFeed.current };
       freeze(v);
       setSeek(null);
-      setOpen((o) => (o.at === null ? o : { at: v }));
+      setSince(null);
+      if (keepT) writeT(v);
+      setOpen((o) => (o.at === null ? { at: v, still: true } : { at: v }));
     }, DEBOUNCE_MS);
   };
 
   const pause = () => {
     const t = nowT();
     freeze(t);
-    setHeld(t);
-    setAt(null);
+    stood.current = t;
+    setOpen({ at: null });
+    if (keepT) writeT(t);
   };
-  const play = () => setAt(Math.round(clamp(nowT(), lo, hi())));
+  const play = () => {
+    setResumed(null);
+    setOpen({ at: Math.round(clamp(nowT(), lo, hi())) });
+  };
+  const goLive = () => {
+    setResumed(null);
+    setOpen({ at: 'live' });
+  };
+  // Live, a nudge moves the delay: earlier is more delay. In replay it moves T.
+  const nudge = (s: number) => (at === 'live' ? changeDelay(delay - s) : seekTo(now() + s * 1000));
+  const toggleAnnounce = (on: boolean) => {
+    setAnnounce(on);
+    writeAnnounce(on);
+  };
 
   const now = () => seek ?? nowT();
-  // A seek while paused only moves T (the sync flow: pause, seek, Play on both screens); the tower stays at `held`.
-  const moved = !playing && held !== null && now() !== held;
-  // The strip shows the time the state stands at: T while playing, `held` while paused (LEFT agrees with the tower).
-  const stateNow = () => (playing ? now() : (held ?? now()));
+  // The strip and LEFT show the time the state stands at: T while playing, else where the last state landed.
+  const stateNow = () => (playing ? now() : stood.current);
   const feed = snap.feed;
   const state = feed?.state;
   // Rebuilt only when the lap rows change (a snapshot or a `laps` event), so the lap table skips deltas.
@@ -305,47 +534,80 @@ export function Player({
       fastest: fastestSoFar(s),
     };
   }, [snap, sessionKey]);
+  // The series is parsed once per flush; the ticking bar only filters it at T.
+  const series = useMemo(() => (snap.feed ? statusSeries(snap.feed.state) : []), [snap]);
+  const focused = useMemo(() => {
+    const s = snap.feed?.state;
+    return s === undefined || focus === null
+      ? null
+      : { n: Number(focus), tla: driverOf(view(s, 'DriverList') ?? {}, focus).acronym };
+  }, [snap, focus]);
   // The tab title carries the light while the session runs (D1); App writes it.
   const word = wall?.running ? LIGHT[wall.strip.light].word : null;
   useEffect(() => setTitleWord(word), [word]);
   useEffect(() => () => setTitleWord(null), []);
-  const info = useMemo(() => {
-    const s = snap.feed?.state;
-    if (!s) return null;
-    const remaining = view(s, 'ExtrapolatedClock')?.Remaining;
-    const lapCount = view(s, 'LapCount');
-    const track = view(s, 'TrackStatus')?.Message;
-    return (
-      <>
-        {remaining && <span> · {remaining} left</span>}
-        {lapCount?.CurrentLap !== undefined && (
-          <span>
-            {' '}
-            · Lap {lapCount.CurrentLap}
-            {lapCount.TotalLaps !== undefined && `/${lapCount.TotalLaps}`}
-          </span>
-        )}
-        {track && <span> · {track}</span>}
-      </>
-    );
-  }, [snap]);
+
+  // Announcements, per flush: what changed since the last one within the same feed. A snapshot (a new feed) only sets
+  // the baseline; a seek's own line comes with its snapshot (onData).
+  const heard = useRef<{ feed: Feed; starts: number; light?: string | undefined; fastest?: string | undefined }>(
+    undefined,
+  );
+  useEffect(() => {
+    const feed = snap.feed;
+    if (!feed) return;
+    const facts = {
+      feed,
+      starts: markersUpTo(series, feed.t, [lo, Number.POSITIVE_INFINITY]).filter((m) => m.kind === 'start').length,
+      light: wall && LIGHT[wall.strip.light].word,
+      fastest: wall?.fastest && `Fastest lap: ${wall.fastest.driver.acronym} ${wall.fastest.value}`,
+    };
+    const prev = heard.current;
+    heard.current = facts;
+    if (prev?.feed !== feed) return;
+    const parts = [
+      facts.starts > prev.starts && 'Start',
+      facts.light !== prev.light && facts.light,
+      facts.fastest !== prev.fastest && facts.fastest,
+    ].filter((p) => typeof p === 'string');
+    if (parts.length > 0) voice.say(parts.join('. '));
+  }, [snap, series, wall, lo, voice]);
+
+  const live = at === 'live';
+  const mode = live
+    ? delay === 0
+      ? 'LIVE · Delay not set'
+      : `LIVE, ${delay} s behind`
+    : playing
+      ? 'Replay'
+      : 'Paused';
+  const nudgeButton = (s: number) => (
+    <button key={s} type="button" aria-label={nudgeLabel(s)} onClick={() => nudge(s)}>
+      {signed(s)}
+    </button>
+  );
 
   return (
     <>
-      <Clock now={now} playing={playing}>
-        {info}
-        {at === 'live' ? <span> · Live</span> : !playing && <span> · Paused</span>}
-      </Clock>
-      {playing && fails >= FAILING ? (
+      {at !== null && fails >= FAILING ? (
         <p role="status">The stream keeps failing. Reload the page (your Access session may have expired).</p>
       ) : (
-        ((playing && fails > 0) || moved) && (
+        at !== null &&
+        fails > 0 && (
           <p role="status" className="muted">
-            {moved ? 'Press Play to load this position.' : 'Reconnecting…'}
+            Reconnecting…
           </p>
         )
       )}
+      {resumed !== null && <p className="muted">Resumed at {fmtClock(resumed)}: press Play when the video is there.</p>}
       {wall && <Strip strip={wall.strip} now={stateNow} playing={playing} />}
+      {since !== null && (
+        <p className="since">
+          <b>Before this point</b> <span>{since}</span>
+          <button type="button" aria-label="Dismiss" onClick={() => setSince(null)}>
+            ×
+          </button>
+        </p>
+      )}
       {detail && (
         <fieldset className="segmented" aria-label="View">
           <button type="button" aria-pressed={tab === 'tower'} onClick={() => setTab('tower')}>
@@ -369,9 +631,38 @@ export function Player({
         tower
       )}
       <section className="player" aria-label="Playback controls">
-        <Seek now={now} playing={playing} lo={lo} hi={hi} marks={snap.marks} onSeek={seekTo} />
-        {at === 'live' && (
-          <label>
+        <Clock now={now} stateNow={stateNow} playing={playing} strip={wall?.strip}>
+          <span className={live ? 'pill live' : 'pill'}>
+            <span className="dot" aria-hidden="true" />
+            {mode}
+          </span>
+        </Clock>
+        <Seek now={now} playing={playing} lo={lo} hi={hi} series={series} onSeek={seekTo} />
+        {/* Seven buttons, Play in the middle; in replay of an open recording a Live button (a mode switch) follows. */}
+        <div className="transport">
+          {NUDGES.slice(0, 3).map(nudgeButton)}
+          <button type="button" className="play" onClick={playing ? pause : play}>
+            {playing ? 'Pause' : 'Play'}
+          </button>
+          {NUDGES.slice(3).map(nudgeButton)}
+          {!live && recording.ended_at === null && (
+            <button type="button" className="golive" onClick={goLive}>
+              Live
+            </button>
+          )}
+        </div>
+        <BackTo
+          now={now}
+          playing={playing}
+          lo={lo}
+          hi={hi}
+          series={series}
+          laps={snap.laps}
+          focused={focused}
+          onSeek={seekTo}
+        />
+        {live && (
+          <label className="delay">
             Delay {delay} s
             <input
               type="range"
@@ -384,44 +675,14 @@ export function Player({
             />
           </label>
         )}
-        {/* One row of equal buttons at 390 px: Play/Pause and the six nudges (a Live button wraps to its own row). */}
-        <div className="controls">
-          {playing ? (
-            <button type="button" onClick={pause}>
-              Pause
-            </button>
-          ) : (
-            <button type="button" onClick={play}>
-              Play
-            </button>
-          )}
-          {at === 'live' ? (
-            NUDGES.map((s) => (
-              <button key={s} type="button" aria-label={`Delay ${signed(s)}`} onClick={() => changeDelay(delay + s)}>
-                {signed(s)}
-              </button>
-            ))
-          ) : (
-            <>
-              {NUDGES.map((s) => (
-                <button
-                  key={s}
-                  type="button"
-                  aria-label={`Position ${signed(s)}`}
-                  onClick={() => seekTo(now() + s * 1000)}
-                >
-                  {signed(s)}
-                </button>
-              ))}
-              {recording.ended_at === null && (
-                <button type="button" onClick={() => setAt('live')}>
-                  Live
-                </button>
-              )}
-            </>
-          )}
-        </div>
+        <label className="announce">
+          <input type="checkbox" checked={announce} onChange={(e) => toggleAnnounce(e.target.checked)} />
+          Announce events
+        </label>
       </section>
+      <p className="vh" role="status">
+        {said}
+      </p>
     </>
   );
 }

@@ -1,17 +1,16 @@
 // @vitest-environment happy-dom
-import { Lap, type Live as LiveData, SessionDetail, view } from '@f1/contracts';
+import { Lap, type Live as LiveData, type Recordings, SessionDetail, view } from '@f1/contracts';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { useTitle } from '../src/lib/routes.ts';
-import { markers, streamUrl } from '../src/lib/stream.ts';
-import { Live } from '../src/views/Live.tsx';
+import { streamUrl } from '../src/lib/stream.ts';
+import { Live, Replay } from '../src/views/Live.tsx';
 import { Player, type PlayerRecording } from '../src/views/Player.tsx';
 import { raceState } from './feed-state.ts';
 
-// `view` (a zod parse of a topic) counts what the tower, the pit wall, the clock line's info and the markers derive from
-// the state.
+// `view` (a zod parse of a topic) counts what the tower, the pit wall and the status series derive from the state.
 vi.mock('@f1/contracts', async (load) => {
   const m = await load<typeof import('@f1/contracts')>();
   return { ...m, view: vi.fn(m.view) };
@@ -103,38 +102,6 @@ describe('streamUrl', () => {
   });
 });
 
-describe('markers', () => {
-  it('comes from the status series alone: start (not the 2 s blip), TrackStatus Red, Finished', () => {
-    const state = {
-      SessionData: {
-        StatusSeries: {
-          '0': { Utc: '2026-10-25T20:00:00', TrackStatus: 'AllClear' },
-          '1': { Utc: '2026-10-25T20:00:00', SessionStatus: 'Started' },
-          '2': { Utc: '2026-10-25T20:00:02', SessionStatus: 'Aborted' },
-          '3': { Utc: '2026-10-25T20:05:00.000Z', SessionStatus: 'Started' },
-          '4': { Utc: '2026-10-25T20:05:50', TrackStatus: 'Yellow' }, // not a SessionStatus: the start stays
-          '5': { Utc: '2026-10-25T20:30:00', TrackStatus: 'Red' },
-          '6': { Utc: '2026-10-25T21:30:00', SessionStatus: 'Finished' },
-        },
-      },
-    };
-    expect(markers(state)).toEqual([
-      { kind: 'start', t: Date.parse('2026-10-25T20:05:00Z') },
-      { kind: 'red', t: Date.parse('2026-10-25T20:30:00Z') },
-      { kind: 'chequered', t: Date.parse('2026-10-25T21:30:00Z') },
-    ]);
-    expect(markers({})).toEqual([]);
-  });
-
-  it('a RaceControl RED or CHEQUERED alone gives no marker', () => {
-    const Messages = {
-      '0': { Utc: '2026-10-25T20:30:00', Category: 'Flag', Flag: 'RED' },
-      '1': { Utc: '2026-10-25T21:30:00', Category: 'Flag', Flag: 'CHEQUERED' },
-    };
-    expect(markers({ RaceControlMessages: { Messages } })).toEqual([]);
-  });
-});
-
 describe('Player', () => {
   it('a marker before the recording started is not drawn', () => {
     render({ recording: ended, start: S + 3_600_000 });
@@ -152,20 +119,21 @@ describe('Player', () => {
     const input = $<HTMLInputElement>('input[aria-label="Delay"]');
     expect([input.min, input.max, input.step]).toEqual(['0', '120', '1']);
     expect(delayShown()).toBe(0);
-    click('Delay −30 s');
-    click('Delay −1 s');
+    // P4e: the nudges are named for T ("earlier"/"later"); live, earlier is more delay.
+    click('30 seconds later');
+    click('1 second later');
     expect(delayShown()).toBe(0);
-    click('Delay +5 s');
-    click('Delay +1 s');
+    click('5 seconds earlier');
+    click('1 second earlier');
     expect(delayShown()).toBe(6);
     slide('Delay', 118);
     expect(delayShown()).toBe(118);
     expect(host.textContent).toContain('Delay 118 s');
-    click('Delay +30 s');
+    click('30 seconds earlier');
     expect(delayShown()).toBe(120);
-    click('Delay +1 s');
+    click('1 second earlier');
     expect(delayShown()).toBe(120);
-    click('Delay −1 s');
+    click('1 second later');
     expect(delayShown()).toBe(119);
   });
 
@@ -174,7 +142,7 @@ describe('Player', () => {
     render({});
     expect(delayShown()).toBe(45);
     expect(last().url).toContain('delay=45');
-    click('Delay +5 s');
+    click('5 seconds earlier'); // P4e: was "Delay +5 s"
     expect(localStorage.getItem('f1.delay')).toBe('50');
     act(() => root.unmount());
 
@@ -197,7 +165,7 @@ describe('Player', () => {
     root = createRoot(host);
     render({});
     expect(delayShown()).toBe(0);
-    click('Delay +5 s'); // the write throws; the value still shows
+    click('5 seconds earlier'); // the write throws; the value still shows (P4e: was "Delay +5 s")
     expect(delayShown()).toBe(5);
   });
 
@@ -206,9 +174,10 @@ describe('Player', () => {
     expect(FakeES.all).toHaveLength(1);
     const first = last();
     expect(first.url).toBe('/api/v1/playback/7/stream?at=live&delay=0');
-    click('Delay +1 s');
+    // P4e: was "Delay +1 s" and "Delay +5 s".
+    click('1 second earlier');
     advance(100);
-    click('Delay +5 s');
+    click('5 seconds earlier');
     advance(300);
     slide('Delay', 9);
     advance(399);
@@ -236,8 +205,9 @@ describe('Player', () => {
     expect(atOf(last())).toBe(String(to));
     expect(openCount()).toBe(1);
 
-    click('Position +5 s');
-    click('Position +5 s');
+    // P4e: was "Position +5 s".
+    click('5 seconds later');
+    click('5 seconds later');
     advance(400);
     expect(FakeES.all).toHaveLength(3);
     expect(atOf(last())).toBe(String(to + 10_000));
@@ -254,8 +224,8 @@ describe('Player', () => {
     expect(atOf(last())).toBe(String(to + 10_000));
     expect(openCount()).toBe(1);
 
-    // A nudge past the end clamps to it.
-    click('Position +30 s');
+    // A nudge past the end clamps to it (P4e: was "Position +30 s").
+    click('30 seconds later');
     slide('Position', E + 60_000);
     advance(400);
     expect(atOf(last())).toBe(String(E));
@@ -369,7 +339,7 @@ describe('Player', () => {
       stints: [],
     });
     advance(250);
-    const clockText = () => host.querySelector('.clock time')?.textContent;
+    const clockText = () => host.querySelector('.clockline time')?.textContent; // P4e: the clock line is in the bar
     const left = () =>
       [...host.querySelectorAll('.strip > div')].find((d) => d.querySelector('dt')?.textContent === 'Left')
         ?.textContent;
@@ -388,37 +358,16 @@ describe('Player', () => {
     render({ start: NOW - 60_000 });
     const bar = $<HTMLInputElement>('input[aria-label="Position"]');
     expect(bar.max).toBe(String(NOW));
-    expect(bar.getAttribute('aria-valuetext')).toBe('22:59:00'); // NOW − 60 s in Amsterdam (CET)
-    click('Position +30 s');
-    click('Position +30 s');
-    click('Position +30 s');
+    // NOW − 60 s in Amsterdam (CET); P4e: per minute while playing, so '22:59', was '22:59:00'.
+    expect(bar.getAttribute('aria-valuetext')).toBe('22:59');
+    click('30 seconds later');
+    click('30 seconds later');
+    click('30 seconds later');
     advance(400);
     expect(atOf(last())).toBe(String(NOW));
   });
 
-  it('a seek while paused moves T only, and says Play loads it', () => {
-    const start = S + 3_600_000;
-    render({ recording: ended, start });
-    last().emit('snapshot', { t: start, state: {}, laps: [], stints: [] });
-    button('Pause');
-    const hint = 'Press Play to load this position.';
-    expect(host.textContent).not.toContain(hint);
-    click('Position −30 s');
-    expect(host.textContent).toContain(hint);
-    advance(400);
-    expect(FakeES.all).toHaveLength(1); // nothing opens while paused
-    expect(host.textContent).toContain(hint);
-    click('Position +30 s'); // back where the tower stands
-    advance(400);
-    expect(host.textContent).not.toContain(hint);
-    click('Position −5 s');
-    advance(400);
-    button('Play');
-    expect(atOf(last())).toBe(String(start - 5_000));
-    expect(host.textContent).not.toContain(hint);
-  });
-
-  it('a seek while paused leaves LEFT where the tower stands', () => {
+  it("a seek while paused leaves LEFT where the tower stands until the still frame's snapshot", () => {
     const start = S + 3_600_000;
     render({ recording: ended, start, sessionKey: 9100 });
     const clock = { Utc: new Date(start).toISOString(), Remaining: '01:00:00', Extrapolating: true };
@@ -432,12 +381,17 @@ describe('Player', () => {
     const left = () => [...host.querySelectorAll('.strip div')].find((d) => d.textContent?.startsWith('Left'));
     expect(left()?.textContent).toBe('Left59:50');
     button('Pause');
-    slide('Position', start + 10_000 + 300_000);
-    expect(host.textContent).toContain('Press Play to load this position.');
+    const to = start + 10_000 + 300_000;
+    slide('Position', to);
     expect(left()?.textContent).toBe('Left59:50');
     advance(400);
+    // P4e: the paused seek opens a still frame (no more "Press Play"); LEFT waits for its snapshot.
+    expect(atOf(last())).toBe(String(to));
     expect(left()?.textContent).toBe('Left59:50');
-    button('Play');
+    last().emit('snapshot', { t: to, state: raceState({ extra: { ExtrapolatedClock: clock } }), laps: [], stints: [] });
+    advance(250);
+    expect(left()?.textContent).toBe('Left54:50');
+    advance(5_000); // paused: it stands
     expect(left()?.textContent).toBe('Left54:50');
   });
 
@@ -515,6 +469,7 @@ describe('Player', () => {
           },
         },
         LapCount: { CurrentLap: 3, TotalLaps: 71 },
+        SessionStatus: { Status: 'Started' }, // P4e: the strip's light word needs a running session
         TrackStatus: { Status: '1', Message: 'AllClear' },
       },
       laps: [lap(1, 1)],
@@ -527,7 +482,9 @@ describe('Player', () => {
     expect(tower()).toEqual(['VER', 'HAM']);
     expect(host.textContent).toContain('+1.234');
     expect(host.textContent).toContain('Lap 3/71');
-    expect(host.textContent).toContain('AllClear');
+    // P4e: the clock line no longer shows TrackStatus.Message ("AllClear"); the strip's light word carries it.
+    const light = () => host.querySelector('.strip .lw')?.textContent;
+    expect(light()).toBe('Track clear');
 
     last().emit('delta', {
       t: t + 1_000,
@@ -538,7 +495,7 @@ describe('Player', () => {
     expect(tower()).toEqual(['VER', 'HAM']); // throttled
     advance(250);
     expect(tower()).toEqual(['HAM', 'VER']);
-    expect(host.textContent).toContain('Yellow');
+    expect(light()).toBe('Yellow flag'); // P4e: was the clock line's "Yellow"
 
     button('Laps');
     const lapHeads = () => [...host.querySelectorAll('table.laps thead th')].map((x) => x.textContent);
@@ -705,5 +662,540 @@ describe('the pit wall in the player', () => {
     act(() => driver('CCC')?.click());
     expect(focused()).toEqual([]);
     expect(host.querySelectorAll('.tower [aria-pressed="true"]')).toHaveLength(0);
+  });
+});
+
+// The player bar (P4e, A§13): one control model around T, nothing on screen ahead of T, a reload that comes back
+// paused where you were. One test per criterion of #51.
+describe('the player bar', () => {
+  const T = S + 3_600_000; // 20:00Z, 21:00:00 in Amsterdam (CET)
+  const utcOf = (hm: string) => `2026-10-25T${hm}:00.000Z`;
+  /** A StatusSeries from [UTC HH:mm, field, value] rows, keyed 0, 1, … */
+  const statusSeries = (rows: [string, 'SessionStatus' | 'TrackStatus', string][]) =>
+    Object.fromEntries(rows.map(([hm, k, v], i) => [String(i), { Utc: utcOf(hm), [k]: v }]));
+  const pitOut = (driver: number, n: number, hm: string) => ({
+    ...lap(driver, n),
+    is_pit_out: true,
+    date_start: utcOf(hm),
+  });
+  const pill = () => $('.clockline .pill').textContent;
+  const chips = () => [...host.querySelectorAll('section.player .chips button')].map((b) => b.textContent);
+  const position = () => Number($<HTMLInputElement>('input[aria-label="Position"]').value);
+  const tap = (tla: string) =>
+    act(() =>
+      [...host.querySelectorAll<HTMLButtonElement>('.tower tbody th button')]
+        .find((b) => b.textContent === tla)
+        ?.click(),
+    );
+
+  beforeEach(() => history.replaceState(null, '', '/'));
+
+  it('nudges: live, earlier adds delay and later takes it off (0–120 s); in replay they move T', () => {
+    render({});
+    expect($('.clockline .pill').className).toBe('pill live');
+    expect(pill()).toBe('LIVE · Delay not set');
+    expect([...host.querySelectorAll('.transport button')].map((b) => b.textContent)).toEqual([
+      '−30',
+      '−5',
+      '−1',
+      'Pause',
+      '+1',
+      '+5',
+      '+30',
+    ]);
+    expect($('.transport button:nth-child(4)').className).toBe('play');
+    click('5 seconds earlier');
+    expect(delayShown()).toBe(5);
+    expect(pill()).toBe('LIVE, 5 s behind');
+    click('5 seconds later');
+    expect(delayShown()).toBe(0);
+    expect(pill()).toBe('LIVE · Delay not set');
+    click('1 second later');
+    expect(delayShown()).toBe(0);
+    for (let i = 0; i < 5; i++) click('30 seconds earlier');
+    expect(delayShown()).toBe(120);
+    expect(pill()).toBe('LIVE, 120 s behind');
+    act(() => root.unmount());
+
+    root = createRoot(host);
+    render({ recording: ended, start: T });
+    last().emit('snapshot', { t: T, state: {}, laps: [], stints: [] });
+    expect($('.clockline .pill').className).toBe('pill');
+    expect(pill()).toBe('Replay');
+    const opened = FakeES.all.length;
+    click('5 seconds earlier');
+    advance(399);
+    expect(FakeES.all).toHaveLength(opened);
+    advance(1);
+    expect(atOf(last())).toBe(String(T - 5_000));
+    expect(openCount()).toBe(1);
+  });
+
+  it('has no forward jump: no mark or chip after T, only Play/Pause, six nudges, the back chips and Live', () => {
+    render({ recording: open, start: T }); // a replay of an open recording: Live is a mode switch (D2)
+    // A synthetic state that knows the future: each kind once before T and once after.
+    const StatusSeries = statusSeries([
+      ['19:10', 'SessionStatus', 'Started'],
+      ['19:20', 'TrackStatus', 'SCDeployed'],
+      ['19:25', 'TrackStatus', 'AllClear'],
+      ['19:30', 'TrackStatus', 'VSCDeployed'],
+      ['19:32', 'TrackStatus', 'AllClear'],
+      ['19:40', 'TrackStatus', 'Red'],
+      ['19:45', 'TrackStatus', 'AllClear'],
+      ['19:50', 'SessionStatus', 'Finished'],
+      ['20:10', 'TrackStatus', 'SCDeployed'],
+      ['20:20', 'TrackStatus', 'Red'],
+      ['20:30', 'SessionStatus', 'Started'],
+      ['20:40', 'SessionStatus', 'Finished'],
+    ]);
+    last().emit('snapshot', { t: T, state: { SessionData: { StatusSeries } }, laps: [], stints: [] });
+    advance(250);
+    expect([...host.querySelectorAll('.marks .marker')].map((m) => m.getAttribute('title'))).toEqual([
+      'Start 20:10:00',
+      'Safety car 20:20:00',
+      'Virtual safety car 20:30:00',
+      'Red flag 20:40:00',
+      'Chequered flag 20:50:00',
+    ]);
+    expect([...$('section.player').children].map((c) => c.className)).toEqual([
+      'clockline',
+      'seek',
+      'transport',
+      'chips',
+      'announce',
+    ]);
+    expect([...$('section.player').querySelectorAll('button')].map((b) => b.textContent)).toEqual([
+      '−30',
+      '−5',
+      '−1',
+      'Pause',
+      '+1',
+      '+5',
+      '+30',
+      'Live',
+      'Start 20:10',
+      'SC 20:20',
+      'VSC 20:30',
+      'Red flag 20:40',
+      'Chequered flag 20:50',
+    ]);
+    expect($('.transport .golive').textContent).toBe('Live');
+    // Every chip goes back: the latest first, then each one before it.
+    let before = position();
+    for (const [chip, hm] of [
+      ['Chequered flag 20:50', '19:50'],
+      ['Red flag 20:40', '19:40'],
+      ['VSC 20:30', '19:30'],
+      ['SC 20:20', '19:20'],
+      ['Start 20:10', '19:10'],
+    ] as const) {
+      button(chip);
+      expect(position()).toBe(Date.parse(utcOf(hm)));
+      expect(position()).toBeLessThan(before);
+      before = position();
+    }
+    expect(chips()).toEqual(['Start 20:10']);
+    advance(400);
+    expect(atOf(last())).toBe(String(Date.parse(utcOf('19:10'))));
+    expect(openCount()).toBe(1);
+  });
+
+  it('marks and chips stand at T: a backward seek drops a later SC at once, an open band grows with the tick', () => {
+    render({ recording: ended, start: T });
+    const StatusSeries = statusSeries([
+      ['19:10', 'SessionStatus', 'Started'],
+      ['19:55', 'TrackStatus', 'SCDeployed'],
+    ]);
+    last().emit('snapshot', { t: T, state: { SessionData: { StatusSeries } }, laps: [], stints: [] });
+    advance(250);
+    const band = () => host.querySelector<HTMLElement>('.marks .m-band');
+    expect(band()?.className).toBe('marker m-band m-sc open');
+    expect(host.querySelector('.marks .m-start')?.className).toBe('marker m-start');
+    const w = () => Number.parseFloat(band()?.style.getPropertyValue('--w') ?? '');
+    const w0 = w();
+    expect(w0).toBeGreaterThan(0);
+    const calls = vi.mocked(view).mock.calls.length;
+    advance(5_000);
+    expect(w()).toBeGreaterThan(w0); // the open band ends at T, which ticked
+    expect(vi.mocked(view).mock.calls.length).toBe(calls); // and nothing was parsed for it
+    expect(chips()).toEqual(['Start 20:10', 'SC 20:55']);
+
+    // Back to before the SC: its band and chip go at once, before any new stream or snapshot.
+    slide('Position', Date.parse(utcOf('19:50')));
+    expect(band()).toBeNull();
+    expect(chips()).toEqual(['Start 20:10']);
+    expect(FakeES.all).toHaveLength(1);
+    // A chip seeks back to its mark.
+    button('Start 20:10');
+    advance(400);
+    expect(atOf(last())).toBe(String(Date.parse(utcOf('19:10'))));
+    expect(openCount()).toBe(1);
+  });
+
+  it("the focused driver's last stop is a chip; a pit-out after T is none", () => {
+    render({ recording: ended, start: T, sessionKey: 9100 });
+    const laps = [pitOut(2, 21, '19:30'), pitOut(2, 40, '20:30'), pitOut(3, 40, '20:30')];
+    last().emit('snapshot', { t: T, state: raceState(), laps, stints: [] });
+    advance(250);
+    expect(host.querySelector('section.player .chips')).toBeNull(); // no mark and no focus: no group at all
+    tap('BBB');
+    expect(chips()).toEqual(['BBB stop L20']); // lap 40's pit-out is after T
+    expect($('section.player .chips').getAttribute('aria-label')).toBe('Back to');
+    expect($('section.player .chips .label').textContent).toBe('Back to');
+    tap('CCC');
+    expect(host.querySelector('section.player .chips')).toBeNull(); // its only pit-out is after T
+    tap('BBB');
+    button('BBB stop L20');
+    advance(400);
+    expect(atOf(last())).toBe(String(Date.parse(utcOf('19:30'))));
+  });
+
+  it('a forward seek says once what it skipped in (old T, new T]: dismissible, and none after a backward seek', () => {
+    render({ recording: ended, start: T, sessionKey: 9100, detail });
+    const since = () => host.querySelector('p.since');
+    const deleted = { ...lap(1, 10), deleted: true };
+    last().emit('snapshot', { t: T, state: raceState(), laps: [deleted], stints: [] });
+    advance(250);
+    const to = Date.parse(utcOf('20:30'));
+    slide('Position', to);
+    advance(400);
+    expect(since()).toBeNull(); // not before the new snapshot
+    const msg = (hm: string, Message: string) => ({ Utc: utcOf(hm), Category: 'Other', Message });
+    const state = raceState({
+      extra: {
+        SessionData: {
+          StatusSeries: statusSeries([
+            ['19:20', 'TrackStatus', 'SCDeployed'], // before the old T
+            ['19:25', 'TrackStatus', 'AllClear'],
+            ['20:05', 'TrackStatus', 'SCDeployed'],
+            ['20:08', 'TrackStatus', 'AllClear'],
+            ['20:15', 'TrackStatus', 'VSCDeployed'],
+            ['20:16', 'TrackStatus', 'VSCEnding'],
+            ['20:17', 'TrackStatus', 'AllClear'],
+            ['20:50', 'TrackStatus', 'Red'], // after the new T (a synthetic future)
+          ]),
+        },
+        RaceControlMessages: {
+          Messages: {
+            '0': msg('19:50', 'TURN 1 INCIDENT INVOLVING CARS 1 (AAA) AND 2 (BBB) NOTED'),
+            '1': msg('20:12', 'TURN 4 INCIDENT INVOLVING CAR 3 (CCC) NOTED - CAUSING A COLLISION'),
+            '2': msg('20:13', 'TURN 4 INCIDENT INVOLVING CAR 3 (CCC) UNDER INVESTIGATION'),
+            '3': msg('20:45', 'TURN 9 INCIDENT INVOLVING CAR 4 (DDD) NOTED'),
+          },
+        },
+      },
+    });
+    const laps = [
+      deleted, // deleted before: not counted
+      { ...lap(2, 5), deleted: true },
+      pitOut(1, 21, '20:10'),
+      pitOut(2, 22, '20:20'),
+      pitOut(3, 1, '20:05'), // lap 1 is no stop
+      pitOut(4, 30, '20:40'), // after the new T
+    ];
+    last().emit('snapshot', { t: to, state, laps, stints: [] });
+    expect(since()?.querySelector('b')?.textContent).toBe('Before this point');
+    expect(since()?.querySelector('span')?.textContent).toBe(
+      '1 SC · 1 VSC · 2 pit stops · 1 lap deleted · 1 incident noted',
+    );
+    advance(250);
+    // Above the view switch, below the strip; never a dialog.
+    expect($('.strip').compareDocumentPosition($('p.since')) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(
+      $('p.since').compareDocumentPosition($('fieldset.segmented')) & Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
+    expect(host.querySelector('dialog, [role="dialog"]')).toBeNull();
+    click('Dismiss');
+    expect(since()).toBeNull();
+    advance(60_000);
+    expect(since()).toBeNull(); // shown once
+
+    // Backward: no line, also once its snapshot is in.
+    slide('Position', T);
+    advance(400);
+    last().emit('snapshot', { t: T, state: raceState(), laps: [deleted], stints: [] });
+    expect(since()).toBeNull();
+  });
+
+  it('a seek while paused opens one still frame, closed by its snapshot; a new seek closes a pending one first', () => {
+    render({ recording: ended, start: T });
+    last().emit('snapshot', { t: T, state: {}, laps: [], stints: [] });
+    button('Pause');
+    expect(openCount()).toBe(0);
+    click('30 seconds earlier');
+    advance(399);
+    expect(FakeES.all).toHaveLength(1);
+    advance(1);
+    expect(FakeES.all).toHaveLength(2);
+    expect(atOf(last())).toBe(String(T - 30_000));
+    expect(openCount()).toBe(1);
+    expect(pill()).toBe('Paused'); // a still frame does not play
+    last().emit('snapshot', { t: T - 30_000, state: {}, laps: [], stints: [] });
+    expect(last().closed).toBe(true);
+    expect(openCount()).toBe(0);
+    advance(60_000);
+    expect(FakeES.all).toHaveLength(2); // nothing reopens
+    expect(position()).toBe(T - 30_000); // T stands at the still frame
+
+    // A second seek while a still frame is pending closes it at once, before its own 400 ms.
+    click('5 seconds earlier');
+    advance(400);
+    const pending = last();
+    expect(atOf(pending)).toBe(String(T - 35_000));
+    click('5 seconds earlier');
+    expect(pending.closed).toBe(true);
+    expect(openCount()).toBe(0);
+    advance(400);
+    expect(atOf(last())).toBe(String(T - 40_000));
+    expect(openCount()).toBe(1);
+
+    // An error retries it as a still frame at the same T.
+    last().emit('error');
+    expect(host.textContent).toContain('Reconnecting…');
+    advance(1_000);
+    expect(FakeES.all).toHaveLength(5);
+    expect(atOf(last())).toBe(String(T - 40_000));
+    expect(openCount()).toBe(1);
+    last().emit('snapshot', { t: T - 40_000, state: {}, laps: [], stints: [] });
+    expect(openCount()).toBe(0);
+    expect(host.textContent).not.toContain('Reconnecting…');
+
+    button('Play');
+    expect(atOf(last())).toBe(String(T - 40_000));
+    expect(pill()).toBe('Replay');
+    expect(openCount()).toBe(1);
+  });
+
+  const recordings: Recordings = [
+    {
+      id: 7,
+      session_key: 9100,
+      year: 2026,
+      meeting_name: 'Mexico City',
+      session_name: 'Race',
+      session_type: 'Race',
+      date_start: new Date(T).toISOString(),
+      started_at: ended.started_at,
+      ended_at: ended.ended_at,
+      complete: true,
+    },
+  ];
+  // /replay/7 as App renders it, from a cache filled by hand (msw would fail a fetch).
+  const replay = () => {
+    const client = new QueryClient({ defaultOptions: { queries: { enabled: false } } });
+    client.setQueryData(['recordings'], recordings);
+    act(() =>
+      root.render(
+        <QueryClientProvider client={client}>
+          <Replay recording={7} />
+        </QueryClientProvider>,
+      ),
+    );
+  };
+
+  it('the replay keeps T in the URL: on pause, on a seek commit and every 15 s while playing', () => {
+    history.replaceState(null, '', '/replay/7');
+    replay();
+    expect(atOf(last())).toBe(String(T));
+    last().emit('snapshot', { t: T, state: {}, laps: [], stints: [] });
+    advance(14_999);
+    expect(location.search).toBe('');
+    advance(1);
+    expect(location.search).toBe('?t=21:00:15');
+    advance(15_000);
+    expect(location.search).toBe('?t=21:00:30');
+    advance(2_000);
+    button('Pause');
+    expect(location.search).toBe('?t=21:00:32');
+    advance(30_000);
+    expect(location.search).toBe('?t=21:00:32'); // paused: no more writes
+    click('30 seconds earlier');
+    expect(location.search).toBe('?t=21:00:32'); // not before the commit
+    advance(400);
+    expect(location.search).toBe('?t=21:00:02');
+    expect(location.pathname).toBe('/replay/7');
+  });
+
+  it('/live never writes T to the URL', () => {
+    history.replaceState(null, '', '/live');
+    const client = new QueryClient({ defaultOptions: { queries: { enabled: false } } });
+    const live: LiveData = {
+      session: {
+        session_key: 9100,
+        meeting_name: 'Mexico City',
+        session_name: 'Race',
+        date_start: new Date(S).toISOString(),
+        date_end: new Date(E).toISOString(),
+      },
+      recording: { id: 7, started_at: open.started_at, ended_at: null, complete: false },
+    };
+    client.setQueryData(['live'], live);
+    act(() =>
+      root.render(
+        <QueryClientProvider client={client}>
+          <Live />
+        </QueryClientProvider>,
+      ),
+    );
+    expect(last().url).toContain('at=live');
+    last().emit('snapshot', { t: NOW, state: {}, laps: [], stints: [] });
+    advance(30_000);
+    button('Pause');
+    click('30 seconds earlier');
+    advance(400);
+    button('Play');
+    advance(30_000);
+    expect(location.pathname + location.search).toBe('/live');
+  });
+
+  it('a load with ?t resumes paused there as a still frame, with the note until Play', () => {
+    history.replaceState(null, '', '/replay/7?t=20:30:00');
+    replay();
+    const at = S + 1_800_000; // 19:30Z
+    expect(FakeES.all).toHaveLength(1);
+    expect(atOf(last())).toBe(String(at));
+    const note = 'Resumed at 20:30:00: press Play when the video is there.';
+    expect(host.textContent).toContain(note);
+    expect(pill()).toBe('Paused');
+    last().emit('snapshot', { t: at, state: {}, laps: [], stints: [] });
+    expect(openCount()).toBe(0);
+    advance(10_000);
+    expect(position()).toBe(at);
+    expect(host.textContent).toContain(note);
+    button('Play');
+    expect(atOf(last())).toBe(String(at));
+    expect(host.textContent).not.toContain('Resumed at');
+  });
+
+  it('a bad or out-of-range ?t falls back to the session start, with no note', () => {
+    for (const t of ['abc', '25:00:00', '21:44', '23:30:00', '19:59:59']) {
+      history.replaceState(null, '', `/replay/7?t=${t}`);
+      FakeES.all = [];
+      replay();
+      expect(FakeES.all).toHaveLength(1);
+      expect(atOf(last())).toBe(String(T));
+      expect(host.textContent).not.toContain('Resumed at');
+      expect(pill()).toBe('Replay');
+      act(() => root.unmount());
+      root = createRoot(host);
+    }
+  });
+
+  it('announcements: one status region from the start, off by default, at most a line per 5 s keeping the newest', () => {
+    render({ recording: ended, start: T, sessionKey: 9100 });
+    const region = $('p.vh[role="status"]');
+    expect(region.textContent).toBe('');
+    const toggle = () => $<HTMLInputElement>('label.announce input[type="checkbox"]');
+    expect(toggle().checked).toBe(false);
+    expect($('label.announce').textContent).toBe('Announce events');
+    let t = T;
+    const delta = (topic: string, data: object, wait = 1_000) => {
+      advance(wait - 250);
+      t += wait;
+      last().emit('delta', { t, topic, data });
+      advance(250); // the flush
+    };
+    last().emit('snapshot', { t, state: raceState(), laps: [], stints: [] });
+    advance(250);
+
+    delta('TrackStatus', { Status: '4' }); // off: silent
+    expect(region.textContent).toBe('');
+    act(() => toggle().click());
+    expect(toggle().checked).toBe(true);
+    expect(localStorage.getItem('f1.announce')).toBe('1');
+    expect($('p.vh[role="status"]')).toBe(region); // the same element, mounted from the first render
+
+    delta('TrackStatus', { Status: '5' });
+    expect(region.textContent).toBe('Red flag');
+    delta('TrackStatus', { Status: '2' }); // 1 s later: waits
+    expect(region.textContent).toBe('Red flag');
+    delta('TrackStatus', { Status: '1' }); // and replaces the waiting line
+    expect(region.textContent).toBe('Red flag');
+    advance(2_999);
+    expect(region.textContent).toBe('Red flag');
+    advance(1); // 5 s after the first line: the newest
+    expect(region.textContent).toBe('Track clear');
+    advance(10_000);
+    expect(region.textContent).toBe('Track clear'); // the dropped "Yellow flag" never comes
+
+    // What changes in one flush is one line.
+    advance(250);
+    t += 250;
+    last().emit('delta', {
+      t,
+      topic: 'SessionData',
+      data: { StatusSeries: { '0': { Utc: new Date(t).toISOString(), SessionStatus: 'Started' } } },
+    });
+    last().emit('delta', {
+      t,
+      topic: 'TimingStats',
+      data: {
+        Lines: {
+          '1': { PersonalBestLapTime: { Value: '1:20.100', Position: 1 } },
+          '2': { PersonalBestLapTime: { Position: 2 } },
+        },
+      },
+    });
+    advance(250);
+    expect(region.textContent).toBe('Start. Fastest lap: AAA 1:20.100');
+
+    // A forward seek: where T landed, and what it skipped.
+    advance(5_000);
+    const to = t + 600_000;
+    slide('Position', to);
+    advance(400);
+    const StatusSeries = statusSeries([['20:01', 'TrackStatus', 'SCDeployed']]);
+    last().emit('snapshot', {
+      t: to,
+      state: raceState({ extra: { SessionData: { StatusSeries } } }),
+      laps: [],
+      stints: [],
+    });
+    expect(region.textContent).toBe(
+      `At ${new Intl.DateTimeFormat('en-GB', { timeZone: 'Europe/Amsterdam', hour: '2-digit', minute: '2-digit', second: '2-digit', hourCycle: 'h23' }).format(to)}. Before this point: 1 SC.`,
+    );
+    advance(250);
+
+    // Off: silent again.
+    act(() => toggle().click());
+    expect(localStorage.getItem('f1.announce')).toBe('0');
+    delta('TrackStatus', { Status: '5' }, 6_000);
+    advance(6_000);
+    expect(region.textContent).toBe('');
+  });
+
+  it('announcements default to off when storage throws, and are remembered when it works', () => {
+    localStorage.setItem('f1.announce', '1');
+    render({});
+    expect($<HTMLInputElement>('label.announce input').checked).toBe(true);
+    act(() => root.unmount());
+    vi.stubGlobal('localStorage', {
+      getItem: () => {
+        throw new Error('denied');
+      },
+      setItem: () => {
+        throw new Error('denied');
+      },
+    });
+    root = createRoot(host);
+    render({});
+    const toggle = $<HTMLInputElement>('label.announce input');
+    expect(toggle.checked).toBe(false);
+    act(() => toggle.click()); // the write throws; the toggle still works
+    expect(toggle.checked).toBe(true);
+  });
+
+  it('the Position range reads HH:mm while playing and HH:mm:ss while paused', () => {
+    render({ recording: ended, start: T + 5_000 });
+    const text = () => $('input[aria-label="Position"]').getAttribute('aria-valuetext');
+    expect(text()).toBe('21:00');
+    advance(30_000);
+    expect(text()).toBe('21:00'); // 21:00:35: no change within the minute
+    advance(30_000);
+    expect(text()).toBe('21:01');
+    button('Pause');
+    expect(text()).toBe('21:01:05');
+    click('1 second later');
+    expect(text()).toBe('21:01:06');
   });
 });
