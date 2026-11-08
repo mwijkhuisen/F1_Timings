@@ -425,54 +425,177 @@ td.deleted {
   --cmp: var(--wet);
 }
 
-/* Stints (D11): one bar per driver, each stint at --x with width --w. */
-.stints {
-  list-style: none;
-  margin: 0;
-  padding: 0;
+/* Stints on a lap scale (P4f, A§13): a stint at --x, --w of the lanes; the left column is the driver, the right one the stops. */
+.stintbox {
+  display: grid;
+  gap: 4px;
 }
 
-.stints li {
-  display: flex;
+.laxis,
+.stints .row {
+  display: grid;
+  grid-template-columns: 4.5em minmax(0, 1fr) 5em;
   align-items: center;
   gap: 8px;
+}
+
+.laxis {
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.laxis .ticks,
+.lanes {
+  position: relative;
+}
+
+.laxis .ticks {
+  height: 16px;
+}
+
+.tick {
+  position: absolute;
+  left: var(--x);
+  transform: translateX(-50%);
+}
+
+/* The last label ends at the end of the scale. */
+.tick-end {
+  transform: translateX(-100%);
+}
+
+/* Over the lanes' middle column; the lines are borders, which forced colours keep. */
+.rules {
+  position: absolute;
+  inset: 0 calc(5em + 8px) 0 calc(4.5em + 8px);
+  pointer-events: none;
+}
+
+.rules .rule {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: var(--x);
+  width: 0;
+  border-left: 1px solid var(--line-soft);
+}
+
+.rules .vscline {
+  position: absolute;
+  z-index: 2;
+  top: -6px;
+  bottom: 0;
+  left: var(--x);
+  width: var(--w);
+  border-left: 1px dashed var(--amber);
+  border-right: 1px dashed var(--amber);
+}
+
+.stints {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.stints > li {
+  border-bottom: 1px solid var(--line-soft);
+}
+
+.stints .row {
+  width: 100%;
   min-height: 44px;
-  border-bottom: 1px solid var(--line);
+  padding: 0;
+  text-align: left;
+  background: none;
+  border: 0;
+  border-radius: 0;
 }
 
 .stints .drv {
-  flex: 0 0 3.5em;
   align-self: stretch;
   display: flex;
   align-items: center;
 }
 
-.bar {
+.lane {
   position: relative;
-  flex: 1;
-  height: 28px;
+  height: 24px;
+}
+
+/* The line runs to the driver's last lap, so a hole in the stints shows as bare line. */
+.lane .trackline {
+  position: absolute;
+  top: 11px;
+  left: 0;
+  width: var(--w);
+  border-top: 2px solid var(--line);
 }
 
 .seg {
   position: absolute;
+  z-index: 1;
+  top: 0;
+  bottom: 0;
   left: var(--x);
-  width: var(--w);
-  height: 100%;
+  width: calc(var(--w) - 2px);
   display: flex;
   align-items: center;
-  gap: 4px;
+  gap: 6px;
   padding: 0 4px;
-  overflow: hidden;
-  white-space: nowrap;
-  border: 1px solid var(--line);
   border-radius: 4px;
+  outline: 1px solid var(--cmp-ring);
+  outline-offset: -1px;
   font-size: 12px;
+  white-space: nowrap;
   container-type: inline-size;
 }
 
-/* The lap range only where it fits. */
-@container (max-width: 4.5rem) {
-  .range {
+.seg small {
+  font-size: inherit;
+  font-weight: 500;
+}
+
+/* No clipping: the number goes first, then the letter. */
+@container (max-width: 48px) {
+  .seg small {
+    display: none;
+  }
+}
+
+@container (max-width: 16px) {
+  .seg b {
+    display: none;
+  }
+}
+
+.stints .stop {
+  color: var(--muted);
+  font-size: 12px;
+  text-align: right;
+}
+
+.dash {
+  display: inline-block;
+  width: 14px;
+  height: 12px;
+  margin-right: 6px;
+  vertical-align: middle;
+  border-left: 1px dashed var(--amber);
+  border-right: 1px dashed var(--amber);
+}
+
+@media (max-width: 640px) {
+  .laxis,
+  .stints .row {
+    grid-template-columns: 3.5em minmax(0, 1fr);
+  }
+
+  .rules {
+    inset: 0 0 0 calc(3.5em + 8px);
+  }
+
+  .stints .stop,
+  .laxis > :last-child {
     display: none;
   }
 }
