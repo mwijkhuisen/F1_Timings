@@ -167,11 +167,28 @@ export function withinASecond(state: Obj): Pair[] {
 
 export type Fastest = { driver: Driver; value: string; lap?: number | undefined };
 
-/** The fastest lap so far: the TimingStats line ranked 1 on its personal best (the feed ranks it, deletions included). */
+const LAP_TIME = /^(?:(?:(\d{1,2}):)?(\d{1,2}):)?(\d{1,2})\.(\d{3})$/;
+
+/** `h:mm:ss.SSS`, `m:ss.SSS` or `ss.SSS` in ms; anything else Infinity (sorts last). */
+const lapMs = (v: string): number => {
+  const m = LAP_TIME.exec(v);
+  if (!m) return Number.POSITIVE_INFINITY;
+  const [h, min, s, ms] = m.slice(1).map((x) => Number(x ?? 0)) as [number, number, number, number];
+  return ((h * 60 + min) * 60 + s) * 1000 + ms;
+};
+
+/**
+ * The fastest lap so far: the TimingStats line ranked 1 on its personal best (the feed ranks it, deletions included).
+ * Should the feed leave a stale 1 on the driver just beaten, the faster time wins (ties by key order).
+ */
 export function fastestSoFar(state: Obj): Fastest | undefined {
-  const lines = Object.entries(view(state, 'TimingStats')?.Lines ?? {});
-  const hit = lines.find(([n, l]) => /^\d{1,3}$/.test(n) && l?.PersonalBestLapTime?.Position === 1);
-  const pb = hit?.[1]?.PersonalBestLapTime;
-  if (!hit || !pb?.Value) return undefined;
-  return { driver: driverOf(view(state, 'DriverList') ?? {}, hit[0]), value: pb.Value, lap: pb.Lap };
+  let best: { n: string; ms: number; value: string; lap?: number | undefined } | undefined;
+  for (const [n, l] of Object.entries(view(state, 'TimingStats')?.Lines ?? {})) {
+    const pb = l?.PersonalBestLapTime;
+    if (!/^\d{1,3}$/.test(n) || pb?.Position !== 1 || !pb.Value) continue;
+    const ms = lapMs(pb.Value);
+    if (!best || ms < best.ms) best = { n, ms, value: pb.Value, lap: pb.Lap };
+  }
+  if (!best) return undefined;
+  return { driver: driverOf(view(state, 'DriverList') ?? {}, best.n), value: best.value, lap: best.lap };
 }

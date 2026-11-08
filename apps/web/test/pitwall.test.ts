@@ -237,4 +237,23 @@ describe('fastestSoFar', () => {
     const unranked = { TimingStats: { Lines: { '1': { PersonalBestLapTime: { Value: '', Position: 1 } } } } };
     expect(fastestSoFar(unranked)).toBeUndefined();
   });
+
+  it('takes the faster of two lines ranked 1, whatever their key order', () => {
+    const stats = (a: string, b: string) => ({
+      TimingStats: {
+        Lines: {
+          '1': { PersonalBestLapTime: { Value: a, Position: 1, Lap: 3 } },
+          '2': { PersonalBestLapTime: { Value: b, Position: 1, Lap: 4 } },
+        },
+      },
+    });
+    const who = (state: Obj) => fastestSoFar(state)?.driver.number;
+    expect(who(stats('1:20.600', '1:20.500'))).toBe(2);
+    expect(who(stats('1:20.500', '1:20.600'))).toBe(1);
+    expect(fastestSoFar(stats('1:00.100', '59.900'))).toMatchObject({ value: '59.900', lap: 4 });
+    expect(who(stats('59.900', '1:00.100'))).toBe(1);
+    expect(who(stats('1:20.500', '1:20.500'))).toBe(1); // a tie: key order
+    expect(who(stats('?', '1:01:20.500'))).toBe(2); // an unparsable value last; h:mm:ss.SSS parses
+    expect(who(stats('?', 'x'))).toBe(1);
+  });
 });
