@@ -377,6 +377,27 @@ td.deleted {
   text-align: left;
 }
 
+/* A popover opens at what opened it (owner, 2026-11-08, #72): its popovertarget button is the implicit anchor.
+   Below it, left edges aligned, 4 px apart; flipped left, then up, when the window has no room. A browser
+   without anchor positioning keeps its centred popover. */
+@supports (position-area: bottom) {
+  .pop {
+    position-anchor: auto;
+    position-area: bottom span-right;
+    position-try-fallbacks:
+      flip-inline,
+      flip-block,
+      flip-block flip-inline;
+    inset: auto;
+    margin: 4px 0;
+  }
+
+  /* A text popover shrinks into the room left instead of overflowing, so it needs a floor to flip at the edge. */
+  .pop:not(.menu) {
+    min-width: min(12rem, 90vw);
+  }
+}
+
 .badge {
   margin-left: 4px;
   padding: 0 3px;
