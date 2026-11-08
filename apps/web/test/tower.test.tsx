@@ -1,3 +1,5 @@
+import { readFileSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
 import type { Obj } from '@f1/contracts';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, expect, it } from 'vitest';
@@ -477,5 +479,14 @@ describe('focus', () => {
 
   it('keeps the driver as text without a handler', () => {
     expect(renderToStaticMarkup(<Tower state={raceState()} focus="2" />)).not.toContain('aria-pressed');
+  });
+
+  it('gives the driver button the whole cell and the global 44 px tap target', () => {
+    const css = readFileSync(fileURLToPath(new URL('../src/styles.css', import.meta.url)), 'utf8');
+    const at = css.indexOf('\n.tower .drv button {');
+    const rule = css.slice(at, css.indexOf('}', at));
+    expect(at).toBeGreaterThanOrEqual(0);
+    expect(rule).toContain('width: 100%;');
+    expect(rule).not.toMatch(/min-(width|height)/);
   });
 });

@@ -1328,10 +1328,11 @@ header .links {
   }
 }
 
-/* The pit wall (P4d, A§13). The tower's driver is a toggle: the focused row is raised and its name underlined. */
+/* The pit wall (P4d, A§13). The tower's driver is a toggle: the focused row is raised and its name underlined. It fills the cell's content box (about 51 px, set by the "Driver" head), so it keeps the global 44 × 44 px and the column its width. */
 .tower .drv button {
-  min-width: 0;
+  width: 100%;
   padding: 0;
+  text-align: left;
   border: 0;
   background: none;
   color: inherit;
