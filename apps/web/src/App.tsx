@@ -1,6 +1,6 @@
 import { useEffect } from 'react';
 import { useRecordings, useSession } from './lib/api.ts';
-import { type Route, replace, titleOf, useHeadingFocus, useRoute } from './lib/routes.ts';
+import { type Route, replace, titleOf, useHeadingFocus, useRoute, useTitle } from './lib/routes.ts';
 import { NotFound } from './ui/ErrorView.tsx';
 import { Header } from './views/Header.tsx';
 import { Live, Replay, Replays } from './views/Live.tsx';
@@ -35,12 +35,8 @@ function Page({ route }: { route: Route | null }) {
   }
 }
 
-// `document.title` (A§13), one writer per route. The session and replay names come from the queries their pages
-// make anyway (the same cache keys, so no extra request).
-const useTitle = (title: string) =>
-  useEffect(() => {
-    document.title = title;
-  }, [title]);
+// `document.title` (A§13), one writer per route (useTitle, with the title word in front). The session and replay names
+// come from the queries their pages make anyway (the same cache keys, so no extra request).
 
 function SessionTitle({ route }: { route: Extract<Route, { id: 'session' }> }) {
   const d = useSession(route.session).data;

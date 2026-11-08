@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { type Route, routeOf, sessionPath, slug, titleOf } from '../src/lib/routes.ts';
+import { type Route, routeOf, sessionPath, slug, titleOf, withWord } from '../src/lib/routes.ts';
 
 describe('routeOf', () => {
   it.each([
@@ -111,5 +111,19 @@ describe('titleOf: the title for every route', () => {
     expect(titleOf({ id: 'replay', recording: 7 }, { meeting: 'Mexico City Grand Prix', session: null })).toBe(
       'Replay: Mexico City Grand Prix · — · F1 Timings',
     );
+  });
+});
+
+describe('withWord: the title word in front (D1)', () => {
+  it('puts the word before the page title, and leaves the title alone without one', () => {
+    expect(withWord('Safety car', titleOf({ id: 'live' }))).toBe('Safety car · Live · F1 Timings');
+    expect(
+      withWord(
+        'Safety car',
+        titleOf({ id: 'replay', recording: 7 }, { meeting: 'Mexico City Grand Prix', session: 'Race' }),
+      ),
+    ).toBe('Safety car · Replay: Mexico City Grand Prix · Race · F1 Timings');
+    expect(withWord(null, 'Live · F1 Timings')).toBe('Live · F1 Timings');
+    expect(withWord('', 'Live · F1 Timings')).toBe('Live · F1 Timings');
   });
 });
