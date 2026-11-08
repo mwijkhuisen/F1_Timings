@@ -6,6 +6,7 @@ import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { useTitle } from '../src/lib/routes.ts';
 import { streamUrl } from '../src/lib/stream.ts';
+import { fmtClock } from '../src/lib/time.ts';
 import { Live, Replay } from '../src/views/Live.tsx';
 import { Player, type PlayerRecording } from '../src/views/Player.tsx';
 import { raceState } from './feed-state.ts';
@@ -840,8 +841,10 @@ describe('the player bar', () => {
     expect(host.querySelector('section.player .chips')).toBeNull(); // no mark and no focus: no group at all
     tap('BBB');
     expect(chips()).toEqual(['BBB stop L20']); // lap 40's pit-out is after T
+    expect($('section.player .chips').tagName).toBe('FIELDSET'); // a group, named by its aria-label
     expect($('section.player .chips').getAttribute('aria-label')).toBe('Back to');
     expect($('section.player .chips .label').textContent).toBe('Back to');
+    expect($('section.player .chips .label').getAttribute('aria-hidden')).toBe('true'); // the name is not read twice
     tap('CCC');
     expect(host.querySelector('section.player .chips')).toBeNull(); // its only pit-out is after T
     tap('BBB');
@@ -907,6 +910,8 @@ describe('the player bar', () => {
     expect(host.querySelector('dialog, [role="dialog"]')).toBeNull();
     click('Dismiss');
     expect(since()).toBeNull();
+    // Focus goes to the seek bar before the button unmounts, not back to the page.
+    expect(document.activeElement).toBe($('input[aria-label="Position"]'));
     advance(60_000);
     expect(since()).toBeNull(); // shown once
 
@@ -966,6 +971,61 @@ describe('the player bar', () => {
     expect(openCount()).toBe(1);
   });
 
+  it('Play and Live after a long pause start T where they open: no jump by the pause before the first event', () => {
+    render({ recording: open, start: T });
+    last().emit('snapshot', { t: T, state: {}, laps: [], stints: [] });
+    advance(10_000);
+    button('Pause');
+    const clock = () => $('.clockline time').textContent;
+    const paused = clock();
+    expect(paused).toBe(fmtClock(T + 10_000));
+    advance(60_000);
+    button('Play');
+    expect(atOf(last())).toBe(String(T + 10_000));
+    expect(clock()).toBe(paused); // not 60 s ahead
+    expect(position()).toBe(T + 10_000);
+    button('Pause');
+    advance(60_000);
+    button('Live');
+    expect(last().url).toContain('at=live');
+    expect(clock()).toBe(fmtClock(Date.now())); // live at a delay of 0, not the paused T + 60 s
+  });
+
+  it('an unmount closes the stream and leaves nothing to open later: playing, a pending seek, a still, a retry', () => {
+    const cases: [string, () => void][] = [
+      ['playing', () => {}],
+      [
+        'a pending seek',
+        () => {
+          slide('Position', T - 60_000);
+          advance(100);
+        },
+      ],
+      [
+        'a pending still',
+        () => {
+          button('Pause');
+          click('5 seconds earlier');
+          advance(400);
+          expect(openCount()).toBe(1);
+        },
+      ],
+      ['a pending retry', () => last().emit('error')],
+    ];
+    for (const [name, before] of cases) {
+      FakeES.all = [];
+      render({ recording: ended, start: T });
+      last().emit('snapshot', { t: T, state: {}, laps: [], stints: [] });
+      before();
+      const opened = FakeES.all.length;
+      act(() => root.unmount());
+      expect(openCount(), name).toBe(0);
+      advance(120_000);
+      expect(FakeES.all, name).toHaveLength(opened);
+      root = createRoot(host);
+    }
+  });
+
   const recordings: Recordings = [
     {
       id: 7,
@@ -1014,6 +1074,31 @@ describe('the player bar', () => {
     advance(400);
     expect(location.search).toBe('?t=21:00:02');
     expect(location.pathname).toBe('/replay/7');
+  });
+
+  it('a replaceState that throws (a browser rate limit) never loses a seek', () => {
+    history.replaceState(null, '', '/replay/7');
+    replay();
+    last().emit('snapshot', { t: T, state: {}, laps: [], stints: [] });
+    const spy = vi.spyOn(history, 'replaceState').mockImplementation(() => {
+      throw new DOMException('Too many calls', 'SecurityError');
+    });
+    try {
+      click('30 seconds later');
+      advance(400);
+      expect(spy).toHaveBeenCalled();
+      expect(atOf(last())).toBe(String(T + 30_000));
+      expect(openCount()).toBe(1);
+      advance(15_000); // the 15 s write throws too
+      button('Pause');
+      expect(openCount()).toBe(0);
+      click('30 seconds earlier'); // a paused seek's still frame
+      advance(400);
+      expect(atOf(last())).toBe(String(T + 15_000));
+      expect(openCount()).toBe(1);
+    } finally {
+      spy.mockRestore();
+    }
   });
 
   it('/live never writes T to the URL', () => {
@@ -1065,6 +1150,18 @@ describe('the player bar', () => {
     button('Play');
     expect(atOf(last())).toBe(String(at));
     expect(host.textContent).not.toContain('Resumed at');
+
+    // A seek commit clears it too: the note would name an old time.
+    act(() => root.unmount());
+    root = createRoot(host);
+    replay();
+    expect(host.textContent).toContain(note);
+    click('5 seconds later');
+    advance(399);
+    expect(host.textContent).toContain(note);
+    advance(1);
+    expect(host.textContent).not.toContain('Resumed at');
+    expect(atOf(last())).toBe(String(at + 5_000));
   });
 
   it('a bad or out-of-range ?t falls back to the session start, with no note', () => {

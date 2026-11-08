@@ -3,6 +3,7 @@ import {
   type CSSProperties,
   memo,
   type ReactNode,
+  type Ref,
   useEffect,
   useMemo,
   useRef,
@@ -41,9 +42,9 @@ import { driverOf, Tower } from './Tower.tsx';
 // The player (A§13): one playback stream at a time; the bar holds the clock line, the seek bar with the marks at or
 // before T, the transport, the "Back to" chips, the delay slider (live) and the announcements toggle. `open.at` is the
 // open stream's start: 'live', epoch ms (replay), or null while paused; a `still` stream only fetches the state at a
-// paused T and closes on its snapshot. Only the clock line, the seek bar, the chips and the strip's LEFT cell tick each
-// second, from values derived per flush; the tower, the pit wall and everything else derived from the state render on
-// a store flush.
+// paused T and closes on its snapshot. Only the clock line, the seek bar, the Back to chips and the strip's LEFT cell
+// tick each second, from values derived per flush (no state parsing per tick); the tower, the pit wall and everything
+// else derived from the state render on a store flush.
 
 /** A SessionDetail whose drivers and results come from the stream: OpenF1 has no drivers during a live session. */
 function streamDetail(detail: SessionDetail, state: Obj): SessionDetail {
@@ -124,7 +125,11 @@ function writeAnnounce(on: boolean) {
 
 /** T in the replay's URL (`?t=HH:mm:ss`): replaceState only, so the route stays and nothing is dispatched. */
 function writeT(t: number) {
-  history.replaceState(history.state, '', `${location.pathname}?t=${fmtClock(t)}`);
+  try {
+    history.replaceState(history.state, '', `${location.pathname}?t=${fmtClock(t)}`);
+  } catch {
+    // A browser that rate-limits replaceState throws (SecurityError): the URL just lags behind T.
+  }
 }
 
 /** At most one line per `SAY_GAP_MS`: a line that comes sooner replaces the waiting one, said when the gap is over. */
@@ -215,6 +220,7 @@ function Seek({
   hi,
   series,
   onSeek,
+  ref,
 }: {
   now: () => number;
   playing: boolean;
@@ -222,6 +228,7 @@ function Seek({
   hi: () => number;
   series: Status[];
   onSeek(t: number): void;
+  ref: Ref<HTMLInputElement>;
 }) {
   useTick(playing);
   const T = now();
@@ -230,6 +237,7 @@ function Seek({
   return (
     <div className="seek">
       <input
+        ref={ref}
         type="range"
         aria-label="Position"
         // Per minute while playing (a per-second change would be read out), per second while paused.
@@ -287,9 +295,10 @@ function BackTo({
   const stop = focused && lastStop(laps, focused.n, T);
   if (latest.size === 0 && !stop) return null;
   return (
-    // biome-ignore lint/a11y/useSemanticElements: jump buttons with a visible label, not a form's fields; a named group is what a screen reader needs.
-    <div className="chips" role="group" aria-label="Back to">
-      <span className="label">Back to</span>
+    <fieldset className="chips" aria-label="Back to">
+      <span className="label" aria-hidden="true">
+        Back to
+      </span>
       {CHIPS.map(([kind, label]) => {
         const t = latest.get(kind);
         return (
@@ -305,7 +314,7 @@ function BackTo({
           {focused?.tla} stop L{stop.lap}
         </button>
       )}
-    </div>
+    </fieldset>
   );
 }
 
@@ -373,6 +382,7 @@ export function Player({
   // A replay ignores the delay (A§13): an open recording's bar ends at now, or now − delay while live.
   const hi = () =>
     recording.ended_at === null ? Date.now() - (at === 'live' ? delay : 0) * 1000 : Date.parse(recording.ended_at);
+  const position = useRef<HTMLInputElement>(null);
   const freeze = (t: number) => {
     clock.current = { t, wall: Date.now() };
   };
@@ -474,8 +484,9 @@ export function Player({
       freeze(v);
       setSeek(null);
       setSince(null);
-      if (keepT) writeT(v);
+      setResumed(null); // the note would name an old time
       setOpen((o) => (o.at === null ? { at: v, still: true } : { at: v }));
+      if (keepT) writeT(v); // last: nothing it does can lose the seek
     }, DEBOUNCE_MS);
   };
 
@@ -486,11 +497,15 @@ export function Player({
     setOpen({ at: null });
     if (keepT) writeT(t);
   };
+  // A reopen starts T where the stream opens, so it does not jump by the pause before the first event.
   const play = () => {
+    const t = Math.round(clamp(nowT(), lo, hi()));
+    freeze(t);
     setResumed(null);
-    setOpen({ at: Math.round(clamp(nowT(), lo, hi())) });
+    setOpen({ at: t });
   };
   const goLive = () => {
+    freeze(Date.now() - delay * 1000);
     setResumed(null);
     setOpen({ at: 'live' });
   };
@@ -603,7 +618,14 @@ export function Player({
       {since !== null && (
         <p className="since">
           <b>Before this point</b> <span>{since}</span>
-          <button type="button" aria-label="Dismiss" onClick={() => setSince(null)}>
+          <button
+            type="button"
+            aria-label="Dismiss"
+            onClick={() => {
+              position.current?.focus(); // before the button goes, so focus is not lost to the page
+              setSince(null);
+            }}
+          >
             ×
           </button>
         </p>
@@ -637,7 +659,7 @@ export function Player({
             {mode}
           </span>
         </Clock>
-        <Seek now={now} playing={playing} lo={lo} hi={hi} series={series} onSeek={seekTo} />
+        <Seek now={now} playing={playing} lo={lo} hi={hi} series={series} onSeek={seekTo} ref={position} />
         {/* Seven buttons, Play in the middle; in replay of an open recording a Live button (a mode switch) follows. */}
         <div className="transport">
           {NUDGES.slice(0, 3).map(nudgeButton)}
