@@ -758,14 +758,16 @@ describe('the player bar', () => {
       'Red flag 20:40:00',
       'Chequered flag 20:50:00',
     ]);
-    expect([...$('section.player').children].map((c) => c.className)).toEqual([
-      'clockline',
+    expect([...$('section.player').children].map((c) => c.className)).toEqual(['barhead', 'controls']);
+    expect([...$('.barhead').children].map((c) => c.className)).toEqual(['clockline', 'bartoggle']);
+    expect([...$('.player .controls').children].map((c) => c.className)).toEqual([
       'seek',
       'transport',
       'chips',
       'announce',
     ]);
     expect([...$('section.player').querySelectorAll('button')].map((b) => b.textContent)).toEqual([
+      'Controls',
       '−30',
       '−5',
       '−1',
@@ -1294,5 +1296,144 @@ describe('the player bar', () => {
     expect(text()).toBe('21:01:05');
     click('1 second later');
     expect(text()).toBe('21:01:06');
+  });
+
+  describe('minimized (#77)', () => {
+    const toggle = () => $<HTMLButtonElement>('button.bartoggle');
+    const headOf = () => [...$('.barhead').children].map((c) => c.className);
+    const clock = () => $('.clockline time').textContent;
+
+    it('keeps the clock line, Play/Pause and the toggle; the stream plays on, and the rest comes back', () => {
+      render({ recording: ended, start: T, sessionKey: 9100 });
+      last().emit('snapshot', { t: T, state: raceState(), laps: [], stints: [] });
+      advance(250);
+      const controls = $<HTMLElement>('.player .controls');
+      expect(toggle().textContent).toBe('Controls'); // the name stays; aria-expanded carries the state
+      expect(toggle().getAttribute('aria-expanded')).toBe('true');
+      expect(toggle().getAttribute('aria-controls')).toBe(controls.id);
+      expect(controls.hidden).toBe(false);
+      expect(headOf()).toEqual(['clockline', 'bartoggle']);
+      const stream = last();
+      const opened = FakeES.all.length;
+
+      act(() => toggle().click());
+      expect(toggle().getAttribute('aria-expanded')).toBe('false');
+      expect($('section.player').className).toBe('player min');
+      expect(localStorage.getItem('f1.minimized')).toBe('1');
+      // The same element, hidden and empty: nothing in it can take focus or tick.
+      expect($('.player .controls')).toBe(controls);
+      expect(controls.hidden).toBe(true);
+      expect(controls.childElementCount).toBe(0);
+      for (const sel of ['input[aria-label="Position"]', '.transport', '.player .chips', 'label.announce'])
+        expect(host.querySelector(sel)).toBeNull();
+      // The head: the clock line (T, time left, lap and mode), then Play/Pause, then the toggle.
+      expect(headOf()).toEqual(['clockline', 'play', 'bartoggle']);
+      expect([...$('.clockline').children].map((c) => c.className)).toEqual(['', 'left', 'lap', 'pill']);
+      expect($('.barhead .play').textContent).toBe('Pause');
+      // No reopen, no close: the stream and T are untouched, and the clock keeps ticking.
+      expect(FakeES.all).toHaveLength(opened);
+      expect(stream.closed).toBe(false);
+      expect(clock()).toBe(fmtClock(T));
+      advance(1_000);
+      expect(clock()).toBe(fmtClock(T + 1_000));
+
+      // Pause and Play work from the head.
+      button('Pause');
+      expect(openCount()).toBe(0);
+      expect(clock()).toBe(fmtClock(T + 1_000));
+      advance(5_000);
+      expect(clock()).toBe(fmtClock(T + 1_000));
+      button('Play');
+      expect(atOf(last())).toBe(String(T + 1_250)); // the snapshot's 250 ms flush, then the 1 s
+      expect(openCount()).toBe(1);
+
+      // Expanded again: everything is back, Play/Pause once (in the transport), and the stream still not reopened.
+      const playing = last();
+      act(() => toggle().click());
+      expect(toggle().getAttribute('aria-expanded')).toBe('true');
+      expect($('section.player').className).toBe('player');
+      expect(localStorage.getItem('f1.minimized')).toBe('0');
+      expect(controls.hidden).toBe(false);
+      expect(headOf()).toEqual(['clockline', 'bartoggle']);
+      expect([...host.querySelectorAll('section.player .play')].map((b) => b.parentElement?.className)).toEqual([
+        'transport',
+      ]);
+      expect($('input[aria-label="Position"]').getAttribute('aria-valuetext')).toBe(fmtClock(T).slice(0, 5));
+      expect(clock()).toBe(fmtClock(T + 1_000));
+      expect(last()).toBe(playing);
+      expect(playing.closed).toBe(false);
+    });
+
+    it('is remembered per device, and is expanded when storage throws', () => {
+      localStorage.setItem('f1.minimized', '1');
+      render({});
+      expect(toggle().getAttribute('aria-expanded')).toBe('false');
+      expect(host.querySelector('input[aria-label="Delay"]')).toBeNull();
+      act(() => root.unmount());
+
+      localStorage.setItem('f1.minimized', 'yes'); // only '1' minimizes
+      root = createRoot(host);
+      render({});
+      expect(toggle().getAttribute('aria-expanded')).toBe('true');
+      act(() => root.unmount());
+
+      vi.stubGlobal('localStorage', {
+        getItem: () => {
+          throw new Error('denied');
+        },
+        setItem: () => {
+          throw new Error('denied');
+        },
+      });
+      root = createRoot(host);
+      render({});
+      expect(toggle().getAttribute('aria-expanded')).toBe('true');
+      act(() => toggle().click()); // the write throws; the toggle still works
+      expect(toggle().getAttribute('aria-expanded')).toBe('false');
+      expect(host.querySelector('input[aria-label="Delay"]')).toBeNull();
+    });
+
+    it('live: the delay stays while minimized, announcements still speak, and Dismiss focuses the toggle', () => {
+      localStorage.setItem('f1.delay', '30');
+      localStorage.setItem('f1.announce', '1');
+      render({ recording: ended, start: T, sessionKey: 9100 });
+      const region = $('p.vh[role="status"]');
+      let t = T;
+      last().emit('snapshot', { t, state: raceState(), laps: [], stints: [] });
+      advance(250);
+      // A forward seek, so the skipped line shows; then minimize.
+      const to = Date.parse(utcOf('20:30'));
+      slide('Position', to);
+      advance(400);
+      const StatusSeries = statusSeries([['20:05', 'TrackStatus', 'SCDeployed']]);
+      t = to;
+      last().emit('snapshot', {
+        t,
+        state: raceState({ extra: { SessionData: { StatusSeries } } }),
+        laps: [],
+        stints: [],
+      });
+      advance(250);
+      expect($('p.since span').textContent).toBe('1 SC');
+      act(() => toggle().click());
+      // Dismiss: the Position range is gone, so the toggle takes the focus.
+      click('Dismiss');
+      expect(host.querySelector('p.since')).toBeNull();
+      expect(document.activeElement).toBe(toggle());
+      // Announcements go on while minimized (the region sits outside the bar).
+      advance(5_000);
+      t += 5_000;
+      last().emit('delta', { t, topic: 'TrackStatus', data: { Status: '5' } });
+      advance(250);
+      expect(region.textContent).toBe('Red flag');
+      act(() => root.unmount());
+
+      // Live and minimized: the stored delay still applies to the stream and the pill.
+      root = createRoot(host);
+      render({ recording: open, start: 'live' });
+      expect(toggle().getAttribute('aria-expanded')).toBe('false');
+      expect(new URL(last().url, 'http://x').searchParams.get('delay')).toBe('30');
+      expect(pill()).toBe('LIVE, 30 s behind');
+    });
   });
 });

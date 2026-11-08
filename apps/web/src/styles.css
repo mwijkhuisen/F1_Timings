@@ -863,8 +863,8 @@ header .links {
 }
 
 /* The player bar (A§13, P4e): sticky at the bottom, within thumb reach; every target 44 px; it never scrolls. Wide: the
-   clock line across, then transport | seek bar, then the chips with the announce toggle at the end, then the delay
-   (live). A phone stacks them. */
+   head (clock line and the Controls toggle) across, then transport | seek bar, then the chips with the announce toggle
+   at the end, then the delay (live). A phone stacks them. Minimized (.min, #77) only the head stays, with Play/Pause. */
 .player {
   position: sticky;
   bottom: 0;
@@ -933,6 +933,47 @@ header .links {
   background: var(--live);
 }
 
+/* The bar's head (#77): the clock line, then Play/Pause (minimized only) and the Controls toggle at the right end. The
+   rest of the bar is a `display: contents` wrapper, so its controls stay items of the bar's grid; minimized it is empty
+   and hidden. */
+.barhead {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.barhead .clockline {
+  flex: 1;
+  min-width: 0;
+}
+
+.player .controls {
+  display: contents;
+}
+
+.player .controls[hidden] {
+  display: none;
+}
+
+/* The toggle: a chevron (down: minimize, up: expand) and one word; its state is aria-expanded, so the name stays. */
+.bartoggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.bartoggle .chev {
+  width: 7px;
+  height: 7px;
+  border-right: 2px solid currentColor;
+  border-bottom: 2px solid currentColor;
+  transform: translateY(-2px) rotate(45deg);
+}
+
+.bartoggle[aria-expanded="false"] .chev {
+  transform: translateY(2px) rotate(-135deg);
+}
+
 /* Transport: a compact cluster at its own widths, Play emphasised; "Live" is one more button. */
 .transport {
   display: flex;
@@ -940,14 +981,19 @@ header .links {
   gap: 4px;
 }
 
-.transport button {
+.transport button,
+.barhead button {
   padding: 0 8px;
   font-size: 13px;
   font-weight: 600;
   white-space: nowrap;
 }
 
-.transport .play {
+.barhead button {
+  flex: none;
+}
+
+.player .play {
   min-width: 56px;
   background: var(--fg);
   color: var(--bg);
@@ -1043,7 +1089,7 @@ header .links {
     grid-template-columns: auto minmax(0, 1fr) auto;
   }
 
-  .clockline {
+  .barhead {
     grid-column: 1 / -1;
     grid-row: 1;
   }
@@ -1093,6 +1139,18 @@ header .links {
 
   .transport .golive {
     flex: 1 1 100%;
+  }
+
+  /* Minimized, the head is one 44 px row: the time left and the lap are in the status strip, so only T and the mode,
+     stacked tightly beside Play/Pause and the toggle (a 61 px bar at 390 px). */
+  .player.min .clockline {
+    row-gap: 2px;
+    line-height: 1.15;
+  }
+
+  .player.min .clockline .left,
+  .player.min .clockline .lap {
+    display: none;
   }
 }
 
