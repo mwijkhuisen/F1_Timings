@@ -947,11 +947,28 @@ header .links {
   min-width: 0;
 }
 
-.player .controls {
+/* Minimized, the head stays one 44 px row: the mode pill gives way with an ellipsis rather than run under Play/Pause
+   (a phone narrower than 390 px) or wrap the head (just above 640 px). Its full text stays in the markup. */
+.player.min .pill {
+  min-width: 0;
+  max-width: 100%;
+}
+
+.player.min .pill .dot {
+  flex: none;
+}
+
+.player.min .pill .mode {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.barbody {
   display: contents;
 }
 
-.player .controls[hidden] {
+.barbody[hidden] {
   display: none;
 }
 
@@ -1081,9 +1098,9 @@ header .links {
   outline: 1px solid var(--fg);
 }
 
-/* Wide: row 1 the clock line; row 2 transport | seek bar, which gets all the rest (columns 2 and 3); row 3 the chips from
-   column 1 and the announce toggle in column 3, at the right end; row 4 the delay (live). The chips never take width
-   from the seek bar. */
+/* Wide: row 1 the head (the clock line and the Controls toggle); row 2 transport | seek bar, which gets all the rest
+   (columns 2 and 3); row 3 the chips from column 1 and the announce toggle in column 3, at the right end; row 4 the delay
+   (live). The chips never take width from the seek bar. Minimized, only row 1, which never wraps. */
 @media (min-width: 641px) {
   .player {
     grid-template-columns: auto minmax(0, 1fr) auto;
@@ -1119,9 +1136,13 @@ header .links {
     grid-column: 1 / -1;
     grid-row: 4;
   }
+
+  .player.min .clockline {
+    flex-wrap: nowrap;
+  }
 }
 
-/* A phone stacks the bar: clock line, seek bar, seven equal buttons ((358 − 6 × 4) / 7 ≈ 47.7 px each, so "−30" and "Pause" fit), Live on its own row, chips, delay, announce. */
+/* A phone stacks the bar: the head (clock line and Controls toggle), seek bar, seven equal buttons ((358 − 6 × 4) / 7 ≈ 47.7 px each, so "−30" and "Pause" fit), Live on its own row, chips, delay, announce. */
 @media (max-width: 640px) {
   .clockline time {
     font-size: 17px;

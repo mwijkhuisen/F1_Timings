@@ -758,14 +758,9 @@ describe('the player bar', () => {
       'Red flag 20:40:00',
       'Chequered flag 20:50:00',
     ]);
-    expect([...$('section.player').children].map((c) => c.className)).toEqual(['barhead', 'controls']);
+    expect([...$('section.player').children].map((c) => c.className)).toEqual(['barhead', 'barbody']);
     expect([...$('.barhead').children].map((c) => c.className)).toEqual(['clockline', 'bartoggle']);
-    expect([...$('.player .controls').children].map((c) => c.className)).toEqual([
-      'seek',
-      'transport',
-      'chips',
-      'announce',
-    ]);
+    expect([...$('.barbody').children].map((c) => c.className)).toEqual(['seek', 'transport', 'chips', 'announce']);
     expect([...$('section.player').querySelectorAll('button')].map((b) => b.textContent)).toEqual([
       'Controls',
       '−30',
@@ -1307,7 +1302,7 @@ describe('the player bar', () => {
       render({ recording: ended, start: T, sessionKey: 9100 });
       last().emit('snapshot', { t: T, state: raceState(), laps: [], stints: [] });
       advance(250);
-      const controls = $<HTMLElement>('.player .controls');
+      const controls = $<HTMLElement>('.barbody');
       expect(toggle().textContent).toBe('Controls'); // the name stays; aria-expanded carries the state
       expect(toggle().getAttribute('aria-expanded')).toBe('true');
       expect(toggle().getAttribute('aria-controls')).toBe(controls.id);
@@ -1321,7 +1316,7 @@ describe('the player bar', () => {
       expect($('section.player').className).toBe('player min');
       expect(localStorage.getItem('f1.minimized')).toBe('1');
       // The same element, hidden and empty: nothing in it can take focus or tick.
-      expect($('.player .controls')).toBe(controls);
+      expect($('.barbody')).toBe(controls);
       expect(controls.hidden).toBe(true);
       expect(controls.childElementCount).toBe(0);
       for (const sel of ['input[aria-label="Position"]', '.transport', '.player .chips', 'label.announce'])
@@ -1393,8 +1388,19 @@ describe('the player bar', () => {
       expect(host.querySelector('input[aria-label="Delay"]')).toBeNull();
     });
 
-    it('live: the delay stays while minimized, announcements still speak, and Dismiss focuses the toggle', () => {
-      localStorage.setItem('f1.delay', '30');
+    it('the toggle takes the focus, so none is lost when the focused control goes (Safari focuses no clicked button)', () => {
+      render({ recording: ended, start: T });
+      // happy-dom's click() moves no focus either, as Safari's: each control is focused by hand first.
+      $<HTMLInputElement>('input[aria-label="Position"]').focus();
+      act(() => toggle().click());
+      expect(document.activeElement).toBe(toggle());
+      $<HTMLButtonElement>('.barhead .play').focus();
+      act(() => toggle().click());
+      expect(host.querySelector('.barhead .play')).toBeNull();
+      expect(document.activeElement).toBe(toggle());
+    });
+
+    it('replay: announcements still speak, and Dismiss focuses the toggle (there is no Position range)', () => {
       localStorage.setItem('f1.announce', '1');
       render({ recording: ended, start: T, sessionKey: 9100 });
       const region = $('p.vh[role="status"]');
@@ -1416,7 +1422,8 @@ describe('the player bar', () => {
       advance(250);
       expect($('p.since span').textContent).toBe('1 SC');
       act(() => toggle().click());
-      // Dismiss: the Position range is gone, so the toggle takes the focus.
+      // Dismiss from the keyboard: the focus is on it, and goes to the toggle, not to the page.
+      $<HTMLButtonElement>('button[aria-label="Dismiss"]').focus();
       click('Dismiss');
       expect(host.querySelector('p.since')).toBeNull();
       expect(document.activeElement).toBe(toggle());
@@ -1426,14 +1433,52 @@ describe('the player bar', () => {
       last().emit('delta', { t, topic: 'TrackStatus', data: { Status: '5' } });
       advance(250);
       expect(region.textContent).toBe('Red flag');
+    });
+
+    it('live: toggling keeps the stream and the delay; a pending delay change still commits while minimized', () => {
+      localStorage.setItem('f1.delay', '30');
+      render({ recording: open, start: 'live' });
+      const delayOf = (es: FakeES) => new URL(es.url, 'http://x').searchParams.get('delay');
+      const stream = last();
+      expect(atOf(stream)).toBe('live');
+      expect(delayOf(stream)).toBe('30');
+      const opened = FakeES.all.length;
+
+      act(() => toggle().click());
+      expect(host.querySelector('input[aria-label="Delay"]')).toBeNull();
+      expect(pill()).toBe('LIVE, 30 s behind');
+      act(() => toggle().click());
+      expect(delayShown()).toBe(30);
+      advance(1_000); // past any debounce
+      expect(FakeES.all).toHaveLength(opened);
+      expect(stream.closed).toBe(false);
+
+      // A nudge, then minimized within the 400 ms: the new delay reaches the stream all the same.
+      click('5 seconds earlier');
+      expect(delayShown()).toBe(35);
+      advance(100);
+      act(() => toggle().click());
+      expect(pill()).toBe('LIVE, 35 s behind');
+      advance(300);
+      expect(stream.closed).toBe(true);
+      expect(atOf(last())).toBe('live');
+      expect(delayOf(last())).toBe('35');
+      expect(openCount()).toBe(1);
+      act(() => toggle().click());
+      expect(delayShown()).toBe(35);
       act(() => root.unmount());
 
-      // Live and minimized: the stored delay still applies to the stream and the pill.
+      // Mounted minimized: the stored delay applies to the stream and the pill.
+      root = createRoot(host);
+      render({ recording: open, start: 'live' });
+      expect(toggle().getAttribute('aria-expanded')).toBe('true'); // expanded last
+      localStorage.setItem('f1.minimized', '1');
+      act(() => root.unmount());
       root = createRoot(host);
       render({ recording: open, start: 'live' });
       expect(toggle().getAttribute('aria-expanded')).toBe('false');
-      expect(new URL(last().url, 'http://x').searchParams.get('delay')).toBe('30');
-      expect(pill()).toBe('LIVE, 30 s behind');
+      expect(delayOf(last())).toBe('35');
+      expect(pill()).toBe('LIVE, 35 s behind');
     });
   });
 });

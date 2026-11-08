@@ -539,7 +539,10 @@ export function Player({
     setAnnounce(on);
     writeAnnounce(on);
   };
+  // The toggle takes the focus itself: Safari does not focus a tapped or clicked button, and a focused control in the
+  // part that goes (the Position range, the head's Play/Pause) would otherwise drop the focus to the page.
   const toggleMinimized = () => {
+    toggleRef.current?.focus();
     setMinimized(!minimized);
     writeMinimized(!minimized);
   };
@@ -692,7 +695,7 @@ export function Player({
           <Clock now={now} stateNow={stateNow} playing={playing} strip={wall?.strip}>
             <span className={live ? 'pill live' : 'pill'}>
               <span className="dot" aria-hidden="true" />
-              {mode}
+              <span className="mode">{mode}</span>
             </span>
           </Clock>
           {minimized && playButton}
@@ -709,7 +712,7 @@ export function Player({
           </button>
         </div>
         {/* Minimized, the rest is not rendered (nothing hidden is focusable, and nothing hidden ticks). */}
-        <div className="controls" id={controlsId} hidden={minimized}>
+        <div className="barbody" id={controlsId} hidden={minimized}>
           {!minimized && (
             <>
               <Seek now={now} playing={playing} lo={lo} hi={hi} series={series} onSeek={seekTo} ref={position} />
