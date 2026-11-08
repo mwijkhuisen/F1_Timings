@@ -1,12 +1,15 @@
 import type { Lap } from '@f1/contracts';
+import { use } from 'echarts/core';
+import { SVGRenderer } from 'echarts/renderers';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, expect, it } from 'vitest';
+import { init } from '../src/lib/echarts.ts';
 import type { Driver } from '../src/lib/session.ts';
 import { fmtDelta } from '../src/lib/time.ts';
 import { Compare } from '../src/views/Compare.tsx';
 import { DeltaTable } from '../src/views/DeltaTable.tsx';
 import { DriverPicker } from '../src/views/DriverPicker.tsx';
-import { lapChartOption } from '../src/views/lap-chart-option.ts';
+import { type ChartTokens, lapChartOption, lineStyles } from '../src/views/lap-chart-option.ts';
 
 // The comparison (E1–E4, D2, D4, D5) on hand-built laps, rendered statically (A§15).
 
@@ -67,65 +70,260 @@ const laps = [
   // PER: one lap.
   lap(11, 2, 81500, [28300, 30300, 22900], 'green'),
 ];
-const tokens = { fg: '#f0f0f5', muted: '#9b9ba8', line: '#34343f', bg: '#15151e' };
+const tokens: ChartTokens = {
+  fg: '#f0f0f5',
+  muted: '#9b9ba8',
+  line: '#34343f',
+  bg: '#15151e',
+  amber: '#ffb020',
+  live: '#ff6b6b',
+  light: false,
+};
+const fit = { window: 'fit', periods: [] } as const;
 
 describe('lapChartOption', () => {
-  const option = lapChartOption([VER, NOR, PER], laps, tokens);
-  const series = (acronym: string) => option.series.find((s) => s.name === acronym);
+  const option = lapChartOption([VER, NOR, PER], laps, tokens, fit);
+  // Each driver has its line, then (after all the lines) its triangles under the same name.
+  const [verLine, norLine, perLine, verUp, norUp, perUp] = option.series;
+  const items = (s: (typeof option.series)[number] | undefined) => s?.data ?? [];
 
-  it('plots every lap on a category axis, with null for a missing lap or a lap without a time', () => {
-    expect(option.xAxis).toMatchObject({ type: 'category', data: [1, 2, 3, 4, 5] });
-    expect(series('VER')?.data).toEqual([
-      100000,
-      80500,
-      null,
-      { value: 80000, symbol: 'emptyCircle', symbolSize: 8 },
-      null,
+  it('plots dense [lap, ms] pairs on a value axis from lap 0.5 to the last lap + 0.5 (F2)', () => {
+    expect(option.xAxis).toMatchObject({ type: 'value', min: 0.5, max: 5.5, splitLine: { show: false } });
+    // A band edge sits half a lap off a whole lap, so the labels skip anything but whole laps.
+    expect(option.xAxis.axisLabel.formatter(3)).toBe('3');
+    expect(option.xAxis.axisLabel.formatter(0.5)).toBe('');
+    expect(items(perLine)).toEqual([
+      [1, null],
+      expect.objectContaining({ value: [2, 81500] }),
+      [3, null],
+      [4, null],
+      [5, null],
     ]);
-    expect(series('PER')?.data).toEqual([null, 81500, null, null, null]);
-    for (const s of option.series) expect(s).toMatchObject({ connectNulls: false, clip: true });
+    for (const s of [verLine, norLine, perLine]) expect(s).toMatchObject({ connectNulls: false, clip: true });
   });
 
-  it('marks a deleted lap with a hollow symbol and an ordinary lap with none', () => {
-    for (const s of option.series) expect(s.symbol).toBe('none');
-    expect(series('VER')?.data[3]).toEqual({ value: 80000, symbol: 'emptyCircle', symbolSize: 8 });
-    // An ordinary lap is a bare value, so it takes the series' symbol.
-    expect(series('NOR')?.data).toEqual([
-      95000,
-      81000,
-      { value: 81200, symbol: 'emptyCircle', symbolSize: 8 },
-      82000,
-      80900,
+  it("has symbol 'none' and showAllSymbol true on every series; only the laps below override the symbol", () => {
+    // 'auto' thins symbols on a category axis only (LineView getIsIgnoreFunc); true keeps that so (A§13).
+    expect(option.series).toHaveLength(6);
+    for (const s of option.series) expect(s).toMatchObject({ symbol: 'none', showAllSymbol: true });
+  });
+
+  it('rings the own best (purple or green) and draws a deleted lap as a 10 px ring filled with --bg (F1)', () => {
+    const best = (color: string) => ({
+      symbol: 'circle',
+      symbolSize: 10,
+      itemStyle: { color, borderColor: tokens.bg, borderWidth: 2 },
+    });
+    const hollow = (color: string) => ({
+      symbol: 'circle',
+      symbolSize: 10,
+      itemStyle: { color: tokens.bg, borderColor: color, borderWidth: 2 },
+    });
+    expect(items(verLine)).toEqual([
+      [1, 100000],
+      { value: [2, 80500], ...best('#3671C6') },
+      [3, null],
+      { value: [4, 80000], ...hollow('#3671C6') },
+      [5, null],
+    ]);
+    expect(items(norLine)).toEqual([
+      [1, 95000],
+      [2, 81000],
+      { value: [3, 81200], ...hollow('#FF8000') },
+      [4, 82000],
+      { value: [5, 80900], ...best('#FF8000') },
     ]);
   });
 
-  it('shows every symbol, so ECharts never thins a deleted lap away', () => {
-    // ECharts' default showAllSymbol 'auto' keeps only the symbols on labelled laps once a lap is
-    // narrower than 1.5 symbols: at 390 px, about one lap in four of a 57-lap race.
-    for (const s of option.series) expect(s.showAllSymbol).toBe(true);
+  it('puts a triangle on the top edge for exactly the laps above the window, in the line colour and name', () => {
+    // The window is 1:19–1:23: VER lap 1 (1:40) and NOR lap 1 (1:35) are above it.
+    const up = { symbol: 'triangle', symbolSize: 8, symbolOffset: [0, -4] };
+    expect(items(verUp)).toEqual([{ value: [1, 83000], ...up }, [2, null], [3, null], [4, null], [5, null]]);
+    expect(items(norUp)).toEqual([{ value: [1, 83000], ...up }, [2, null], [3, null], [4, null], [5, null]]);
+    expect(items(perUp).every((d) => Array.isArray(d) && d[1] === null)).toBe(true);
+    for (const [line, tri] of [
+      [verLine, verUp],
+      [norLine, norUp],
+      [perLine, perUp],
+    ])
+      expect(tri).toMatchObject({ name: line?.name, color: line?.color, lineStyle: { width: 0 }, clip: false });
+    expect(verUp).not.toHaveProperty('endLabel');
+    // No laps above the 107 % window (1:19–1:27) but the two out-laps either; none without a window.
+    const wide = lapChartOption([VER, NOR], laps, tokens, { window: '107', periods: [] });
+    expect(wide.series[2]?.data[0]).toMatchObject({ value: [1, 87000] });
+    expect(wide.series[3]?.data.slice(1).every((d) => Array.isArray(d) && d[1] === null)).toBe(true);
+    const none = lapChartOption([VER], [laps[0] as Lap], tokens, fit);
+    expect(none.series[1]?.data).toEqual([[1, null]]);
   });
 
-  it('windows the y-axis from the best valid lap − 1 s to 107 %, in whole seconds', () => {
-    // Best valid lap: VER lap 2, 80.5 s (the deleted 80.0 s does not count); 80.5 × 1.07 = 86.135.
-    expect(option.yAxis).toMatchObject({ min: 79000, max: 87000 });
-    // Without a purple or green lap the axis scales by itself.
-    const auto = lapChartOption([VER], [laps[0] as Lap], tokens).yAxis;
-    expect(auto).not.toHaveProperty('min');
-    expect(auto).not.toHaveProperty('max');
+  it('windows Fit (C1) from the best valid lap − 1 s, floored to a second, over 4 s', () => {
+    // Best valid lap: VER lap 2, 1:20.500 (the deleted 1:20.000 does not count).
+    expect(option.yAxis).toMatchObject({ min: 79000, max: 83000, interval: 1000 });
+    // 1:20.000 exactly: − 1 s is already whole.
+    const whole = lapChartOption([PER], [{ ...(laps.at(-1) as Lap), lap_ms: 80000 }], tokens, fit);
+    expect(whole.yAxis).toMatchObject({ min: 79000, max: 83000 });
   });
 
-  it('colours a line by its team and dashes a teammate', () => {
-    expect(option.series.map((s) => [s.name, s.color, s.lineStyle.type])).toEqual([
-      ['VER', '#3671C6', 'solid'],
-      ['NOR', '#FF8000', 'solid'],
-      ['PER', '#3671C6', 'dashed'],
+  it('windows 107 % from the same floor to 107 % of the best lap, ceiled to a second', () => {
+    // 80.5 × 1.07 = 86.135.
+    const wide = lapChartOption([VER, NOR, PER], laps, tokens, { window: '107', periods: [] });
+    expect(wide.yAxis).toMatchObject({ min: 79000, max: 87000, interval: 1000 });
+  });
+
+  it('scales by itself, in whole seconds, without a purple or green lap', () => {
+    const auto = lapChartOption([VER], [laps[0] as Lap], tokens, fit).yAxis;
+    expect(auto).toMatchObject({ minInterval: 1000 });
+    for (const key of ['min', 'max', 'interval']) expect(auto).not.toHaveProperty(key);
+  });
+
+  it('labels the y-axis in whole seconds, "1:33"', () => {
+    expect(option.yAxis.axisLabel.formatter(93000)).toBe('1:33');
+    expect(option.yAxis.axisLabel.formatter(79000)).toBe('1:19');
+    expect(option.yAxis.axisLabel.formatter(119999.6)).toBe('2:00');
+  });
+
+  it('bands SC and VSC in --amber and red in --live, from half a lap before to half a lap after (F2)', () => {
+    const periods = [
+      { kind: 'sc', from: 2, to: 3 },
+      { kind: 'vsc', from: 4, to: 4 },
+      { kind: 'red', from: 5, to: 5 },
+    ] as const;
+    const banded = lapChartOption([VER, NOR], laps, tokens, { window: 'fit', periods });
+    const area = (c: string) => ({ color: c, opacity: 0.15 });
+    expect(banded.series[0]).toHaveProperty('markArea', {
+      silent: true,
+      label: { color: tokens.fg, position: 'insideTop' },
+      data: [
+        [{ name: 'SC', xAxis: 1.5, itemStyle: area(tokens.amber) }, { xAxis: 3.5 }],
+        // A one-lap VSC is a lap wide.
+        [{ name: 'VSC', xAxis: 3.5, itemStyle: area(tokens.amber) }, { xAxis: 4.5 }],
+        [{ name: 'RED', xAxis: 4.5, itemStyle: area(tokens.live) }, { xAxis: 5.5 }],
+      ],
+    });
+    // On the first series only, and none without a period.
+    expect(banded.series.slice(1).some((s) => 'markArea' in s)).toBe(false);
+    expect(option.series.some((s) => 'markArea' in s)).toBe(false);
+  });
+
+  it('names only the drivers in the legend, 36 px wide so a dash shows, in --fg', () => {
+    expect(option.legend).toEqual({
+      top: 0,
+      data: ['VER', 'NOR', 'PER'],
+      itemWidth: 36,
+      textStyle: { color: tokens.fg },
+    });
+  });
+
+  it('ends each line with its acronym in --fg, moved apart on overlap, inside a 48 px right margin (F3)', () => {
+    for (const s of [verLine, norLine, perLine])
+      expect(s).toMatchObject({
+        endLabel: { show: true, formatter: s?.name, color: tokens.fg },
+        labelLayout: { moveOverlap: 'shiftY' },
+      });
+    expect(option.grid).toEqual({
+      left: 8,
+      right: 48,
+      top: 40,
+      bottom: 8,
+      outerBoundsMode: 'same',
+      outerBoundsContain: 'axisLabel',
+    });
+  });
+
+  it('uses a rich-text tooltip: the lap, then per driver its time, Δ to the reference, compound and flags', () => {
+    expect(option.tooltip).toMatchObject({
+      trigger: 'axis',
+      renderMode: 'richText',
+      confine: true,
+      axisPointer: { snap: true },
+    });
+    const marked = laps.map((l) =>
+      l.driver_number === 4 && l.lap_number === 4 ? { ...l, is_pit_in: true, compound: 'MEDIUM' } : l,
+    );
+    const tip = lapChartOption([VER, NOR, PER], marked, tokens, fit).tooltip.formatter;
+    // Lap 1: both out of the window; no Δ on the reference line.
+    expect(tip([{ dataIndex: 0 }])).toBe(
+      'Lap 1\nVER 1:40.000 · Soft · OUT, above the window\nNOR 1:35.000 · −5.000 · Soft · above the window\nPER —',
+    );
+    // Lap 3: the reference has no time, so no Δ.
+    expect(tip([{ dataIndex: 2 }])).toBe('Lap 3\nVER —\nNOR 1:21.200 · Soft · deleted\nPER —');
+    expect(tip({ dataIndex: 3 })).toBe(
+      'Lap 4\nVER 1:20.000 · Soft · deleted\nNOR 1:22.000 · +2.000 · Medium · IN\nPER —',
+    );
+    expect(tip([{ dataIndex: 1 }])).toBe(
+      'Lap 2\nVER 1:20.500 · Soft\nNOR 1:21.000 · +0.500 · Soft\nPER 1:21.500 · +1.000 · Soft',
+    );
+    // An unknown compound is left out.
+    const odd = lapChartOption([PER], [{ ...(laps.at(-1) as Lap), compound: 'UNKNOWN' }], tokens, fit);
+    expect(odd.tooltip.formatter([{ dataIndex: 1 }])).toBe('Lap 2\nPER 1:21.500');
+    expect(JSON.stringify(option)).not.toMatch(/[<>]/);
+  });
+
+  it('strips rich-text markup {|} from data strings', () => {
+    const odd = lapChartOption([driver(1, '{a|VER}', null)], laps, tokens, fit);
+    expect(odd.series[0]).toMatchObject({ name: 'aVER', endLabel: { formatter: 'aVER' } });
+    expect(odd.series[1]?.name).toBe('aVER');
+    expect(odd.legend.data).toEqual(['aVER']);
+    expect(odd.tooltip.formatter({ dataIndex: 1 })).toBe('Lap 2\naVER 1:20.500 · Soft');
+  });
+
+  it('draws each line with lineStyles', () => {
+    expect(option.series.slice(0, 3).map((s) => [s.name, s.color, s.lineStyle])).toEqual([
+      ['VER', '#3671C6', { type: 'solid' }],
+      ['NOR', '#FF8000', { type: 'solid' }],
+      ['PER', '#3671C6', { type: 'dashed' }],
     ]);
-    expect(lapChartOption([driver(9, 'XXX', null)], laps, tokens).series[0]?.color).toBe(tokens.muted);
+  });
+});
+
+describe('lineStyles (C2)', () => {
+  const styles = (teams: (string | null)[], light = false) =>
+    lineStyles(
+      teams.map((t, i) => driver(i + 1, `D${i}`, t)),
+      { ...tokens, light },
+    ).map((s) => [s.color, s.type]);
+
+  it('dashes the second of two equal colours', () => {
+    expect(styles(['#3671C6', '#3671C6'])).toEqual([
+      ['#3671C6', 'solid'],
+      ['#3671C6', 'dashed'],
+    ]);
   });
 
-  it('cycles solid, dashed, dotted per repeated colour, drivers without a team colour included', () => {
-    const plain = [1, 2, 3, 4].map((n) => driver(n, `D${n}`, null));
-    expect(lapChartOption([...plain, NOR], laps, tokens).series.map((s) => [s.color, s.lineStyle.type])).toEqual([
+  it('dashes a close but unequal pair', () => {
+    // Red Bull 2025 against 2026: ΔE 5.2 (deutan 5.3, protan 5.3), under 15.
+    expect(styles(['#3671C6', '#4781D7'])).toEqual([
+      ['#3671C6', 'solid'],
+      ['#4781D7', 'dashed'],
+    ]);
+  });
+
+  it('dashes a pair that is close only after the light clamp, and only on light', () => {
+    // Mercedes #00D7B6 against Aston Martin #229971: ΔE 18.0 (deutan 17.5, protan 19.0) as drawn on dark;
+    // the clamp darkens Mercedes to #00a88d, ΔE 5.0 (deutan 4.8, protan 5.3).
+    expect(styles(['#00D7B6', '#229971'])).toEqual([
+      ['#00D7B6', 'solid'],
+      ['#229971', 'solid'],
+    ]);
+    expect(styles(['#00D7B6', '#229971'], true)).toEqual([
+      ['#00a88d', 'solid'],
+      ['#229971', 'dashed'],
+    ]);
+  });
+
+  it('keeps a far pair solid', () => {
+    // Red Bull against McLaren: ΔE 37.0 (deutan 36.9, protan 27.8).
+    expect(styles(['#3671C6', '#FF8000'])).toEqual([
+      ['#3671C6', 'solid'],
+      ['#FF8000', 'solid'],
+    ]);
+  });
+
+  it('gives three close drivers solid, dashed and dotted, then goes round again', () => {
+    // #3671C6, #4781D7 and Williams #1868DB: every pair under ΔE 8.1.
+    expect(styles(['#3671C6', '#4781D7', '#1868DB']).map(([, t]) => t)).toEqual(['solid', 'dashed', 'dotted']);
+    // Drivers without a team colour share --muted.
+    expect(styles([null, null, null, null, '#FF8000'])).toEqual([
       [tokens.muted, 'solid'],
       [tokens.muted, 'dashed'],
       [tokens.muted, 'dotted'],
@@ -134,33 +332,140 @@ describe('lapChartOption', () => {
     ]);
   });
 
-  it('labels the y-axis in whole milliseconds, also on a fractional tick', () => {
-    expect(option.yAxis.axisLabel.formatter(80499.6)).toBe('1:20.500');
-    expect(option.yAxis.axisLabel.formatter(79000)).toBe('1:19.000');
+  it('takes the first type no close earlier driver uses, so a far driver in between changes nothing', () => {
+    expect(styles(['#3671C6', '#FF8000', '#3671C6', '#FF8000']).map(([, t]) => t)).toEqual([
+      'solid',
+      'solid',
+      'dashed',
+      'dashed',
+    ]);
+  });
+});
+
+// The chart laid out by ECharts itself, at phone width, through server-side rendering (F4): what is drawn, not
+// what the option asks for.
+describe('the lap chart at 390 px', () => {
+  use([SVGRenderer]);
+  const RED_BULL = '#3671C6';
+  const MCLAREN = '#FF8000';
+  const DELETED = [12, 25, 38, 44];
+  // 57 laps each: pit laps 20 and 21 above the window, the bests on laps 30 and 33, both ending on 1:33.000.
+  const race = [1, 4].flatMap((d) =>
+    Array.from({ length: 57 }, (_, i) => {
+      const n = i + 1;
+      const ms = n === 57 ? 93000 : n === 20 || n === 21 ? 99000 + d : 93300 + ((n * d) % 7) * 100;
+      const best = d === 1 ? n === 30 : n === 33;
+      return lap(d, n, ms, [null, null, null], best ? (d === 1 ? 'purple' : 'green') : null, {
+        deleted: DELETED.includes(n) && (d === 1 ? n < 30 : n > 30),
+        is_pit_in: n === 20,
+        is_pit_out: n === 21,
+      });
+    }),
+  );
+  const pick = [driver(1, 'VER', RED_BULL), driver(4, 'NOR', MCLAREN)];
+  const option = lapChartOption(pick, race, tokens, fit);
+
+  type Drawn = {
+    type: string;
+    shape?: { symbolType?: string };
+    style: { fill?: string; stroke?: string; text?: string };
+  };
+  type Box = { x: number; y: number; width: number; height: number };
+  const draw = (o: object) => {
+    const chart = init(null, null, { renderer: 'svg', ssr: true, width: 390, height: 300 });
+    try {
+      chart.setOption({ ...o, animation: false });
+      return chart
+        .getZr()
+        .storage.getDisplayList()
+        .map((el) => {
+          const e = el as unknown as Drawn & {
+            parent?: { __hostTarget?: { type: string } };
+            transform?: number[];
+            getBoundingRect(): { clone(): Box & { applyTransform(m: number[]): void } };
+          };
+          const box = e.getBoundingRect().clone();
+          if (e.transform) box.applyTransform(e.transform);
+          return { el: e, box, endLabel: e.parent?.__hostTarget?.type === 'ec-polyline' };
+        });
+    } finally {
+      chart.dispose();
+    }
+  };
+  const symbols = (o: object) => {
+    const list = draw(o).filter(({ el }) => el.shape?.symbolType !== undefined);
+    const team = new Set([RED_BULL, MCLAREN]);
+    const of = (type: string, fill: (f: string) => boolean, stroke: (s: string) => boolean) =>
+      list.filter(
+        ({ el }) => el.shape?.symbolType === type && fill(el.style.fill ?? '') && stroke(el.style.stroke ?? ''),
+      ).length;
+    return {
+      hollow: of(
+        'circle',
+        (f) => f === tokens.bg,
+        (s) => team.has(s),
+      ),
+      best: of(
+        'circle',
+        (f) => team.has(f),
+        (s) => s === tokens.bg,
+      ),
+      triangles: of(
+        'triangle',
+        (f) => team.has(f),
+        () => true,
+      ),
+    };
+  };
+
+  it('fills ECharts’ emptyCircle white, a disc on the dark theme (F1)', () => {
+    const empty = {
+      backgroundColor: tokens.bg,
+      xAxis: { type: 'value' },
+      yAxis: { type: 'value' },
+      series: [
+        {
+          type: 'line',
+          color: RED_BULL,
+          symbol: 'none',
+          data: [[1, 93000], { value: [2, 93500], symbol: 'emptyCircle', symbolSize: 10 }],
+        },
+      ],
+    };
+    // An emptyCircle is drawn as a circle with an "empty brush": ringed in the line colour, filled with tokens' #fff.
+    const fills = draw(empty)
+      .filter(({ el }) => el.shape?.symbolType === 'circle')
+      .map(({ el }) => [el.style.fill, el.style.stroke]);
+    expect(fills).toEqual([['#fff', RED_BULL]]);
   });
 
-  it('keeps the axis labels inside the grid margins through outerBounds, not the deprecated containLabel', () => {
-    expect(option.grid).toEqual({
-      left: 8,
-      right: 16,
-      top: 40,
-      bottom: 8,
-      outerBoundsMode: 'same',
-      outerBoundsContain: 'axisLabel',
-    });
+  it('draws all 4 deleted laps hollow, both own bests and the 4 laps above the window', () => {
+    expect(race.filter((l) => l.deleted)).toHaveLength(4);
+    expect(symbols(option)).toEqual({ hollow: 4, best: 2, triangles: 4 });
   });
 
-  it('uses a rich-text tooltip with a plain-text formatter, and no HTML anywhere', () => {
-    expect(option.tooltip).toMatchObject({ trigger: 'axis', renderMode: 'richText', confine: true });
-    expect(option.tooltip.formatter([{ dataIndex: 3 }])).toBe('Lap 4\nVER 1:20.000 deleted\nNOR 1:22.000\nPER —');
-    expect(option.tooltip.formatter([{ dataIndex: 1 }])).toBe('Lap 2\nVER 1:20.500\nNOR 1:21.000\nPER 1:21.500');
-    expect(JSON.stringify(option)).not.toMatch(/[<>]/);
+  it('would thin the deleted laps on a category axis with showAllSymbol auto, the P4d layout', () => {
+    // On the value axis 'auto' changes nothing (it thins on a category axis only), so the old axis shows it can fail.
+    const auto = { ...option, series: option.series.map((s) => ({ ...s, showAllSymbol: 'auto' })) };
+    expect(symbols(auto).hollow).toBe(4);
+    const category = { ...auto, xAxis: { type: 'category', data: Array.from({ length: 58 }, (_, i) => i) } };
+    expect(symbols(category).hollow).toBeLessThan(4);
   });
 
-  it('strips rich-text markup {|} from data strings', () => {
-    const odd = lapChartOption([driver(1, '{a|VER}', null)], laps, tokens);
-    expect(odd.series[0]?.name).toBe('aVER');
-    expect(odd.tooltip.formatter({ dataIndex: 1 })).toBe('Lap 2\naVER 1:20.500');
+  it('keeps the two end labels apart when both drivers end on the same time (F3)', () => {
+    const labels = (o: object) =>
+      draw(o)
+        .filter((d) => d.endLabel)
+        .map((d) => d.box);
+    const apart = ([a, b]: Box[]) =>
+      a !== undefined &&
+      b !== undefined &&
+      (a.x + a.width <= b.x || b.x + b.width <= a.x || a.y + a.height <= b.y || b.y + b.height <= a.y);
+    expect(labels(option)).toHaveLength(2);
+    expect(apart(labels(option))).toBe(true);
+    // Without moveOverlap they sit on each other, so the check can fail.
+    const stacked = { ...option, series: option.series.map((s) => ({ ...s, labelLayout: undefined })) };
+    expect(apart(labels(stacked))).toBe(false);
   });
 });
 
