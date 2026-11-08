@@ -11,6 +11,7 @@ Status: approved by the owner (2026-10-25). It builds on `ARCHITECTURE.md` (cite
 | Dec 2026 → Feb 2027 | **P2b–P2e** | No sessions; build on the recordings and archive files |
 | Las Vegas 20–22 Nov 2026 (fallbacks: Lusail 27–29 Nov, Yas Marina 4–6 Dec) | **P2f** | Live verified on a real session |
 | Nov 2026 → Jan 2027 | **P4a–P4f** | The redesign (owner, 2026-11-07): web only, on the API as it is, so it can run next to P2f and the last 2026 weekends |
+| Nov 2026 → Jan 2027 | **P5a–P5c** | Weather (owner, 2026-11-07), next to P4. P5c's live check needs a session (Lusail 27–29 Nov or Yas Marina 4–6 Dec 2026, else 2027 testing) |
 | After P2 | **P3a–P3c** | History back to 2018 (and optional pre-2018 lap times) |
 
 Remaining 2026 weekends (OpenF1 schedule): Austin (race 25 Oct) · Mexico City 30 Oct–1 Nov · São Paulo 6–8 Nov · Las Vegas 20–22 Nov · Lusail 27–29 Nov · Yas Marina 4–6 Dec.
@@ -23,7 +24,7 @@ Remaining 2026 weekends (OpenF1 schedule): Austin (race 25 Oct) · Mexico City 3
   - **[weekend]** needs a real F1 session.
   - **[owner]** is a manual owner action or judgement.
 - **Per phase:** one issue with the goal, scope, deliverables and acceptance criteria copied from this file. Branch `claude/p<N><x>-<slug>`, conventional commits, and a PR with an evidence checklist (each criterion → test or command output). Agents never merge. The owner merges with a merge commit once `ci` and `security` are green (branch protection on `main` requires both; owner, 2026-10-25).
-- **Reviews:** a fresh-session `/code-review` before merging P1b, P1c, P2b, P2c, P2d and P4e. A security review for anything touching secrets, the firewall, Access, the token or the compose hardening (P0 CI, P1f, P2c). For the web-only P4 phases a Sonnet security review is recommended where more feed or URL text is parsed or rendered (P4d, P4e, P4f), and optional elsewhere unless the CSP or the build config changes.
+- **Reviews:** a fresh-session `/code-review` before merging P1b, P1c, P2b, P2c, P2d, P4e, P5a, P5b and P5c. A security review for anything touching secrets, the firewall, Access, the token or the compose hardening (P0 CI, P1f, P2c), and for P5c (a new outbound host in the `ingest` daemon and third-party map data in the page). For the web-only P4 phases a Sonnet security review is recommended where more feed or URL text is parsed or rendered (P4d, P4e, P4f), and optional elsewhere unless the CSP or the build config changes.
 - **Models and effort** (owner, 2026-10-25; each phase issue has its own table):
   - Build: Opus 5.5 at `xhigh` (`high` for UI and well-specified phases, `max` for P2b's lap reconstruction). Sonnet 5.5 at `high` for small phases (P2f, P3b, P3c).
   - Code review: a fresh session with a different model from the build. Sonnet 5.5 at `xhigh` for required reviews and `high`/`medium` otherwise; Opus 5.5 when Sonnet built.
@@ -358,6 +359,77 @@ Remaining 2026 weekends (OpenF1 schedule): Austin (race 25 Oct) · Mexico City 3
   - [CI] `?d` parsing: unknown and duplicate numbers dropped, order kept.
   - [CI] ECharts still loads only on Compare, and its chunk passes the dist scan.
   - [owner] comparing two drivers in the Mexico City 2026 race reads the same as the F1 TV timing.
+
+### P5: Weather (owner, 2026-11-07)
+
+- **Decision:** a Weather tab on the session page (summary, chart, race laps on the timeline, a rain map around the circuit), a one-line summary in the session head, and a Weather tab in the player.
+- **Sources** (checked 2026-11-07):
+  - Point weather (air and track temperature, humidity, pressure, rain yes/no, wind): OpenF1 `/weather` for the session pages (2023+, about one sample a minute), and the feed's `WeatherData` for live and replay. Both are the same track-side station, which the recorder already records.
+  - MET Norway was checked and dropped. Its Nowcast and radar cover only Norway, Sweden, Finland and Denmark, and its global `locationforecast` is a model refreshed every 6 h outside the Nordics.
+  - The rain field: the Open-Meteo model grid (CC BY 4.0, free for non-commercial use). It is sharp only where a high-resolution model runs: about 1.5–3 km in Central Europe, the UK and North America, 9–25 km elsewhere. It is modelled rain, not radar, and the page says so.
+  - Circuit outlines: `bacinger/f1-circuits` (MIT; all 25 venues of 2026), vendored with its notice.
+  - The surroundings: a simplified OpenStreetMap extract per circuit (ODbL), only after the licence ADR of P5c is approved.
+- **Rules for every P5 phase:** the browser still makes no third-party request: every source is fetched by our server or vendored. Each phase amends A§6, A§7, A§10 and A§13 for what it changes, marked "(owner, 2026-11-07)".
+- **Order:** P5a after P4b and P4c (all three change `views/Session.tsx`). P5b after P5a and P4e (`views/Player.tsx`). P5c after P5a; its player part needs P5b.
+
+### P5a: The Weather tab (OpenF1)
+
+- **Goal:** every session since 2023 shows how its weather went.
+- **Scope in:**
+  - OpenF1 `weather` as the seventh per-session endpoint: zod schema (each field nullable and bounded by its column), fixtures, a `weather` table keyed (session_key, date), the `raw_response.endpoint` CHECK extended, grants (`f1_ingest` replaces, `f1_api` reads)
+  - a re-queue in the same migration: every `final`, not cancelled session goes back to `fetched` with `next_fetch_at` = `date_end` + 35 min, so the running daemon fetches all seven endpoints once more (about 455 sessions × 7 requests ≈ 2 h 15 min, paused during live windows)
+  - `GET /sessions/:key/weather` with a strict contract and the A§10 cache rule
+  - the route `/:year/:meeting/:session/weather` and a Weather tab after Stints:
+    - tiles: air and track min–max, humidity, pressure, wind (mean, max, prevailing direction as a compass point), and rain: "Dry", or its periods in Amsterdam time
+    - a chart on the lazy ECharts chunk: air and track temperature as two line types, rain as bands, the rest in a rich-text tooltip
+    - in `Race`-type sessions, the leader's lap at each sample (the highest lap any driver has started, from the laps already loaded) in the tooltip and beside each rain period ("laps 23–27")
+  - a one-line summary in the session head on every tab ("Air 24–27 °C · Track 38–45 °C · Dry")
+- **Scope out:** the player (P5b), the rain map (P5c).
+- **Acceptance:**
+  - [CI] the schema parses its fixtures (a dry session, a wet session, empty), the golden outputs match, and arbitrary JSON never throws.
+  - [CI] integration: ingest writes the weather rows and their raw row, a duplicate date keeps the last, a re-run is idempotent, and an empty answer after rows is `empty` and keeps them.
+  - [CI] the migration: a final session becomes `fetched` and the next tick processes it; cancelled, scheduled and failed sessions are unchanged; `f1_api` reads `weather` and cannot write it.
+  - [CI] the route parses against its contract; a bad key gives 400, an unknown key 404, and the cache follows the session state.
+  - [CI] unit tests: the summary (nulls, all null, rain periods split by a gap, compass points at 0° and 359°), the leader's lap (before the start, mid-race, after the flag, not a race).
+  - [CI] chart option tests: two line types, rain bands, the lap in the tooltip only in races, and data strings stripped of `{`, `|` and `}`.
+  - [CI] ECharts stays out of the initial bundle and is loaded only by the chart views (Compare and Weather), and the dist scan passes with no new allowance.
+  - [box] after the deploy the re-queue has drained, and a query the PR supplies counts the sessions with weather, the rainfall values, the sample interval and any rows outside the session window. The facts go into A§6.1.
+  - [owner] a wet 2024–2026 session reads the same as the F1 TV weather graphic.
+
+### P5b: Weather in the player
+
+- **Goal:** live and replay show the weather up to T.
+- **Scope in:**
+  - a pure `weatherRow(view, t)` in `packages/contracts`: the feed's `WeatherData` strings become a row of the P5a contract (non-numbers become null)
+  - the playback `snapshot` carries `weather`, every sample so far from the same replay pass (A§11.3); the client appends a row on each `WeatherData` delta
+  - the player's tabs Tower · Laps · Weather; the Weather tab reuses P5a's tiles and chart on the rows up to T, with race laps from the stream's lap rows
+- **Scope out:** the rain map in the player (P5c).
+- **Acceptance:**
+  - [CI] unit tests: `weatherRow` on numbers as strings, an empty string and garbage.
+  - [CI] the playback property extended: the snapshot's `weather` at a random T equals a full replay to T, and the client-applied deltas give the same rows.
+  - [CI] component tests (happy-dom): a `WeatherData` delta appends a row, a seek back drops later rows, and nothing after T is shown.
+  - [owner] in a replayed 2026 race the Weather tab agrees with the F1 TV weather graphic at three moments.
+
+### P5c: The rain map
+
+- **Goal:** see where the rain was around the circuit, and when.
+- **Scope in:**
+  - a licence ADR first (ADR-0008): `bacinger/f1-circuits` (MIT), the OpenStreetMap extract (ODbL against PolyForm Strict: a Produced Work or a Derivative Database, the attribution) and Open-Meteo (CC BY 4.0). No OSM-derived file lands before the owner approves it; without approval the map shows the outline and the scale rings only.
+  - `scripts/map-extract.ts` (the owner's machine only, refuses under `CI`): per circuit, the outline from the vendored GeoJSON plus coastline, water and main roads within about 6 km from Overpass, simplified and projected, written as one JSON per circuit that the web loads lazily
+  - a mapping from OpenF1's `circuit_short_name` to the outline id, covering every circuit of 2023–2026
+  - a rain job in the `ingest` daemon with its own state per session, rate limiter, fixed hostnames, timeouts and fixed error codes: a grid of about 7 × 7 points around the circuit; the Historical Forecast API once for a past session; every 15 min while a session is live, then once more after it ends; a backfill of past sessions within a daily call budget
+  - tables for the grid and its 15-minute frames, and `GET /sessions/:key/rain`
+  - the map on the Weather tab (and in the player up to T): an SVG with the OSM layers, the outline, 1 km rings to 5 km, a north arrow, rain cells in three intensity steps with a legend, a time slider, a text summary per frame, and the attributions
+- **Acceptance:**
+  - [owner] ADR-0008 approved before any OSM-derived file is committed.
+  - [CI] unit tests: the grid points, the projection (a known distance within 1 %), the intensity steps, and the circuit mapping over the 2023–2026 meetings fixtures.
+  - [CI] msw tests: the Open-Meteo client refuses redirects, times out, caps the body and maps failures to fixed codes; the job's live refresh, final fetch, back-off and daily budget run on a fake clock.
+  - [CI] integration: the job stores frames, the route parses against its contract, and it is `no-store` until the grid is final.
+  - [CI] component tests: the map (outline, rings, cells by class, legend, attributions), the slider, the text summary, the "no outline" and "not fetched yet" states; the contrast test classifies the rain tokens.
+  - [CI] the build test: the map data loads lazily per circuit, and the dist scan passes.
+  - [box] every `circuit_short_name` in the VM database maps to an outline, and the rain backfill finishes within the budget (a query and log counts the PR supplies).
+  - [weekend] during a live session the grid refreshes every 15 min, and the player's map never shows a frame after T.
+  - [owner] a wet 2024–2026 session shows rain where the broadcast reported it.
 
 ## 4. Owner actions
 
