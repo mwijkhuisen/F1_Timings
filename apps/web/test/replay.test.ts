@@ -2,7 +2,7 @@ import type { Obj } from '@f1/contracts';
 import { describe, expect, it } from 'vitest';
 import { lastStop, markersUpTo, skipped, skippedText, statusSeries } from '../src/lib/replay.ts';
 import type { Feed } from '../src/lib/stream.ts';
-import { parseT } from '../src/lib/time.ts';
+import { fmtClock, parseT } from '../src/lib/time.ts';
 import { lap } from './laps.ts';
 
 // The player's pure helpers (A§13, P4e): markers and chips at or before T, the last stop, the skipped events and ?t.
@@ -37,7 +37,7 @@ describe('markersUpTo', () => {
     const s = series([
       { Utc: '2026-10-25T20:00:00', TrackStatus: 'AllClear' },
       { Utc: '2026-10-25T20:00:00', SessionStatus: 'Started' },
-      { Utc: '2026-10-25T20:00:02', SessionStatus: 'Aborted' },
+      { Utc: '2026-10-25T20:00:02', SessionStatus: 'Inactive' }, // A§11.1: a `Started` that lasted 2 s
       { Utc: '2026-10-25T20:05:00.000Z', SessionStatus: 'Started' },
       { Utc: '2026-10-25T20:05:50', TrackStatus: 'Yellow' },
       { Utc: '2026-10-25T21:30:00', SessionStatus: 'Finished' },
@@ -48,16 +48,51 @@ describe('markersUpTo', () => {
     ]);
   });
 
-  it('SC, then Aborted, Red and AllClear: SC closes at Red, Red runs to AllClear', () => {
+  // The 2026 race's shape (A§11.3): its TrackStatus clears 2 min after the red flag, the restart comes 39 min later.
+  const race = series([
+    { Utc: '2026-10-25T20:00:00', SessionStatus: 'Started' },
+    { Utc: '2026-10-25T20:10:00', TrackStatus: 'SCDeployed' },
+    { Utc: '2026-10-25T20:12:00', SessionStatus: 'Aborted' },
+    { Utc: '2026-10-25T20:12:05', TrackStatus: 'Red' },
+    { Utc: '2026-10-25T20:14:05', TrackStatus: 'AllClear' },
+    { Utc: '2026-10-25T20:20:00', TrackStatus: 'Yellow' },
+    { Utc: '2026-10-25T20:21:00', TrackStatus: 'AllClear' },
+    { Utc: '2026-10-25T20:53:05', SessionStatus: 'Started' },
+    { Utc: '2026-10-25T20:53:10', TrackStatus: 'SCDeployed' },
+    { Utc: '2026-10-25T21:00:00', TrackStatus: 'AllClear' },
+  ]);
+
+  it('the race: SC closes at Aborted, the red flag runs from Aborted to the restart, then the SC after it', () => {
+    expect(markersUpTo(race, at('2026-10-25T22:00:00Z'), ALL)).toEqual([
+      { kind: 'start', t: at('2026-10-25T20:00:00Z') },
+      { kind: 'sc', t: at('2026-10-25T20:10:00Z'), end: at('2026-10-25T20:12:00Z') },
+      { kind: 'red', t: at('2026-10-25T20:12:00Z'), end: at('2026-10-25T20:53:05Z') },
+      { kind: 'start', t: at('2026-10-25T20:53:05Z') },
+      { kind: 'sc', t: at('2026-10-25T20:53:10Z'), end: at('2026-10-25T21:00:00Z') },
+    ]);
+  });
+
+  it('a red flag still in force at T is open, also after its TrackStatus cleared', () => {
+    const T = at('2026-10-25T20:30:00Z');
+    expect(markersUpTo(race, T, ALL)).toEqual([
+      { kind: 'start', t: at('2026-10-25T20:00:00Z') },
+      { kind: 'sc', t: at('2026-10-25T20:10:00Z'), end: at('2026-10-25T20:12:00Z') },
+      { kind: 'red', t: at('2026-10-25T20:12:00Z'), end: T, open: true },
+    ]);
+  });
+
+  it('a red flag without Aborted (practice) ends at the next TrackStatus outside Red', () => {
     const s = series([
-      { Utc: '2026-10-25T20:10:00', TrackStatus: 'SCDeployed' },
-      { Utc: '2026-10-25T20:12:00', SessionStatus: 'Aborted' },
-      { Utc: '2026-10-25T20:12:05', TrackStatus: 'Red' },
+      { Utc: '2026-10-25T20:10:00', TrackStatus: 'Red' },
+      { Utc: '2026-10-25T20:25:00', TrackStatus: 'AllClear' },
+      { Utc: '2026-10-25T20:30:00', TrackStatus: 'SCDeployed' },
+      { Utc: '2026-10-25T20:32:00', TrackStatus: 'Red' },
       { Utc: '2026-10-25T20:40:00', TrackStatus: 'AllClear' },
     ]);
     expect(markersUpTo(s, at('2026-10-25T21:00:00Z'), ALL)).toEqual([
-      { kind: 'sc', t: at('2026-10-25T20:10:00Z'), end: at('2026-10-25T20:12:05Z') },
-      { kind: 'red', t: at('2026-10-25T20:12:05Z'), end: at('2026-10-25T20:40:00Z') },
+      { kind: 'red', t: at('2026-10-25T20:10:00Z'), end: at('2026-10-25T20:25:00Z') },
+      { kind: 'sc', t: at('2026-10-25T20:30:00Z'), end: at('2026-10-25T20:32:00Z') },
+      { kind: 'red', t: at('2026-10-25T20:32:00Z'), end: at('2026-10-25T20:40:00Z') },
     ]);
   });
 
@@ -250,6 +285,20 @@ describe('parseT', () => {
     expect(parseT('02:30:00', rec('2026-10-24T23:00:00.000Z', '2026-10-25T01:00:00.000Z'))).toBe(
       at('2026-10-25T00:30:00Z'),
     );
+  });
+
+  it('round-trips fmtClock for every whole second of a recording across midnight and a DST change', () => {
+    // Spring forward (29 Mar): every second has one Amsterdam time. Fall back (25 Oct): 02:00–02:59:59 happens twice
+    // inside this span (00:00Z–01:59:59Z), so those are null; every other second comes back as itself.
+    for (const [from, to, twice] of [
+      ['2026-03-28T22:00:00Z', '2026-03-29T03:00:00Z', []],
+      ['2026-10-24T22:00:00Z', '2026-10-25T03:00:00Z', ['2026-10-25T00:00:00Z', '2026-10-25T02:00:00Z']],
+    ] as const) {
+      const r = rec(from, to);
+      const [a, b] = twice.map(at);
+      for (let t = at(from); t <= at(to); t += 1000)
+        expect(parseT(fmtClock(t), r)).toBe(a !== undefined && b !== undefined && t >= a && t < b ? null : t);
+    }
   });
 
   it('the spring-forward gap: a time that never was is null', () => {

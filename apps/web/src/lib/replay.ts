@@ -20,33 +20,43 @@ export function statusSeries(state: Obj): Status[] {
     .sort((a, b) => a.t - b.t);
 }
 
-/** The TrackStatus words of each band (A§11.3): VSCEnding is still the VSC. */
-const BAND = new Map<string, Kind>([
-  ['SCDeployed', 'sc'],
-  ['VSCDeployed', 'vsc'],
-  ['VSCEnding', 'vsc'],
-  ['Red', 'red'],
-]);
+/**
+ * The band in force (A§11.3): a red flag while TrackStatus is Red or the session is Aborted (until Started or
+ * Finished: the race's red flag runs to its restart, its TrackStatus clears earlier), else SC, else VSC (VSCEnding is
+ * still the VSC).
+ */
+const bandOf = (track: string | undefined, aborted: boolean): Kind | undefined =>
+  track === 'Red' || aborted
+    ? 'red'
+    : track === 'SCDeployed'
+      ? 'sc'
+      : track === 'VSCDeployed' || track === 'VSCEnding'
+        ? 'vsc'
+        : undefined;
 
 /**
  * The marks at or before T, by time. A start is a `Started` unless the next entry with a SessionStatus follows within
- * 60 s (the race's 2 s blip, A§11.1); a band runs from its first entry to the next TrackStatus outside it (SC → Red
- * closes SC and opens Red); every `Finished` is a chequered flag. A mark that starts outside [lo, hi] is dropped and a
- * band's end is clipped to hi.
+ * 60 s (the race's 2 s blip, A§11.1); a band is a run of one kind (`bandOf`, from the latest TrackStatus and whether
+ * the session is aborted), from the entry where it comes into force to the entry where it stops (SC → Aborted closes
+ * SC and opens red); every `Finished` is a chequered flag. A mark that starts outside [lo, hi] is dropped and a band's
+ * end is clipped to hi.
  */
 export function markersUpTo(series: readonly Status[], T: number, [lo, hi]: readonly [number, number]): Mark[] {
   const seen = series.filter((s) => s.t <= T);
   const out: Mark[] = [];
+  let track: string | undefined;
+  let aborted = false;
   let band: { kind: Kind; t: number } | undefined;
   seen.forEach((s, i) => {
-    if (s.track !== undefined) {
-      const kind = BAND.get(s.track);
-      if (band && kind !== band.kind) {
-        out.push({ kind: band.kind, t: band.t, end: s.t });
-        band = undefined;
-      }
-      if (kind && !band) band = { kind, t: s.t };
+    if (s.track !== undefined) track = s.track;
+    if (s.session === 'Aborted') aborted = true;
+    else if (s.session === 'Started' || s.session === 'Finished') aborted = false;
+    const kind = bandOf(track, aborted);
+    if (band && kind !== band.kind) {
+      out.push({ kind: band.kind, t: band.t, end: s.t });
+      band = undefined;
     }
+    if (kind && !band) band = { kind, t: s.t };
     if (s.session === 'Finished') out.push({ kind: 'chequered', t: s.t });
     if (s.session !== 'Started') return;
     const next = seen.slice(i + 1).find((n) => n.session !== undefined);
