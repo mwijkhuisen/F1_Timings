@@ -303,6 +303,27 @@ export function createApp({
     return c.json(body, 200, cache(session.state));
   });
 
+  api.get('/sessions/:key/weather', async (c) => {
+    const session = await lookup(c);
+    if (session instanceof Response) return session;
+    const body = await db
+      .selectFrom('weather')
+      .select([
+        'date',
+        'air_temperature',
+        'track_temperature',
+        'humidity',
+        'pressure',
+        'rainfall',
+        'wind_direction',
+        'wind_speed',
+      ])
+      .where('session_key', '=', session.key)
+      .orderBy('date')
+      .execute();
+    return c.json(body, 200, cache(session.state));
+  });
+
   api.get('/status', async (c) => {
     const counts = await db
       .selectFrom('session')
