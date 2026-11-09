@@ -772,6 +772,25 @@ describe('the Weather tab in the player', () => {
     expect(chart.options).toHaveLength(2);
   });
 
+  it("a race's rain period names the leader's laps from the stream's lap rows", () => {
+    render({ recording: ended, start: T, sessionKey: 9100, detail });
+    const started = (n: number, at: number) => ({ ...lap(1, n), date_start: new Date(at).toISOString() });
+    last().emit('snapshot', {
+      t: T,
+      state: raceState(),
+      laps: [started(1, T - 150_000), started(2, T - 90_000), started(3, T - 10_000)],
+      stints: [],
+      weather: [
+        weatherRow({ ...W, Rainfall: '1' }, T - 120_000),
+        weatherRow({ ...W, Rainfall: '1' }, T - 60_000),
+        weatherRow(W, T),
+      ],
+    });
+    advance(250);
+    button('Weather');
+    expect(host.querySelector('dl.tiles.wx')?.textContent).toMatch(/· laps 1–2/);
+  });
+
   it('says "No weather in the feed yet." before the feed shows the session, and without rows', () => {
     start(rows, 9999);
     button('Weather');
