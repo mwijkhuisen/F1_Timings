@@ -323,7 +323,13 @@ describe('playback routes (f1_api login, Access JWT, real socket)', { timeout: 6
     const seen = events(await res.text());
     expect(seen.map((e) => e.event)).toEqual(['snapshot', ...Array(LINES - 1).fill('delta'), 'end']);
     const snapshot = PlaybackSnapshot.parse(seen[0]?.data);
-    expect(snapshot).toEqual({ t: DONE_AT, state: { TimingData: { Lines: { '1': { N: 0 } } } }, laps: [], stints: [] });
+    expect(snapshot).toEqual({
+      t: DONE_AT,
+      state: { TimingData: { Lines: { '1': { N: 0 } } } },
+      laps: [],
+      stints: [],
+      weather: [],
+    });
     const deltas = seen.slice(1, -1).map((e) => PlaybackDelta.parse(e.data));
     expect(deltas.map((d) => d.t)).toEqual([1, 2, 3].map((i) => DONE_AT + i * 100));
     expect(deltas.map((d) => d.topic)).toEqual(Array(LINES - 1).fill('TimingData'));

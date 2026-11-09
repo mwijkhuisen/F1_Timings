@@ -3,7 +3,7 @@ import { open, readdir, stat } from 'node:fs/promises';
 import { join } from 'node:path';
 import { pipeline } from 'node:stream';
 import { createGunzip } from 'node:zlib';
-import type { Lap, Obj, Stints } from '@f1/contracts';
+import { type Lap, type Obj, type Stints, view, type Weather, weatherRow } from '@f1/contracts';
 import { codeOf } from '../db/db.ts';
 import { progressiveColours } from '../timing/colours.ts';
 import { createLaps, type LapRow, type StintRow } from './laps.ts';
@@ -16,11 +16,12 @@ import { isObj, parseFeedLine } from './read.ts';
 // advance, which is the back-pressure. `.z` topics are never applied, kept or sent (O1). Nothing here logs.
 //
 // The lap and stint rows come from createLaps over the same events: a snapshot carries all of them, a `laps` event the
-// rows that changed since the last send.
+// rows that changed since the last send. The weather rows are one per applied WeatherData delta since the last session
+// switch.
 
-/** `state` is the stream's own state, which changes on the next `next()`: serialize it before. */
+/** `state` and `weather` are the stream's own, which change on the next `next()`: serialize them before. */
 export type PlaybackEvent =
-  | { event: 'snapshot'; data: { t: number; state: Obj; laps: Lap[]; stints: Stints } }
+  | { event: 'snapshot'; data: { t: number; state: Obj; laps: Lap[]; stints: Stints; weather: Weather } }
   | { event: 'delta'; data: { t: number; topic: string; data: unknown } }
   | { event: 'laps'; data: { t: number; laps: Lap[]; stints: Stints } }
   | { event: 'end'; data: { t: number } }
@@ -210,6 +211,7 @@ export async function* playback(o: {
   const start = o.now();
   const T = () => (o.at === 'live' ? o.now() - o.delay * 1000 : o.at + (o.now() - start) * o.speed);
   const feed = createFeed();
+  const weather: Weather = [];
   const engine = createLaps(o.sessionKey, 'f1-live');
   const sent = new Map<string, string>(); // row key → the row's JSON as last sent
   let dirty = false; // a TimingData or TimingAppData change since the rows were last sent
@@ -228,6 +230,7 @@ export async function* playback(o: {
         const [key, current] = [keyOf(ev.payload), keyOf(feed.state.SessionInfo)];
         if (key !== undefined && current !== undefined && key !== current) {
           for (const topic of Object.keys(feed.state)) delete feed.state[topic];
+          weather.length = 0;
           switched = true;
         }
       }
@@ -235,6 +238,7 @@ export async function* playback(o: {
       if (data === undefined) continue;
       engine.push(ev, data);
       if (ev.topic === 'TimingData' || ev.topic === 'TimingAppData') dirty = true;
+      if (ev.topic === 'WeatherData') weather.push(weatherRow(view(feed.state, 'WeatherData'), line.r));
       out?.push({ event: 'delta', data: { t: line.r, topic: ev.topic, data } });
     }
     return switched;
@@ -259,7 +263,7 @@ export async function* playback(o: {
   // uncompressed); a compact or compressed form if that hurts.
   const snapshot = (t: number): PlaybackEvent => {
     sent.clear();
-    return { event: 'snapshot', data: { t, state: feed.state, ...rows() } };
+    return { event: 'snapshot', data: { t, state: feed.state, ...rows(), weather } };
   };
   const changes = (): PlaybackEvent | undefined => {
     lapsAt = o.now();
