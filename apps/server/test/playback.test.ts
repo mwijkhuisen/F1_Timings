@@ -2,7 +2,17 @@ import { linkSync, mkdtempSync, readdirSync, readFileSync, rmSync, symlinkSync, 
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { gunzipSync, gzipSync } from 'node:zlib';
-import { type Lap, merge, type Obj, PlaybackPing, type Stints, view, type Weather, weatherRow } from '@f1/contracts';
+import {
+  type Lap,
+  merge,
+  type Obj,
+  PlaybackPing,
+  type Stints,
+  view,
+  type Weather,
+  weatherRow,
+  withWeatherRow,
+} from '@f1/contracts';
 import fc from 'fast-check';
 import { afterEach, describe, expect, it } from 'vitest';
 import { createLaps } from '../src/live/laps.ts';
@@ -74,11 +84,11 @@ async function record(
 /**
  * The full replay as JSON: createFeed and createLaps over every line with receivedAt ≤ t, `.z` skipped (O1), the state
  * and the weather rows cleared before a SessionInfo with another Key than the state's, a weather row per applied
- * WeatherData delta.
+ * WeatherData delta (withWeatherRow).
  */
 function full(values: Value[], t: number, key = 9001): { state: Obj; laps: Lap[]; stints: Stints; weather: Weather } {
   const [feed, laps] = [createFeed(), createLaps(key, 'f1-live')];
-  const weather: Weather = [];
+  let weather: Weather = [];
   const keyOf = (v: unknown) => (isObj(v) && typeof v.Key === 'number' ? v.Key : undefined);
   for (const v of values) {
     if (v[0] > t) continue;
@@ -87,12 +97,13 @@ function full(values: Value[], t: number, key = 9001): { state: Obj; laps: Lap[]
       const [next, now] = [keyOf(ev.payload), keyOf(feed.state.SessionInfo)];
       if (ev.topic === 'SessionInfo' && next !== undefined && now !== undefined && next !== now) {
         for (const topic of Object.keys(feed.state)) delete feed.state[topic];
-        weather.length = 0;
+        weather = [];
       }
       const delta = feed.apply(ev);
       if (delta === undefined) continue;
       laps.push(ev, delta);
-      if (ev.topic === 'WeatherData') weather.push(weatherRow(view(feed.state, 'WeatherData'), v[0]));
+      if (ev.topic === 'WeatherData')
+        weather = withWeatherRow(weather, weatherRow(view(feed.state, 'WeatherData'), v[0]));
     }
   }
   return plain({ state: feed.state, ...lapRows(laps.rows()), weather });
@@ -213,6 +224,9 @@ describe('playback', () => {
         fc.constantFrom(...sources),
         fc.integer({ min: 60_000, max: 400_000 }), // rotateMs
         fc.array(fc.tuple(fc.nat(), weatherData), { maxLength: 6 }), // WeatherData lines, just after these lines
+        // Subscribe states with WeatherData: a weather line's payload again just after it (no change: no delta, no
+        // row), or another payload just after a line (a change: one delta, one row).
+        fc.array(fc.tuple(fc.nat(), fc.option(weatherData, { nil: undefined })), { maxLength: 4 }),
         // Reconnect duplicates: a line re-sent later (up to 4 min) with its topic, payload and F1 timestamp.
         fc.array(fc.tuple(fc.nat(), fc.integer({ min: 1, max: 240_000 })), { maxLength: 8 }),
         fc.array(fc.nat(), { maxLength: 3 }), // CarData.z lines, just after these lines
@@ -222,9 +236,16 @@ describe('playback', () => {
         fc.array(fc.constantFrom('gz', 'plain', 'both'), { minLength: 1, maxLength: 4 }), // the segments' files
         fc.nat(), // T
         fc.constantFrom(1, 2, 4, 8, 16),
-        async ([source, sessionKey], rotateMs, weathers, dups, zs, same, snaps, forms, pick, speed) => {
-          // Before the duplicates are drawn, so a duplicate can repeat a weather line too.
-          const base = byR([...source, ...weathers.map(([i, w]) => weatherAt(nth(source, i)[0] + 1, w))]);
+        async ([source, sessionKey], rotateMs, weathers, subs, dups, zs, same, snaps, forms, pick, speed) => {
+          // Before the duplicates are drawn, so a duplicate can repeat a weather line too (never a `_subscribe` one).
+          const weatherLines = weathers.map(([i, w]) => weatherAt(nth(source, i)[0] + 1, w));
+          const subscribes = subs.flatMap(([i, w]): Value[] => {
+            if (w !== undefined) return [[nth(source, i)[0] + 2, '_subscribe', { WeatherData: w }]];
+            if (weatherLines.length === 0) return [];
+            const [r, , payload] = nth(weatherLines, i);
+            return [[r, '_subscribe', { WeatherData: payload }]]; // after its line: byR keeps a tie's order
+          });
+          const base = byR([...source, ...weatherLines, ...subscribes]);
           const values = [...base];
           for (const [i, delay] of dups) {
             const [r, ...rest] = nth(base, i);
@@ -293,7 +314,9 @@ describe('playback', () => {
                 }
               } else if (ev.event === 'delta') {
                 clientApply(client, ev.data);
-                if (ev.data.topic === 'WeatherData') weather.push(weatherRow(view(client, 'WeatherData'), ev.data.t));
+                if (ev.data.topic === 'WeatherData') {
+                  weather = withWeatherRow(weather, weatherRow(view(client, 'WeatherData'), ev.data.t));
+                }
                 const after = events[i + 1]?.ev;
                 if (after?.event !== 'delta' || after.data.t !== ev.data.t) {
                   const { state, weather: rowsAt } = truth(ev.data.t);
