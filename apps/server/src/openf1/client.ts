@@ -72,6 +72,8 @@ export function createLimiter(clock: Clock = systemClock, perMinute = PER_MINUTE
     pause(ms: number): void {
       notBefore = Math.max(notBefore, clock.now() + ms);
     },
+    /** The clock time before which no request starts (a pause's end; 0 before any). */
+    until: (): number => notBefore,
   };
 }
 

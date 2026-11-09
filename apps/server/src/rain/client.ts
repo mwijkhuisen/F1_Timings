@@ -1,3 +1,4 @@
+import { isReal } from '@f1/contracts';
 import { Agent, type Dispatcher } from 'undici';
 import { z } from 'zod';
 import { type Clock, createLimiter, readCapped, retryAfterMs, systemClock, timedOut } from '../openf1/client.ts';
@@ -12,7 +13,7 @@ export const HISTORICAL = 'https://historical-forecast-api.open-meteo.com/v1/for
 const HOSTS = { forecast: FORECAST, historical: HISTORICAL } as const;
 export type RainApi = keyof typeof HOSTS;
 
-/** Requests per sliding 60 s and 1 s window, far below the free tier's 600 a minute. */
+/** Requests per sliding 60 s and 1 s window: 6 × 49 location-calls = 294 a minute, against the free tier's 600 (U2). */
 export const PER_MINUTE = 6;
 export const PER_SECOND = 1;
 const CONNECT_TIMEOUT_MS = 10_000;
@@ -21,6 +22,9 @@ const READ_TIMEOUT_MS = 30_000;
 export const DEADLINE_MS = 60_000;
 /** 49 points over a race window (15 steps) are ~26 kB, over a day ~70 kB; past this it is not an answer we keep. */
 export const MAX_BODY_BYTES = 4 * 1024 * 1024;
+/** A 429 pauses the client for its Retry-After, at most this: a far HTTP date must not stop rain for days. */
+export const MAX_PAUSE_MS = 5 * 60_000;
+const STEP_S = 900;
 
 const Location = z.object({
   latitude: z.number(),
@@ -28,7 +32,15 @@ const Location = z.object({
   minutely_15: z
     .object({
       time: z.array(z.number().int()),
-      precipitation: z.array(z.number().min(0).max(1000).nullable()),
+      // A value that would not fit PostgreSQL's real (non-zero below 1e-37) becomes null, as P5b's weatherRow does.
+      precipitation: z.array(
+        z
+          .number()
+          .min(0)
+          .max(1000)
+          .nullable()
+          .transform((v) => (v !== null && isReal(v) ? v : null)),
+      ),
     })
     .refine((m) => m.time.length === m.precipitation.length),
 });
@@ -46,8 +58,14 @@ export type RainAnswer = z.infer<typeof Answer>;
 export type RainError = { code: 'http'; status: number } | { code: 'rate_limited' | 'timeout' | 'network' | 'schema' };
 export type RainText = { status: number; text: string };
 
-/** The answer for `points` requested locations, or undefined (not JSON, another shape or count). */
-export function parseAnswer(text: string, points: number): RainAnswer | undefined {
+/** What a call asked for: `points` locations over [from, to] (epoch ms, on 15-minute boundaries). */
+export type RainAsked = { points: number; from: number; to: number };
+
+/**
+ * The answer to `asked`, or undefined (not JSON, another shape or count). Its steps must be the asked window's: at
+ * least one, 900 s apart and within [from, to], so at most (to − from)/900 s + 1 of them.
+ */
+export function parseAnswer(text: string, { points, from, to }: RainAsked): RainAnswer | undefined {
   let json: unknown;
   try {
     json = JSON.parse(text);
@@ -55,7 +73,12 @@ export function parseAnswer(text: string, points: number): RainAnswer | undefine
     return undefined;
   }
   const parsed = Answer.safeParse(json);
-  return parsed.success && parsed.data.length === points ? parsed.data : undefined;
+  if (!parsed.success || parsed.data.length !== points) return undefined;
+  const time = parsed.data[0]?.minutely_15.time ?? [];
+  const first = time[0];
+  const last = time.at(-1);
+  const inWindow = first !== undefined && last !== undefined && first * 1000 >= from && last * 1000 <= to;
+  return inWindow && time.every((t, i) => i === 0 || t - (time[i - 1] ?? t) === STEP_S) ? parsed.data : undefined;
 }
 
 /** `onAttempt` runs as each call starts (after the limiter): the ingest heartbeat. */
@@ -64,7 +87,7 @@ export type RainClientOptions = { clock?: Clock; dispatcher?: Dispatcher; onAtte
 /**
  * One client per process, one attempt per call (C3): the rain job's A§8 back-off is the retry,
  * so a slow Open-Meteo never holds the busy guard for long. A 429 pauses every later call for
- * its Retry-After (or 60 s).
+ * its Retry-After (or 60 s), at most MAX_PAUSE_MS; the job skips its step while `pausedFor()` > 0.
  */
 export function createRainClient({ clock = systemClock, dispatcher, onAttempt = () => {} }: RainClientOptions = {}) {
   const limiter = createLimiter(clock, PER_MINUTE, PER_SECOND);
@@ -92,7 +115,8 @@ export function createRainClient({ clock = systemClock, dispatcher, onAttempt = 
         signal: deadline.signal,
       });
       const { status } = response;
-      if (status === 429) limiter.pause(retryAfterMs(response.headers.get('retry-after'), clock.now()));
+      if (status === 429)
+        limiter.pause(Math.min(retryAfterMs(response.headers.get('retry-after'), clock.now()), MAX_PAUSE_MS));
       const body = await readCapped(response, MAX_BODY_BYTES);
       return body === undefined
         ? { ok: false, error: { code: 'schema' } }
@@ -104,22 +128,25 @@ export function createRainClient({ clock = systemClock, dispatcher, onAttempt = 
     }
   }
 
-  /** The parsed answer for `points` requested locations; any other count is `schema`. */
+  /** The parsed answer to `asked` (the query's points and window); anything else is `schema`. */
   async function get(
     api: RainApi,
     query: Readonly<Record<string, string>>,
-    points: number,
+    asked: RainAsked,
   ): Promise<Result<RainAnswer, RainError>> {
     const fetched = await text(api, query);
     if (!fetched.ok) return fetched;
     const { status } = fetched.value;
     if (status === 429) return { ok: false, error: { code: 'rate_limited' } };
     if (status < 200 || status >= 300) return { ok: false, error: { code: 'http', status } };
-    const answer = parseAnswer(fetched.value.text, points);
+    const answer = parseAnswer(fetched.value.text, asked);
     return answer === undefined ? { ok: false, error: { code: 'schema' } } : { ok: true, value: answer };
   }
 
-  return { get, text };
+  /** Milliseconds until a 429's pause ends, on the client's clock; 0 when not paused. */
+  const pausedFor = (): number => Math.max(0, limiter.until() - clock.now());
+
+  return { get, text, pausedFor };
 }
 
 export type BudgetKind = 'live' | 'backfill';

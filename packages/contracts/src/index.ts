@@ -177,7 +177,7 @@ const num = (s: unknown, fits: (v: number) => boolean): number | null => {
   const v = Number(s);
   return Number.isFinite(v) && fits(v) ? v + 0 : null;
 };
-const isReal = (v: number) => v === 0 || (Math.abs(v) >= 1e-37 && Math.abs(v) <= 3.4e38);
+export const isReal = (v: number) => v === 0 || (Math.abs(v) >= 1e-37 && Math.abs(v) <= 3.4e38);
 const isSmallint = (v: number) => Number.isInteger(v) && v >= -32768 && v <= 32767;
 
 export function weatherRow(w: Views['WeatherData'] | undefined, t: number): Weather[number] {

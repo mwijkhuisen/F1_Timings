@@ -50,7 +50,9 @@ export async function record(
   }
 
   const points = gridPoints(lat0 as number, lon0 as number, SIZE, STEP_M);
-  const query = rainQuery(points, floor15((start as number) - 3_600_000), ceil15((end as number) + 1_800_000));
+  const from = floor15((start as number) - 3_600_000);
+  const to = ceil15((end as number) + 1_800_000);
+  const query = rainQuery(points, from, to);
   const fetched = await createRainClient().text(api as RainApi, query);
   if (!fetched.ok) {
     log(`record-rain-fixture: ${JSON.stringify(fetched.error)}`);
@@ -69,7 +71,7 @@ export async function record(
   mkdirSync(dir, { recursive: true });
   writeFileSync(join(dir, `${name}.raw`), text);
   writeFileSync(join(dir, `${name}.meta.json`), `${JSON.stringify(meta, null, 2)}\n`);
-  const answer = status === 200 ? parseAnswer(text, points.length) : undefined;
+  const answer = status === 200 ? parseAnswer(text, { points: points.length, from, to }) : undefined;
   const steps = answer?.[0]?.minutely_15.time.length;
   log(
     `${name}: HTTP ${status}, ${text.length} bytes${steps === undefined ? '' : `, ${points.length} × ${steps} steps`}`,

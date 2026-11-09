@@ -9,7 +9,7 @@ import { createDb, type DB } from '../src/db/db.ts';
 import { tick } from '../src/ingest/ingest.ts';
 import { run } from '../src/main.ts';
 import { type Clock, createClient, OPENF1 } from '../src/openf1/client.ts';
-import { createBudget, createRainClient, FORECAST, HISTORICAL } from '../src/rain/client.ts';
+import { createBudget, createRainClient, FORECAST, HISTORICAL, MAX_PAUSE_MS } from '../src/rain/client.ts';
 import { createRainStep } from '../src/rain/job.ts';
 import { createTestDb, type TestDb } from './db.ts';
 
@@ -95,15 +95,9 @@ const dates = (rows: { date: Date }[]) => rows.map((r) => r.date.toISOString().s
 
 /** A fresh daemon process's rain step: its own client, budget (on the test's `at`), seed and log memory. */
 function daemon(budget = createBudget({ now: () => at.getTime() })) {
-  const step = createRainStep({
-    db,
-    client: createRainClient({ clock }),
-    budget,
-    now: () => at,
-    log,
-    beat: () => void beats++,
-  });
-  return { run: () => step(() => false), budget };
+  const client = createRainClient({ clock });
+  const step = createRainStep({ db, client, budget, now: () => at, log, beat: () => void beats++ });
+  return { run: () => step(() => false), budget, client };
 }
 
 /** Never a URL, a coordinate or a body in a log line. */
@@ -161,6 +155,7 @@ describe('rain job (Open-Meteo through msw, f1_ingest login)', { timeout: 120_00
       next_fetch_at: new Date('2026-11-15T13:22:00Z'),
       fetch_count: 1,
       fail_count: 0,
+      attempt_count: 1,
       last_error: null,
       updated_at: new Date('2026-11-15T13:07:00Z'),
     });
@@ -269,7 +264,7 @@ describe('rain job (Open-Meteo through msw, f1_ingest login)', { timeout: 120_00
       await p.run();
     }
     expect(delays).toEqual([5, 10, 20, 40, 80, 160, 320, 360]);
-    expect(await grid(100)).toMatchObject({ state: 'failed', next_fetch_at: null, fail_count: 9 });
+    expect(await grid(100)).toMatchObject({ state: 'failed', next_fetch_at: null, fail_count: 9, attempt_count: 9 });
     expect(seen).toHaveLength(9);
     expect(seen.every((s) => s.host === 'forecast')).toBe(true);
     at = new Date('2026-11-18T00:00:00Z');
@@ -285,6 +280,123 @@ describe('rain job (Open-Meteo through msw, f1_ingest login)', { timeout: 120_00
     at = new Date('2026-11-15T13:07:00Z');
     await daemon().run();
     expect(await grid(100)).toMatchObject({ state: 'live', fail_count: 1, last_error: 'rate_limited' });
+  });
+
+  it('a 429 of Retry-After 86400 pauses the job for 5 min: no request, budget, failure or wait meanwhile', async () => {
+    let requests = 0;
+    reply = () =>
+      requests++ === 0 ? new HttpResponse(null, { status: 429, headers: { 'Retry-After': '86400' } }) : undefined;
+    await meeting(MC, 'Monte Carlo');
+    await session(9094, MC, ['2023-05-28T13:00:00Z', '2023-05-28T15:00:00Z']);
+    await session(9093, MC, ['2023-05-27T14:00:00Z', '2023-05-27T15:00:00Z']); // a backfill candidate throughout
+    const p = daemon();
+    at = new Date('2026-11-09T12:00:00Z');
+    await p.run();
+    expect(await grid(9094)).toMatchObject({ fail_count: 1, attempt_count: 1, last_error: 'rate_limited' });
+    expect(p.client.pausedFor()).toBe(MAX_PAUSE_MS);
+    const before = { virtual, used: p.budget.used() };
+
+    for (const minute of ['12:01', '12:02']) {
+      at = new Date(`2026-11-09T${minute}:00Z`);
+      await p.run();
+    }
+    expect(seen).toHaveLength(1);
+    expect(virtual).toBe(before.virtual); // the limiter never slept: nothing waited on the pause
+    expect(p.budget.used()).toEqual(before.used);
+    expect(await grid(9093)).toBeUndefined();
+    expect(await grid(9094)).toMatchObject({ fail_count: 1, attempt_count: 1 });
+    expect(logged('rain_paused')).toEqual([expect.objectContaining({ ms: MAX_PAUSE_MS })]);
+    expect(logged('rain_budget')).toEqual([]);
+
+    virtual += MAX_PAUSE_MS; // the client's clock passes the pause
+    at = new Date('2026-11-09T12:03:00Z');
+    await p.run();
+    expect(seen.map((s) => s.host)).toEqual(['historical', 'historical']);
+    expect(await grid(9093)).toMatchObject({ state: 'final', attempt_count: 1 });
+    expect(logged('rain_paused')).toHaveLength(1);
+  });
+
+  it('one Open-Meteo request per step: the newest due grid, then the next, then one backfill session', async () => {
+    await meeting(MC, 'Monte Carlo');
+    await session(100, MC, LIVE);
+    await session(101, MC, ['2026-11-15T13:00:00Z', '2026-11-15T14:00:00Z']); // live too, ends earlier
+    await session(9094, MC, ['2023-05-28T13:00:00Z', '2023-05-28T15:00:00Z']);
+    const p = daemon();
+    for (const minute of ['13:07', '13:08', '13:09']) {
+      at = new Date(`2026-11-15T${minute}:00Z`);
+      const before = seen.length;
+      await p.run();
+      expect(seen.length - before).toBe(1);
+      if (minute === '13:07') expect(await grid(101)).toMatchObject({ state: 'live', attempt_count: 0 }); // due, waits
+    }
+    expect(logged('rain').map((l) => [l.session_key, l.api])).toEqual([
+      [100, 'forecast'],
+      [101, 'forecast'],
+      [9094, 'historical'],
+    ]);
+    expect(p.budget.used().hour).toBe(3 * 49);
+  });
+
+  it('a due grid budget kind: a backfill grid that never succeeded retries as backfill, a final fetch as live', async () => {
+    await meeting(MC, 'Monte Carlo');
+    await session(100, MC, LIVE);
+    await session(9094, MC, ['2023-05-28T13:00:00Z', '2023-05-28T15:00:00Z']);
+    const due = (session_key: number, fetch_count: number, next_fetch_at: string) =>
+      admin
+        .insertInto('rain_grid')
+        .values({
+          session_key,
+          source: 'open-meteo',
+          map_id: 'mc-1929',
+          centre_lat: 43.7367,
+          centre_lon: 7.4258,
+          size: 7,
+          step_m: 1500,
+          state: 'live',
+          next_fetch_at,
+          fetch_count,
+          fail_count: fetch_count === 0 ? 1 : 0,
+          updated_at: '2026-11-15T15:20:00Z',
+        })
+        .execute();
+    await due(100, 1, '2026-11-16T15:00:00Z'); // the final fetch after a live refresh
+    await due(9094, 0, '2026-11-15T15:25:00Z'); // a failed backfill, due again
+    // No backfill share at all: only a live take can pass.
+    const p = daemon(createBudget({ now: () => at.getTime() }, { hour: 4000, day: 8000, backfillDay: 0 }));
+    at = new Date('2026-11-16T15:00:00Z');
+    await p.run();
+    expect(seen.map((s) => s.host)).toEqual(['historical']);
+    expect(await grid(100)).toMatchObject({ state: 'final', fetch_count: 2 });
+    at = new Date('2026-11-16T15:01:00Z');
+    await p.run();
+    expect(seen).toHaveLength(1);
+    expect(await grid(9094)).toMatchObject({ state: 'live', fail_count: 1, attempt_count: 0 });
+    expect(logged('rain_budget')).toEqual([expect.objectContaining({ kind: 'backfill' })]);
+  });
+
+  it('an answer without steps is schema: the grid does not become final with 0 frames', async () => {
+    const none = { time: [], precipitation: [] };
+    reply = () =>
+      HttpResponse.json(Array.from({ length: 49 }, () => ({ latitude: 0, longitude: 0, minutely_15: none })));
+    await meeting(MC, 'Monte Carlo');
+    await session(9093, MC, ['2023-05-27T14:00:00Z', '2023-05-27T15:00:00Z']);
+    at = new Date('2026-11-09T12:00:00Z');
+    await daemon().run();
+    expect(seen).toHaveLength(1);
+    expect(await grid(9093)).toMatchObject({ state: 'live', fetch_count: 0, fail_count: 1, last_error: 'schema' });
+    expect(await frames(9093)).toEqual([]);
+  });
+
+  it('a precipitation below real range (1e-50) is stored as null, not a db failure', async () => {
+    wet = 1e-50;
+    await meeting(MC, 'Monte Carlo');
+    await session(100, MC, LIVE);
+    at = new Date('2026-11-15T13:07:00Z');
+    await daemon().run();
+    expect(await grid(100)).toMatchObject({ state: 'live', fetch_count: 1, last_error: null });
+    const rows = await frames(100);
+    expect(rows).toHaveLength(5);
+    expect(rows.every((r) => r.mm.every((mm) => mm === null))).toBe(true);
   });
 
   it('the backfill takes one past mapped session per step, newest first; an unmapped one never gets a grid', async () => {
@@ -351,16 +463,16 @@ describe('rain job (Open-Meteo through msw, f1_ingest login)', { timeout: 120_00
     expect(logged('rain_budget')).toHaveLength(1);
   });
 
-  it('a restart seeds the budget from the grids touched in the last day and hour, once', async () => {
+  it('a restart seeds the budget from the attempts of the grids touched in the last day and hour, once', async () => {
     await meeting(MC, 'Monte Carlo');
     at = new Date('2026-11-15T12:00:00Z');
-    const rows: [number, number, number, number][] = [
-      // [key, fetch_count, fail_count, minutes before at]
-      [9094, 3, 1, 30], // (3 + 1) × 49 = 196 in the hour and the day
-      [9093, 2, 0, 5 * 60], // 98 in the day
-      [9092, 5, 0, 25 * 60], // outside both
+    const rows: [number, number, number, number, number][] = [
+      // [key, fetch_count, fail_count, attempt_count, minutes before at]
+      [9094, 3, 0, 4, 30], // 4 × 49 = 196 in the hour and the day (fail_count was reset by a success)
+      [9093, 2, 0, 2, 5 * 60], // 98 in the day
+      [9092, 5, 0, 5, 25 * 60], // outside both
     ];
-    for (const [key, fetch_count, fail_count, ago] of rows) {
+    for (const [key, fetch_count, fail_count, attempt_count, ago] of rows) {
       await session(key, MC, ['2023-05-27T10:00:00Z', '2023-05-27T11:00:00Z']);
       await admin
         .insertInto('rain_grid')
@@ -375,6 +487,7 @@ describe('rain job (Open-Meteo through msw, f1_ingest login)', { timeout: 120_00
           state: 'final',
           fetch_count,
           fail_count,
+          attempt_count,
           updated_at: new Date(at.getTime() - ago * 60_000),
         })
         .execute();
@@ -385,6 +498,26 @@ describe('rain job (Open-Meteo through msw, f1_ingest login)', { timeout: 120_00
     await p.run();
     expect(p.budget.used()).toEqual({ hour: 196, day: 294 });
     expect(seen).toEqual([]);
+  });
+
+  it('a grid that failed and then succeeded seeds both attempts after a restart', async () => {
+    let requests = 0;
+    reply = () => (requests++ === 0 ? HttpResponse.json({ error: true }, { status: 500 }) : undefined);
+    await meeting(MC, 'Monte Carlo');
+    await session(100, MC, LIVE);
+    at = new Date('2026-11-15T13:07:00Z');
+    const first = daemon();
+    await first.run();
+    at = new Date('2026-11-15T13:12:00Z');
+    await first.run();
+    expect(await grid(100)).toMatchObject({ fetch_count: 1, fail_count: 0, attempt_count: 2 });
+    expect(first.budget.used()).toEqual({ hour: 98, day: 98 });
+
+    at = new Date('2026-11-15T13:13:00Z'); // a restart: nothing is due (the grid's next fetch is 13:27)
+    const restarted = daemon();
+    await restarted.run();
+    expect(seen).toHaveLength(2);
+    expect(restarted.budget.used()).toEqual({ hour: 98, day: 98 }); // (fetch_count + fail_count) × 49 would be 49
   });
 
   it('runs during a live window while the OpenF1 tick waits: no OpenF1 request, one Open-Meteo fetch', async () => {
