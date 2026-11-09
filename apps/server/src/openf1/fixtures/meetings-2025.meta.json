@@ -1,0 +1,13 @@
+{
+  "url": "https://api.openf1.org/v1/meetings?year=2025",
+  "fetchedAt": "2026-11-09T10:04:23.381Z",
+  "status": 200,
+  "trim": {
+    "drivers": null,
+    "laps": null
+  },
+  "rows": {
+    "fetched": 25,
+    "kept": 25
+  }
+}

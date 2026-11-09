@@ -34,7 +34,12 @@ export async function record(
     return EXIT_USAGE;
   }
   const [endpoint, name, query] = args.positionals;
-  if (args.positionals.length !== 3 || !isEndpoint(endpoint) || !/^[a-z]+$/.test(name ?? '') || query === undefined) {
+  if (
+    args.positionals.length !== 3 ||
+    !isEndpoint(endpoint) ||
+    !/^[a-z0-9]+$/.test(name ?? '') ||
+    query === undefined
+  ) {
     log(USAGE);
     return EXIT_USAGE;
   }
