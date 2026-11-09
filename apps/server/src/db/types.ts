@@ -106,6 +106,7 @@ export interface RainFrame {
 }
 
 export interface RainGrid {
+  attempt_count: Generated<number>;
   centre_lat: number;
   centre_lon: number;
   fail_count: Generated<number>;

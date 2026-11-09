@@ -76,14 +76,14 @@ WHERE NOT s.is_cancelled
   AND m.circuit_short_name IN (:mapped)
   AND NOT EXISTS (SELECT 1 FROM rain_grid g WHERE g.session_key = s.session_key);
 
-\echo '4a. Location-calls spent in total: sum((fetch_count + fail_count) * size^2), an upper bound'
-SELECT count(*) AS grids, sum(fetch_count) AS fetches, sum(fail_count) AS failures,
-  sum((fetch_count + fail_count) * size * size) AS location_calls
+\echo '4a. Location-calls spent in total: sum(attempt_count * size^2)'
+SELECT count(*) AS grids, sum(fetch_count) AS fetches, sum(attempt_count) AS attempts,
+  sum(attempt_count * size * size) AS location_calls
 FROM rain_grid;
 
 \echo '4b. Grids last touched per UTC day (the last 14 days)'
 SELECT (updated_at AT TIME ZONE 'UTC')::date AS day_utc, count(*) AS grids,
-  sum((fetch_count + fail_count) * size * size) AS location_calls_upper_bound
+  sum(attempt_count * size * size) AS location_calls_upper_bound
 FROM rain_grid
 WHERE updated_at > now() - interval '14 days'
 GROUP BY 1 ORDER BY 1 DESC;

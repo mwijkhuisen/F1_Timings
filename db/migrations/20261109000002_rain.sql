@@ -16,6 +16,8 @@ CREATE TABLE rain_grid (
   next_fetch_at timestamptz,
   fetch_count int NOT NULL DEFAULT 0,
   fail_count int NOT NULL DEFAULT 0,
+  -- Every Open-Meteo attempt, success or failure, counted in the write that records its outcome (the budget seed, A§8).
+  attempt_count int NOT NULL DEFAULT 0,
   -- A short code, never Open-Meteo's or PostgreSQL's text.
   last_error text CHECK (last_error ~ '^(http_[0-9]{3}|rate_limited|timeout|network|schema|db|unknown)$'),
   updated_at timestamptz NOT NULL
@@ -30,11 +32,15 @@ CREATE TABLE rain_frame (
   PRIMARY KEY (session_key, date)
 );
 
-GRANT SELECT, INSERT, UPDATE, DELETE ON rain_grid, rain_frame TO f1_ingest;
+-- Least privilege: a grid goes only by the cascade from its session (which runs as the table owner), and the job
+-- replaces a grid's frames (delete, insert) but never updates one.
+GRANT SELECT, INSERT, UPDATE ON rain_grid TO f1_ingest;
+GRANT SELECT, INSERT, DELETE ON rain_frame TO f1_ingest;
 GRANT SELECT ON rain_grid, rain_frame TO f1_api;
 
 -- migrate:down
 REVOKE SELECT ON rain_grid, rain_frame FROM f1_api;
-REVOKE SELECT, INSERT, UPDATE, DELETE ON rain_grid, rain_frame FROM f1_ingest;
+REVOKE SELECT, INSERT, DELETE ON rain_frame FROM f1_ingest;
+REVOKE SELECT, INSERT, UPDATE ON rain_grid FROM f1_ingest;
 DROP TABLE rain_frame;
 DROP TABLE rain_grid;

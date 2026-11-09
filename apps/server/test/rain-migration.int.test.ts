@@ -119,21 +119,30 @@ describe('the rain migration (20261109000002)', { timeout: 120_000 }, () => {
     expect(await count('rain_frame')).toBe(2);
   });
 
-  it('lets f1_ingest update a grid', async () => {
-    await sql`UPDATE rain_grid SET state = 'final', fetch_count = fetch_count + 1`.execute(ingest);
+  it('lets f1_ingest update a grid and delete frames, but neither delete a grid nor update a frame', async () => {
+    await sql`UPDATE rain_grid SET state = 'final', fetch_count = fetch_count + 1, attempt_count = attempt_count + 1`.execute(
+      ingest,
+    );
     expect(
-      (await sql<{ state: string; fetch_count: number }>`SELECT state, fetch_count FROM rain_grid`.execute(api))
-        .rows[0],
-    ).toEqual({ state: 'final', fetch_count: 1 });
+      (
+        await sql<{ state: string; fetch_count: number; attempt_count: number }>`
+          SELECT state, fetch_count, attempt_count FROM rain_grid`.execute(api)
+      ).rows[0],
+    ).toEqual({ state: 'final', fetch_count: 1, attempt_count: 1 });
+    expect(await code(sql`DELETE FROM rain_grid`.execute(ingest))).toBe('42501');
+    expect(await code(sql`UPDATE rain_frame SET mm = mm`.execute(ingest))).toBe('42501');
+    expect(await code(sql`DELETE FROM rain_frame WHERE date = '2026-10-11T12:15:00Z'`.execute(ingest))).toBe('ok');
+    expect(await count('rain_grid')).toBe(1);
+    expect(await count('rain_frame')).toBe(1);
   });
 
   it('deleting the grid cascades to its frames, deleting the session cascades to the grid and its frames', async () => {
     await grid({ session_key: SESSION + 1 }).execute(ingest);
     await frame(SESSION + 1, '2026-10-11T12:00:00Z').execute(ingest);
-    expect(await count('rain_frame')).toBe(3);
-
-    await sql`DELETE FROM rain_grid WHERE session_key = ${SESSION + 1}`.execute(ingest);
     expect(await count('rain_frame')).toBe(2);
+
+    await sql`DELETE FROM rain_grid WHERE session_key = ${SESSION + 1}`.execute(admin);
+    expect(await count('rain_frame')).toBe(1);
     expect(await count('rain_grid')).toBe(1);
 
     await sql`DELETE FROM session WHERE session_key = ${SESSION}`.execute(admin);
