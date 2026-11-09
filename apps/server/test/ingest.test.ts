@@ -1,7 +1,7 @@
 import { DummyDriver, Kysely, PostgresAdapter, PostgresIntrospector, PostgresQueryCompiler } from 'kysely';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { DB } from '../src/db/db.ts';
-import { SYNC_RETRY_MS, scheduleSync } from '../src/ingest/ingest.ts';
+import { minuteWork, SYNC_RETRY_MS, scheduleSync } from '../src/ingest/ingest.ts';
 import { ms, normaliseSession } from '../src/ingest/normalise.ts';
 import { afterFailure, afterSuccess, busyGuard, errorCode, firstFetchAt, type Progress } from '../src/ingest/state.ts';
 import type { createClient } from '../src/openf1/client.ts';
@@ -198,6 +198,46 @@ describe('busyGuard (fake timers)', () => {
     await vi.advanceTimersByTimeAsync(1_000);
     await third;
     expect(runs).toBe(3);
+  });
+});
+
+describe('minuteWork (the daemon job inside the busy guard)', () => {
+  const setup = (fail?: 'sync' | 'tick') => {
+    const order: string[] = [];
+    const step = (name: string) => async () => {
+      order.push(name);
+      if (name === fail) throw Object.assign(new Error('boom'), { code: 'XX000' });
+    };
+    const log = { error: vi.fn() };
+    return { order, log, job: { sync: step('sync'), tick: step('tick'), rain: vi.fn(step('rain')) } };
+  };
+
+  it('runs the sync, the tick, then the rain step with the stopping flag', async () => {
+    const { order, log, job } = setup();
+    const stopping = () => false;
+    await minuteWork(job, log, stopping);
+    expect(order).toEqual(['sync', 'tick', 'rain']);
+    expect(job.rain.mock.calls).toEqual([[stopping]]);
+    expect(log.error).not.toHaveBeenCalled();
+  });
+
+  it.each(['sync', 'tick'] as const)(
+    'runs the rain step once when the %s throws, and logs the code only',
+    async (fail) => {
+      const { order, log, job } = setup(fail);
+      await minuteWork(job, log, () => false);
+      expect(order).toEqual(fail === 'sync' ? ['sync', 'rain'] : ['sync', 'tick', 'rain']);
+      expect(job.rain).toHaveBeenCalledTimes(1);
+      expect(log.error.mock.calls).toEqual([[{ cause: 'XX000' }, 'tick failed']]);
+    },
+  );
+
+  it('runs without a rain step (backfill and refetch have none), and runs nothing once stopping', async () => {
+    const { order, log, job } = setup();
+    await minuteWork({ sync: job.sync, tick: job.tick }, log, () => false);
+    expect(order).toEqual(['sync', 'tick']);
+    await minuteWork(job, log, () => true);
+    expect(order).toEqual(['sync', 'tick']);
   });
 });
 
