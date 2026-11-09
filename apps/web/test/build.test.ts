@@ -56,10 +56,10 @@ describe('the ECharts importer', () => {
       ),
     );
 
-  it('is views/Chart.tsx alone, which only views/Compare.tsx uses', () => {
+  it('is views/Chart.tsx alone, which only the chart views (Compare and Weather) use', () => {
     expect(files).toContain('lib/echarts.ts');
     expect(importing(/(^|\/)echarts\.ts$/)).toEqual(['views/Chart.tsx']);
-    expect(importing(/(^|\/)Chart\.tsx$/)).toEqual(['views/Compare.tsx']);
+    expect(importing(/(^|\/)Chart\.tsx$/).sort()).toEqual(['views/Compare.tsx', 'views/Weather.tsx']);
   });
 });
 
