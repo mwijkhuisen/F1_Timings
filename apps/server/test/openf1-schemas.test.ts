@@ -99,6 +99,15 @@ describe('real-data values beyond the scan (synthetic rows from the fixtures)', 
     expect(issues([{ ...lap, i1_speed: 40_000 }])).toEqual(['[0].i1_speed']); // smallint km/h
     expect(issues([{ ...lap, lap_duration: 3e6 }])).toEqual(['[0].lap_duration']); // int ms
     expect(issues([{ ...lap, session_key: null }])).toEqual(['[0].session_key']); // a key
+    // timestamptz: year ≥ 0001 and an offset within ±15:59
+    const at = (date_start: string) => issues([{ ...lap, date_start }]);
+    expect(at('0000-01-01T00:00:00Z')).toEqual(['[0].date_start']);
+    expect(at('2026-10-11T12:00:00+23:59')).toEqual(['[0].date_start']);
+    expect(at('2026-10-11T12:00:00-16:00')).toEqual(['[0].date_start']);
+    expect(at('2026-10-11T12:00:00+15:59')).toEqual([]);
+    expect(at('2026-10-11T12:00:00-15:59')).toEqual([]);
+    expect(at('0001-01-01T00:00:00Z')).toEqual([]);
+    expect(at('2023-09-15T09:30:00.095000+00:00')).toEqual([]);
     const [driver] = rows('drivers-normal.raw');
     const nul = parse('drivers', [{ ...driver, full_name: 'a\u0000b' }]);
     expect(nul.ok ? [] : nul.error.issues.map((i) => i.path)).toEqual(['[0].full_name']); // text without NUL

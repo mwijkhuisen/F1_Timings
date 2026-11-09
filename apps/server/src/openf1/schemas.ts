@@ -18,7 +18,13 @@ const opt = <T extends z.ZodType>(schema: T) => schema.nullish().transform((v) =
 const int32 = z.number().int().min(-2_147_483_648).max(2_147_483_647);
 const int16 = z.number().int().min(-32_768).max(32_767);
 const text = z.string().refine((s) => !s.includes('\0'), 'NUL');
-const date = z.iso.datetime({ offset: true });
+// A timestamptz holds years 0001–9999 and an offset of at most ±15:59 (`Z` is 0): zod's format check alone lets
+// year 0000 and +23:59 through, which PostgreSQL refuses.
+const date = z.iso.datetime({ offset: true }).refine((s) => {
+  if (s.startsWith('0000')) return false;
+  const m = /([+-])(\d{2}):?(\d{2})?$/.exec(s);
+  return m === null || Number(m[2]) * 60 + Number(m[3] ?? 0) <= 15 * 60 + 59;
+}, 'timestamptz');
 // Rounded to integer ms / km/h by the normaliser: the bounds keep the result in int / smallint.
 const seconds = z.number().min(-2_147_483).max(2_147_483);
 const kph = z.number().min(-32_768).max(32_767);
