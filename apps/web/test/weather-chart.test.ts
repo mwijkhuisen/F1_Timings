@@ -93,6 +93,13 @@ describe('weatherChartOption', () => {
     expect(tip(weatherChartOption(rows, tokens, { periods, laps: null, type: 'Race' }), 31)).not.toMatch(/Lap/);
   });
 
+  it('breaks the line at a dropout (a 0 temperature) and names no direction for a calm sample', () => {
+    const drop = rows.map((r, i) => (i === 5 ? { ...r, track_temperature: 0, wind_speed: 0 } : r));
+    const o = weatherChartOption(drop, tokens, { periods, laps, type: 'Qualifying' });
+    expect(seriesOf(o)[1]?.data[5]).toEqual([T0 + 5 * MIN, null]);
+    expect(tip(o, 5).split('\n').slice(1, 4)).toEqual(['Air 22.2 °C · Track —', 'Humidity 86 %', 'Wind 0.0 m/s']);
+  });
+
   it('strips rich-text markup {|} from every tooltip line', () => {
     // No weather value is a string, so a data string can only arrive through a broken row: it is still stripped.
     const odd = [{ ...rows[0], wind_speed: { toFixed: () => '{a|1}' } as unknown as number } as WeatherRow];

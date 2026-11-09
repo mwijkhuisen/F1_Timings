@@ -29,7 +29,7 @@ FROM s GROUP BY ROLLUP (year, type) ORDER BY year NULLS LAST, type NULLS LAST;
 SELECT rainfall, count(*) AS rows, count(DISTINCT session_key) AS sessions
 FROM weather GROUP BY 1 ORDER BY 1 NULLS LAST;
 
-\echo '4. Nulls per column'
+\echo '4. Nulls, zeros (dropouts) and calm samples per column'
 SELECT count(*) AS rows,
   count(*) FILTER (WHERE air_temperature IS NULL) AS air,
   count(*) FILTER (WHERE track_temperature IS NULL) AS track,
@@ -39,6 +39,13 @@ SELECT count(*) AS rows,
   count(*) FILTER (WHERE wind_direction IS NULL) AS wind_direction,
   count(*) FILTER (WHERE wind_speed IS NULL) AS wind_speed,
   count(*) FILTER (WHERE humidity <> round(humidity)) AS humidity_fractional,
+  -- A dropout comes as 0 (A§6.1); the web reads these as no reading.
+  count(*) FILTER (WHERE air_temperature = 0) AS air_0,
+  count(*) FILTER (WHERE track_temperature = 0) AS track_0,
+  count(*) FILTER (WHERE humidity = 0) AS humidity_0,
+  count(*) FILTER (WHERE pressure = 0) AS pressure_0,
+  count(*) FILTER (WHERE wind_speed = 0) AS calm,
+  count(*) FILTER (WHERE wind_direction = 0 AND wind_speed > 0) AS direction_0_with_wind,
   min(wind_direction) AS wind_direction_min, max(wind_direction) AS wind_direction_max
 FROM weather;
 

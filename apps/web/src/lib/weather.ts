@@ -25,6 +25,22 @@ export type Summary = {
 /** A run of samples with rainfall > 0, as epoch ms of its first and last sample. */
 export type RainPeriod = { from: number; to: number };
 
+const dropout = (v: number | null) => (v === 0 ? null : v);
+
+/**
+ * A sample as the tab reads it (owner, 2026-11-09; A§6.1): OpenF1 sends a sensor dropout as 0, not null (11388 at
+ * 11:32:56 has a track temperature of 0 between 43 °C samples), so a 0 air or track temperature, humidity or pressure
+ * is no reading; and a calm sample (wind speed 0) has no direction. The stored rows keep what OpenF1 sent.
+ */
+export const reading = (r: WeatherRow): WeatherRow => ({
+  ...r,
+  air_temperature: dropout(r.air_temperature),
+  track_temperature: dropout(r.track_temperature),
+  humidity: dropout(r.humidity),
+  pressure: dropout(r.pressure),
+  wind_direction: r.wind_speed === 0 ? null : r.wind_direction,
+});
+
 /** 8 points, each 45° wide and centred on its direction: 0° and 359° are both N, 22.5° is NE. */
 export const compass = (deg: number): Point => POINTS[((Math.round(deg / 45) % 8) + 8) % 8] ?? 'N';
 
@@ -33,7 +49,9 @@ const range = (values: (number | null)[]): Range | null => {
   return known.length === 0 ? null : { min: Math.min(...known), max: Math.max(...known) };
 };
 
-export function summarise(rows: readonly WeatherRow[]): Summary {
+/** Every sample through `reading`, so a dropout never sets a minimum. */
+export function summarise(samples: readonly WeatherRow[]): Summary {
+  const rows = samples.map(reading);
   const speeds = rows.map((r) => r.wind_speed).filter((v): v is number => v !== null);
   // A Map keeps first-seen order, so the strict > below gives a tie to the point seen first.
   const counts = new Map<Point, number>();

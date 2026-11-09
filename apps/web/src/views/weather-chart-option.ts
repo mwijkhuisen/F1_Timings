@@ -1,6 +1,6 @@
 import type { Lap } from '@f1/contracts';
 import { fmtHm } from '../lib/time.ts';
-import { compass, leaderLap, type RainPeriod, type WeatherRow } from '../lib/weather.ts';
+import { compass, leaderLap, type RainPeriod, reading, type WeatherRow } from '../lib/weather.ts';
 import { type ChartTokens, endLabel, grid, plain, tooltip } from './lap-chart-option.ts';
 
 // The weather chart's ECharts option (P5a, A§13). Pure: no ECharts import at runtime, no HTML. Air and track
@@ -16,7 +16,7 @@ export type WeatherChartView = {
   type: string | null;
 };
 
-const reading = (v: number | null, digits: number, unit: string) => (v === null ? '—' : `${v.toFixed(digits)} ${unit}`);
+const shown = (v: number | null, digits: number, unit: string) => (v === null ? '—' : `${v.toFixed(digits)} ${unit}`);
 
 /** The rain bands, on a data-less series of their own: silent, and out of the legend and the tooltip. */
 const rainSeries = (periods: readonly RainPeriod[], tokens: ChartTokens) =>
@@ -37,7 +37,9 @@ const rainSeries = (periods: readonly RainPeriod[], tokens: ChartTokens) =>
         },
       ];
 
-export function weatherChartOption(rows: readonly WeatherRow[], tokens: ChartTokens, view: WeatherChartView) {
+export function weatherChartOption(samples: readonly WeatherRow[], tokens: ChartTokens, view: WeatherChartView) {
+  // A dropout (a 0 temperature) is no reading, so it breaks the line instead of dropping it to 0 (lib/weather.ts).
+  const rows = samples.map(reading);
   const t = rows.map((r) => Date.parse(r.date));
   const race = view.type === 'Race' && view.laps !== null && view.laps.length > 0;
   const first = t.length > 0 ? Math.min(...t) : 0;
@@ -66,8 +68,8 @@ export function weatherChartOption(rows: readonly WeatherRow[], tokens: ChartTok
     if (r.wind_direction !== null) wind.push(compass(r.wind_direction));
     const out = [
       fmtHm(t[i] ?? 0),
-      `Air ${reading(r.air_temperature, 1, '°C')} · Track ${reading(r.track_temperature, 1, '°C')}`,
-      `Humidity ${reading(r.humidity, 0, '%')}`,
+      `Air ${shown(r.air_temperature, 1, '°C')} · Track ${shown(r.track_temperature, 1, '°C')}`,
+      `Humidity ${shown(r.humidity, 0, '%')}`,
       `Wind ${wind.join(' ')}`,
       r.rainfall === null ? 'Rain —' : r.rainfall > 0 ? 'Rain' : 'Dry',
     ];

@@ -149,6 +149,19 @@ describe('[U] the weather fixtures', () => {
       expect(Number.isInteger(r.wind_direction)).toBe(true);
     }
   });
+
+  // A dropout comes as 0, not null: the web reads a 0 temperature, humidity or pressure as no reading (A§6.1, A§13).
+  it('normal: one track temperature of 0 between 43 °C samples, a sensor dropout; no other zero reading', () => {
+    type V = Record<'date' | 'air_temperature' | 'track_temperature' | 'humidity' | 'pressure', unknown>;
+    const zeros = CASES.flatMap(([name]) =>
+      (read(`weather-${name}.raw`) as V[]).flatMap((r, i, all) =>
+        (['air_temperature', 'track_temperature', 'humidity', 'pressure'] as const)
+          .filter((k) => r[k] === 0)
+          .map((k) => [name, r.date, k, all[i - 1]?.[k], all[i + 1]?.[k]]),
+      ),
+    );
+    expect(zeros).toEqual([['normal', '2026-10-11T11:32:56.866000+00:00', 'track_temperature', 43.1, 43.4]]);
+  });
 });
 
 // [U] pit.lap_number = in-lap (A§6.1, A§9). Proven per session type over the fixture rows:

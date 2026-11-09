@@ -6,6 +6,7 @@ import {
   leaderLap,
   periodText,
   rainPeriods,
+  reading,
   summarise,
   type WeatherRow,
 } from '../src/lib/weather.ts';
@@ -109,6 +110,45 @@ describe('summarise', () => {
       w(3, { wind_direction: 95 }),
     ]);
     expect(s.direction).toBe('E');
+  });
+});
+
+describe('dropouts (owner, 2026-11-09)', () => {
+  it('reads a 0 air or track temperature, humidity or pressure as no reading; 0 m/s and rainfall 0 stay values', () => {
+    expect(
+      reading(
+        w(0, {
+          air_temperature: 0,
+          track_temperature: 0,
+          humidity: 0,
+          pressure: 0,
+          wind_speed: 0,
+          rainfall: 0,
+          wind_direction: 170,
+        }),
+      ),
+    ).toEqual(w(0, { wind_speed: 0, rainfall: 0 }));
+  });
+
+  it('keeps a dropout out of the range: 11388’s track 0 between 43 °C samples', () => {
+    const s = summarise([
+      w(0, { track_temperature: 43.1 }),
+      w(1, { track_temperature: 0 }),
+      w(2, { track_temperature: 43.4 }),
+    ]);
+    expect(s.track).toEqual({ min: 43.1, max: 43.4 });
+    expect(summarise([w(0, { air_temperature: 0, pressure: 0 })])).toMatchObject({ air: null, pressure: null });
+  });
+
+  it('counts no direction for a calm sample (wind speed 0), and keeps its speed in the mean', () => {
+    const s = summarise([
+      w(0, { wind_speed: 0, wind_direction: 0 }),
+      w(1, { wind_speed: 0, wind_direction: 0 }),
+      w(2, { wind_speed: 1.5, wind_direction: 170 }),
+    ]);
+    expect(s.direction).toBe('S');
+    expect(s.wind).toEqual({ mean: 0.5, max: 1.5 });
+    expect(summarise([w(0, { wind_speed: 0, wind_direction: 90 })]).direction).toBeNull();
   });
 });
 
