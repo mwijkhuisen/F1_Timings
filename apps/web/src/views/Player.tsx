@@ -38,6 +38,7 @@ import { fmtClock, parseT } from '../lib/time.ts';
 import { KIND_LABEL, KIND_NAME, type Kind } from '../lib/track.ts';
 import { LapTable } from './LapTable.tsx';
 import { Panel, Strip, useTick } from './PitWall.tsx';
+import { RainMapCard } from './RainMap.tsx';
 import { driverOf, Tower } from './Tower.tsx';
 import { WeatherPanels } from './Weather.tsx';
 
@@ -46,9 +47,10 @@ import { WeatherPanels } from './Weather.tsx';
 // (`f1.minimized`), only the clock line, Play/Pause and the Controls toggle, while the stream plays on. `open.at` is the
 // open stream's start: 'live', epoch ms (replay), or null while paused; a `still` stream only fetches the state at a
 // paused T and closes on its snapshot. Only the clock line, the seek bar, the Back to chips and the strip's LEFT cell
-// tick each second, from values derived per flush (no state parsing per tick); the tower, the pit wall and everything
-// else derived from the state render on a store flush. The tabs are Tower · Laps · Weather; the Weather tab shows the
-// feed's weather rows up to T (P5b), redrawn only when a row arrives.
+// (and, on the Weather tab, the rain map) tick each second, from values derived per flush (no state parsing per tick);
+// the tower, the pit wall and everything else derived from the state render on a store flush. The tabs are Tower ·
+// Laps · Weather; the Weather tab shows the feed's weather rows up to T (P5b), redrawn only when a row arrives, and the
+// rain map's frames up to T (P5c).
 
 /** A SessionDetail whose drivers and results come from the stream: OpenF1 has no drivers during a live session. */
 function streamDetail(detail: SessionDetail, state: Obj): SessionDetail {
@@ -338,6 +340,25 @@ function BackTo({
       )}
     </fieldset>
   );
+}
+
+/**
+ * The rain map up to T (P5c): the one part of the Weather tab that ticks, as its own component. It re-derives only
+ * when T crosses a frame (RainMapCard memoises on the last frame at or before T), so the panels above never redraw.
+ */
+function PlayerRain({
+  detail,
+  live,
+  now,
+  playing,
+}: {
+  detail: SessionDetail;
+  live: boolean;
+  now: () => number;
+  playing: boolean;
+}) {
+  useTick(playing);
+  return <RainMapCard detail={detail} live={live} cap={now()} />;
 }
 
 type Open = { at: number | 'live' | null; still?: true };
@@ -690,11 +711,14 @@ export function Player({
         lapTable
       ) : tab === 'weather' ? (
         // Gated as the strip is, so the two agree: nothing from the previous session.
-        wall && snap.weather.rows.length > 0 ? (
-          <WeatherPanels rows={snap.weather.rows} laps={snap.weather.laps} type={wall.type} source="the feed" />
-        ) : (
-          <p className="muted">No weather in the feed yet.</p>
-        )
+        <>
+          {wall && snap.weather.rows.length > 0 ? (
+            <WeatherPanels rows={snap.weather.rows} laps={snap.weather.laps} type={wall.type} source="the feed" />
+          ) : (
+            <p className="muted">No weather in the feed yet.</p>
+          )}
+          {detail && <PlayerRain detail={detail} live={live} now={now} playing={playing} />}
+        </>
       ) : wall ? (
         <div className="pitwall">
           <div>{tower}</div>
