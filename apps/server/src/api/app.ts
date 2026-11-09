@@ -1,7 +1,7 @@
 import { stat } from 'node:fs/promises';
 import { join } from 'node:path';
 import { setTimeout as sleep } from 'node:timers/promises';
-import type { Seasons, Status, Stints } from '@f1/contracts';
+import type { Rain, Seasons, Status, Stints } from '@f1/contracts';
 import { type Context, Hono, type MiddlewareHandler } from 'hono';
 import { streamSSE } from 'hono/streaming';
 import { type Kysely, sql } from 'kysely';
@@ -322,6 +322,30 @@ export function createApp({
       .orderBy('date')
       .execute();
     return c.json(body, 200, cache(session.state));
+  });
+
+  api.get('/sessions/:key/rain', async (c) => {
+    const session = await lookup(c);
+    if (session instanceof Response) return session;
+    const grid = await db
+      .selectFrom('rain_grid')
+      .select(['map_id', 'centre_lat', 'centre_lon', 'size', 'step_m', 'state'])
+      .where('session_key', '=', session.key)
+      .executeTakeFirst();
+    const frames = grid
+      ? await db
+          .selectFrom('rain_frame')
+          .select(['date', 'mm'])
+          .where('session_key', '=', session.key)
+          .orderBy('date')
+          .execute()
+      : [];
+    const body: Rain = {
+      grid: grid ? { ...grid, state: grid.state as 'live' | 'final' | 'failed' } : null,
+      frames: frames.map((f) => ({ date: f.date.toISOString(), mm: f.mm })),
+    };
+    // Immutable only when the grid will never change: its own state, not just the session's.
+    return c.json(body, 200, cache(grid?.state === 'final' ? session.state : 'live'));
   });
 
   api.get('/status', async (c) => {

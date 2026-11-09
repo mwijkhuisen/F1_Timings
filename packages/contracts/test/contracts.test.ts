@@ -6,6 +6,7 @@ import {
   MAX_WEATHER_ROWS,
   Pits,
   RaceControl,
+  Rain,
   Season,
   Seasons,
   SessionDetail,
@@ -286,5 +287,21 @@ describe('withWeatherRow', () => {
     expect(withWeatherRow(few, row(1))).toEqual([row(0), row(1)]);
     expect(few).toEqual([row(0)]);
     expect(withWeatherRow([], row(0))).toEqual([row(0)]);
+  });
+});
+
+describe('Rain', () => {
+  const grid = { map_id: 'x', centre_lat: 1.5, centre_lon: -2.5, size: 7, step_m: 1000, state: 'live' } as const;
+  const frames = [{ date: iso, mm: [0, null, 0.25] }];
+
+  it('takes a grid with frames, null elements, and no grid', () => {
+    expect(Rain.parse({ grid, frames })).toEqual({ grid, frames });
+    expect(Rain.parse({ grid: null, frames: [] })).toEqual({ grid: null, frames: [] });
+  });
+
+  it('rejects an unknown state, an extra key and a date that is not ISO UTC', () => {
+    expect(Rain.safeParse({ grid: { ...grid, state: 'done' }, frames }).success).toBe(false);
+    expect(Rain.safeParse({ grid: { ...grid, source: 'x' }, frames }).success).toBe(false);
+    expect(Rain.safeParse({ grid, frames: [{ date: '2026-03-14 05:00', mm: [] }] }).success).toBe(false);
   });
 });
