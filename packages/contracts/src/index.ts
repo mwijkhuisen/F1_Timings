@@ -1,6 +1,8 @@
 import { z } from 'zod';
 import type { Views } from './live.ts';
 
+export * from './circuits.ts';
+export * from './geo.ts';
 export * from './live.ts';
 
 // The zod contracts of every API answer (A§10), shared by the server and the web.
@@ -148,6 +150,23 @@ export const Weather = z.array(
   }),
 );
 
+// P5c (owner, 2026-11-07; A§10): the rain map's grid and frames. The Open-Meteo model grid is 7 × 7 points; a frame
+// is 15 minutes of precipitation in mm per point, row-major from the north-west; null = no value. `grid` is null
+// for a session without one.
+export const Rain = z.strictObject({
+  grid: z
+    .strictObject({
+      map_id: z.string(),
+      centre_lat: z.number(),
+      centre_lon: z.number(),
+      size: int,
+      step_m: int,
+      state: z.enum(['live', 'final', 'failed']),
+    })
+    .nullable(),
+  frames: z.array(z.strictObject({ date, mm: z.array(z.number().nullable()) })),
+});
+
 // P5b (A§10, A§11.3): one feed WeatherData view as a Weather row at `t`. A field is its number when it is a non-blank
 // string whose value is finite and fits the P5a column, else null: a `real` is 0 or 1e-37 ≤ |v| ≤ 3.4e38 (as in
 // openf1/schemas.ts), rainfall and wind direction an integer within smallint. −0 becomes 0, so a row survives JSON.
@@ -158,7 +177,7 @@ const num = (s: unknown, fits: (v: number) => boolean): number | null => {
   const v = Number(s);
   return Number.isFinite(v) && fits(v) ? v + 0 : null;
 };
-const isReal = (v: number) => v === 0 || (Math.abs(v) >= 1e-37 && Math.abs(v) <= 3.4e38);
+export const isReal = (v: number) => v === 0 || (Math.abs(v) >= 1e-37 && Math.abs(v) <= 3.4e38);
 const isSmallint = (v: number) => Number.isInteger(v) && v >= -32768 && v <= 32767;
 
 export function weatherRow(w: Views['WeatherData'] | undefined, t: number): Weather[number] {
@@ -264,6 +283,7 @@ export type Stints = z.infer<typeof Stints>;
 export type Pits = z.infer<typeof Pits>;
 export type RaceControl = z.infer<typeof RaceControl>;
 export type Weather = z.infer<typeof Weather>;
+export type Rain = z.infer<typeof Rain>;
 export type Status = z.infer<typeof Status>;
 export type Live = z.infer<typeof Live>;
 export type Recordings = z.infer<typeof Recordings>;

@@ -84,8 +84,19 @@ afterEach(() => {
   vi.useRealTimers();
 });
 
+// The Weather tab's rain map reads the query cache (P5c); no query runs, so a test fills what it needs beforehand.
+let client = new QueryClient({ defaultOptions: { queries: { enabled: false } } });
+beforeEach(() => {
+  client = new QueryClient({ defaultOptions: { queries: { enabled: false } } });
+});
 const render = (props: Partial<Parameters<typeof Player>[0]>) =>
-  act(() => root.render(<Player recording={open} start="live" detail={undefined} {...props} />));
+  act(() =>
+    root.render(
+      <QueryClientProvider client={client}>
+        <Player recording={open} start="live" detail={undefined} {...props} />
+      </QueryClientProvider>,
+    ),
+  );
 const advance = (ms: number) => act(() => vi.advanceTimersByTime(ms));
 const $ = <T extends Element>(sel: string) => {
   const el = host.querySelector<T>(sel);
@@ -791,6 +802,37 @@ describe('the Weather tab in the player', () => {
     expect(host.querySelector('dl.tiles.wx')?.textContent).toMatch(/· laps 1–2/);
   });
 
+  // P5c: the rain map under the panels, from the player's T: no frame after it, and it follows T.
+  it('shows the rain map up to T under the panels; it follows T, and the chart is not redrawn', async () => {
+    const mexico = { ...detail, meeting: { ...detail.meeting, circuit_short_name: 'Mexico City' } };
+    const mm = (v: number) => Array.from({ length: 49 }, (_, k) => (k === 24 ? v : 0));
+    client.setQueryData(['rain', mexico.session.session_key], {
+      grid: { map_id: 'mx-1962', centre_lat: 19.4, centre_lon: -99.09, size: 7, step_m: 1500, state: 'final' },
+      frames: [-900_000, 0, 900_000].map((d, k) => ({ date: new Date(T + d).toISOString(), mm: mm(0.1 * (k + 1)) })),
+    });
+    client.setQueryData(['map', 'mx-1962'], { outline: 'M 0 0 L 1 1 Z', osm: null });
+    render({ recording: ended, start: T, sessionKey: 9100, detail: mexico });
+    last().emit('snapshot', { t: T, state: raceState(), laps: [], stints: [], weather: rows });
+    advance(250);
+    button('Weather');
+    await drawn();
+    expect(chart.options).toHaveLength(1);
+    expect(host.querySelector('dl.tiles.wx + .card + .card.rainmap')).not.toBeNull(); // under the tiles and the chart
+    const range = () => $<HTMLInputElement>('input[aria-label="Rain map time"]');
+    expect([range().max, range().value]).toEqual(['1', '1']); // the frame at T, not the one 15 min later
+    expect(host.querySelector('.rainsum')?.textContent).toBe(
+      'Rain in 1 of 49 cells, heaviest 0.8 mm/h, at the circuit',
+    );
+    // 15 min of play; the pings keep the stream open, and each resyncs T.
+    for (let i = 1; i <= 60; i++) {
+      advance(15_000);
+      last().emit('ping', { t: T + i * 15_000 });
+    }
+    expect([range().max, range().value]).toEqual(['2', '2']);
+    await drawn();
+    expect(chart.options).toHaveLength(1);
+  });
+
   it('says "No weather in the feed yet." before the feed shows the session, and without rows', () => {
     start(rows, 9999);
     button('Weather');
@@ -802,6 +844,8 @@ describe('the Weather tab in the player', () => {
     button('Weather');
     expect(host.textContent).toContain('No weather in the feed yet.');
     expect(host.querySelector('dl.tiles.wx')).toBeNull();
+    // P5c: the rain map card is there without rows too (this venue has no outline: the test detail has no circuit).
+    expect(host.querySelector('.card.rainmap h2')?.textContent).toBe('Rain around the circuit');
   });
 });
 

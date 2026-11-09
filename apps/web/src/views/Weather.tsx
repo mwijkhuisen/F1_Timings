@@ -14,19 +14,25 @@ import { Pending } from '../ui/ErrorView.tsx';
 import { Note } from '../ui/Note.tsx';
 import { Chart } from './Chart.tsx';
 import type { ChartTokens } from './lap-chart-option.ts';
+import { RainMapCard } from './RainMap.tsx';
 import { Tile } from './Tiles.tsx';
 import { weatherChartOption } from './weather-chart-option.ts';
 
 // The Weather tab (P5a, A§13): the tiles, the rain periods and the temperature chart of every sample OpenF1 lists for
 // the session. The tiles and the rain periods are the chart's text alternative. The player's Weather tab (P5b) shows
-// the same panels from the feed's rows up to T.
+// the same panels from the feed's rows up to T. Both put the rain map (P5c, views/RainMap.tsx) under them.
 
 type Data = { detail: SessionDetail; laps: Laps | null };
 
 export function WeatherTab({ session, ...data }: Data & { session: number }) {
   const weather = useWeather(session);
-  if (!weather.data) return <Pending error={weather.error} />;
-  return <WeatherView rows={weather.data} {...data} />;
+  return (
+    <>
+      {weather.data ? <WeatherView rows={weather.data} {...data} /> : <Pending error={weather.error} />}
+      {/* The rain map comes from its own source (Open-Meteo, P5c), so it shows without OpenF1 rows too. */}
+      <RainMapCard detail={data.detail} />
+    </>
+  );
 }
 
 const unit = (r: Summary['air'], digits: number, u: string) => r && `${fmtRange(r, digits)} ${u}`;

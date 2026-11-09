@@ -19,6 +19,8 @@ const TABLES = [
   'result',
   'raw_response',
   'weather',
+  'rain_grid',
+  'rain_frame',
   'recording',
   'recorder_status',
 ];

@@ -99,6 +99,29 @@ export interface RaceControl {
   source: string;
 }
 
+export interface RainFrame {
+  date: Timestamp;
+  mm: number[];
+  session_key: number;
+}
+
+export interface RainGrid {
+  attempt_count: Generated<number>;
+  centre_lat: number;
+  centre_lon: number;
+  fail_count: Generated<number>;
+  fetch_count: Generated<number>;
+  last_error: string | null;
+  map_id: string;
+  next_fetch_at: Timestamp | null;
+  session_key: number;
+  size: number;
+  source: string;
+  state: string;
+  step_m: number;
+  updated_at: Timestamp;
+}
+
 export interface RawResponse {
   body: Json;
   endpoint: string;
@@ -190,6 +213,8 @@ export interface DB {
   meeting: Meeting;
   pit: Pit;
   race_control: RaceControl;
+  rain_frame: RainFrame;
+  rain_grid: RainGrid;
   raw_response: RawResponse;
   recorder_status: RecorderStatus;
   recording: Recording;

@@ -36,6 +36,8 @@ export type Deps = {
   beat: () => void;
   /** The healthchecks.io ping (never throws); the daemon pings once a sync the daily Cron requested has succeeded, not after the startup sync. */
   ping?: (slug: string) => Promise<void>;
+  /** The daemon's rain step (P5c, `createRainStep`), after the tick every minute; it never rejects. */
+  rainStep?: (stopping: () => boolean) => Promise<void>;
 };
 export type Outcome = Result<IngestState, ErrorCode | 'unknown_session' | 'live_session'>;
 
@@ -404,12 +406,33 @@ export function scheduleSync(deps: Deps) {
 }
 
 /**
- * The daemon: one job every minute that syncs the schedule when due, then ticks. Resolves
+ * The minute job inside the busy guard: the schedule sync when due, the tick, then the rain step, which also runs
+ * when the sync or the tick throws. Never rejects, as long as the rain step never does.
+ */
+export async function minuteWork(
+  job: { sync: () => Promise<void>; tick: () => Promise<unknown>; rain?: Deps['rainStep'] | undefined },
+  log: Pick<Logger, 'error'>,
+  stopping: () => boolean,
+): Promise<void> {
+  if (stopping()) return;
+  try {
+    await job.sync();
+    await job.tick();
+  } catch (err) {
+    log.error({ cause: codeOf(err) }, 'tick failed'); // the code only: busyGuard needs fn not to reject
+  }
+  // The tick breaks out of a live window instead of waiting in it, so the rain step runs every minute.
+  await job.rain?.(stopping);
+}
+
+/**
+ * The daemon: one job every minute that syncs the schedule when due, ticks, then runs the rain step. Resolves
  * after SIGTERM/SIGINT once the running job has finished.
  */
 export async function startIngest(deps: Deps): Promise<void> {
   const { log } = deps;
   let stopping = false;
+  const stopped = () => stopping;
   const stop = new Promise<void>((resolve) => {
     process.once('SIGTERM', resolve);
     process.once('SIGINT', resolve);
@@ -417,15 +440,8 @@ export async function startIngest(deps: Deps): Promise<void> {
     stopping = true;
   });
   const sync = scheduleSync(deps);
-  const work = busyGuard(async () => {
-    if (stopping) return;
-    try {
-      await sync.run();
-      await tick(deps, () => stopping);
-    } catch (err) {
-      log.error({ cause: codeOf(err) }, 'tick failed'); // the code only: busyGuard needs fn not to reject
-    }
-  });
+  const job = { sync: sync.run, tick: () => tick(deps, stopped), rain: deps.rainStep };
+  const work = busyGuard(() => minuteWork(job, log, stopped));
   deps.beat();
   void work.run();
   const jobs = [

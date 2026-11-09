@@ -67,6 +67,13 @@ let admin: Kysely<DB>;
 let env: { PATH: string | undefined; DATABASE_URL: string };
 const dbmate = async (...args: string[]) =>
   (await exec('dbmate', ['--no-dump-schema', '--migrations-dir', MIGRATIONS, ...args], { env })).stdout;
+// Rolls back the newer migrations (P5c's rain and later), then the weather one; dbmate's last output.
+const rollbackWeather = async () => {
+  for (;;) {
+    const out = await dbmate('rollback');
+    if (/Rolled back: 20261109000001_weather\.sql/.test(out) || !/Rolled back:/.test(out)) return out;
+  }
+};
 const snapshot = async () =>
   Object.fromEntries(
     (
@@ -85,7 +92,7 @@ describe('the weather migration (20261109000001)', { timeout: 120_000 }, () => {
     testDb = await createTestDb();
     env = { PATH: process.env.PATH, DATABASE_URL: testDb.urls.f1_migrator };
     expect(await run(['migrate'], env, () => {})).toBe(0);
-    expect(await dbmate('rollback')).toMatch(/Rolled back: 20261109000001_weather\.sql/);
+    expect(await rollbackWeather()).toMatch(/Rolled back: 20261109000001_weather\.sql/);
     admin = createDb(testDb.urls.admin);
     await admin.insertInto('meeting').values({ meeting_key: 1296, source: 'openf1', year: 2026 }).execute();
     for (const [key, state, cancelled, next, fails, error] of SESSIONS)
@@ -156,7 +163,7 @@ describe('the weather migration (20261109000001)', { timeout: 120_000 }, () => {
   });
 
   it('rolls back with weather raw rows present, and the old CHECK refuses weather again', async () => {
-    expect(await dbmate('rollback')).toMatch(/Rolled back: 20261109000001_weather\.sql/);
+    expect(await rollbackWeather()).toMatch(/Rolled back: 20261109000001_weather\.sql/);
     const endpoints = await admin
       .selectFrom('raw_response')
       .select('endpoint')

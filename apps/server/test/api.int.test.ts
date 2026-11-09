@@ -1,7 +1,7 @@
 import { readFileSync } from 'node:fs';
 import { createServer } from 'node:net';
 import { join } from 'node:path';
-import { Laps, Pits, RaceControl, Season, Seasons, SessionDetail, Status, Stints, Weather } from '@f1/contracts';
+import { Laps, Pits, RaceControl, Rain, Season, Seasons, SessionDetail, Status, Stints, Weather } from '@f1/contracts';
 import type { Hono } from 'hono';
 import type { Kysely } from 'kysely';
 import { HttpResponse, http, passthrough } from 'msw';
@@ -84,8 +84,15 @@ const ROUTES = [
   [`/api/v1/sessions/${QUALI}/pits`, 'Pits', Pits],
   [`/api/v1/sessions/${QUALI}/race-control`, 'RaceControl', RaceControl],
   [`/api/v1/sessions/${QUALI}/weather`, 'Weather', Weather],
+  [`/api/v1/sessions/${QUALI}/rain`, 'Rain', Rain],
   ['/api/v1/status', 'Status', Status],
 ] as const;
+
+// 49 grid points (7 x 7), element 3 null. The generated type says number[] for real[], which cannot show a null.
+const mm = (base: number) =>
+  Array.from({ length: 49 }, (_, i) => (i === 3 ? null : base + i / 100)) as unknown as number[];
+const FRAME_1 = '2026-10-10T10:00:00.000Z';
+const FRAME_2 = '2026-10-10T10:15:00.000Z';
 
 const get = (path: string, method = 'GET') =>
   app.request(path, { method, headers: { 'cf-access-jwt-assertion': token } });
@@ -126,6 +133,36 @@ describe('api (f1_api login, Access JWT)', { timeout: 120_000 }, () => {
         next_fetch_at: new Date('2026-10-30T20:25:00Z'),
       })
       .where('session_key', '=', FAILING)
+      .execute();
+    // A grid per session: final for the final quali and the non-final race, live for the final sprint; none for FAILING.
+    for (const [session, state] of [
+      [QUALI, 'final'],
+      [RACE, 'final'],
+      [SPRINT, 'live'],
+    ] as const)
+      await admin
+        .insertInto('rain_grid')
+        .values({
+          session_key: session,
+          source: 'open-meteo',
+          map_id: 'test-circuit',
+          centre_lat: 25.49,
+          centre_lon: -80.12,
+          size: 7,
+          step_m: 1000,
+          state,
+          updated_at: new Date('2026-10-26T00:00:00Z'),
+        })
+        .execute();
+    // QUALI's frames go in out of date order.
+    await admin
+      .insertInto('rain_frame')
+      .values([
+        { session_key: QUALI, date: FRAME_2, mm: mm(1) },
+        { session_key: QUALI, date: FRAME_1, mm: mm(0) },
+        { session_key: RACE, date: FRAME_1, mm: mm(0) },
+        { session_key: SPRINT, date: FRAME_1, mm: mm(0) },
+      ])
       .execute();
     apiDb = createDb(testDb.urls.f1_api);
     app = createApp({ db: apiDb, access: access({ team: TEAM, aud: AUD }, log), log, liveDir: '/nonexistent' });
@@ -204,7 +241,7 @@ describe('api (f1_api login, Access JWT)', { timeout: 120_000 }, () => {
 
   it('Cache-Control: private, max-age=86400 for a final session, no-store otherwise and on every error', async () => {
     const cacheOf = async (path: string, method = 'GET') => (await get(path, method)).headers.get('cache-control');
-    for (const tail of ['', '/laps', '/stints', '/pits', '/race-control', '/weather']) {
+    for (const tail of ['', '/laps', '/stints', '/pits', '/race-control', '/weather', '/rain']) {
       expect(await cacheOf(`/api/v1/sessions/${QUALI}${tail}`)).toBe('private, max-age=86400');
       expect(await cacheOf(`/api/v1/sessions/${QUALI}${tail}`, 'HEAD')).toBe('private, max-age=86400');
       expect(await cacheOf(`/api/v1/sessions/${RACE}${tail}`)).toBe('no-store');
@@ -223,6 +260,9 @@ describe('api (f1_api login, Access JWT)', { timeout: 120_000 }, () => {
       ['/api/v1/sessions/999999', 404, 'not found'],
       ['/api/v1/sessions/999999/laps', 404, 'not found'],
       ['/api/v1/sessions/999999/weather', 404, 'not found'],
+      ['/api/v1/sessions/-1/rain', 400, 'bad request'],
+      ['/api/v1/sessions/1234567890/rain', 400, 'bad request'],
+      ['/api/v1/sessions/999999/rain', 404, 'not found'],
       ['/api/v1/seasons/2025', 404, 'not found'],
       ['/api/v1/nothing', 404, 'not found'],
     ] as const;
@@ -285,6 +325,42 @@ describe('api (f1_api login, Access JWT)', { timeout: 120_000 }, () => {
     const { session_key: _, meeting_key: __, date, ...values } = first ?? {};
     expect(rows[0]).toEqual({ date: new Date(String(date)).toISOString(), ...values });
     expect(await body(`/api/v1/sessions/${RACE}/weather`, Weather)).toHaveLength(160);
+  });
+
+  it('rain: the grid, and its frames in date order with numbers and null kept', async () => {
+    const rain = await body(`/api/v1/sessions/${QUALI}/rain`, Rain);
+    expect(rain.grid).toEqual({
+      map_id: 'test-circuit',
+      centre_lat: 25.49,
+      centre_lon: -80.12,
+      size: 7,
+      step_m: 1000,
+      state: 'final',
+    });
+    expect(rain.frames.map((f) => f.date)).toEqual([FRAME_1, FRAME_2]);
+    for (const f of rain.frames) {
+      expect(f.mm).toHaveLength(49);
+      expect(f.mm[3]).toBeNull();
+      expect(typeof f.mm[4]).toBe('number');
+    }
+    expect(rain.frames[1]?.mm[0]).toBeCloseTo(1, 5); // a real column: float4 rounding only
+  });
+
+  it('rain: a session without a grid answers a null grid and no frames, no-store', async () => {
+    const res = await get(`/api/v1/sessions/${FAILING}/rain`);
+    expect(res.status).toBe(200);
+    expect(res.headers.get('cache-control')).toBe('no-store');
+    expect(await res.json()).toEqual({ grid: null, frames: [] });
+  });
+
+  it('rain: private for 24 h only when the session and the grid are both final', async () => {
+    const cacheOf = async (session: number, method = 'GET') =>
+      (await get(`/api/v1/sessions/${session}/rain`, method)).headers.get('cache-control');
+    for (const method of ['GET', 'HEAD']) {
+      expect(await cacheOf(QUALI, method)).toBe('private, max-age=86400'); // both final
+      expect(await cacheOf(SPRINT, method)).toBe('no-store'); // final session, live grid
+      expect(await cacheOf(RACE, method)).toBe('no-store'); // final grid, session not final
+    }
   });
 
   it('seasons, a season, a session and the status', async () => {
