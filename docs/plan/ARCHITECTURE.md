@@ -104,6 +104,10 @@ Checked against the live APIs on 2026-10-25 (Austin quali `11392`, Marina Bay ra
 - `meetings.gmt_offset` is a string `[-]HH:MM:SS` with no `+` for a positive offset ("-06:00:00", "02:00:00"; the committed fixtures); ingest stores it unchanged and the web parses it (P4c, A§13 Times).
 - **Cancelled sessions stay listed** with `is_cancelled: true` (`sessions-year` fixture: 10 of the 131 sessions of 2026, those of the cancelled Bahrain `1282` and Saudi Arabia `1283` meetings, 10–19 April). Their data endpoints answer "No results found.". P1b stores the flag on `meeting` and `session` and never fetches a cancelled session, so it stays `scheduled` without `next_fetch_at` and P1c can tell "cancelled" from "no data".
 - Known issues (open on `br-g/openf1`): null pit `stop_duration` (#484), sessions needing re-ingest (#483), wrong `tyre_age_at_start` for used sets (#473), slowness right after a session becomes free (#474).
+- **`pit` rows removed after the event** (owner, 2026-11-09; found by the P5a re-queue, A§8). OpenF1 now answers `pit` with 404 "No results found." for 72 of the 80 past non-race sessions of 2026: practice, qualifying, sprint qualifying and testing, from the first test day to the Austin weekend (23–24 Oct). Their stored responses held 48–276 rows each.
+  - **Still there on 9 Nov:** the two latest weekends (Mexico City 11397–11400, São Paulo 11405–11408), every 2026 race and sprint, and the 2024–2025 non-race sessions sampled (9465, 9468, 9627, 9686, 9689, 9989).
+  - **2023:** the samples (7765, 7768, 9222) answer 404 too, but no 2023 session tripped the empty guard.
+  - **Impact:** no web view reads the pit rows (`GET /sessions/:key/pits` serves them, and nothing calls it), so the owner accepted the removal (A§8).
 - **During a live session every free request fails, past sessions included** (P1a, 2026-10-25 20:03 UTC, Austin race): HTTP 401 `{"detail":"Live F1 session in progress. Global API access (including past sessions) is restricted to authenticated users until the session ends. …"}`, with a link to buy a paid API key (the plan uses none). It lifted between 22:26:45 and 22:31:46 UTC, at the end of the live window (scheduled end 22:00 + 30 min), not at the chequered flag. The client reports it as `http 401` without retrying. P1b: nothing calls OpenF1 while a session in `session` is inside its window (`date_start − 30 min` … `date_end + 30 min`; a cancelled session or a row longer than 12 h opens none). The tick waits it out, the daemon's sync retries 15 min later, the backfill stops (exit 1) and a `refetch` fails with exit 1 and writes nothing (A§8). The very first sync has no schedule to check yet: a 401 there fails with `http_401` and is retried the same way.
 - **A query without rows answers 404 `{"detail":"No results found."}`**, not `[]` (P1a). The client turns exactly that answer into an empty list; any other 404 is an error. Bahrain 2023 race `7953` has no `pit` rows at all.
 - **Nulls** (P1a scan, 2026-10-25: the full responses of 11388, 11392, 11383 and 7953, plus `meetings`/`sessions` 2023–2026; the zod schemas in `apps/server/src/openf1/schemas.ts` follow it):
@@ -135,11 +139,41 @@ Checked against the live APIs on 2026-10-25 (Austin quali `11392`, Marina Bay ra
   - **Sample interval:** one a minute, 59.77–60.23 s between consecutive rows (median 60.0 s), in every one of the four sessions; no gap.
   - **Rows outside [date_start, date_end]:** yes, the rows cover the station's feed rather than the session. They start 52 min before `date_start` in both races (11388: 11:07:56 for 12:00; 9636: 14:38 for 15:30), 43 min before in the sprint and 12.5 min before in qualifying, and end 13 min before `date_end` (11388; `date_end` is the scheduled end), 3.5 min after (11392), 28 min after (9636) or 54 min after (11383, whose `date_end` is 09:30 for a 09:00 sprint). The owner's rule (2026-11-09): the tiles, the rain periods and the session head summarise every row OpenF1 lists for the session, the hour before a race included (A§13).
   - **Rainfall:** only 0 and 1 (9636: 117 × 1 and 84 × 0; 11383: 20 × 1 of 127; 11388 and 11392 all 0). The UI reads any value > 0 as rain.
-  - **JSON types:** `humidity` is a JSON number, which OpenF1 writes with a decimal point: whole in all 201 rows of 9636 (`86.0`; the fixtures re-serialise it as `86`) and fractional in 141 of 160 rows of 11388 (`69.6`), so the column is `real`. `wind_direction` is an integer in every row (0–354). Whether it names where the wind comes from or where it blows to is not documented (**[U]**), so the UI shows only its compass point. Pressure is about 927 mbar at Interlagos and 1009 at Marina Bay.
+  - **JSON types:** `humidity` is a JSON number, which OpenF1 writes with a decimal point: whole in all 201 rows of 9636 (`86.0`; the fixtures re-serialise it as `86`) and fractional in 141 of 160 rows of 11388 (`69.6`), so the column is `real`. `wind_direction` is an integer in every row (0–354 in the fixtures, 0–360 on the VM). Whether it names where the wind comes from or where it blows to is not documented (**[U]**), so the UI shows only its compass point. Pressure is about 927 mbar at Interlagos and 1009 at Marina Bay.
   - **A dropout comes as 0, not null** (found on the screenshots, 2026-11-09): `weather-normal` has a track temperature of 0 at 11:32:56, between 43.1 and 43.4 °C; no other air or track temperature, humidity or pressure of 0 in the four sessions (pinned in the same test). The owner's rule (2026-11-09): the stored rows keep what OpenF1 sent, and the web reads a 0 air or track temperature, humidity or pressure as no reading (`reading` in `lib/weather.ts`, A§13).
   - **Calm samples:** `wind_speed` 0 in 2 rows of 11388 (both with direction 0) and 11 of 9636 (9 with another direction, 191 to 330); direction 0 in 19 rows of 9636, 17 of them with 0.4–1.0 m/s. A calm sample counts no direction in the prevailing point (owner, 2026-11-09); a direction of 0 with wind stays N.
   - **Nulls:** none in the four sessions; every value is still nullable and bounded by its column (`real` refuses ±3.4e38 and beyond and a non-zero value that would round to 0; smallint for rainfall and the direction), the P1b lesson.
-  - **Still to measure** ([box], `scripts/weather-facts.sql` on the VM once the re-queue has drained): the sessions with and without weather per year and type, the rainfall values, the nulls, the zeros and calm samples, the interval over every session and the rows outside [date_start − 1 h, date_end + 1 h]. A follow-up docs PR records them here.
+  - **Measured on the VM** (owner, 2026-11-09; `scripts/weather-facts.sql`, read-only as `f1_api`, after the re-queue had drained):
+    - **Coverage:** 464 of the 465 fetched or final sessions of 2023–2026 have weather, 52,230 rows in all:
+      - 2023: 113 sessions, 12,799 rows
+      - 2024: 123 sessions, 12,847 rows
+      - 2025: 123 sessions, 13,637 rows
+      - 2026: 105 of 106 sessions, 12,947 rows
+    - **The one without** is the 2026 race still `fetched`, most likely the 8 Nov race: it was last fetched before the deploy, and the re-queue took only `final` sessions. It gains weather at its `date_end + 24 h` refetch.
+    - **Rainfall:** only 0 (50,004 rows, 463 sessions) and 1 (2,226 rows, 85 sessions).
+    - **Readings:**
+      - No null in any column.
+      - Dropouts: 40 track temperatures of 0; no air temperature, humidity or pressure of 0.
+      - Calm: 868 samples at 0 m/s, and 1,229 samples with direction 0 and wind.
+      - `humidity` is fractional in 11,517 rows. `wind_direction` runs 0–360, wider than the fixtures' 0–354; `compass` reads 360 as N.
+    - **Interval:** median 60.001 s and p95 60.028 s over 51,766 intervals. There are 11 gaps over 5 min in 9 sessions, the longest 78 min (4,680.7 s); the 5-minute rule in `rainPeriods` splits a period across them.
+    - **First row against `date_start`** (median, then range):
+
+      | Type | Median | Range |
+      |---|---|---|
+      | Practice | 13.8 min before | 74.9 min before to 106.0 min after |
+      | Qualifying | 13.0 min before | 74.2 min before to 24.3 min after |
+      | Race | 52.3 min before | 58.9 to 0.8 min before |
+
+    - **Last row against `date_end`:**
+
+      | Type | Median | Range |
+      |---|---|---|
+      | Practice | 6.4 min after | 266.4 min before to 186.0 min after |
+      | Qualifying | 7.1 min after | 40.2 min before to 86.5 min after |
+      | Race | 18.4 min before | 39.8 min before to 81.0 min after |
+
+    - **Rows outside [date_start − 1 h, date_end + 1 h]:** 267 rows in 11 sessions, 60 early and 207 late. Every row is summarised (owner, 2026-11-09), so these count in the tiles and the chart too.
 
 | View | Endpoints → fields | Known gaps → UI |
 |---|---|---|
@@ -234,6 +268,20 @@ Roles (owner, 2026-10-25; built in P1b): `deploy/postgres/roles.sql`, a PostgreS
 
   Measured 2026-10-26: run 1 (8ade505, before the real-data schema fix) 1 h 45 min 41 s, 455 sessions, 36 `schema` failures, exit 1; run 2 on the merged code (6770997) 9 min 3 s, the 37 remaining sessions, 0 failures, exit 0. Together 1 h 54 min 44 s. End state: 454 `final`, 1 `fetched` (the latest race, waiting for end + 24 h), 40 `scheduled` (25 future, 15 cancelled). Database 102 MB (A§7).
 - **The P5a re-queue** (owner, 2026-11-07; `20261109000001_weather.sql`): the migration sets every `final`, not cancelled session back to `fetched` with `next_fetch_at = date_end + 35 min`, long past, so the running daemon's next tick marks them all `due` and fetches each once more with its seven endpoints, newest first: about 455 sessions × 7 requests ≈ 2 h 15 min, paused during live windows like any tick. No SQL `now()`: the tick's clock decides, and each becomes `final` again by the success rule above. Scheduled, due, fetched, failed and cancelled sessions are untouched, so a `failed` session gets weather only through a `refetch`. The empty guard still applies: an endpoint that now answers `[]` where rows were stored fails with `empty` and keeps the rows. Any failure of a re-queued session (a 429, a timeout, a weather `schema` error, `empty`) takes the normal backoff, and the 9th in a row makes it `failed` although it holds complete data: the rows stay, but the API then serves them `no-store`, `/status` lists the session, and a `refetch` recovers it (P5a code review). Until its turn, a re-queued session's Weather tab says "Weather is queued for a new fetch; check back later." (A§13). The down migration does not undo it. The [box] checks once it has drained: `/status` shows no extra `fetched`, and its `failed` list is the one from before the deploy. Locally (2026-11-09, a throw-away PostgreSQL 18 with 2024 and 2026 synced and 9636, 11388 and 11392 refetched): after a rollback and `migrate` the three were `fetched` at end + 35 min, and one tick fetched them back to `final` with 201, 160 and 77 weather rows, about 3.3 s each.
+  - **On the VM** (owner, 2026-11-09):
+    - The drain ran at about 3.5 sessions a minute: 7 requests each within the 25-a-minute budget. The last 60 sessions took 16 min.
+    - **72 sessions failed with `empty`:** 2026 practice, qualifying, sprint qualifying and testing up to the Austin weekend. OpenF1 had removed their `pit` rows (A§6.1). A `refetch` cannot clear this, because it applies the same guard.
+    - **The fix:** the owner accepted the removal and cleared the guard by deleting the stored `pit` responses of the sessions failing with `empty` that are not races. It printed `DELETE 72`, and each session's next tick made it `final` with weather and no pit rows:
+
+      ```
+      DELETE FROM raw_response r USING session s
+      WHERE r.session_key = s.session_key AND r.endpoint = 'pit' AND jsonb_array_length(r.body) > 0
+        AND s.last_error = 'empty' AND s.fail_count > 0
+        AND s.type IS DISTINCT FROM 'Race' AND NOT s.is_cancelled
+      ```
+
+    - **End state:** after the drain, 464 sessions are `final` and none `due`, and the failed list is empty, as it was before the deploy.
+  - **When OpenF1 removes an endpoint's rows for good**, this is the remedy: delete that endpoint's stored raw response for the sessions failing with `empty`; it serves only the guard. Run the same filter as a SELECT first. The next fetch then takes OpenF1's answer. This accepts the loss of those rows, so it is the owner's call each time.
 - **Manual:** `refetch <session_key>` (digits only, else exit 64; unknown key → exit 1) for OpenF1 re-ingests (as in #483). It processes the session now: a success makes the normal transition, a failure changes nothing (a `final` session stays `final`) and exits 1. During a live window it writes nothing and exits 1 (it does not wait: a manual command should not hang for hours).
 - **Scheduling pattern:** in-process croner (UTC). One job runs every minute inside a busy guard: it syncs the schedule when due (at start, after `30 0 * * *` asks for it, or 15 min after a failed try), then ticks. A minute that fires while the job runs is remembered, and the job runs once more when it ends (missed ticks run once, the Waterheight pattern). SIGTERM/SIGINT stops the cron, lets the current session finish, closes the pool and exits 0.
 - **Heartbeat:** the work touches it at start, as each OpenF1 attempt starts (after the rate limiter), after each call, after each session and at the end of each tick (a waiting one too). One attempt lasts at most 120 s (the client's deadline), within the 120 s limit (A§4), so slow but progressing work never goes stale. Staleness means an attempt that ran into its deadline, a 429 `Retry-After` over 2 min, or a database wait past its timeouts; then `f1-tick` restarts the container.
