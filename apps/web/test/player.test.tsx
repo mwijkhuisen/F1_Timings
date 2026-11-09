@@ -1,5 +1,5 @@
 // @vitest-environment happy-dom
-import { Lap, type Live as LiveData, type Recordings, SessionDetail, view } from '@f1/contracts';
+import { Lap, type Live as LiveData, type Recordings, SessionDetail, view, weatherRow } from '@f1/contracts';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
@@ -16,6 +16,17 @@ vi.mock('@f1/contracts', async (load) => {
   const m = await load<typeof import('@f1/contracts')>();
   return { ...m, view: vi.fn(m.view) };
 });
+
+// The Weather tab's chart (P5b): a stub ECharts that keeps every option set, so a test sees each redraw.
+type Option = { series: { data: [number, number | null][] }[] };
+const chart = vi.hoisted(() => ({ options: [] as Option[] }));
+vi.mock('../src/lib/echarts.ts', () => ({
+  init: () => ({
+    setOption: (o: Option) => chart.options.push(o),
+    resize() {},
+    dispose() {},
+  }),
+}));
 
 // The player (A§13, A§15): a real React tree in happy-dom, a fake EventSource, fake timers, no fetch.
 
@@ -666,6 +677,112 @@ describe('the pit wall in the player', () => {
     act(() => driver('CCC')?.click());
     expect(focused()).toEqual([]);
     expect(host.querySelectorAll('.tower [aria-pressed="true"]')).toHaveLength(0);
+  });
+});
+
+// The player's Weather tab (P5b, A§13): the feed's rows up to T, in P5a's tiles and chart.
+describe('the Weather tab in the player', () => {
+  const T = S + 3_600_000;
+  const W = { AirTemp: '22.4', TrackTemp: '43.1', Rainfall: '0', Humidity: '40.0' }; // raceState's WeatherData
+  const rows = [
+    weatherRow({ ...W, AirTemp: '20.0' }, T - 120_000),
+    weatherRow({ ...W, AirTemp: '21.0' }, T - 60_000),
+    weatherRow(W, T),
+  ];
+  const air = () => host.querySelector('dl.tiles.wx > div dd.v')?.textContent;
+  const lastX = () => Math.max(...(chart.options.at(-1)?.series ?? []).flatMap((x) => x.data.map((p) => p[0])));
+  // The chart's lazy import, then its set-up and first draw.
+  const drawn = async () => {
+    for (let i = 0; i < 5; i++) await act(async () => {});
+  };
+  const start = (weather: unknown[], sessionKey = 9100) => {
+    render({ recording: ended, start: T, sessionKey, detail });
+    last().emit('snapshot', { t: T, state: raceState(), laps: [lap(1, 1)], stints: [], weather });
+    advance(250);
+  };
+
+  beforeEach(() => {
+    chart.options = [];
+  });
+
+  it('the view switch reads Tower · Laps · Weather; aria-pressed follows the click', () => {
+    start(rows);
+    const views = () => [...host.querySelectorAll('fieldset[aria-label="View"] button')];
+    expect(views().map((b) => b.textContent)).toEqual(['Tower', 'Laps', 'Weather']);
+    const pressed = () => views().map((b) => b.getAttribute('aria-pressed'));
+    expect(pressed()).toEqual(['true', 'false', 'false']);
+    button('Weather');
+    expect(pressed()).toEqual(['false', 'false', 'true']);
+    expect(host.querySelector('table[aria-label="Timing tower"]')).toBeNull();
+    expect(air()).toBe('20.0–22.4 °C');
+    expect(host.querySelector('.strip')).not.toBeNull(); // the strip stays on every tab
+    button('Laps');
+    expect(pressed()).toEqual(['false', 'true', 'false']);
+    expect(host.querySelector('table.laps')).not.toBeNull();
+    expect(host.querySelector('dl.tiles.wx')).toBeNull();
+    button('Tower');
+    expect(host.querySelector('table[aria-label="Timing tower"]')).not.toBeNull();
+  });
+
+  it('a WeatherData delta appends a row: the tiles and the chart after the flush', async () => {
+    start(rows);
+    button('Weather');
+    await drawn();
+    expect(chart.options).toHaveLength(1);
+    expect(chart.options[0]?.series[0]?.data).toHaveLength(3);
+    last().emit('delta', { t: T + 1_000, topic: 'WeatherData', data: { AirTemp: '25.0' } });
+    expect(air()).toBe('20.0–22.4 °C'); // throttled
+    advance(250);
+    expect(air()).toBe('20.0–25.0 °C');
+    expect(chart.options).toHaveLength(2);
+    expect(chart.options[1]?.series[0]?.data.at(-1)).toEqual([T + 1_000, 25]);
+    // The row is the whole reading at t: the track temperature the delta left alone is in it.
+    expect(chart.options[1]?.series[1]?.data.at(-1)).toEqual([T + 1_000, 43.1]);
+  });
+
+  it('a seek back drops the later rows: only those up to the new T', async () => {
+    start(rows);
+    button('Weather');
+    await drawn();
+    expect(lastX()).toBe(T);
+    const to = T - 90_000;
+    slide('Position', to);
+    advance(400);
+    last().emit('snapshot', { t: to, state: raceState(), laps: [], stints: [], weather: rows.slice(0, 1) });
+    advance(250);
+    await drawn();
+    expect(air()).toBe('20.0 °C');
+    expect(lastX()).toBeLessThanOrEqual(to);
+    expect(chart.options.at(-1)?.series[0]?.data).toEqual([[T - 120_000, 20]]);
+  });
+
+  it('the chart is redrawn only when a row arrives, not on the tick or a laps event', async () => {
+    start(rows);
+    button('Weather');
+    await drawn();
+    expect(chart.options).toHaveLength(1);
+    advance(5_000);
+    last().emit('laps', { t: T + 5_000, laps: [lap(1, 2)], stints: [] });
+    advance(250);
+    await drawn();
+    expect(chart.options).toHaveLength(1);
+    last().emit('delta', { t: T + 6_000, topic: 'WeatherData', data: { AirTemp: '23.0' } });
+    advance(250);
+    await drawn();
+    expect(chart.options).toHaveLength(2);
+  });
+
+  it('says "No weather in the feed yet." before the feed shows the session, and without rows', () => {
+    start(rows, 9999);
+    button('Weather');
+    expect(host.textContent).toContain('No weather in the feed yet.');
+    expect(host.querySelector('dl.tiles.wx')).toBeNull();
+    act(() => root.unmount());
+    root = createRoot(host);
+    start([]);
+    button('Weather');
+    expect(host.textContent).toContain('No weather in the feed yet.');
+    expect(host.querySelector('dl.tiles.wx')).toBeNull();
   });
 });
 

@@ -18,7 +18,8 @@ import { Tile } from './Tiles.tsx';
 import { weatherChartOption } from './weather-chart-option.ts';
 
 // The Weather tab (P5a, A§13): the tiles, the rain periods and the temperature chart of every sample OpenF1 lists for
-// the session. The tiles and the rain periods are the chart's text alternative.
+// the session. The tiles and the rain periods are the chart's text alternative. The player's Weather tab (P5b) shows
+// the same panels from the feed's rows up to T.
 
 type Data = { detail: SessionDetail; laps: Laps | null };
 
@@ -35,11 +36,14 @@ export function WeatherSummary({
   periods,
   laps,
   type,
+  source,
 }: {
   summary: Summary;
   periods: readonly RainPeriod[];
   laps: Laps | null;
   type: string | null;
+  /** Where the readings come from, for the reasons: "the OpenF1 data" or "the feed". */
+  source: string;
 }) {
   const wind = s.wind && [`${s.wind.mean.toFixed(1)} m/s`, s.direction].filter(Boolean).join(' ');
   return (
@@ -49,21 +53,21 @@ export function WeatherSummary({
         label="Air"
         value={unit(s.air, 1, '°C')}
         who={null}
-        reason="No air temperature in the OpenF1 data"
+        reason={`No air temperature in ${source}`}
       />
       <Tile
         id="wx-track"
         label="Track"
         value={unit(s.track, 1, '°C')}
         who={null}
-        reason="No track temperature in the OpenF1 data"
+        reason={`No track temperature in ${source}`}
       />
       <Tile
         id="wx-humidity"
         label="Humidity"
         value={unit(s.humidity, 0, '%')}
         who={null}
-        reason="No humidity in the OpenF1 data"
+        reason={`No humidity in ${source}`}
       />
       {/* OpenF1 reports mbar, the same as hPa. */}
       <Tile
@@ -71,20 +75,20 @@ export function WeatherSummary({
         label="Pressure"
         value={unit(s.pressure, 0, 'hPa')}
         who={null}
-        reason="No air pressure in the OpenF1 data"
+        reason={`No air pressure in ${source}`}
       />
       <Tile
         id="wx-wind"
         label="Wind"
         value={wind ?? (s.direction && `${s.direction}`)}
         who={s.wind && `mean · max ${s.wind.max.toFixed(1)} m/s`}
-        reason="No wind reading in the OpenF1 data"
+        reason={`No wind reading in ${source}`}
       />
       <div className={periods.length > 0 ? 'rain' : undefined}>
         <dt>Rain</dt>
         <dd className="v">
           {s.rain === null ? (
-            <Note id="wx-rain" text="No rainfall reading in the OpenF1 data">
+            <Note id="wx-rain" text={`No rainfall reading in ${source}`}>
               —
             </Note>
           ) : s.rain === 'dry' ? (
@@ -107,19 +111,27 @@ export function WeatherSummary({
   );
 }
 
-/** `now` (epoch ms) tells a session queued for a new fetch from one OpenF1 has no weather for (`noWeatherText`). */
-export function WeatherView({ rows, detail, laps, now = Date.now() }: Data & { rows: WeatherRows; now?: number }) {
-  const type = detail.session.type;
+/** The tiles and the chart of `rows`; the chart's option is rebuilt only when `rows`, `laps` or `type` change. */
+export function WeatherPanels({
+  rows,
+  laps,
+  type,
+  source,
+}: {
+  rows: WeatherRows;
+  laps: Laps | null;
+  type: string | null;
+  source: string;
+}) {
   const summary = useMemo(() => summarise(rows), [rows]);
   const periods = useMemo(() => rainPeriods(rows), [rows]);
   const option = useCallback(
     (t: ChartTokens) => weatherChartOption(rows, t, { periods, laps, type }),
     [rows, periods, laps, type],
   );
-  if (rows.length === 0) return <p>{noWeatherText(detail.session, now)}</p>;
   return (
     <>
-      <WeatherSummary summary={summary} periods={periods} laps={laps} type={type} />
+      <WeatherSummary summary={summary} periods={periods} laps={laps} type={type} source={source} />
       <section className="card">
         <div className="panel-title">
           <h2>Air and track temperature</h2>
@@ -138,4 +150,10 @@ export function WeatherView({ rows, detail, laps, now = Date.now() }: Data & { r
       </section>
     </>
   );
+}
+
+/** `now` (epoch ms) tells a session queued for a new fetch from one OpenF1 has no weather for (`noWeatherText`). */
+export function WeatherView({ rows, detail, laps, now = Date.now() }: Data & { rows: WeatherRows; now?: number }) {
+  if (rows.length === 0) return <p>{noWeatherText(detail.session, now)}</p>;
+  return <WeatherPanels rows={rows} laps={laps} type={detail.session.type} source="the OpenF1 data" />;
 }
