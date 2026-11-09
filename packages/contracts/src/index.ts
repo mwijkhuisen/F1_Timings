@@ -1,6 +1,8 @@
 import { z } from 'zod';
 import type { Views } from './live.ts';
 
+export * from './circuits.ts';
+export * from './geo.ts';
 export * from './live.ts';
 
 // The zod contracts of every API answer (A§10), shared by the server and the web.
