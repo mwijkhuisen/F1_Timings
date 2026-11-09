@@ -12,6 +12,7 @@ Status: approved by the owner (2026-10-25). It builds on `ARCHITECTURE.md` (cite
 | Las Vegas 20–22 Nov 2026 (fallbacks: Lusail 27–29 Nov, Yas Marina 4–6 Dec) | **P2f** | Live verified on a real session |
 | Nov 2026 → Jan 2027 | **P4a–P4f** | The redesign (owner, 2026-11-07): web only, on the API as it is, so it can run next to P2f and the last 2026 weekends |
 | Nov 2026 → Jan 2027 | **P5a–P5c** | Weather (owner, 2026-11-07), next to P4. P5c's live check needs a session (Lusail 27–29 Nov or Yas Marina 4–6 Dec 2026, else 2027 testing) |
+| Nov 2026 → Jan 2027 | **P6a–P6c** | Team radio (owner, 2026-11-09), next to P4 and P5. P6a's live check needs a session (Las Vegas 20–22 Nov, else Lusail or Yas Marina). P6b and P6c start only after their gate checks |
 | After P2 | **P3a–P3c** | History back to 2018 (and optional pre-2018 lap times) |
 
 Remaining 2026 weekends (OpenF1 schedule): Austin (race 25 Oct) · Mexico City 30 Oct–1 Nov · São Paulo 6–8 Nov · Las Vegas 20–22 Nov · Lusail 27–29 Nov · Yas Marina 4–6 Dec.
@@ -24,7 +25,7 @@ Remaining 2026 weekends (OpenF1 schedule): Austin (race 25 Oct) · Mexico City 3
   - **[weekend]** needs a real F1 session.
   - **[owner]** is a manual owner action or judgement.
 - **Per phase:** one issue with the goal, scope, deliverables and acceptance criteria copied from this file. Branch `claude/p<N><x>-<slug>`, conventional commits, and a PR with an evidence checklist (each criterion → test or command output). Agents never merge. The owner merges with a merge commit once `ci` and `security` are green (branch protection on `main` requires both; owner, 2026-10-25).
-- **Reviews:** a fresh-session `/code-review` before merging P1b, P1c, P2b, P2c, P2d, P4e, P5a, P5b and P5c. A security review for anything touching secrets, the firewall, Access, the token or the compose hardening (P0 CI, P1f, P2c), and for P5c (a new outbound host in the `ingest` daemon and third-party map data in the page). For the web-only P4 phases a Sonnet security review is recommended where more feed or URL text is parsed or rendered (P4d, P4e, P4f), and optional elsewhere unless the CSP or the build config changes.
+- **Reviews:** a fresh-session `/code-review` before merging P1b, P1c, P2b, P2c, P2d, P4e, P5a, P5b, P5c and P6a. A security review for anything touching secrets, the firewall, Access, the token or the compose hardening (P0 CI, P1f, P2c), for P5c (a new outbound host in the `ingest` daemon and third-party map data in the page), and for P6a (a new outbound path in the recorder, a file-serving route and a CSP change). For the web-only P4 phases a Sonnet security review is recommended where more feed or URL text is parsed or rendered (P4d, P4e, P4f), and optional elsewhere unless the CSP or the build config changes.
 - **Models and effort** (owner, 2026-10-25; each phase issue has its own table):
   - Build: Opus 5.5 at `xhigh` (`high` for UI and well-specified phases, `max` for P2b's lap reconstruction). Sonnet 5.5 at `high` for small phases (P2f, P3b, P3c).
   - Code review: a fresh session with a different model from the build. Sonnet 5.5 at `xhigh` for required reviews and `high`/`medium` otherwise; Opus 5.5 when Sonnet built.
@@ -430,6 +431,76 @@ Remaining 2026 weekends (OpenF1 schedule): Austin (race 25 Oct) · Mexico City 3
   - [box] every `circuit_short_name` in the VM database maps to an outline, and the rain backfill finishes within the budget (a query and log counts the PR supplies).
   - [weekend] during a live session the grid refreshes every 15 min, and the player's map never shows a frame after T.
   - [owner] a wet 2024–2026 session shows rain where the broadcast reported it.
+
+### P6: Team radio (owner, 2026-11-09)
+
+- **Decision:** the player lists the team-radio clips up to T, and each one plays in the page (P6a). Transcripts follow once a local Whisper spike has measured cost and accuracy (P6b). Onboard radio from F1 TV goes further than the curated clips, gated on DRM (P6c).
+- **Sources** (checked 2026-11-09, on the owner's machine):
+  - The feed's `TeamRadio` topic, recorded since P2c, already reaches the browser in the playback stream (only `.z` topics are skipped). Each capture is exactly `{Utc, RacingNumber, Path}`: 164 capture messages in 11397, 11404 and 11408, with no transcript.
+  - The clip is `https://livetiming.formula1.com/static/<SessionInfo.Path><Path>`, an MP3 at 128 kbps, mono, 48 kHz (about 6 s in the sample). It answered 200 without a token on 2026-11-09, unlike the archive's JSON files (A§6.2).
+  - About 20–30 clips per session. F1 picks them, so they are not all the radio. From speech (the file name's track-local time) to `Utc`: a median of 21–27 s, 90 % within 35–40 s, and at most 46 s.
+  - The feed's other audio, `AudioStreams` "Live coverage (EN)", is commentary, and `ContentStreams` adds the live text commentary. Neither is radio, and neither is used.
+  - The F1 TV onboard channels carry each driver's radio (owner). They are only an option if the streams carry no DRM (P6c).
+- **Rules for every P6 phase:**
+  - The browser still makes no third-party request: clips are fetched by the recorder, which already reaches `livetiming.formula1.com`, and served by our `api` under `media-src 'self'`.
+  - Audio and transcripts are F1 data: never committed (A§12.1 invariant 3), and test fixtures are synthetic.
+  - We never build anything that gets around DRM.
+- **Order:** P6a first. P6b after P6a and its spike. P6c only after its gate check, independent of P6b.
+
+### P6a: Team radio in the player
+
+- **Goal:** live and replay list the team-radio clips up to T, and each one plays in the page.
+- **Scope in:**
+  - a `TeamRadio` view in `packages/contracts` (`Captures`: `Utc`, `RacingNumber`, `Path`) and a pure `radioFile(path)`, the basename only when `Path` is `TeamRadio/<1–64 of A–Z a–z 0–9 _>.mp3`
+  - the recorder downloads each new clip into `<recording>/radio/`:
+    - one at a time, anonymous, no redirects, 15 s timeout, `audio/mpeg` only, at most 2 MB, written through a temporary name with mode `0600`
+    - retries after 5 s, 30 s and 120 s, then a fixed error code; no download under the disk floor
+    - it never blocks the feed, and a stop aborts what is pending
+  - a role `radio <recording dir>` that replays a recording's lines and fills `radio/`, for the recordings made before P6a
+  - `GET /api/v1/playback/:recording/radio/:file`:
+    - the path from the `recording` row, opened with `O_NOFOLLOW`, a regular file of at most 2 MB
+    - `audio/mpeg`, `private, max-age=31536000, immutable`, `Accept-Ranges: bytes`
+    - a single byte range answers 206 (Safari needs it), an unsatisfiable one 416; HEAD gets no body; the fixed A§10 errors
+  - `media-src 'self'` in the CSP, and a test that pins the whole CSP
+  - a "Team radio" card in the player's side panel under race control, newest first: the driver in team colour, the time, the driver's lap at `Utc` from the stream's lap rows, and a native `<audio controls preload="none">`. Click to play (owner, 2026-11-09)
+- **Scope out:** transcripts (P6b), autoplay, onboard radio (P6c), and radio on the OpenF1 session pages (OpenF1 `/team_radio`; a later idea).
+- **Acceptance:**
+  - [CI] unit tests: `radioFile` on valid paths, traversal, odd extensions, over-long names and non-strings.
+  - [CI] msw tests for the download:
+    - each new capture is downloaded once, duplicates across Subscribe states are skipped, and invalid `Path` and `SessionInfo.Path` values are skipped
+    - a redirect, a wrong content type and a body over 2 MB are refused
+    - a timeout, the retries on a fake clock, then the fixed codes
+    - no download under the disk floor, and an abort leaves no temporary file
+  - [CI] the recorder's integration test: a `TeamRadio` delta leaves the clip in `<dir>/radio/` while the feed keeps flowing.
+  - [CI] the `radio` role: a bad argument exits 2, and a replay of a test recording fills `radio/` once.
+  - [CI] integration tests for the route: 200 and its headers, 206 and 416, HEAD, 400 for a bad id or file, 404 for an unknown recording or a missing file, a symlink refused, 401 without the Access JWT.
+  - [CI] the pinned CSP includes `media-src 'self'`.
+  - [CI] component tests: the card (order, driver, time, lap, empty state, escaping), and in happy-dom a `TeamRadio` delta adds an item while a seek back drops it.
+  - [box] `radio <dir>` on the VM's São Paulo recordings: the clips found, downloaded and failed (counts only).
+  - [weekend] in a live session clips appear at about T and play on desktop and on the phone, and the recorder stays within its limits (`f1-measure`).
+  - [owner] in a replay, a clip sits where it airs on the F1 TV replay.
+
+### P6b: Transcripts of the clips
+
+- **Goal:** each clip shows what was said.
+- **Gate:** the local Whisper spike (owner's machine, `fixtures-private/radio/spike/`; nothing committed):
+  - candidates `base.en`, `small.en`, `distil-large-v3` and `large-v3-turbo` at 2 threads against a `large-v3` reference on the 145 recorded clips: cost per clip, real-time factor, memory, word error rate and hallucinations, with and without a prompt of driver names and jargon
+  - the owner's listening check of `report.html`
+  - the owner then picks local (a hardened STT container on the VM) or a cloud API (a new outbound host and secret)
+- **Scope (outline; fixed after the gate):**
+  - transcribe each downloaded clip once and store the text next to it
+  - show it under the clip in the card, marked as machine-made
+  - an ADR for the model or service, and its licence and data flow
+- **Acceptance:** written into this section and the issue once the gate has decided.
+
+### P6c: Onboard radio (gate check first)
+
+- **Goal:** the radio from every driver's F1 TV onboard channel, recorded and transcribed, beyond the clips F1 picks.
+- **Gate, in order (no plan and no VM work before it passes):**
+  1. [owner] In the browser (DevTools, a past session's replay, one onboard channel): HLS or DASH; any `EXT-X-KEY` with `SAMPLE-AES` or a Widevine, PlayReady or FairPlay key format, any DASH `ContentProtection`, or a licence request; an audio-only rendition and its codec and bitrate; and whether the audio carries radio that is not among the clips. **DRM present = stop.**
+  2. Without DRM: a harness on the owner's machine (outside the repository, the token read through `--token-file` as `fetch-archive.ts` does) records 10 min of one onboard's audio and measures the speech share, Whisper's cost on the speech only, and the messages heard against the clips of those 10 min.
+  3. An ADR on recording F1 TV audio (terms, storage; as ADR-0005), then P6c's scope, sized by those numbers: 20 streams × the session's length, disk per race, CPU on the VM.
+- **Acceptance:** written into this section and the issue once the gate has passed.
 
 ## 4. Owner actions
 
