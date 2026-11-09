@@ -1,7 +1,8 @@
-import { type Obj, view } from '@f1/contracts';
+import { type Obj, view, weatherRow } from '@f1/contracts';
 import { driverOf, towerRows } from '../views/Tower.tsx';
 import type { Driver } from './session.ts';
 import { utc } from './stream.ts';
+import { reading } from './weather.ts';
 
 // The pit wall (A§13, P4d): the session light, the status strip and the side panel, derived from the feed state once
 // per store flush (views/Player.tsx). Pure: nothing here ticks; `leftAt` turns a derived clock into a time left at T.
@@ -61,7 +62,6 @@ export type Strip = {
 };
 
 const HMS = /^(\d{1,2}):(\d{2}):(\d{2})$/;
-const DEGREES = /^-?\d{1,3}(?:\.\d{1,2})?$/;
 const KEY = /^\d{1,6}$/;
 
 function clockOf(state: Obj): Clock | undefined {
@@ -73,12 +73,13 @@ function clockOf(state: Obj): Clock | undefined {
   return { remainingS: h * 3600 + min * 60 + s, utcMs, extrapolating: c?.Extrapolating === true };
 }
 
+/** The latest reading as the Weather tab reads it (`weatherRow` + `reading`): numbers only, a 0 temperature left out. */
 function weatherOf(state: Obj): string | undefined {
-  const w = view(state, 'WeatherData');
+  const w = reading(weatherRow(view(state, 'WeatherData'), 0));
   const parts = [
-    DEGREES.test(w?.AirTemp ?? '') && `${w?.AirTemp}° air`,
-    DEGREES.test(w?.TrackTemp ?? '') && `${w?.TrackTemp}° track`,
-    w?.Rainfall === '0' ? 'dry' : /^\d{1,3}$/.test(w?.Rainfall ?? '') && 'rain',
+    w.air_temperature !== null && `${w.air_temperature.toFixed(1)}° air`,
+    w.track_temperature !== null && `${w.track_temperature.toFixed(1)}° track`,
+    w.rainfall !== null && (w.rainfall > 0 ? 'rain' : 'dry'),
   ].filter((p) => typeof p === 'string');
   return parts.length > 0 ? parts.join(' · ') : undefined;
 }
