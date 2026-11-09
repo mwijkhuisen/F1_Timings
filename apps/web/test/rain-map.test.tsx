@@ -11,9 +11,9 @@ import { sessionDetail } from './laps.ts';
 // The rain map (P5c, A§13), rendered to markup with the data as props; the card's states from a filled query cache.
 
 const grid: RainGrid = {
-  map_id: 'nl-1948',
-  centre_lat: 52.3881,
-  centre_lon: 4.5459,
+  map_id: 'it-1922',
+  centre_lat: 45.6216,
+  centre_lon: 9.2888,
   size: 7,
   step_m: 1500,
   state: 'final',
@@ -164,12 +164,12 @@ describe('the rain map', () => {
 
 // The card's states, from a query cache filled beforehand (no request is made).
 describe('the rain map card', () => {
-  const zandvoort = (over: Partial<SessionDetail['session']> = {}): SessionDetail => {
+  const monza = (over: Partial<SessionDetail['session']> = {}): SessionDetail => {
     const d = sessionDetail('Race', 'Race');
     return {
       ...d,
       session: { ...d.session, date_start: '2026-11-09T14:10:00Z', ...over },
-      meeting: { ...d.meeting, circuit_short_name: 'Zandvoort' },
+      meeting: { ...d.meeting, circuit_short_name: 'Monza' },
     };
   };
   const card = (detail: SessionDetail, rain?: Rain, files?: { outline: string | null; osm: OsmLayers | null }) => {
@@ -184,11 +184,11 @@ describe('the rain map card', () => {
   };
 
   it('renders nothing for a cancelled session', () => {
-    expect(card(zandvoort({ is_cancelled: true }), { grid, frames })).toBe('');
+    expect(card(monza({ is_cancelled: true }), { grid, frames })).toBe('');
   });
 
   it('says so for a venue without a circuit outline', () => {
-    const d = zandvoort();
+    const d = monza();
     const html = card({ ...d, meeting: { ...d.meeting, circuit_short_name: 'Nürburgring' } });
     expect(html).toContain('<h2>Rain around the circuit</h2><p>mm/h, Amsterdam time</p>');
     expect(html).toContain('<p>No circuit outline for this venue.</p>');
@@ -196,23 +196,23 @@ describe('the rain map card', () => {
   });
 
   it('is loading while the rain query has no answer', () => {
-    expect(card(zandvoort())).toContain('Loading…');
+    expect(card(monza())).toContain('Loading…');
   });
 
   it('says "Rain map not fetched yet." without a grid or without frames', () => {
-    expect(card(zandvoort(), { grid: null, frames: [] })).toContain('<p>Rain map not fetched yet.</p>');
-    expect(card(zandvoort(), { grid, frames: [] })).toContain('<p>Rain map not fetched yet.</p>');
+    expect(card(monza(), { grid: null, frames: [] })).toContain('<p>Rain map not fetched yet.</p>');
+    expect(card(monza(), { grid, frames: [] })).toContain('<p>Rain map not fetched yet.</p>');
   });
 
   it('opens at the first frame at or after the start, with the outline and a native model', () => {
-    const html = card(zandvoort(), { grid, frames }, { outline: OUTLINE, osm: null });
+    const html = card(monza(), { grid, frames }, { outline: OUTLINE, osm: null });
     expect(html).toContain('aria-valuetext="15:15 Amsterdam time"');
     expect(html).toContain('map-outline');
     expect(html).not.toContain('Coarse model');
   });
 
   it('notes the coarse model where CIRCUITS has no native 15-minute data (Silverstone)', () => {
-    const d = zandvoort();
+    const d = monza();
     const uk = { ...d, meeting: { ...d.meeting, circuit_short_name: 'Silverstone' } };
     const html = card(uk, { grid: { ...grid, map_id: 'gb-1948' }, frames }, { outline: OUTLINE, osm: null });
     expect(html).toContain('Coarse model here: the field may look uniform.');

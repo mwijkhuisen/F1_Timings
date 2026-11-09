@@ -16,12 +16,12 @@ const base = sessionDetail('Race', 'Race');
 const detail = {
   ...base,
   session: { ...base.session, date_start: '2026-11-09T14:00:00Z' },
-  meeting: { ...base.meeting, circuit_short_name: 'Zandvoort' },
+  meeting: { ...base.meeting, circuit_short_name: 'Monza' },
 };
 const at = (hm: string) => Date.parse(`2026-11-09T${hm}:00Z`);
 // Frame k has rain in cell 24 (the centre) only, 0.1·(k + 1) mm: 0.4, 0.8, 1.2 and 1.6 mm/h.
 const rain: Rain = {
-  grid: { map_id: 'nl-1948', centre_lat: 52.3881, centre_lon: 4.5459, size: 7, step_m: 1500, state: 'final' },
+  grid: { map_id: 'it-1922', centre_lat: 45.6216, centre_lon: 9.2888, size: 7, step_m: 1500, state: 'final' },
   frames: ['14:00', '14:15', '14:30', '14:45'].map((hm, k) => {
     const mm = Array<number | null>(49).fill(0);
     mm[24] = 0.1 * (k + 1);
@@ -38,7 +38,7 @@ beforeEach(() => {
   // Filled beforehand, and no query runs: nothing is fetched or imported.
   client = new QueryClient({ defaultOptions: { queries: { enabled: false } } });
   client.setQueryData(['rain', detail.session.session_key], rain);
-  client.setQueryData(['map', 'nl-1948'], { outline: 'M 0 0 L 1 1 Z', osm: null });
+  client.setQueryData(['map', 'it-1922'], { outline: 'M 0 0 L 1 1 Z', osm: null });
   host = document.createElement('div');
   document.body.append(host);
   root = createRoot(host);
