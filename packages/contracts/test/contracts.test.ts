@@ -1,3 +1,4 @@
+import fc from 'fast-check';
 import { describe, expect, it } from 'vitest';
 import {
   type Lap,
@@ -10,6 +11,8 @@ import {
   Status,
   Stints,
   sectorDeltas,
+  Weather,
+  weatherRow,
 } from '../src/index.ts';
 
 const iso = '2026-03-14T05:00:00.000Z';
@@ -214,5 +217,54 @@ describe('sectorDeltas', () => {
     expect(sectorDeltas(a.slice(3), [lap({ lap_number: 4, s1_ms: null })])).toEqual([
       { lap_number: 4, s1: null, s2: 0, s3: 0 },
     ]);
+  });
+});
+
+describe('weatherRow', () => {
+  const t = Date.parse(iso);
+  const air = (AirTemp: string) => weatherRow({ AirTemp }, t).air_temperature;
+
+  it('reads a number from a non-blank string that fits the column', () => {
+    expect(air('27.4')).toBe(27.4);
+    expect(air('0')).toBe(0);
+    expect(Object.is(air('-0'), 0)).toBe(true);
+    expect(weatherRow({ WindDirection: '191' }, t).wind_direction).toBe(191);
+  });
+
+  it('is null for a blank, non-numeric, non-finite or out-of-column string', () => {
+    for (const s of ['', '  ', 'abc', '1e400', '1e39', '1e-40']) expect(air(s)).toBeNull();
+    expect(weatherRow({ Rainfall: '1.5' }, t).rainfall).toBeNull();
+    expect(weatherRow({ WindDirection: '40000' }, t).wind_direction).toBeNull();
+    expect(weatherRow({ AirTemp: '27.4' }, t).humidity).toBeNull();
+  });
+
+  it('is all null with the date for no view', () => {
+    expect(weatherRow(undefined, t)).toEqual({
+      date: iso,
+      air_temperature: null,
+      track_temperature: null,
+      humidity: null,
+      pressure: null,
+      rainfall: null,
+      wind_direction: null,
+      wind_speed: null,
+    });
+  });
+
+  it('never throws, and its row parses against Weather and survives JSON', () => {
+    const keys = ['AirTemp', 'Humidity', 'Pressure', 'Rainfall', 'TrackTemp', 'WindDirection', 'WindSpeed'] as const;
+    const value = fc.oneof(fc.string(), fc.double().map(String), fc.integer().map(String));
+    fc.assert(
+      fc.property(
+        fc.record(Object.fromEntries(keys.map((k) => [k, value])) as Record<(typeof keys)[number], typeof value>, {
+          requiredKeys: [],
+        }),
+        (w) => {
+          const row = weatherRow(w, t);
+          expect(Weather.parse([row])).toEqual([row]);
+          expect(JSON.parse(JSON.stringify(row))).toEqual(row);
+        },
+      ),
+    );
   });
 });
