@@ -2,7 +2,17 @@ import { linkSync, mkdtempSync, readdirSync, readFileSync, rmSync, symlinkSync, 
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { gunzipSync, gzipSync } from 'node:zlib';
-import { type Lap, merge, type Obj, PlaybackPing, type Stints } from '@f1/contracts';
+import {
+  type Lap,
+  merge,
+  type Obj,
+  PlaybackPing,
+  type Stints,
+  view,
+  type Weather,
+  weatherRow,
+  withWeatherRow,
+} from '@f1/contracts';
 import fc from 'fast-check';
 import { afterEach, describe, expect, it } from 'vitest';
 import { createLaps } from '../src/live/laps.ts';
@@ -73,23 +83,30 @@ async function record(
 
 /**
  * The full replay as JSON: createFeed and createLaps over every line with receivedAt ≤ t, `.z` skipped (O1), the state
- * cleared before a SessionInfo with another Key than the state's.
+ * and the weather rows cleared before a SessionInfo with another Key than the state's, a weather row per applied
+ * WeatherData delta (withWeatherRow).
  */
-function full(values: Value[], t: number, key = 9001): { state: Obj; laps: Lap[]; stints: Stints } {
+function full(values: Value[], t: number, key = 9001): { state: Obj; laps: Lap[]; stints: Stints; weather: Weather } {
   const [feed, laps] = [createFeed(), createLaps(key, 'f1-live')];
+  let weather: Weather = [];
   const keyOf = (v: unknown) => (isObj(v) && typeof v.Key === 'number' ? v.Key : undefined);
   for (const v of values) {
     if (v[0] > t) continue;
     for (const ev of parseFeedLine(JSON.stringify(v))) {
       if (ev.topic.endsWith('.z')) continue;
       const [next, now] = [keyOf(ev.payload), keyOf(feed.state.SessionInfo)];
-      if (ev.topic === 'SessionInfo' && next !== undefined && now !== undefined && next !== now)
+      if (ev.topic === 'SessionInfo' && next !== undefined && now !== undefined && next !== now) {
         for (const topic of Object.keys(feed.state)) delete feed.state[topic];
+        weather = [];
+      }
       const delta = feed.apply(ev);
-      if (delta !== undefined) laps.push(ev, delta);
+      if (delta === undefined) continue;
+      laps.push(ev, delta);
+      if (ev.topic === 'WeatherData')
+        weather = withWeatherRow(weather, weatherRow(view(feed.state, 'WeatherData'), v[0]));
     }
   }
-  return plain({ state: feed.state, ...lapRows(laps.rows()) });
+  return plain({ state: feed.state, ...lapRows(laps.rows()), weather });
 }
 
 /**
@@ -177,6 +194,9 @@ const deltas = (events: Seen[]) =>
   events.flatMap(({ at, ev }) => (ev.event === 'delta' ? [{ at, t: ev.data.t, topic: ev.data.topic }] : []));
 const kinds = (events: Seen[]) => events.map(({ ev }) => ev.event);
 const text = (values: Value[]) => values.map((v) => `${JSON.stringify(v)}\n`).join('');
+/** A WeatherData line at `r`, with its F1 timestamp at `r` too. */
+const weatherAt = (r: number, payload: Obj): Value => [r, 'WeatherData', payload, iso(r)];
+const byR = (values: Value[]) => values.sort((a, b) => a[0] - b[0]); // stable: a tie keeps its order
 
 describe('playback', () => {
   // With their sessions: both make laps and stints.
@@ -186,10 +206,27 @@ describe('playback', () => {
   ];
 
   it('state at T from snapshot + deltas equals a full replay from 0', async () => {
+    const reading = fc.constantFrom('27.4', '0', '', '1e400', 'abc', '-3.5', '1013.2', '191', '1', '45.5');
+    const weatherData = fc.record(
+      {
+        AirTemp: reading,
+        Humidity: reading,
+        Pressure: reading,
+        Rainfall: reading,
+        TrackTemp: reading,
+        WindDirection: reading,
+        WindSpeed: reading,
+      },
+      { requiredKeys: [] },
+    );
     await fc.assert(
       fc.asyncProperty(
         fc.constantFrom(...sources),
         fc.integer({ min: 60_000, max: 400_000 }), // rotateMs
+        fc.array(fc.tuple(fc.nat(), weatherData), { maxLength: 6 }), // WeatherData lines, just after these lines
+        // Subscribe states with WeatherData: a weather line's payload again just after it (no change: no delta, no
+        // row), or another payload just after a line (a change: one delta, one row).
+        fc.array(fc.tuple(fc.nat(), fc.option(weatherData, { nil: undefined })), { maxLength: 4 }),
         // Reconnect duplicates: a line re-sent later (up to 4 min) with its topic, payload and F1 timestamp.
         fc.array(fc.tuple(fc.nat(), fc.integer({ min: 1, max: 240_000 })), { maxLength: 8 }),
         fc.array(fc.nat(), { maxLength: 3 }), // CarData.z lines, just after these lines
@@ -199,7 +236,16 @@ describe('playback', () => {
         fc.array(fc.constantFrom('gz', 'plain', 'both'), { minLength: 1, maxLength: 4 }), // the segments' files
         fc.nat(), // T
         fc.constantFrom(1, 2, 4, 8, 16),
-        async ([base, sessionKey], rotateMs, dups, zs, same, snaps, forms, pick, speed) => {
+        async ([source, sessionKey], rotateMs, weathers, subs, dups, zs, same, snaps, forms, pick, speed) => {
+          // Before the duplicates are drawn, so a duplicate can repeat a weather line too (never a `_subscribe` one).
+          const weatherLines = weathers.map(([i, w]) => weatherAt(nth(source, i)[0] + 1, w));
+          const subscribes = subs.flatMap(([i, w]): Value[] => {
+            if (w !== undefined) return [[nth(source, i)[0] + 2, '_subscribe', { WeatherData: w }]];
+            if (weatherLines.length === 0) return [];
+            const [r, , payload] = nth(weatherLines, i);
+            return [[r, '_subscribe', { WeatherData: payload }]]; // after its line: byR keeps a tie's order
+          });
+          const base = byR([...source, ...weatherLines, ...subscribes]);
           const values = [...base];
           for (const [i, delay] of dups) {
             const [r, ...rest] = nth(base, i);
@@ -251,26 +297,36 @@ describe('playback', () => {
             expect(events[0]?.ev).toEqual({ event: 'snapshot', data: { t: at, ...truth(at) } });
             // (b) the client's state after every delta (after the last one of a line), and its rows after every
             // snapshot and `laps` event, to the end
+            // and its weather rows: a snapshot's, then one per WeatherData delta from its merged view
             let client: Obj = {};
+            let weather: Weather = [];
             const rows = clientRows();
             for (const [i, { ev }] of events.entries()) {
               if (ev.event === 'snapshot' || ev.event === 'laps') {
                 rows.apply(ev.data, ev.event === 'snapshot');
-                const { state, ...expected } = truth(ev.data.t);
+                const { state, weather: rowsAt, ...expected } = truth(ev.data.t);
                 expect(rows.rows()).toEqual(expected);
                 if (ev.event === 'snapshot') {
                   client = ev.data.state;
+                  weather = [...ev.data.weather];
                   expect(client).toEqual(state);
+                  expect(weather).toEqual(rowsAt);
                 }
               } else if (ev.event === 'delta') {
                 clientApply(client, ev.data);
+                if (ev.data.topic === 'WeatherData') {
+                  weather = withWeatherRow(weather, weatherRow(view(client, 'WeatherData'), ev.data.t));
+                }
                 const after = events[i + 1]?.ev;
-                if (after?.event !== 'delta' || after.data.t !== ev.data.t)
-                  expect(client).toEqual(truth(ev.data.t).state);
+                if (after?.event !== 'delta' || after.data.t !== ev.data.t) {
+                  const { state, weather: rowsAt } = truth(ev.data.t);
+                  expect(client).toEqual(state);
+                  expect(weather).toEqual(rowsAt);
+                }
               }
             }
             expect(events.at(-1)?.ev.event).toBe('end');
-            expect({ state: client, ...rows.rows() }).toEqual(truth(Number.POSITIVE_INFINITY));
+            expect({ state: client, weather, ...rows.rows() }).toEqual(truth(Number.POSITIVE_INFINITY));
           } finally {
             rmSync(dir, { recursive: true, force: true });
           }
@@ -310,7 +366,10 @@ describe('playback', () => {
     const events = await drain(gen, clock);
 
     for (const { at, ev } of events) if ('data' in ev) expect(ev.data.t).toBeLessThanOrEqual(at - 45_000);
-    expect(events[0]?.ev).toEqual({ event: 'snapshot', data: { t: T0 - 50_000, state: {}, laps: [], stints: [] } });
+    expect(events[0]?.ev).toEqual({
+      event: 'snapshot',
+      data: { t: T0 - 50_000, state: {}, laps: [], stints: [], weather: [] },
+    });
     expect(deltas(events).map((d) => d.t)).toEqual(values.map((v) => v[0])); // each line once, in order
     expect(events.at(-1)?.ev.event).toBe('end');
     expect(readdirSync(dir).filter((n) => n.startsWith('feed-'))).toHaveLength(2); // one rotation
@@ -389,11 +448,14 @@ describe('playback', () => {
   it('a session switch clears the state: a fresh snapshot without the previous session, and a seek after it too', async () => {
     // practice-stale.jsonl: the full state of an earlier race (8999: drivers 7, 42 and 99, a chequered flag), then
     // F1's switch to 9001 and its reset lines; practice.jsonl follows.
-    const values = [...fixture('practice-stale.jsonl'), ...fixture('practice.jsonl')];
+    // WeatherData lines in both sessions: two before the switch, three after it.
+    const lines0 = [...fixture('practice-stale.jsonl'), ...fixture('practice.jsonl')];
+    const [first, switchAt] = [nth(lines0, 0)[0], nth(lines0, 1)[0]]; // the SessionInfo of 9001
+    const weatherRs = [first + 60_000, first + 120_000, switchAt + 1000, switchAt + 600_000, switchAt + 1_200_000];
+    const values = byR([...lines0, ...weatherRs.map((r, i) => weatherAt(r, { AirTemp: `${20 + i}`, Rainfall: '0' }))]);
     const dir = tmp();
     await record(dir, values, 3_600_000);
-    const [first, last] = [nth(values, 0)[0], nth(values, values.length - 1)[0]];
-    const switchAt = nth(values, 1)[0]; // the SessionInfo of 9001
+    const last = nth(values, values.length - 1)[0];
     const lines = (state: Obj) => Object.keys(((state.TimingData as Obj | undefined)?.Lines ?? {}) as Obj).sort();
 
     const { gen, clock } = start(dir, { at: first, speed: 16 });
@@ -406,12 +468,18 @@ describe('playback', () => {
     expect(at).toEqual([{ event: 'snapshot', data: { t: switchAt, ...full(values, switchAt) } }]);
     expect(at[0]?.event === 'snapshot' && Object.keys(at[0].data.state)).toEqual(['SessionInfo']);
     expect(at[0]?.event === 'snapshot' && at[0].data.state.SessionInfo).toMatchObject({ Key: 9001 });
+    // The earlier session's rows came as deltas before the switch, and the switch snapshot has none of them.
+    expect(deltas(events).filter((d) => d.topic === 'WeatherData' && d.t < switchAt)).toHaveLength(2);
+    expect(at[0]?.event === 'snapshot' && at[0].data.weather).toEqual([]);
 
     const later = start(dir, { at: last });
     const after = (await drain(later.gen, later.clock))[0]?.ev;
     expect(after).toEqual({ event: 'snapshot', data: { t: last, ...full(values, last) } });
     const state = after?.event === 'snapshot' ? after.data.state : {};
     expect(lines(state)).toEqual(['7', '99']);
+    expect(
+      after?.event === 'snapshot' && after.data.weather.map((w) => [Date.parse(w.date), w.air_temperature]),
+    ).toEqual(weatherRs.slice(2).map((r, i) => [r, 22 + i]));
     expect(JSON.stringify(state)).not.toMatch(/8999|Earlier Synthetic|2026-01-03/); // 9001 has its own chequered flag
     expect(after?.event === 'snapshot' && after.data.laps.length).toBeGreaterThan(0);
     expect(after?.event === 'snapshot' && after.data.laps.filter((l) => l.driver_number === 42)).toEqual([]);
@@ -419,7 +487,11 @@ describe('playback', () => {
 
   it('a consumer that stalls 30 s gets one fresh snapshot, not the backlog', async () => {
     const dir = tmp();
-    const values = counter(60);
+    // A WeatherData line every 10 s from 10.5 s on, so the re-snapshot carries the rows up to T.
+    const weather = Array.from({ length: 5 }, (_, i) =>
+      weatherAt(T0 + (i + 1) * 10_000 + 500, { AirTemp: `${20 + i}` }),
+    );
+    const values = byR([...counter(60), ...weather]);
     await record(dir, values, 3_600_000);
     const { gen, clock } = start(dir, { at: T0 });
     const head: Seen[] = [];
@@ -436,8 +508,11 @@ describe('playback', () => {
     const rest = await drain(gen, clock);
 
     expect(rest[0]?.ev).toEqual({ event: 'snapshot', data: { t: T0 + 32_000, ...full(values, T0 + 32_000) } });
+    expect(rest[0]?.ev.event === 'snapshot' && rest[0].ev.data.weather.map((w) => w.air_temperature)).toEqual([
+      20, 21, 22,
+    ]);
     expect(kinds(rest).filter((k) => k === 'snapshot')).toHaveLength(1);
-    expect(deltas(rest).map((d) => d.t)).toEqual(values.slice(33).map((v) => v[0]));
+    expect(deltas(rest).map((d) => d.t)).toEqual(values.filter((v) => v[0] > T0 + 32_000).map((v) => v[0]));
     expect(rest.at(-1)?.ev.event).toBe('end');
   });
 
@@ -530,7 +605,7 @@ describe('playback', () => {
     const rows = clientRows();
     for (const { ev } of events)
       if (ev.event === 'snapshot' || ev.event === 'laps') expect(rows.apply(ev.data, ev.event === 'snapshot')).toBe(0);
-    const { state: _, ...expected } = full(values, Number.POSITIVE_INFINITY, 9002);
+    const { state: _, weather: __, ...expected } = full(values, Number.POSITIVE_INFINITY, 9002);
     expect(rows.rows()).toEqual(expected);
     expect(expected.laps.length).toBeGreaterThan(0);
   });

@@ -39,6 +39,7 @@ import { KIND_LABEL, KIND_NAME, type Kind } from '../lib/track.ts';
 import { LapTable } from './LapTable.tsx';
 import { Panel, Strip, useTick } from './PitWall.tsx';
 import { driverOf, Tower } from './Tower.tsx';
+import { WeatherPanels } from './Weather.tsx';
 
 // The player (A§13): one playback stream at a time; the bar holds the clock line, the seek bar with the marks at or
 // before T, the transport, the "Back to" chips, the delay slider (live) and the announcements toggle; minimized
@@ -46,7 +47,8 @@ import { driverOf, Tower } from './Tower.tsx';
 // open stream's start: 'live', epoch ms (replay), or null while paused; a `still` stream only fetches the state at a
 // paused T and closes on its snapshot. Only the clock line, the seek bar, the Back to chips and the strip's LEFT cell
 // tick each second, from values derived per flush (no state parsing per tick); the tower, the pit wall and everything
-// else derived from the state render on a store flush.
+// else derived from the state render on a store flush. The tabs are Tower · Laps · Weather; the Weather tab shows the
+// feed's weather rows up to T (P5b), redrawn only when a row arrives.
 
 /** A SessionDetail whose drivers and results come from the stream: OpenF1 has no drivers during a live session. */
 function streamDetail(detail: SessionDetail, state: Obj): SessionDetail {
@@ -370,7 +372,7 @@ export function Player({
   const at = open.at;
   const playing = at !== null && !open.still;
   const [seek, setSeek] = useState<number | null>(null); // a pending seek, shown on the bar
-  const [tab, setTab] = useState<'tower' | 'laps'>('tower');
+  const [tab, setTab] = useState<'tower' | 'laps' | 'weather'>('tower');
   // The focused driver's number (a tap on the tower's driver cell); page state that the player bar reads.
   const [focus, setFocus] = useState<string | null>(null);
   const [fails, setFails] = useState(0); // errors since the last snapshot
@@ -571,10 +573,12 @@ export function Player({
   const wall = useMemo(() => {
     const s = snap.feed?.state;
     if (!s || (sessionKey !== undefined && view(s, 'SessionInfo')?.Key !== sessionKey)) return undefined;
+    const type = view(s, 'SessionInfo')?.Type ?? null;
     return {
       strip: stripOf(s),
       running: running(view(s, 'SessionStatus')?.Status),
-      race: view(s, 'SessionInfo')?.Type === 'Race',
+      type,
+      race: type === 'Race',
       rc: raceControl(s),
       pairs: withinASecond(s),
       fastest: fastestSoFar(s),
@@ -675,12 +679,22 @@ export function Player({
           <button type="button" aria-pressed={tab === 'laps'} onClick={() => setTab('laps')}>
             Laps
           </button>
+          <button type="button" aria-pressed={tab === 'weather'} onClick={() => setTab('weather')}>
+            Weather
+          </button>
         </fieldset>
       )}
       {!state ? (
         <p className="muted">Connecting…</p>
       ) : tab === 'laps' && lapTable ? (
         lapTable
+      ) : tab === 'weather' ? (
+        // Gated as the strip is, so the two agree: nothing from the previous session.
+        wall && snap.weather.rows.length > 0 ? (
+          <WeatherPanels rows={snap.weather.rows} laps={snap.weather.laps} type={wall.type} source="the feed" />
+        ) : (
+          <p className="muted">No weather in the feed yet.</p>
+        )
       ) : wall ? (
         <div className="pitwall">
           <div>{tower}</div>

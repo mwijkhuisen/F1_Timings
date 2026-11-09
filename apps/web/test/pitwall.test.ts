@@ -1,4 +1,4 @@
-import { merge, type Obj } from '@f1/contracts';
+import { merge, type Obj, view, weatherRow } from '@f1/contracts';
 import { describe, expect, it } from 'vitest';
 import {
   fastestSoFar,
@@ -11,6 +11,7 @@ import {
   stripOf,
   withinASecond,
 } from '../src/lib/pitwall.ts';
+import { fmtRange, reading, summarise } from '../src/lib/weather.ts';
 import { messages, practiceState, qualifyingState, raceState } from './feed-state.ts';
 
 // The pit wall's state functions (A§13, P4d) on synthetic feed states.
@@ -96,9 +97,33 @@ describe('stripOf', () => {
     );
     expect(strip.lap).toBeUndefined();
     expect(strip.latest).toBeUndefined();
-    expect(strip.weather).toBe('30° track');
+    expect(strip.weather).toBe('30.0° track');
     expect(stripOf({}).weather).toBeUndefined();
     expect(stripOf({})).toEqual({ light: 'off' });
+  });
+
+  it('reads the weather as the Weather tab does (P5b): a 0 temperature is a dropout, left out', () => {
+    const at = (w: Record<string, string>) => stripOf(practiceState({ extra: { WeatherData: w } })).weather;
+    expect(at({ AirTemp: '0', TrackTemp: '41.25', Rainfall: '0' })).toBe('41.3° track · dry');
+    expect(at({ AirTemp: '0', TrackTemp: '0' })).toBeUndefined();
+    expect(at({ AirTemp: '19', Rainfall: '2' })).toBe('19.0° air · rain');
+  });
+
+  it("gives the same values as the tab's summary of the same reading", () => {
+    for (const w of [
+      { AirTemp: '22.44', TrackTemp: '43.1', Rainfall: '0' },
+      { AirTemp: '0', TrackTemp: '35', Rainfall: '1' },
+      { AirTemp: '17.96', Rainfall: 'x' },
+    ]) {
+      const state = practiceState({ extra: { WeatherData: w } });
+      const s = summarise([reading(weatherRow(view(state, 'WeatherData'), 0))]);
+      const parts = [
+        s.air && `${fmtRange(s.air, 1)}° air`,
+        s.track && `${fmtRange(s.track, 1)}° track`,
+        s.rain === 'rain' ? 'rain' : s.rain === 'dry' ? 'dry' : null,
+      ].filter((p) => typeof p === 'string');
+      expect(stripOf(state).weather).toBe(parts.join(' · ') || undefined);
+    }
   });
 
   it('takes the message with the highest numeric key as the latest', () => {

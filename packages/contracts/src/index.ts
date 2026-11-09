@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import type { Views } from './live.ts';
 
 export * from './live.ts';
 
@@ -147,6 +148,41 @@ export const Weather = z.array(
   }),
 );
 
+// P5b (A§10, A§11.3): one feed WeatherData view as a Weather row at `t`. A field is its number when it is a non-blank
+// string whose value is finite and fits the P5a column, else null: a `real` is 0 or 1e-37 ≤ |v| ≤ 3.4e38 (as in
+// openf1/schemas.ts), rainfall and wind direction an integer within smallint. −0 becomes 0, so a row survives JSON.
+// `t` is the receive time of a line the stream applied, so at most the stream's T (about now; the route bounds `at`
+// to the recording), well within Date's range: toISOString would throw past ±8.64e15.
+const num = (s: unknown, fits: (v: number) => boolean): number | null => {
+  if (typeof s !== 'string' || s.trim() === '') return null;
+  const v = Number(s);
+  return Number.isFinite(v) && fits(v) ? v + 0 : null;
+};
+const isReal = (v: number) => v === 0 || (Math.abs(v) >= 1e-37 && Math.abs(v) <= 3.4e38);
+const isSmallint = (v: number) => Number.isInteger(v) && v >= -32768 && v <= 32767;
+
+export function weatherRow(w: Views['WeatherData'] | undefined, t: number): Weather[number] {
+  return {
+    date: new Date(t).toISOString(),
+    air_temperature: num(w?.AirTemp, isReal),
+    track_temperature: num(w?.TrackTemp, isReal),
+    humidity: num(w?.Humidity, isReal),
+    pressure: num(w?.Pressure, isReal),
+    rainfall: num(w?.Rainfall, isSmallint),
+    wind_direction: num(w?.WindDirection, isSmallint),
+    wind_speed: num(w?.WindSpeed, isReal),
+  };
+}
+
+// A day at one a minute: bounds a stream's rows and the snapshot whatever the recording holds (real sessions send
+// about one a minute, A§11.3).
+export const MAX_WEATHER_ROWS = 1440;
+
+/** A new array: `rows` plus `row`, the oldest dropped so it never holds more than MAX_WEATHER_ROWS. */
+export function withWeatherRow(rows: Weather, row: Weather[number]): Weather {
+  return [...rows.slice(Math.max(0, rows.length + 1 - MAX_WEATHER_ROWS)), row];
+}
+
 export const Status = z.strictObject({
   states: z.strictObject({ scheduled: int, due: int, fetched: int, final: int, failed: int }),
   cancelled: int,
@@ -203,12 +239,15 @@ export const Recordings = z.array(
 // The SSE events of /playback/:recording/stream (A§10); each event's data is one of these as JSON. `state` is
 // {topic: value}; a delta's `data` is merged into state[topic] when it is an object, else it replaces it. A snapshot
 // carries every lap and stint row so far; `laps` only the rows that changed since the last snapshot or `laps`, which
-// replace the rows of the same (driver_number, lap_number) or (driver_number, stint_number).
+// replace the rows of the same (driver_number, lap_number) or (driver_number, stint_number). `weather` holds every
+// WeatherData sample since the stream's last session switch, one row per applied WeatherData delta, at most the last
+// MAX_WEATHER_ROWS; the client adds weatherRow of the merged view at the delta's t with withWeatherRow.
 export const PlaybackSnapshot = z.strictObject({
   t: int,
   state: z.record(z.string(), z.unknown()),
   laps: Laps,
   stints: Stints,
+  weather: Weather,
 });
 export const PlaybackLaps = z.strictObject({ t: int, laps: Laps, stints: Stints });
 export const PlaybackDelta = z.strictObject({ t: int, topic: z.string(), data: z.unknown() });

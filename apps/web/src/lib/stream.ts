@@ -8,17 +8,22 @@ import {
   PlaybackPing,
   PlaybackSnapshot,
   type Stints,
+  view,
+  type Weather,
+  weatherRow,
+  withWeatherRow,
 } from '@f1/contracts';
 
 // The playback stream (A§10, A§11.3): state at T over SSE, framework-free. Every event is parsed with its contract;
 // a delta merges into the state as the server's feed does. EventSource's own retry would reconnect to the same URL,
 // so the same stale `at`: on an error the stream closes itself and the caller reopens (views/Player.tsx). A half-open
 // connection raises no error, so a stream with no event at all (the server pings after 15 s) for 40 s fails too.
+// The weather rows (P5b): the snapshot's, then one per WeatherData delta, read from the merged view at the delta's t.
 
 export type Stint = Stints[number];
 export type StreamParams = { recording: number; at: number | 'live'; delay: number };
-/** Mutated in place by every event; a snapshot starts a new one. */
-export type Feed = { t: number; state: Obj; laps: Map<string, Lap>; stints: Map<string, Stint> };
+/** Mutated in place by every event; a snapshot starts a new one. `weather` is a new array per row. */
+export type Feed = { t: number; state: Obj; laps: Map<string, Lap>; stints: Map<string, Stint>; weather: Weather };
 export type Handlers = {
   onData(feed: Feed, kind: 'snapshot' | 'delta' | 'laps'): void;
   onError(): void;
@@ -76,7 +81,7 @@ export function openStream(params: StreamParams, h: Handlers, ES: typeof EventSo
 
   on('snapshot', PlaybackSnapshot, (d) => {
     // merge copies into prototype-free objects and drops unsafe keys, as on the server.
-    feed = { t: d.t, state: Object.create(null), laps: new Map(), stints: new Map() };
+    feed = { t: d.t, state: Object.create(null), laps: new Map(), stints: new Map(), weather: [...d.weather] };
     merge(feed.state, d.state);
     putRows(feed, d);
     h.onData(feed, 'snapshot');
@@ -86,6 +91,9 @@ export function openStream(params: StreamParams, h: Handlers, ES: typeof EventSo
     feed.t = d.t;
     // One merge at the root: an object merges into state[topic] (created first), anything else replaces it.
     merge(feed.state, { [d.topic]: d.data });
+    // After the merge, as the server does: a row is the whole station reading at t, not the delta's fields.
+    if (d.topic === 'WeatherData')
+      feed.weather = withWeatherRow(feed.weather, weatherRow(view(feed.state, 'WeatherData'), d.t));
     h.onData(feed, 'delta');
   });
   on('laps', PlaybackLaps, (d) => {
@@ -109,13 +117,13 @@ export const utc = (v: string | undefined) =>
 
 /**
  * What React renders: a new object per flush, so it is the key for everything derived from the state. `laps` is a new
- * array only when the rows changed.
+ * array only when the rows changed; `weather` a new pair only when the weather rows changed.
  */
-export type Snap = { rev: number; feed: Feed | undefined; laps: Lap[] };
+export type Snap = { rev: number; feed: Feed | undefined; laps: Lap[]; weather: { rows: Weather; laps: Lap[] } };
 
 /** Holds the latest feed and notifies at most every `everyMs`, so a burst of deltas is one render. */
 export function createStore(everyMs = 250) {
-  let snap: Snap = { rev: 0, feed: undefined, laps: [] };
+  let snap: Snap = { rev: 0, feed: undefined, laps: [], weather: { rows: [], laps: [] } };
   let pending: Feed | undefined;
   let lapsDirty = false;
   let timer: ReturnType<typeof setTimeout> | undefined;
@@ -123,7 +131,11 @@ export function createStore(everyMs = 250) {
   const flush = () => {
     timer = undefined;
     const laps = lapsDirty && pending ? [...pending.laps.values()] : snap.laps;
-    snap = { rev: snap.rev + 1, feed: pending, laps };
+    // The Weather tab's chart option is rebuilt only when the rows change (about once a minute), not on every `laps`
+    // event (up to one a second in a race): its lap rows are those as of the last row change.
+    const rows = pending?.weather ?? snap.weather.rows;
+    const weather = rows === snap.weather.rows ? snap.weather : { rows, laps };
+    snap = { rev: snap.rev + 1, feed: pending, laps, weather };
     lapsDirty = false;
     for (const f of subs) f();
   };
