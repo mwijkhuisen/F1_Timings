@@ -37,6 +37,9 @@ class FakeES {
     this.closed = true;
   }
   emit(name: string, data?: unknown) {
+    // P5b: a snapshot carries `weather`; the tests that are not about it leave it out.
+    if (name === 'snapshot' && data && typeof data === 'object' && !('weather' in data))
+      data = { ...data, weather: [] };
     const e = new MessageEvent(name, { data: data === undefined ? undefined : JSON.stringify(data) });
     act(() => {
       for (const f of this.listeners.get(name) ?? []) f(e);

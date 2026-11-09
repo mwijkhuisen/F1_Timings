@@ -176,6 +176,7 @@ describe('skipped', () => {
     state,
     laps: new Map(laps.map((l) => [`${l.driver_number}:${l.lap_number}`, l])),
     stints: new Map(),
+    weather: [],
   });
   const OLD = at('2026-10-25T20:15:00Z');
   const NEW = at('2026-10-25T20:45:00Z');
