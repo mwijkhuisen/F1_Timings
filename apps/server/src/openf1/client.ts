@@ -39,9 +39,9 @@ export function url(endpoint: Endpoint, query: Query): string {
 /**
  * Sliding windows (A§8): a request starts only while fewer than 25 started in the
  * last 60 s and fewer than 2 in the last 1 s. Takes run in order. (A refill bucket
- * would let a full bucket plus its refill through inside one 60 s window.)
+ * would let a full bucket plus its refill through inside one 60 s window.) The rain client (A§8) uses its own rates.
  */
-export function createLimiter(clock: Clock = systemClock) {
+export function createLimiter(clock: Clock = systemClock, perMinute = PER_MINUTE, perSecond = PER_SECOND) {
   const starts: number[] = [];
   let notBefore = 0;
   let queue = Promise.resolve();
@@ -52,8 +52,8 @@ export function createLimiter(clock: Clock = systemClock) {
       while (starts.length > 0 && (starts[0] ?? 0) <= now - 60_000) starts.shift();
       const at = Math.max(
         notBefore,
-        (starts.at(-PER_MINUTE) ?? -Infinity) + 60_000,
-        (starts.at(-PER_SECOND) ?? -Infinity) + 1_000,
+        (starts.at(-perMinute) ?? -Infinity) + 60_000,
+        (starts.at(-perSecond) ?? -Infinity) + 1_000,
       );
       if (at <= now) {
         starts.push(now);
@@ -97,8 +97,8 @@ function parseJson(text: string): unknown {
 const noResults = (body: unknown) =>
   typeof body === 'object' && body !== null && 'detail' in body && body.detail === 'No results found.';
 
-/** The body as text, or undefined once it passes MAX_BODY_BYTES (it is never held whole). */
-async function readCapped(response: Response): Promise<string | undefined> {
+/** The body as text, or undefined once it passes `max` bytes (it is never held whole). */
+export async function readCapped(response: Response, max = MAX_BODY_BYTES): Promise<string | undefined> {
   if (response.body === null) return '';
   const reader = response.body.getReader();
   const parts: Uint8Array[] = [];
@@ -107,7 +107,7 @@ async function readCapped(response: Response): Promise<string | undefined> {
     const { done, value } = await reader.read();
     if (done) return Buffer.concat(parts).toString('utf8');
     size += value.byteLength;
-    if (size > MAX_BODY_BYTES) {
+    if (size > max) {
       await reader.cancel();
       return undefined;
     }
@@ -115,7 +115,8 @@ async function readCapped(response: Response): Promise<string | undefined> {
   }
 }
 
-const timedOut = (error: unknown) =>
+/** An undici connect, headers or body timeout, on the error or its cause. */
+export const timedOut = (error: unknown) =>
   [error, error instanceof Error ? error.cause : undefined].some(
     (e) => typeof e === 'object' && e !== null && 'code' in e && /TIME(D?)OUT/.test(String(e.code)),
   );
