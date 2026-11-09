@@ -2380,9 +2380,10 @@ dl.duel > div {
   fill-rule: evenodd;
 }
 
+/* vector-effect is not inherited: it sits on each stroked element, never on a <g>. */
 .rainfield .map-coast,
 .rainfield .map-road,
-.rainfield .map-rings,
+.rainfield .map-rings circle,
 .rainfield .map-halo,
 .rainfield .map-outline,
 .rainfield .map-scale path {
@@ -2439,6 +2440,13 @@ dl.duel > div {
 .rainfield .map-scale path {
   stroke: var(--fg);
   stroke-width: 2px;
+}
+
+/* Inline links in a sentence are exempt from the 44 px target (WCAG 2.5.8). */
+.rainsrc a {
+  display: inline;
+  min-width: 0;
+  min-height: 0;
 }
 
 .rainlegend {

@@ -39,7 +39,7 @@ const WORD: Record<Point, string> = {
 };
 
 /**
- * One frame in words, the map's text alternative: "No rain within 5 km", or "Rain in 12 of 49 cells, heaviest 3.2 mm/h,
+ * One frame in words, the map's text alternative: "No rain data for this time" (every value null), "No rain within 5 km", or "Rain in 12 of 49 cells, heaviest 3.2 mm/h,
  * 2 km north-west of the circuit" ("…, at the circuit" for the centre cell). A tie goes to the first cell row-major.
  */
 export function rainSummary(mm: readonly (number | null)[], size: number, stepM: number): string {
@@ -50,7 +50,7 @@ export function rainSummary(mm: readonly (number | null)[], size: number, stepM:
     wet++;
     if (top < 0 || (v ?? 0) > (mm[top] ?? 0)) top = k;
   });
-  if (top < 0) return 'No rain within 5 km';
+  if (top < 0) return mm.every((v) => v === null) ? 'No rain data for this time' : 'No rain within 5 km';
   const heaviest = `heaviest ${((mm[top] ?? 0) * 4).toFixed(1)} mm/h`;
   const { cx, cy } = centre(top, size, stepM / 1000);
   // North is −y: the bearing is clockwise from north.

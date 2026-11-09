@@ -179,16 +179,14 @@ describe.each([
     expect(minDeltaE(set, vision)).toBeGreaterThanOrEqual(bar);
   });
 
-  // The rain map's steps (P5c, D2): each neighbour pair reads apart for everyone, and light rain is no water.
+  // The rain map's steps (P5c, D2): every pair of the three steps and the water reads apart for everyone.
   it.each(['normal', 'deutan', 'protan'] as Vision[])(
-    'neighbouring rain steps, and light rain and water, are at least ΔE 8 apart (%s)',
+    'the rain steps and the water are at least ΔE 8 apart (%s)',
     (vision) => {
-      for (const [a, b] of [
-        ['rain-1', 'rain-2'],
-        ['rain-2', 'rain-3'],
-        ['rain-1', 'map-water'],
-      ] as const)
-        expect(deltaE(hex(theme, a), hex(theme, b), vision), `--${a} --${b}`).toBeGreaterThanOrEqual(8);
+      const set = ['rain-1', 'rain-2', 'rain-3', 'map-water'];
+      for (const [i, a] of set.entries())
+        for (const b of set.slice(i + 1))
+          expect(deltaE(hex(theme, a), hex(theme, b), vision), `--${a} --${b}`).toBeGreaterThanOrEqual(8);
     },
   );
 });

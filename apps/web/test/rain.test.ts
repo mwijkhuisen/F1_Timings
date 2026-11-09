@@ -40,6 +40,10 @@ describe('rainSummary', () => {
     expect(rainSummary(at({ 3: 0.024, 9: null }), 7, 1500)).toBe('No rain within 5 km');
   });
 
+  it('says "No rain data for this time" when every value is null, not that it is dry', () => {
+    expect(rainSummary(Array<number | null>(49).fill(null), 7, 1500)).toBe('No rain data for this time');
+  });
+
   it('counts the wet cells and names the heaviest with its distance and direction', () => {
     // Cell 16 is row 2, column 2: (−1.5, −1.5) km, north-west of the centre.
     expect(rainSummary(at({ 16: 0.8 }), 7, 1500)).toBe(

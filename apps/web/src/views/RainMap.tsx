@@ -147,6 +147,7 @@ export const RainMap = memo(function RainMap({ grid, frames, outline, osm, coars
           type="range"
           aria-label="Rain map time"
           aria-valuetext={`${time} Amsterdam time`}
+          aria-describedby={`${id}-sum`}
           min={0}
           max={frames.length - 1}
           step={1}
@@ -155,7 +156,9 @@ export const RainMap = memo(function RainMap({ grid, frames, outline, osm, coars
         />
         <output htmlFor={id}>{time}</output>
       </div>
-      <p className="rainsum">{summary}</p>
+      <p id={`${id}-sum`} className="rainsum" aria-live="polite">
+        {summary}
+      </p>
       <Credits grid={grid} osm={drawn} />
     </>
   );

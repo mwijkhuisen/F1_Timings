@@ -1,3 +1,4 @@
+import { readFileSync } from 'node:fs';
 import type { Rain, SessionDetail } from '@f1/contracts';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import type { ComponentProps } from 'react';
@@ -111,7 +112,22 @@ describe('the rain map', () => {
     const html = map();
     const summary = 'Rain in 4 of 49 cells, heaviest 8.0 mm/h, 2 km south-west of the circuit';
     expect(html).toContain(`aria-label="${summary}"`);
-    expect(html).toContain(`<p class="rainsum">${summary}</p>`);
+    expect(html).toMatch(new RegExp(`<p id="[^"]+" class="rainsum" aria-live="polite">${summary}</p>`));
+  });
+
+  it('announces the summary politely and describes the slider with it', () => {
+    const html = map();
+    const input = /<input [^>]*>/.exec(html)?.[0] ?? '';
+    const sum = /<p id="([^"]+)" class="rainsum" aria-live="polite">/.exec(html);
+    expect(sum).not.toBeNull();
+    expect(input).toContain(`aria-describedby="${sum?.[1]}"`);
+  });
+
+  it('names an all-null frame "No rain data for this time", not dry', () => {
+    const html = map({ frames: [{ date: frames[0]?.date ?? '', mm: Array<number | null>(49).fill(null) }] });
+    expect(html).toContain('aria-label="No rain data for this time"');
+    expect(html).toContain('>No rain data for this time</p>');
+    expect(html).not.toContain('No rain within');
   });
 
   it('credits Open-Meteo and the outline in ADR-0008’s words, with plain noreferrer links', () => {
@@ -153,6 +169,26 @@ describe('the rain map', () => {
   it('notes a coarse model', () => {
     expect(map()).not.toContain('Coarse model');
     expect(map({ coarse: true })).toContain('Coarse model here: the field may look uniform.');
+  });
+
+  // `vector-effect` is not inherited: on a <g> it does nothing and each child's 1 px stroke scales with the viewBox to 1 km.
+  it('gives every stroked element its own non-scaling stroke, never a <g>', () => {
+    const css = readFileSync(new URL('../src/styles.css', import.meta.url), 'utf8').replace(/\/\*[\s\S]*?\*\//g, '');
+    const rule = /([^{}]*)\{[^}]*vector-effect:\s*non-scaling-stroke;[^}]*\}/.exec(css)?.[1] ?? '';
+    const selectors = rule.split(',').map((x) => x.trim());
+    expect(selectors).toEqual([
+      '.rainfield .map-coast',
+      '.rainfield .map-road',
+      '.rainfield .map-rings circle',
+      '.rainfield .map-halo',
+      '.rainfield .map-outline',
+      '.rainfield .map-scale path',
+    ]);
+    // Each of those is an element of the markup (a <circle> in the rings group, a <path> in the scale group).
+    const html = map({ osm });
+    for (const c of ['map-coast', 'map-road', 'map-halo', 'map-outline']) expect(html).toContain(`<path class="${c}"`);
+    expect(html).toMatch(/<g class="map-rings"><circle /);
+    expect(html).toMatch(/<g class="map-scale"><path /);
   });
 
   it('sets no style attribute and no <style> (CSP)', () => {
