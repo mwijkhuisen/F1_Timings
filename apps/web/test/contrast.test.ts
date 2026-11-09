@@ -16,7 +16,7 @@ const css = readFileSync(fileURLToPath(new URL('../src/styles.css', import.meta.
 const tokens = (block: string): Record<string, string> =>
   Object.fromEntries([...block.matchAll(/--([\w-]+):\s*([^;]+);/g)].map(([, k = '', v = '']) => [k, v.trim()]));
 const darkOwn = tokens(/^:root\s*\{([^}]*)\}/m.exec(css)?.[1] ?? '');
-const lightOwn = tokens(/@media \(prefers-color-scheme: light\)\s*\{\s*:root\s*\{([^}]*)\}/.exec(css)?.[1] ?? '');
+const lightOwn = tokens(/^:root\[data-theme="light"\]\s*\{([^}]*)\}/m.exec(css)?.[1] ?? '');
 const dark = darkOwn;
 const light = { ...darkOwn, ...lightOwn };
 
@@ -117,6 +117,11 @@ describe('the tokens', () => {
 
   it('has a different background per theme', () => {
     expect(hex(dark, 'bg')).not.toBe(hex(light, 'bg'));
+  });
+
+  it('gives a light system the light --bg before main.tsx sets data-theme', () => {
+    const early = /:root:not\(\[data-theme\]\)\s*\{([^}]*)\}/.exec(css)?.[1] ?? '';
+    expect(tokens(early)).toEqual({ bg: light.bg });
   });
 
   // Forced colours drop box-shadow, so every cue is an outline or a border (A§13).

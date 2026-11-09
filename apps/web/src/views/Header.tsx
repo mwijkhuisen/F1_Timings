@@ -1,13 +1,15 @@
 import type { Season, Seasons } from '@f1/contracts';
 import { useQuery } from '@tanstack/react-query';
+import { useSyncExternalStore } from 'react';
 import { seasonQuery, useSeasons } from '../lib/api.ts';
 import { Link, type Route, sessionPath } from '../lib/routes.ts';
 import { meetingTarget, neighbours, type Slot } from '../lib/season.ts';
+import { currentTheme, setTheme, subscribeTheme, type Theme } from '../lib/theme.ts';
 import { Cancelled } from '../ui/Cancelled.tsx';
 import { Menu } from '../ui/Menu.tsx';
 
-// The header (A§13): the session switcher (‹ year / meeting / session ›) and Live · Replays · Status. It reads
-// /seasons and the route's season only, never a session.
+// The header (A§13): the session switcher (‹ year / meeting / session ›), Live · Replays · Status and the moon
+// (the dark theme on or off). It reads /seasons and the route's season only, never a session.
 
 const yearOf = (route: Route | null): number | null =>
   route?.id === 'year' || route?.id === 'session' ? route.year : null;
@@ -24,10 +26,14 @@ export function HeaderView({
   route,
   seasons,
   season,
+  theme,
+  onTheme,
 }: {
   route: Route | null;
   seasons: Seasons | undefined;
   season: Season | undefined;
+  theme: Theme;
+  onTheme: (t: Theme) => void;
 }) {
   const year = yearOf(route);
   const at = route?.id === 'session' ? route : null;
@@ -108,6 +114,18 @@ export function HeaderView({
           Status
         </Link>
       </nav>
+      <button
+        type="button"
+        className="theme"
+        aria-pressed={theme === 'dark'}
+        aria-label="Dark theme"
+        title="Dark theme"
+        onClick={() => onTheme(theme === 'dark' ? 'light' : 'dark')}
+      >
+        <svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true">
+          <path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z" />
+        </svg>
+      </button>
     </header>
   );
 }
@@ -116,5 +134,14 @@ export function Header({ route }: { route: Route | null }) {
   const seasons = useSeasons();
   const year = yearOf(route);
   const season = useQuery({ ...seasonQuery(year ?? 0), enabled: year !== null });
-  return <HeaderView route={route} seasons={seasons.data} season={year === null ? undefined : season.data} />;
+  const theme = useSyncExternalStore(subscribeTheme, currentTheme);
+  return (
+    <HeaderView
+      route={route}
+      seasons={seasons.data}
+      season={year === null ? undefined : season.data}
+      theme={theme}
+      onTheme={setTheme}
+    />
+  );
 }

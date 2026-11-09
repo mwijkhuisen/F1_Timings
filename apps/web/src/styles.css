@@ -1,8 +1,8 @@
 /*
  * The design system (A§13, P4a). Dark timing-screen tokens on :root by default, light ones under
- * prefers-color-scheme. Colour is data, with no brand accent: purple is the overall best, green a
- * personal best, "other" times are plain text; --live is live, a red flag or a failure; --amber is SC
- * and VSC. Every text token reaches 4.5:1 on --bg, --panel and --raised and every mini-sector fill
+ * data-theme="light" (lib/theme.ts: the header's moon, else prefers-color-scheme). Colour is data, with
+ * no brand accent: purple is the overall best, green a personal best, "other" times are plain text;
+ * --live is live, a red flag or a failure; --amber is SC and VSC. Every text token reaches 4.5:1 on --bg, --panel and --raised and every mini-sector fill
  * 3:1 on --bg, and purple, green and --fg stay apart for colour-blind vision (test/contrast.test.ts).
  * Team colours go through .drv and --tc: --team, or on the light theme --team-l (lib/session.ts).
  * Type (px): 11 badge and compound · 12 label (upper case) · 14 body and tables · 15 tower · 17 heads ·
@@ -15,7 +15,7 @@
  * through CSSOM.
  */
 :root {
-  color-scheme: dark light;
+  color-scheme: dark;
   accent-color: var(--fg);
   /* Surfaces and lines. */
   --bg: #15151e;
@@ -69,40 +69,48 @@
   --tc: var(--team, var(--muted));
 }
 
+/* Before main.tsx sets data-theme only the empty body shows: its light background, so a light system never flashes dark. */
 @media (prefers-color-scheme: light) {
-  :root {
+  :root:not([data-theme]) {
     --bg: #ffffff;
-    --panel: #f6f6f9;
-    --raised: #eeeef3;
-    --line: #d9d9e1;
-    --line-soft: #e8e8ee;
-    --fg: #15151e;
-    --muted: #5c5c6a;
-    --dim: #64646f;
-    --purple: #7d2fc2;
-    --purple-wash: rgb(125 47 194 / 0.1);
-    --green: #0f7553;
-    --pit: #1f5fbf;
-    --ms-other: #9a7d1f;
-    --live: #c0262d;
-    --amber: #a24b00;
-    --rain: #1f5fbf;
-    --rain-1: #2a8a96;
-    --rain-2: #2f5bd6;
-    --rain-3: #a3189e;
-    --map-water: #d6e4f0;
-    --map-road: #cfcfd8;
-    --heat-1: rgb(162 75 0 / 0.08);
-    --heat-2: rgb(162 75 0 / 0.16);
-    --heat-3: rgb(162 75 0 / 0.26);
-    --cmp-ring: #64646f;
   }
+}
 
-  /* The light theme's team colour: a copy darkened to 3:1 on --bg, hue kept (lib/session.ts clampForLight). */
-  .drv,
-  .duel .fill {
-    --tc: var(--team-l, var(--muted));
-  }
+/* The light theme: data-theme from the header's moon, else the system's prefers-color-scheme (lib/theme.ts). */
+:root[data-theme="light"] {
+  color-scheme: light;
+  --bg: #ffffff;
+  --panel: #f6f6f9;
+  --raised: #eeeef3;
+  --line: #d9d9e1;
+  --line-soft: #e8e8ee;
+  --fg: #15151e;
+  --muted: #5c5c6a;
+  --dim: #64646f;
+  --purple: #7d2fc2;
+  --purple-wash: rgb(125 47 194 / 0.1);
+  --green: #0f7553;
+  --pit: #1f5fbf;
+  --ms-other: #9a7d1f;
+  --live: #c0262d;
+  --amber: #a24b00;
+  --rain: #1f5fbf;
+  --rain-1: #2a8a96;
+  --rain-2: #2f5bd6;
+  --rain-3: #a3189e;
+  --map-water: #d6e4f0;
+  --map-road: #cfcfd8;
+  --heat-1: rgb(162 75 0 / 0.08);
+  --heat-2: rgb(162 75 0 / 0.16);
+  --heat-3: rgb(162 75 0 / 0.26);
+  --cmp-ring: #64646f;
+}
+
+/* The light theme's team colour: a copy darkened to 3:1 on --bg, hue kept (lib/session.ts clampForLight). */
+/* :where keeps the specificity of the dark rule above, so source order decides. */
+:where([data-theme="light"]) .drv,
+:where([data-theme="light"]) .duel .fill {
+  --tc: var(--team-l, var(--muted));
 }
 
 * {
@@ -1502,6 +1510,32 @@ header {
 header .links {
   margin-left: auto;
   gap: 2px;
+}
+
+/* The moon (lib/theme.ts): outlined on the light theme, filled when the dark one is on (aria-pressed). */
+header .theme {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  background: none;
+  border-color: transparent;
+}
+
+header .theme:hover {
+  background: var(--panel);
+}
+
+.theme svg {
+  fill: var(--moon, none);
+  stroke: currentColor;
+  stroke-width: 2;
+  stroke-linejoin: round;
+}
+
+header .theme[aria-pressed="true"] {
+  --moon: currentColor;
+  color: var(--fg);
 }
 
 .links a {
