@@ -5,6 +5,7 @@ import {
   type ReactNode,
   type Ref,
   useEffect,
+  useId,
   useMemo,
   useRef,
   useState,
@@ -40,7 +41,8 @@ import { Panel, Strip, useTick } from './PitWall.tsx';
 import { driverOf, Tower } from './Tower.tsx';
 
 // The player (A§13): one playback stream at a time; the bar holds the clock line, the seek bar with the marks at or
-// before T, the transport, the "Back to" chips, the delay slider (live) and the announcements toggle. `open.at` is the
+// before T, the transport, the "Back to" chips, the delay slider (live) and the announcements toggle; minimized
+// (`f1.minimized`), only the clock line, Play/Pause and the Controls toggle, while the stream plays on. `open.at` is the
 // open stream's start: 'live', epoch ms (replay), or null while paused; a `still` stream only fetches the state at a
 // paused T and closes on its snapshot. Only the clock line, the seek bar, the Back to chips and the strip's LEFT cell
 // tick each second, from values derived per flush (no state parsing per tick); the tower, the pit wall and everything
@@ -83,6 +85,7 @@ const Laps = memo(LapTable);
 export const MAX_DELAY = 120;
 const DELAY_KEY = 'f1.delay';
 const ANNOUNCE_KEY = 'f1.announce';
+const MINIMIZED_KEY = 'f1.minimized';
 const DEBOUNCE_MS = 400;
 const WRITE_T_MS = 15_000;
 const SAY_GAP_MS = 5_000;
@@ -118,6 +121,23 @@ function readAnnounce(): boolean {
 function writeAnnounce(on: boolean) {
   try {
     localStorage.setItem(ANNOUNCE_KEY, on ? '1' : '0');
+  } catch {
+    // As for the delay: not remembered.
+  }
+}
+
+/** The bar is minimized only when stored as '1'; expanded when storage throws. */
+function readMinimized(): boolean {
+  try {
+    return localStorage.getItem(MINIMIZED_KEY) === '1';
+  } catch {
+    return false;
+  }
+}
+
+function writeMinimized(on: boolean) {
+  try {
+    localStorage.setItem(MINIMIZED_KEY, on ? '1' : '0');
   } catch {
     // As for the delay: not remembered.
   }
@@ -200,9 +220,9 @@ function Clock({
   return (
     <p className="clockline" aria-live="off">
       <time dateTime={new Date(T).toISOString()}>{fmtClock(T)}</time>
-      {strip?.clock && <span>{fmtLeft(leftAt(strip.clock, stateNow()))} left</span>}
+      {strip?.clock && <span className="left">{fmtLeft(leftAt(strip.clock, stateNow()))} left</span>}
       {strip?.lap && (
-        <span>
+        <span className="lap">
           Lap {strip.lap.current}
           {strip.lap.total !== undefined && `/${strip.lap.total}`}
         </span>
@@ -356,6 +376,10 @@ export function Player({
   const [fails, setFails] = useState(0); // errors since the last snapshot
   const [since, setSince] = useState<string | null>(null); // what the last forward seek skipped
   const [announce, setAnnounce] = useState(readAnnounce);
+  // Minimized, the bar keeps only its head (the clock line, Play/Pause and the toggle); the stream is untouched.
+  const [minimized, setMinimized] = useState(readMinimized);
+  const controlsId = useId();
+  const toggleRef = useRef<HTMLButtonElement>(null);
   const [said, setSaid] = useState('');
   const [voice] = useState(() => createVoice(setSaid));
   const [store] = useState(() => createStore());
@@ -515,6 +539,13 @@ export function Player({
     setAnnounce(on);
     writeAnnounce(on);
   };
+  // The toggle takes the focus itself: Safari does not focus a tapped or clicked button, and a focused control in the
+  // part that goes (the Position range, the head's Play/Pause) would otherwise drop the focus to the page.
+  const toggleMinimized = () => {
+    toggleRef.current?.focus();
+    setMinimized(!minimized);
+    writeMinimized(!minimized);
+  };
 
   const now = () => seek ?? nowT();
   // The strip and LEFT show the time the state stands at: T while playing, else where the last state landed.
@@ -600,6 +631,11 @@ export function Player({
       {signed(s)}
     </button>
   );
+  const playButton = (
+    <button type="button" className="play" onClick={playing ? pause : play}>
+      {playing ? 'Pause' : 'Play'}
+    </button>
+  );
 
   return (
     <>
@@ -622,7 +658,8 @@ export function Player({
             type="button"
             aria-label="Dismiss"
             onClick={() => {
-              position.current?.focus(); // before the button goes, so focus is not lost to the page
+              // Before the button goes, so focus is not lost to the page; a minimized bar has no Position range.
+              (minimized ? toggleRef : position).current?.focus();
               setSince(null);
             }}
           >
@@ -652,55 +689,75 @@ export function Player({
       ) : (
         tower
       )}
-      <section className="player" aria-label="Playback controls">
-        <Clock now={now} stateNow={stateNow} playing={playing} strip={wall?.strip}>
-          <span className={live ? 'pill live' : 'pill'}>
-            <span className="dot" aria-hidden="true" />
-            {mode}
-          </span>
-        </Clock>
-        <Seek now={now} playing={playing} lo={lo} hi={hi} series={series} onSeek={seekTo} ref={position} />
-        {/* Seven buttons, Play in the middle; in replay of an open recording a Live button (a mode switch) follows. */}
-        <div className="transport">
-          {NUDGES.slice(0, 3).map(nudgeButton)}
-          <button type="button" className="play" onClick={playing ? pause : play}>
-            {playing ? 'Pause' : 'Play'}
+      <section className={minimized ? 'player min' : 'player'} aria-label="Playback controls">
+        {/* The head stays when minimized: the clock line, Play/Pause (from the transport) and the toggle. */}
+        <div className="barhead">
+          <Clock now={now} stateNow={stateNow} playing={playing} strip={wall?.strip}>
+            <span className={live ? 'pill live' : 'pill'}>
+              <span className="dot" aria-hidden="true" />
+              <span className="mode">{mode}</span>
+            </span>
+          </Clock>
+          {minimized && playButton}
+          <button
+            ref={toggleRef}
+            type="button"
+            className="bartoggle"
+            aria-expanded={!minimized}
+            aria-controls={controlsId}
+            onClick={toggleMinimized}
+          >
+            <span className="chev" aria-hidden="true" />
+            Controls
           </button>
-          {NUDGES.slice(3).map(nudgeButton)}
-          {!live && recording.ended_at === null && (
-            <button type="button" className="golive" onClick={goLive}>
-              Live
-            </button>
+        </div>
+        {/* Minimized, the rest is not rendered (nothing hidden is focusable, and nothing hidden ticks). */}
+        <div className="barbody" id={controlsId} hidden={minimized}>
+          {!minimized && (
+            <>
+              <Seek now={now} playing={playing} lo={lo} hi={hi} series={series} onSeek={seekTo} ref={position} />
+              {/* Seven buttons, Play in the middle; in replay of an open recording a Live button (a mode switch) follows. */}
+              <div className="transport">
+                {NUDGES.slice(0, 3).map(nudgeButton)}
+                {playButton}
+                {NUDGES.slice(3).map(nudgeButton)}
+                {!live && recording.ended_at === null && (
+                  <button type="button" className="golive" onClick={goLive}>
+                    Live
+                  </button>
+                )}
+              </div>
+              <BackTo
+                now={now}
+                playing={playing}
+                lo={lo}
+                hi={hi}
+                series={series}
+                laps={snap.laps}
+                focused={focused}
+                onSeek={seekTo}
+              />
+              {live && (
+                <label className="delay">
+                  Delay {delay} s
+                  <input
+                    type="range"
+                    aria-label="Delay"
+                    min={0}
+                    max={MAX_DELAY}
+                    step={1}
+                    value={delay}
+                    onChange={(e) => changeDelay(Number(e.target.value))}
+                  />
+                </label>
+              )}
+              <label className="announce">
+                <input type="checkbox" checked={announce} onChange={(e) => toggleAnnounce(e.target.checked)} />
+                Announce events
+              </label>
+            </>
           )}
         </div>
-        <BackTo
-          now={now}
-          playing={playing}
-          lo={lo}
-          hi={hi}
-          series={series}
-          laps={snap.laps}
-          focused={focused}
-          onSeek={seekTo}
-        />
-        {live && (
-          <label className="delay">
-            Delay {delay} s
-            <input
-              type="range"
-              aria-label="Delay"
-              min={0}
-              max={MAX_DELAY}
-              step={1}
-              value={delay}
-              onChange={(e) => changeDelay(Number(e.target.value))}
-            />
-          </label>
-        )}
-        <label className="announce">
-          <input type="checkbox" checked={announce} onChange={(e) => toggleAnnounce(e.target.checked)} />
-          Announce events
-        </label>
       </section>
       <p className="vh" role="status">
         {said}
