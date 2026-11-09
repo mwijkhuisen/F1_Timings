@@ -11,6 +11,7 @@ const PINNED: Record<string, string> = {
   '20261026000002_grants.sql': '302ff6e6ec279a31b5b26a62034912f670b175b882ca1cbac205075acd56ed48',
   '20261030000001_recording.sql': 'b39b27def9a1d632dca21f4433d637e3b288249317f63b74002248b04d52ff2d',
   '20261109000001_weather.sql': '21c802b2bbcc2c1fcb7bbd96c0695748409a4886e43cea8b14637a7cc7832c25',
+  '20261109000002_rain.sql': '3b14175d8bd71864b4ff984a315833375f2892dbca2e4afb953a27486d52d889',
 };
 
 it('every migration matches its pinned sha256, and no file is added or removed', () => {
