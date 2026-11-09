@@ -5,7 +5,7 @@ import { type ComponentProps, createElement, type MouseEvent, useEffect, useMemo
 // canonicalised once the session is loaded). Importable in Node: `window` is
 // touched only inside functions.
 
-export type View = 'laps' | 'compare' | 'minisectors' | 'stints';
+export type View = 'laps' | 'compare' | 'minisectors' | 'stints' | 'weather';
 
 /** A view's name on its tab and in the title. */
 export const VIEW_LABEL: Record<View, string> = {
@@ -13,6 +13,7 @@ export const VIEW_LABEL: Record<View, string> = {
   compare: 'Compare',
   minisectors: 'Mini-sectors',
   stints: 'Stints',
+  weather: 'Weather',
 };
 
 export type Route =
@@ -57,7 +58,7 @@ export function routeOf(pathname: string): Route | null {
   const session = c === undefined ? null : keyOf(c);
   if (meeting === null || session === null) return null;
   if (d === undefined) return { id: 'session', year, meeting, session, view: null };
-  return d === 'laps' || d === 'compare' || d === 'minisectors' || d === 'stints'
+  return d === 'laps' || d === 'compare' || d === 'minisectors' || d === 'stints' || d === 'weather'
     ? { id: 'session', year, meeting, session, view: d }
     : null;
 }
