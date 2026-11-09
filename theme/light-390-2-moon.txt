@@ -1,0 +1,1 @@
+{"before":{"theme":"light","pressed":"false","bg":"rgb(255, 255, 255)","moon":[330,48,44,44],"canvas":1,"overflow":false,"stored":null,"errs":[]},"after":{"theme":"dark","pressed":"true","bg":"rgb(21, 21, 30)","moon":[330,48,44,44],"canvas":1,"overflow":false,"stored":"dark","errs":[]}}
