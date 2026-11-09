@@ -171,6 +171,19 @@ export interface Stint {
   tyre_age_at_start: number | null;
 }
 
+export interface Weather {
+  air_temperature: number | null;
+  date: Timestamp;
+  humidity: number | null;
+  pressure: number | null;
+  rainfall: number | null;
+  session_key: number;
+  source: string;
+  track_temperature: number | null;
+  wind_direction: number | null;
+  wind_speed: number | null;
+}
+
 export interface DB {
   driver: Driver;
   lap: Lap;
@@ -183,4 +196,5 @@ export interface DB {
   result: Result;
   session: Session;
   stint: Stint;
+  weather: Weather;
 }
