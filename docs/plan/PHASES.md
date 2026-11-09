@@ -492,12 +492,12 @@ Remaining 2026 weekends (OpenF1 schedule): Austin (race 25 Oct) · Mexico City 3
     - `base.en`: 0.37
   - A prompt of names gains 0.6 to 1.7 points, and driver names stay the weak spot.
 - **Runtime:** whisper.cpp (MIT, no dependencies) with the same turbo weights, not faster-whisper (24 Python packages; ADR-0006 rules out Python). It runs one process per clip, so it holds no memory between clips.
-- **Gate (before the build):** whisper.cpp built and run on the owner's machine, on the same 145 clips, `-t 2 -bs 5 -l en` with VAD. It passes if all of these hold:
-  - it reads the MP3 directly
-  - a clip without speech exits 0 with no text
-  - p50 ≤ 20 s per clip, peak RSS ≤ 2.5 GB, word error rate ≤ 0.25 against the reference
-
-  If it fails, the phase is re-planned on faster-whisper with an ADR-0006 amendment. The gate also yields the pins: the release tag and the sha256s of the tarball and the models.
+- **Gate: passed 2026-11-09** (owner's machine, the same 145 clips; pins and numbers on the P6b issue):
+  - limits: it reads the MP3 directly; a clip without speech exits 0 with no text; p50 ≤ 20 s per clip; peak RSS ≤ 2.5 GB; word error rate ≤ 0.25 against the reference
+  - whisper.cpp v1.9.5 with turbo q8_0 at 4 threads: p50 12.9 s, peak RSS 1.17 GB, word error rate 0.221 (faster-whisper turbo had 0.220)
+  - at 2 threads p50 is 22.7 s, which fails, so `stt` runs 4 threads (owner, 2026-11-09)
+  - `-nt` fails the error rate (0.265). In whisper.cpp it decodes without timestamp tokens, and the decoder then drops whole stretches of a clip.
+  - whisper.cpp's default VAD (100 ms silence, 30 ms pad) cuts speech; the faster-whisper defaults fix it
 - **Scope in:**
   - the server image, `deploy/server/Dockerfile`:
     - a builder stage compiles `whisper-cli` from the pinned release tarball (`ADD --checksum`, as dbmate)
@@ -510,12 +510,13 @@ Remaining 2026 weekends (OpenF1 schedule): Austin (race 25 Oct) · Mexico City 3
   - a compose service `stt` on `F1_SERVER_IMAGE`:
     - `network_mode: none`
     - `/srv/f1/live` and `/srv/f1/models` read-only, `/srv/f1/transcripts` read-write
-    - `mem_limit: 3g`, `cpus: 2.0`, `cpu_shares: 256` (`live` and `api` win under load), `pids_limit: 64`
+    - `mem_limit: 3g`, `cpus: 4.0`, `cpu_shares: 256` (`live` and `api` win under load), `pids_limit: 64`
     - the node healthcheck
     - `api` gets `/srv/f1/transcripts` read-only
   - a role `stt`, a daemon like `live`:
     - every 30 s it lists `<recording>/radio/<name>.mp3` (regular files of at most 2 MB, no symlinks) without a result yet, newest first, one at a time
-    - it runs `whisper-cli` through `execFile` (120 s timeout, 1 MiB output, the stop signal)
+    - it runs `whisper-cli -m <model> -t 4 -bs 5 -l en -np --vad -vm <vad> -vsd 2000 -vp 400 -vspd 0 -f <clip>` (never `-nt`) through `execFile` (120 s timeout, 1 MiB output, the stop signal)
+    - it strips the `[… --> …]` prefix of each output line (`^\[[^\]]*\]\s*`) and joins the lines with a space; text without a letter or digit counts as no speech (one silent clip printed only `.`)
     - it writes `<recording>/<name>.txt` (empty means no speech; at most 4000 characters) under `/srv/f1/transcripts`, through a temporary name, mode 0600
     - one retry, then an empty `<name>.fail`
     - fixed codes `stt_timeout`, `stt_exit`, `stt_spawn`; logs never carry text, paths or stderr
@@ -545,6 +546,7 @@ Remaining 2026 weekends (OpenF1 schedule): Austin (race 25 Oct) · Mexico City 3
     - a missing model idles, logs once and is picked up later
     - an abort kills the child and leaves no temporary file
     - the text cap; no text in the logs
+    - the timestamp prefix is stripped, and output without a letter or digit gives an empty `.txt`
   - [CI] `stt` takes no argument: an extra one exits 64.
   - [CI] integration tests for the route:
     - a failure gives `null`, and no directory gives `{}`
@@ -575,7 +577,7 @@ Remaining 2026 weekends (OpenF1 schedule): Austin (race 25 Oct) · Mexico City 3
   3. then `sudo f1-model`
 
   `f1-install` recreates the stack with the image already deployed, so running it earlier makes `stt` exit 64.
-- **Order:** after P6a is merged, and only once the gate has passed.
+- **Order:** after P6a is merged (the gate has passed).
 
 ### P6c: Onboard radio (gate check first)
 
