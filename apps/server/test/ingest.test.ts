@@ -5,7 +5,7 @@ import { SYNC_RETRY_MS, scheduleSync } from '../src/ingest/ingest.ts';
 import { ms, normaliseSession } from '../src/ingest/normalise.ts';
 import { afterFailure, afterSuccess, busyGuard, errorCode, firstFetchAt, type Progress } from '../src/ingest/state.ts';
 import type { createClient } from '../src/openf1/client.ts';
-import type { Lap } from '../src/openf1/schemas.ts';
+import type { Lap, Weather } from '../src/openf1/schemas.ts';
 
 const MIN = 60_000;
 const end = new Date('2026-10-11T14:00:00Z');
@@ -105,7 +105,7 @@ describe('normaliseSession', () => {
     segments_sector_3: null,
     ...over,
   });
-  const none = { drivers: [], stints: [], pit: [], race_control: [], session_result: [] };
+  const none = { drivers: [], stints: [], pit: [], race_control: [], session_result: [], weather: [] };
 
   it('keeps the last of duplicate keys, skips rows of another session and counts both', () => {
     const laps = [
@@ -130,6 +130,46 @@ describe('normaliseSession', () => {
     const [row] = normaliseSession(1, { ...none, laps: [lap({ duration_sector_1: 33.0985, i1_speed: 294.6 })] }, null)
       .rows.lap;
     expect(row).toMatchObject({ s1_ms: 33_099, s2_ms: null, i1_kph: 295, i2_kph: null });
+  });
+
+  // P5a: one instant in two spellings is one key (the primary key is (session_key, date)); the last row wins.
+  it('weather: keeps the last row per instant, skips another session and keeps nulls and values as they are', () => {
+    const w = (date: string, over: Partial<Weather> = {}): Weather => ({
+      session_key: 1,
+      date,
+      meeting_key: null,
+      air_temperature: 30.2,
+      track_temperature: 43.1,
+      humidity: 69.1,
+      pressure: 1009.9,
+      rainfall: 0,
+      wind_direction: 170,
+      wind_speed: 0.8,
+      ...over,
+    });
+    const weather = [
+      w('2026-10-11T12:00:57.007000+00:00', { air_temperature: 30 }),
+      w('2026-10-11T12:00:57.007+00:00', { air_temperature: 31, humidity: null }),
+      w('2026-10-11T12:01:57.018000+00:00'),
+      w('2026-10-11T12:02:57+00:00', { session_key: 2 }),
+    ];
+    const { rows, skipped } = normaliseSession(1, { ...none, laps: [], weather }, null);
+    expect(rows.weather).toEqual([
+      {
+        session_key: 1,
+        source: 'openf1',
+        date: '2026-10-11T12:00:57.007+00:00',
+        air_temperature: 31,
+        track_temperature: 43.1,
+        humidity: null,
+        pressure: 1009.9,
+        rainfall: 0,
+        wind_direction: 170,
+        wind_speed: 0.8,
+      },
+      expect.objectContaining({ date: '2026-10-11T12:01:57.018000+00:00', air_temperature: 30.2 }),
+    ]);
+    expect(skipped).toBe(2);
   });
 });
 

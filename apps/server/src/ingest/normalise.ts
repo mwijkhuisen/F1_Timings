@@ -1,6 +1,16 @@
 import type { Insertable } from 'kysely';
 import type { DB } from '../db/db.ts';
-import type { Driver, Lap, Meeting, Pit, RaceControl, Session, SessionResult, Stint } from '../openf1/schemas.ts';
+import type {
+  Driver,
+  Lap,
+  Meeting,
+  Pit,
+  RaceControl,
+  Session,
+  SessionResult,
+  Stint,
+  Weather,
+} from '../openf1/schemas.ts';
 import { markLaps, type RuleCounts } from '../timing/rules.ts';
 
 // OpenF1 rows → A§7 rows. Pure. Seconds become integer ms, nulls stay null, source is 'openf1'.
@@ -53,6 +63,7 @@ export type SessionData = {
   pit: Pit[];
   race_control: RaceControl[];
   session_result: SessionResult[];
+  weather: Weather[];
 };
 
 export type SessionRows = {
@@ -62,6 +73,7 @@ export type SessionRows = {
   pit: Insertable<DB['pit']>[];
   race_control: Insertable<DB['race_control']>[];
   result: Insertable<DB['result']>[];
+  weather: Insertable<DB['weather']>[];
 };
 
 type PitLap = { driver_number: number; lap_number: number; is_pit_out: boolean | null; is_pit_in?: boolean };
@@ -199,6 +211,24 @@ export function normaliseSession(
         dsq: r.dsq,
         durations_ms: perPhase(r.duration),
         gaps_ms: perPhase(r.gap_to_leader),
+      }),
+    ),
+    // Keyed on the instant, not the text: OpenF1 mixes `+00:00` and `.095000+00:00`, and one instant in two
+    // spellings would break the primary key (session_key, date).
+    weather: keyed(
+      data.weather,
+      (w) => String(Date.parse(w.date)),
+      (w) => ({
+        session_key: key,
+        source,
+        date: w.date,
+        air_temperature: w.air_temperature,
+        track_temperature: w.track_temperature,
+        humidity: w.humidity,
+        pressure: w.pressure,
+        rainfall: w.rainfall,
+        wind_direction: w.wind_direction,
+        wind_speed: w.wind_speed,
       }),
     ),
   };

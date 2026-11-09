@@ -21,8 +21,8 @@ import {
 // counts and fixed codes only: never a URL, a password or a response body.
 
 const FIRST_YEAR = 2023;
-const SESSION_ENDPOINTS = ['drivers', 'laps', 'stints', 'pit', 'race_control', 'session_result'] as const;
-const REPLACED = ['raw_response', 'driver', 'lap', 'stint', 'pit', 'race_control', 'result'] as const;
+const SESSION_ENDPOINTS = ['drivers', 'laps', 'stints', 'pit', 'race_control', 'session_result', 'weather'] as const;
+const REPLACED = ['raw_response', 'driver', 'lap', 'stint', 'pit', 'race_control', 'result', 'weather'] as const;
 // 1,000 rows × ≤ 20 columns stays far below PostgreSQL's 65,535 bind parameters.
 const CHUNK = 1_000;
 
@@ -156,7 +156,7 @@ const setProgress = (trx: Transaction<DB>, key: number, p: Progress) =>
   trx.updateTable('session').set(p).where('session_key', '=', key).execute();
 
 /**
- * D6: fetch all six endpoints (no write on any error), then one transaction: lock the
+ * D6: fetch all seven endpoints (no write on any error), then one transaction: lock the
  * session row, decide from the locked row, replace raw responses and child rows, set the
  * state. A failure is its own short locked write. `refetch` never changes state on failure.
  * Never throws; logs one line per session.

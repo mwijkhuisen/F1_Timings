@@ -78,7 +78,7 @@ describe('real-data values beyond the scan (synthetic rows from the fixtures)', 
       ]),
     );
     const stints = value(parse('stints', [{ ...rows('stints-normal.raw')[0], compound: null }]));
-    const none = { drivers: [], laps: [], pit: [], race_control: [] };
+    const none = { drivers: [], laps: [], pit: [], race_control: [], weather: [] };
     const { rows: out } = normaliseSession(11388, { ...none, stints, session_result: results }, 'Race');
     expect(out.result.map((r) => [r.driver_number, r.position, r.laps])).toEqual([
       [3, 1, 62],
