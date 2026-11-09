@@ -9,7 +9,9 @@ import { pingHealthchecks } from './healthchecks.ts';
 import { healthy, startHeartbeat, touch } from './heartbeat.ts';
 import { backfill, processSession, startIngest } from './ingest/ingest.ts';
 import { LIVE_DIR, startRecorder } from './live/recorder.ts';
-import { createClient } from './openf1/client.ts';
+import { createClient, systemClock } from './openf1/client.ts';
+import { createBudget, createRainClient } from './rain/client.ts';
+import { createRainStep } from './rain/job.ts';
 
 /** Roles of the single server image (A§4); the first argument picks one. */
 export const ROLES = ['api', 'ingest', 'live', 'migrate', 'healthcheck', 'refetch', 'backfill', 'archive'] as const;
@@ -70,7 +72,9 @@ async function runIngest(role: 'ingest' | 'backfill' | 'refetch', key: number, e
   const deps = { db, client: createClient({ onAttempt: beat }), now: () => new Date(), log: logger, beat, ping };
   try {
     if (role === 'ingest') {
-      await startIngest(deps);
+      // Only the daemon has a rain step (P5c); the backfill and refetch jobs never fetch rain.
+      const rain = { client: createRainClient({ onAttempt: beat }), budget: createBudget(systemClock) };
+      await startIngest({ ...deps, rainStep: createRainStep({ ...deps, ...rain }) });
       return 0;
     }
     if (role === 'backfill') return (await backfill(deps)) ? 0 : 1;

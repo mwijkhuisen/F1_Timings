@@ -36,6 +36,8 @@ export type Deps = {
   beat: () => void;
   /** The healthchecks.io ping (never throws); the daemon pings once a sync the daily Cron requested has succeeded, not after the startup sync. */
   ping?: (slug: string) => Promise<void>;
+  /** The daemon's rain step (P5c, `createRainStep`), after the tick every minute; it never rejects. */
+  rainStep?: (stopping: () => boolean) => Promise<void>;
 };
 export type Outcome = Result<IngestState, ErrorCode | 'unknown_session' | 'live_session'>;
 
@@ -404,7 +406,7 @@ export function scheduleSync(deps: Deps) {
 }
 
 /**
- * The daemon: one job every minute that syncs the schedule when due, then ticks. Resolves
+ * The daemon: one job every minute that syncs the schedule when due, ticks, then runs the rain step. Resolves
  * after SIGTERM/SIGINT once the running job has finished.
  */
 export async function startIngest(deps: Deps): Promise<void> {
@@ -425,6 +427,8 @@ export async function startIngest(deps: Deps): Promise<void> {
     } catch (err) {
       log.error({ cause: codeOf(err) }, 'tick failed'); // the code only: busyGuard needs fn not to reject
     }
+    // The tick breaks out of a live window instead of waiting in it, so the rain step runs every minute.
+    await deps.rainStep?.(() => stopping);
   });
   deps.beat();
   void work.run();
