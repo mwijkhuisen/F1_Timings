@@ -33,19 +33,19 @@ export const TABLE: Readonly<Record<string, readonly [id: string, native15: bool
   Imola: ['it-1953', true],
   'Monte Carlo': ['mc-1929', true],
   Montreal: ['ca-1978', true],
-  Catalunya: ['es-1991', false], // [U] U4
+  Catalunya: ['es-1991', false], // U4: south of the AROME box (A§6.3)
   Spielberg: ['at-1969', true],
   Silverstone: ['gb-1948', false],
   Hungaroring: ['hu-1986', true],
-  'Spa-Francorchamps': ['be-1925', true],
-  Zandvoort: ['nl-1948', true],
+  'Spa-Francorchamps': ['be-1925', false], // U4: best_match's Netherlands & Belgium box, KNMI + hourly ICON
+  Zandvoort: ['nl-1948', false], // U4: as Spa
   Monza: ['it-1922', true],
-  Madring: ['es-2026', false], // [U] U4
+  Madring: ['es-2026', false], // U4: outside ICON-D2 and AROME
   Baku: ['az-2016', false],
   'Kuala Lumpur': ['my-1999', false],
   Singapore: ['sg-2008', false],
   Austin: ['us-2012', true],
-  'Mexico City': ['mx-1962', false], // [U] U4
+  'Mexico City': ['mx-1962', false], // U4: south of the HRRR grid
   Interlagos: ['br-1940', false],
   'Las Vegas': ['us-2023', true],
   Lusail: ['qa-2004', false],

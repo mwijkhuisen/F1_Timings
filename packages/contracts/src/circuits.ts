@@ -27,9 +27,9 @@ export const CIRCUITS: Readonly<Record<string, Circuit>> = {
   Shanghai: { id: 'cn-2004', lat: 31.3407, lon: 121.2214, native15: false },
   Silverstone: { id: 'gb-1948', lat: 52.0712, lon: -1.0168, native15: false },
   Singapore: { id: 'sg-2008', lat: 1.2907, lon: 103.858, native15: false },
-  'Spa-Francorchamps': { id: 'be-1925', lat: 50.4369, lon: 5.9686, native15: true },
+  'Spa-Francorchamps': { id: 'be-1925', lat: 50.4369, lon: 5.9686, native15: false },
   Spielberg: { id: 'at-1969', lat: 47.2228, lon: 14.7624, native15: true },
   Suzuka: { id: 'jp-1962', lat: 34.8437, lon: 136.5327, native15: false },
   'Yas Marina Circuit': { id: 'ae-2009', lat: 24.4709, lon: 54.6056, native15: false },
-  Zandvoort: { id: 'nl-1948', lat: 52.3881, lon: 4.5459, native15: true },
+  Zandvoort: { id: 'nl-1948', lat: 52.3881, lon: 4.5459, native15: false },
 };
