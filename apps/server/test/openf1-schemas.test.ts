@@ -103,6 +103,52 @@ describe('real-data values beyond the scan (synthetic rows from the fixtures)', 
     const nul = parse('drivers', [{ ...driver, full_name: 'a\u0000b' }]);
     expect(nul.ok ? [] : nul.error.issues.map((i) => i.path)).toEqual(['[0].full_name']); // text without NUL
   });
+
+  // P5a: real columns (float4) refuse ±3.4e38 and beyond, and a non-zero value that would round to 0.
+  it('weather: rejects, by path, a value its real or smallint column could not hold; nulls stay null', () => {
+    const [w] = rows('weather-normal.raw');
+    const issues = (body: unknown) => {
+      const result = parse('weather', body);
+      return result.ok ? [] : result.error.issues.map((i) => i.path);
+    };
+    expect(issues([{ ...w, rainfall: 0.5 }])).toEqual(['[0].rainfall']); // smallint
+    expect(issues([{ ...w, wind_direction: 40_000 }])).toEqual(['[0].wind_direction']); // smallint
+    expect(issues([{ ...w, air_temperature: 1e39 }])).toEqual(['[0].air_temperature']); // real overflow
+    expect(issues([{ ...w, track_temperature: -1e-40 }])).toEqual(['[0].track_temperature']); // real underflow
+    expect(issues([{ ...w, humidity: '69.1' }])).toEqual(['[0].humidity']);
+    expect(issues([{ ...w, date: null }])).toEqual(['[0].date']); // the row key
+    expect(issues([{ ...w, pressure: 3.4e38, wind_speed: 1e-37, air_temperature: 0 }])).toEqual([]);
+    const { humidity: _, ...missing } = w ?? {};
+    const parsed = parse('weather', [{ ...missing, rainfall: null }]);
+    expect(parsed.ok && parsed.value[0]).toMatchObject({ humidity: null, rainfall: null });
+  });
+});
+
+// [U] facts of the weather endpoint (A§6.1), pinned on the fixtures: about one sample a minute, rows before the
+// session's date_start, rainfall 0 or 1, and the JSON types of humidity and wind_direction.
+describe('[U] the weather fixtures', () => {
+  type W = { date: string; humidity: unknown; wind_direction: unknown; rainfall: unknown };
+  const weather = (name: string) => read(`weather-${name}.raw`) as W[];
+  const CASES = [
+    // [fixture, session date_start, rows before it, rainfall 1 rows]
+    ['normal', '2026-10-11T12:00:00Z', 53, 0],
+    ['wet', '2024-11-03T15:30:00Z', 52, 117],
+    ['quali', '2026-10-24T21:00:00Z', 13, 0],
+    ['sprint', '2026-10-10T09:00:00Z', 43, 20],
+  ] as const;
+
+  it.each(CASES)('%s: a sample every 60 ± 0.5 s, %s', (name, start, before, wet) => {
+    const rows = weather(name);
+    const t = rows.map((r) => Date.parse(r.date));
+    for (let i = 1; i < t.length; i++) expect(Math.abs((t[i] ?? 0) - (t[i - 1] ?? 0) - 60_000)).toBeLessThan(500);
+    expect(t.filter((x) => x < Date.parse(start))).toHaveLength(before);
+    expect(new Set(rows.map((r) => r.rainfall))).toEqual(new Set(wet > 0 ? [0, 1] : [0]));
+    expect(rows.filter((r) => r.rainfall === 1)).toHaveLength(wet);
+    for (const r of rows) {
+      expect(typeof r.humidity).toBe('number');
+      expect(Number.isInteger(r.wind_direction)).toBe(true);
+    }
+  });
 });
 
 // [U] pit.lap_number = in-lap (A§6.1, A§9). Proven per session type over the fixture rows:
