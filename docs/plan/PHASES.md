@@ -25,7 +25,7 @@ Remaining 2026 weekends (OpenF1 schedule): Austin (race 25 Oct) · Mexico City 3
   - **[weekend]** needs a real F1 session.
   - **[owner]** is a manual owner action or judgement.
 - **Per phase:** one issue with the goal, scope, deliverables and acceptance criteria copied from this file. Branch `claude/p<N><x>-<slug>`, conventional commits, and a PR with an evidence checklist (each criterion → test or command output). Agents never merge. The owner merges with a merge commit once `ci` and `security` are green (branch protection on `main` requires both; owner, 2026-10-25).
-- **Reviews:** a fresh-session `/code-review` before merging P1b, P1c, P2b, P2c, P2d, P4e, P5a, P5b, P5c and P6a. A security review for anything touching secrets, the firewall, Access, the token or the compose hardening (P0 CI, P1f, P2c), for P5c (a new outbound host in the `ingest` daemon and third-party map data in the page), and for P6a (a new outbound path in the recorder, a file-serving route and a CSP change). For the web-only P4 phases a Sonnet security review is recommended where more feed or URL text is parsed or rendered (P4d, P4e, P4f), and optional elsewhere unless the CSP or the build config changes.
+- **Reviews:** a fresh-session `/code-review` before merging P1b, P1c, P2b, P2c, P2d, P4e, P5a, P5b, P5c, P6a and P6b. A security review for anything touching secrets, the firewall, Access, the token or the compose hardening (P0 CI, P1f, P2c), for P5c (a new outbound host in the `ingest` daemon and third-party map data in the page), for P6a (a new outbound path in the recorder, a file-serving route and a CSP change), and for P6b (a new container, C++ parsing third-party MP3 files, a host download script and a new route). For the web-only P4 phases a Sonnet security review is recommended where more feed or URL text is parsed or rendered (P4d, P4e, P4f), and optional elsewhere unless the CSP or the build config changes.
 - **Models and effort** (owner, 2026-10-25; each phase issue has its own table):
   - Build: Opus 5.5 at `xhigh` (`high` for UI and well-specified phases, `max` for P2b's lap reconstruction). Sonnet 5.5 at `high` for small phases (P2f, P3b, P3c).
   - Code review: a fresh session with a different model from the build. Sonnet 5.5 at `xhigh` for required reviews and `high`/`medium` otherwise; Opus 5.5 when Sonnet built.
@@ -472,7 +472,7 @@ Remaining 2026 weekends (OpenF1 schedule): Austin (race 25 Oct) · Mexico City 3
     - a timeout, the retries on a fake clock, then the fixed codes
     - no download under the disk floor, and an abort leaves no temporary file
   - [CI] the recorder's integration test: a `TeamRadio` delta leaves the clip in `<dir>/radio/` while the feed keeps flowing.
-  - [CI] the `radio` role: a bad argument exits 2, and a replay of a test recording fills `radio/` once.
+  - [CI] the `radio` role: a bad argument exits 64 (`EXIT_USAGE`), and a replay of a test recording fills `radio/` once.
   - [CI] integration tests for the route: 200 and its headers, 206 and 416, HEAD, 400 for a bad id or file, 404 for an unknown recording or a missing file, a symlink refused, 401 without the Access JWT.
   - [CI] the pinned CSP includes `media-src 'self'`.
   - [CI] component tests: the card (order, driver, time, lap, empty state, escaping), and in happy-dom a `TeamRadio` delta adds an item while a seek back drops it.
@@ -482,16 +482,100 @@ Remaining 2026 weekends (OpenF1 schedule): Austin (race 25 Oct) · Mexico City 3
 
 ### P6b: Transcripts of the clips
 
-- **Goal:** each clip shows what was said.
-- **Gate:** the local Whisper spike (owner's machine, `fixtures-private/radio/spike/`; nothing committed):
-  - candidates `base.en`, `small.en`, `distil-large-v3` and `large-v3-turbo` at 2 threads against a `large-v3` reference on the 145 recorded clips: cost per clip, real-time factor, memory, word error rate and hallucinations, with and without a prompt of driver names and jargon
-  - the owner's listening check of `report.html`
-  - the owner then picks local (a hardened STT container on the VM) or a cloud API (a new outbound host and secret)
-- **Scope (outline; fixed after the gate):**
-  - transcribe each downloaded clip once and store the text next to it
-  - show it under the clip in the card, marked as machine-made
-  - an ADR for the model or service, and its licence and data flow
-- **Acceptance:** written into this section and the issue once the gate has decided.
+- **Goal:** each clip shows what was said, under the clip in the Team radio card.
+- **Decided (owner, 2026-11-09, after the spike and the listening check):** `large-v3-turbo`, on the VM, in Docker.
+- **The Whisper spike** (owner's machine, 145 clips of six sessions, `fixtures-private/radio/spike/`; numbers on the P6b issue):
+  - faster-whisper int8 at 2 threads, word error rate against a `large-v3` reference:
+    - `large-v3-turbo`: 0.22, 10.6 s per clip, 2.1 GB
+    - `distil-large-v3`: 0.24
+    - `small.en`: 0.30, 2.5 s per clip
+    - `base.en`: 0.37
+  - A prompt of names gains 0.6 to 1.7 points, and driver names stay the weak spot.
+- **Runtime:** whisper.cpp (MIT, no dependencies) with the same turbo weights, not faster-whisper (24 Python packages; ADR-0006 rules out Python). It runs one process per clip, so it holds no memory between clips.
+- **Gate (before the build):** whisper.cpp built and run on the owner's machine, on the same 145 clips, `-t 2 -bs 5 -l en` with VAD. It passes if all of these hold:
+  - it reads the MP3 directly
+  - a clip without speech exits 0 with no text
+  - p50 ≤ 20 s per clip, peak RSS ≤ 2.5 GB, word error rate ≤ 0.25 against the reference
+
+  If it fails, the phase is re-planned on faster-whisper with an ADR-0006 amendment. The gate also yields the pins: the release tag and the sha256s of the tarball and the models.
+- **Scope in:**
+  - the server image, `deploy/server/Dockerfile`:
+    - a builder stage compiles `whisper-cli` from the pinned release tarball (`ADD --checksum`, as dbmate)
+    - CMake: no shared libraries, no OpenMP, `GGML_NATIVE=OFF` with AVX2, FMA and F16C on and AVX-512 off; no `GGML_BACKEND_DL`
+    - the binary and the Silero VAD model (885 kB, `ADD --checksum`) go into the runtime image
+    - there is no new image, so neither the workflows nor `f1-update` change
+  - the turbo model (`ggml-large-v3-turbo-q8_0.bin`, 874 MB) on the host in `/srv/f1/models`:
+    - fetched once by a new idempotent `deploy/bin/f1-model`: a pinned Hugging Face revision and sha256, installed `0444` root
+    - `f1-install` creates `/srv/f1/models` (0755 root) and `/srv/f1/transcripts` (0700 62532) and installs `f1-model`
+  - a compose service `stt` on `F1_SERVER_IMAGE`:
+    - `network_mode: none`
+    - `/srv/f1/live` and `/srv/f1/models` read-only, `/srv/f1/transcripts` read-write
+    - `mem_limit: 3g`, `cpus: 2.0`, `cpu_shares: 256` (`live` and `api` win under load), `pids_limit: 64`
+    - the node healthcheck
+    - `api` gets `/srv/f1/transcripts` read-only
+  - a role `stt`, a daemon like `live`:
+    - every 30 s it lists `<recording>/radio/<name>.mp3` (regular files of at most 2 MB, no symlinks) without a result yet, newest first, one at a time
+    - it runs `whisper-cli` through `execFile` (120 s timeout, 1 MiB output, the stop signal)
+    - it writes `<recording>/<name>.txt` (empty means no speech; at most 4000 characters) under `/srv/f1/transcripts`, through a temporary name, mode 0600
+    - one retry, then an empty `<name>.fail`
+    - fixed codes `stt_timeout`, `stt_exit`, `stt_spawn`; logs never carry text, paths or stderr
+    - without the model it logs `stt_model_missing` once and stays idle and healthy, checking again on every scan
+    - it beats on every scan and every 30 s while a clip runs
+  - `GET /api/v1/playback/:recording/radio`:
+    - `{ "<name>.mp3": text | null }`, where `null` means it failed
+    - at most 500 entries; each file opened with `O_NOFOLLOW`, at most 16 KB
+    - `{}` without a directory, 404 for an unknown recording, `no-store`, the fixed A§10 errors
+  - a `RadioText` contract
+  - the web:
+    - `useRadioText` polls every 15 s while the recording is open and fetches once in a replay
+    - the text sits under each clip as plain text, marked as an automatic transcript
+    - "Transcribing…" shows while the recording is open; nothing shows on a failure or without speech
+  - ADR-0009, speech-to-text with whisper.cpp on the VM:
+    - licences: whisper.cpp MIT, the OpenAI weights MIT
+    - the gate's numbers
+    - no network
+    - the data flow: clips and text never leave the VM, are never committed and are never posted to GitHub
+  - A§4, A§10, A§11 (`stt`), A§12, A§14.2 (`stt`'s budget), the install and update runbooks, and the role list in CLAUDE.md
+- **Scope out:** language detection (`-l en`), a prompt of names, hand correction, search over transcripts, and onboard radio (P6c).
+- **Acceptance:**
+  - [CI] unit tests of `stt` with a fake `whisper-cli` on `PATH`:
+    - valid names only; done and failed clips skipped; newest first
+    - the 2 MB cap; a symlink skipped
+    - a timeout or a failed exit gives one retry, then `.fail`
+    - a missing model idles, logs once and is picked up later
+    - an abort kills the child and leaves no temporary file
+    - the text cap; no text in the logs
+  - [CI] `stt` takes no argument: an extra one exits 64.
+  - [CI] integration tests for the route:
+    - a failure gives `null`, and no directory gives `{}`
+    - 404 and 400
+    - a symlink skipped, the size cap
+    - 401 without the Access JWT, `no-store`
+  - [CI] the `RadioText` contract.
+  - [CI] component tests:
+    - the text under the clip
+    - "Transcribing…" while open, nothing on a failure
+    - escaping
+    - the hook polls only while the recording is open
+  - [CI] `hardening.sh`: `stt` in the service list, the binds and the secret consumers, and a new no-network check with a negative case.
+  - [CI] `e2e.sh`:
+    - `stt` runs idle and healthy with an empty models directory
+    - the new directories are created, and a second `f1-install` run still changes nothing
+    - `whisper-cli --help` exits 0 in the runtime image with `--network none`
+  - [box] on the VM, after `f1-model`, over the clips of P6a's `radio` backfill:
+    - transcribed, empty and failed counts
+    - p50 and p90 seconds per clip
+    - `stt`'s peak memory (`f1-measure`), with no OOM
+    - AVX2 in `/proc/cpuinfo`
+  - [weekend] in a live session the text appears within about 60 s of its clip, and `live` and `api` stay within their limits.
+  - [owner] a spot check of 10 transcripts against the audio.
+- **Rollout order:**
+  1. the P6b release is deployed (`current.env`)
+  2. then `sudo deploy/bin/f1-install`
+  3. then `sudo f1-model`
+
+  `f1-install` recreates the stack with the image already deployed, so running it earlier makes `stt` exit 64.
+- **Order:** after P6a is merged, and only once the gate has passed.
 
 ### P6c: Onboard radio (gate check first)
 
