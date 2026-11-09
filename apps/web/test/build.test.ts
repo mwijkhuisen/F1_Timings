@@ -142,4 +142,51 @@ describe('web build', () => {
     expect(lazy[0]?.facadeModuleId).toMatch(/src[\\/]lib[\\/]echarts\.ts$/);
     expect(entries.some((c) => c.dynamicImports.includes(lazy[0]?.fileName ?? ''))).toBe(true);
   });
+
+  // P5c: the map files (lib/api.ts globs them) load only with the rain map, one circuit at a time.
+  it('keeps every map file out of the initial bundle, each in a lazy chunk of its own', () => {
+    const MAP = /[\\/]src[\\/]map[\\/](?:osm[\\/])?[\w-]+\.json$/;
+    const byName = new Map(chunks.map((c) => [c.fileName, c]));
+    const initial = new Set<string>();
+    const walk = (c: Chunk) => {
+      if (initial.has(c.fileName)) return;
+      initial.add(c.fileName);
+      for (const f of c.imports) {
+        const next = byName.get(f);
+        if (next) walk(next);
+      }
+    };
+    for (const c of chunks.filter((x) => x.isEntry)) walk(c);
+    const mapChunks = chunks.filter((c) => c.moduleIds.some((id) => MAP.test(id)));
+    const ids = mapChunks.flatMap((c) => c.moduleIds.filter((id) => MAP.test(id)));
+    expect(ids.length).toBe(
+      readdirSync(join(webDir, 'src/map')).filter((f) => f.endsWith('.json')).length + osmCount(),
+    );
+    // Rolldown's grouping: one chunk per JSON module, holding that module alone, each a dynamic entry that another
+    // chunk imports dynamically.
+    const dynamic = new Set(chunks.flatMap((c) => c.dynamicImports));
+    for (const c of mapChunks) {
+      expect(initial.has(c.fileName), c.fileName).toBe(false);
+      expect(c.moduleIds, c.fileName).toHaveLength(1);
+      expect(c.isDynamicEntry, c.fileName).toBe(true);
+      expect(dynamic.has(c.fileName), c.fileName).toBe(true);
+    }
+    expect(mapChunks).toHaveLength(ids.length);
+  });
+
+  it('serves the third-party licences file (ADR-0008)', () => {
+    const text = page('third-party-licences.txt');
+    expect(text).toContain('Copyright (c) 2019-2025 Tomislav Bacinger');
+    expect(text).toContain('Open Database License (ODbL) 1.0');
+    expect(text).toContain('Weather data by Open-Meteo.com');
+  });
 });
+
+/** The OSM layer files, which may not exist yet (P5c, E8). */
+function osmCount(): number {
+  try {
+    return readdirSync(join(webDir, 'src/map/osm')).filter((f) => f.endsWith('.json')).length;
+  } catch {
+    return 0;
+  }
+}

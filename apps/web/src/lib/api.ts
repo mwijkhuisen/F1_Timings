@@ -2,6 +2,7 @@ import {
   Laps,
   Live,
   RaceControl,
+  Rain,
   Recordings,
   Season,
   Seasons,
@@ -97,6 +98,37 @@ export const useWeather = (key: number) =>
     queryKey: ['weather', key],
     queryFn: ({ signal }) => getJson(`/api/v1/sessions/${key}/weather`, Weather, signal),
     staleTime: STALE_MS,
+  });
+
+/** The rain map's grid and frames (P5c); `live` polls every 60 s, as the server adds a frame every 15 min. */
+export const useRain = (key: number, live = false) =>
+  useQuery({
+    queryKey: ['rain', key],
+    queryFn: ({ signal }) => getJson(`/api/v1/sessions/${key}/rain`, Rain, signal),
+    staleTime: STALE_MS,
+    refetchInterval: live ? 60_000 : false,
+  });
+
+/** A circuit's OpenStreetMap layers (ODbL, ADR-0008): SVG path data in km, any of them possibly empty. */
+export type OsmLayers = { water: string; coast: string; roads: string };
+
+// The map files are bundled, one lazy chunk per file, so a map costs no request to a third party (or to the API).
+const OUTLINES = import.meta.glob<string>('../map/*.json', { import: 'outline' });
+const OSM = import.meta.glob<OsmLayers>('../map/osm/*.json', { import: 'default' });
+
+/** The circuit's outline and OSM layers by map id, each null when the circuit has no such file. */
+export const useCircuitMap = (id: string | null) =>
+  useQuery({
+    queryKey: ['map', id],
+    enabled: id !== null,
+    staleTime: Number.POSITIVE_INFINITY,
+    queryFn: async () => {
+      const [outline, osm] = await Promise.all([
+        OUTLINES[`../map/${id}.json`]?.() ?? null,
+        OSM[`../map/osm/${id}.json`]?.() ?? null,
+      ]);
+      return { outline, osm: osm && { water: osm.water, coast: osm.coast, roads: osm.roads } };
+    },
   });
 
 /** `refetchMs`: poll, such as every 60 s on `/live`. */

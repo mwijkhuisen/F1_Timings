@@ -30,11 +30,13 @@ const hex = (theme: Record<string, string>, token: string) => {
 // The token classes. Each token is in one, so a new one cannot skip the checks below.
 const SURFACES = ['bg', 'panel', 'raised'];
 const TEXT = ['fg', 'muted', 'dim', 'purple', 'green', 'live', 'amber'];
-// The mini-sector fills (purple and green full, other and unknown half height, pit hatched, no data dashed).
-const FILLS = ['purple', 'green', 'ms-other', 'pit', 'muted', 'dim'];
+// The mini-sector fills (purple and green full, other and unknown half height, pit hatched, no data dashed) and the
+// rain map's three steps (P5c).
+const FILLS = ['purple', 'green', 'ms-other', 'pit', 'muted', 'dim', 'rain-1', 'rain-2', 'rain-3'];
 const COMPOUNDS = ['soft', 'medium', 'hard', 'intermediate', 'wet', 'unknown'];
-// Lines, washes and rings: drawn next to text, never as text or a meaning of their own.
-const DECORATION = ['line', 'line-soft', 'cmp-ring', 'on-cmp', 'display'];
+// Lines, washes and rings: drawn next to text, never as text or a meaning of their own; the rain map's water and roads
+// are context under the rain (P5c, D2).
+const DECORATION = ['line', 'line-soft', 'cmp-ring', 'on-cmp', 'display', 'map-water', 'map-road'];
 // Translucent washes behind text (`rgb(r g b / a)`), checked composited over --bg.
 const WASHES = ['purple-wash', 'heat-1', 'heat-2', 'heat-3'];
 // Chart bands (P5a): drawn translucent under the lines, named by a text key whose swatch is the full colour.
@@ -152,7 +154,7 @@ describe.each([
     expect(contrast(hex(theme, 'fg'), over(theme[token] ?? '', bg))).toBeGreaterThanOrEqual(4.5);
   });
 
-  it.each(FILLS)('the mini-sector fill --%s reaches 3:1 on --bg', (token) => {
+  it.each(FILLS)('the fill --%s reaches 3:1 on --bg', (token) => {
     expect(contrast(hex(theme, token), hex(theme, 'bg'))).toBeGreaterThanOrEqual(3);
   });
 
@@ -176,6 +178,19 @@ describe.each([
     const set = ['purple', 'green', 'fg'].map((t) => hex(theme, t));
     expect(minDeltaE(set, vision)).toBeGreaterThanOrEqual(bar);
   });
+
+  // The rain map's steps (P5c, D2): each neighbour pair reads apart for everyone, and light rain is no water.
+  it.each(['normal', 'deutan', 'protan'] as Vision[])(
+    'neighbouring rain steps, and light rain and water, are at least ΔE 8 apart (%s)',
+    (vision) => {
+      for (const [a, b] of [
+        ['rain-1', 'rain-2'],
+        ['rain-2', 'rain-3'],
+        ['rain-1', 'map-water'],
+      ] as const)
+        expect(deltaE(hex(theme, a), hex(theme, b), vision), `--${a} --${b}`).toBeGreaterThanOrEqual(8);
+    },
+  );
 });
 
 it('fails the separation bar with the old light tokens (purple, green and yellow before P4a)', () => {

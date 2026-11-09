@@ -1,0 +1,64 @@
+Third-party data on this site
+=============================
+
+The rain map on the Weather tabs uses data from three sources. Each keeps its own licence;
+the licence of this site's code does not apply to them (docs/adr/0008-map-and-weather-data-licences.md).
+
+
+1. Circuit outlines: bacinger/f1-circuits (MIT)
+-----------------------------------------------
+
+Source: https://github.com/bacinger/f1-circuits, commit 8094e957b8d6aa8b9f4510c93968556cccd30e02.
+Changes: each outline is projected to km around the circuit's centre, simplified (15 m),
+clipped to 6 km and rounded.
+
+From the bacinger/f1-circuits README: "This repository is unofficial and is not associated in any
+way with the Formula 1 companies." "Formula 1™ circuits data are not official, and they are not
+approved nor endorsed by Formula One Licensing B.V."
+
+The MIT License (MIT)
+
+Copyright (c) 2019-2025 Tomislav Bacinger
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+
+
+2. Water, coast and roads: OpenStreetMap (ODbL 1.0)
+---------------------------------------------------
+
+Contains information from OpenStreetMap, which is made available here under the Open Database License (ODbL) 1.0: https://opendatacommons.org/licenses/odbl/1-0/ — © OpenStreetMap contributors, https://www.openstreetmap.org/copyright
+
+The layers are a Derivative Database under the ODbL 1.0, extracted (one Overpass query per
+circuit), projected, simplified and clipped by scripts/map-extract.ts --osm, and kept as
+separate files (apps/web/src/map/osm/). Anyone may copy them under the ODbL 1.0.
+
+
+3. Rain: Open-Meteo.com (CC BY 4.0)
+-----------------------------------
+
+Weather data by Open-Meteo.com (https://open-meteo.com/), under the Creative Commons
+Attribution 4.0 International licence (CC BY 4.0): https://creativecommons.org/licenses/by/4.0/
+
+Changes: model precipitation is sampled at 7 x 7 points around the circuit, each 15-minute
+sum is shown as mm/h (x 4), and the values are binned into three steps (light, moderate,
+heavy). It is modelled, not radar.
+
+For Silverstone the model data includes UK Met Office data, under the Creative Commons
+Attribution-ShareAlike 4.0 International licence (CC BY-SA 4.0):
+https://creativecommons.org/licenses/by-sa/4.0/
