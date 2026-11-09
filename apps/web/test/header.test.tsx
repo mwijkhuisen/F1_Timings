@@ -4,6 +4,7 @@ import { SessionDetail } from '@f1/contracts';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, expect, it } from 'vitest';
 import type { Route } from '../src/lib/routes.ts';
+import type { Theme } from '../src/lib/theme.ts';
 import { HeaderView } from '../src/views/Header.tsx';
 import { SessionHead } from '../src/views/SessionHead.tsx';
 import { recordings, season, seasons } from './season-data.ts';
@@ -11,8 +12,10 @@ import { recordings, season, seasons } from './season-data.ts';
 // The header's switcher and links, and the session head (A§13, P4c), on the hand-built 2026.
 
 const SP = '/2026/1320-sao-paulo';
-const header = (route: Route | null) =>
-  renderToStaticMarkup(<HeaderView route={route} seasons={seasons} season={route ? season : undefined} />);
+const header = (route: Route | null, theme: Theme = 'dark') =>
+  renderToStaticMarkup(
+    <HeaderView route={route} seasons={seasons} season={route ? season : undefined} theme={theme} onTheme={() => {}} />,
+  );
 /** The opening tag of the first element with this attribute. */
 const tag = (html: string, attr: string) => html.match(new RegExp(`<[^>]*${attr}[^>]*>`))?.[0];
 
@@ -83,8 +86,8 @@ describe('the session switcher', () => {
 });
 
 describe('the page links', () => {
-  const links = (route: Route | null) => {
-    const html = header(route);
+  const links = (route: Route | null, theme?: Theme) => {
+    const html = header(route, theme);
     return html.slice(html.indexOf('aria-label="Pages"'));
   };
   const routes: [string, Route | null, string | null][] = [
@@ -107,6 +110,18 @@ describe('the page links', () => {
     ])
       expect(html).toContain(`${to === current ? 'aria-current="page" ' : ''}href="${to}">${text}</a>`);
     expect(html.match(/aria-current/g)?.length ?? 0).toBe(current ? 1 : 0);
+  });
+
+  it('ends with the moon, pressed on the dark theme only', () => {
+    for (const [theme, pressed] of [
+      ['dark', true],
+      ['light', false],
+    ] as const)
+      expect(links({ id: 'live' }, theme)).toMatch(
+        new RegExp(
+          `Status</a></nav><button type="button" class="theme" aria-pressed="${pressed}" aria-label="Dark theme"`,
+        ),
+      );
   });
 });
 

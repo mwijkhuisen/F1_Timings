@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
+import { currentTheme, subscribeTheme } from '../lib/theme.ts';
 import { Pending } from '../ui/ErrorView.tsx';
 import type { ChartTokens } from './lap-chart-option.ts';
 
@@ -18,6 +19,7 @@ export function Chart({ label, option }: { label: string; option: (t: ChartToken
     if (!el) return;
     let gone = false;
     let observer: ResizeObserver | undefined;
+    let unsubscribe: (() => void) | undefined;
     // Any failure, the import or the set-up after it, shows the failure line instead of "Loading…".
     import('../lib/echarts.ts')
       .then(({ init }) => {
@@ -26,19 +28,23 @@ export function Chart({ label, option }: { label: string; option: (t: ChartToken
         chart.current = c;
         observer = new ResizeObserver(() => c.resize());
         observer.observe(el);
-        // ponytail: the theme is read once; a live prefers-color-scheme switch needs a reload (A§13 follow-up).
-        const css = getComputedStyle(el);
-        const token = (name: string) => css.getPropertyValue(`--${name}`).trim();
-        setState({
-          fg: token('fg'),
-          muted: token('muted'),
-          line: token('line'),
-          bg: token('bg'),
-          amber: token('amber'),
-          live: token('live'),
-          rain: token('rain'),
-          light: matchMedia('(prefers-color-scheme: light)').matches,
-        });
+        // The tokens are read again whenever the header's moon switches the theme (data-theme on <html>).
+        const read = () => {
+          const css = getComputedStyle(el);
+          const token = (name: string) => css.getPropertyValue(`--${name}`).trim();
+          setState({
+            fg: token('fg'),
+            muted: token('muted'),
+            line: token('line'),
+            bg: token('bg'),
+            amber: token('amber'),
+            live: token('live'),
+            rain: token('rain'),
+            light: currentTheme() === 'light',
+          });
+        };
+        read();
+        unsubscribe = subscribeTheme(read);
       })
       .catch(() => {
         if (!gone) setState('failed');
@@ -46,6 +52,7 @@ export function Chart({ label, option }: { label: string; option: (t: ChartToken
     return () => {
       gone = true;
       observer?.disconnect();
+      unsubscribe?.();
       chart.current?.dispose();
       chart.current = null;
     };
