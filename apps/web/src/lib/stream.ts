@@ -11,6 +11,7 @@ import {
   view,
   type Weather,
   weatherRow,
+  withWeatherRow,
 } from '@f1/contracts';
 
 // The playback stream (A§10, A§11.3): state at T over SSE, framework-free. Every event is parsed with its contract;
@@ -91,7 +92,8 @@ export function openStream(params: StreamParams, h: Handlers, ES: typeof EventSo
     // One merge at the root: an object merges into state[topic] (created first), anything else replaces it.
     merge(feed.state, { [d.topic]: d.data });
     // After the merge, as the server does: a row is the whole station reading at t, not the delta's fields.
-    if (d.topic === 'WeatherData') feed.weather = [...feed.weather, weatherRow(view(feed.state, 'WeatherData'), d.t)];
+    if (d.topic === 'WeatherData')
+      feed.weather = withWeatherRow(feed.weather, weatherRow(view(feed.state, 'WeatherData'), d.t));
     h.onData(feed, 'delta');
   });
   on('laps', PlaybackLaps, (d) => {

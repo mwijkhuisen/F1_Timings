@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest';
 import {
   type Lap,
   Laps,
+  MAX_WEATHER_ROWS,
   Pits,
   RaceControl,
   Season,
@@ -13,6 +14,7 @@ import {
   sectorDeltas,
   Weather,
   weatherRow,
+  withWeatherRow,
 } from '../src/index.ts';
 
 const iso = '2026-03-14T05:00:00.000Z';
@@ -266,5 +268,23 @@ describe('weatherRow', () => {
         },
       ),
     );
+  });
+});
+
+describe('withWeatherRow', () => {
+  const row = (t: number) => weatherRow(undefined, Date.parse(iso) + t);
+
+  it('adds the row to a new array, the oldest dropped past MAX_WEATHER_ROWS', () => {
+    const rows = Array.from({ length: MAX_WEATHER_ROWS }, (_, i) => row(i));
+    const copy = [...rows];
+    const next = withWeatherRow(rows, row(MAX_WEATHER_ROWS));
+    expect(rows).toEqual(copy);
+    expect(next).toHaveLength(MAX_WEATHER_ROWS);
+    expect(next[0]).toEqual(row(1));
+    expect(next.at(-1)).toEqual(row(MAX_WEATHER_ROWS));
+    const few = [row(0)];
+    expect(withWeatherRow(few, row(1))).toEqual([row(0), row(1)]);
+    expect(few).toEqual([row(0)]);
+    expect(withWeatherRow([], row(0))).toEqual([row(0)]);
   });
 });

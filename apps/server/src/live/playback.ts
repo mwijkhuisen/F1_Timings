@@ -3,7 +3,7 @@ import { open, readdir, stat } from 'node:fs/promises';
 import { join } from 'node:path';
 import { pipeline } from 'node:stream';
 import { createGunzip } from 'node:zlib';
-import { type Lap, type Obj, type Stints, view, type Weather, weatherRow } from '@f1/contracts';
+import { type Lap, type Obj, type Stints, view, type Weather, weatherRow, withWeatherRow } from '@f1/contracts';
 import { codeOf } from '../db/db.ts';
 import { progressiveColours } from '../timing/colours.ts';
 import { createLaps, type LapRow, type StintRow } from './laps.ts';
@@ -17,9 +17,9 @@ import { isObj, parseFeedLine } from './read.ts';
 //
 // The lap and stint rows come from createLaps over the same events: a snapshot carries all of them, a `laps` event the
 // rows that changed since the last send. The weather rows are one per applied WeatherData delta since the last session
-// switch.
+// switch, at most the last MAX_WEATHER_ROWS (withWeatherRow).
 
-/** `state` and `weather` are the stream's own, which change on the next `next()`: serialize them before. */
+/** `state` is the stream's own, which changes on the next `next()`: serialize it before. `weather` is never mutated. */
 export type PlaybackEvent =
   | { event: 'snapshot'; data: { t: number; state: Obj; laps: Lap[]; stints: Stints; weather: Weather } }
   | { event: 'delta'; data: { t: number; topic: string; data: unknown } }
@@ -211,7 +211,7 @@ export async function* playback(o: {
   const start = o.now();
   const T = () => (o.at === 'live' ? o.now() - o.delay * 1000 : o.at + (o.now() - start) * o.speed);
   const feed = createFeed();
-  const weather: Weather = [];
+  let weather: Weather = [];
   const engine = createLaps(o.sessionKey, 'f1-live');
   const sent = new Map<string, string>(); // row key → the row's JSON as last sent
   let dirty = false; // a TimingData or TimingAppData change since the rows were last sent
@@ -230,7 +230,7 @@ export async function* playback(o: {
         const [key, current] = [keyOf(ev.payload), keyOf(feed.state.SessionInfo)];
         if (key !== undefined && current !== undefined && key !== current) {
           for (const topic of Object.keys(feed.state)) delete feed.state[topic];
-          weather.length = 0;
+          weather = [];
           switched = true;
         }
       }
@@ -238,7 +238,8 @@ export async function* playback(o: {
       if (data === undefined) continue;
       engine.push(ev, data);
       if (ev.topic === 'TimingData' || ev.topic === 'TimingAppData') dirty = true;
-      if (ev.topic === 'WeatherData') weather.push(weatherRow(view(feed.state, 'WeatherData'), line.r));
+      if (ev.topic === 'WeatherData')
+        weather = withWeatherRow(weather, weatherRow(view(feed.state, 'WeatherData'), line.r));
       out?.push({ event: 'delta', data: { t: line.r, topic: ev.topic, data } });
     }
     return switched;
