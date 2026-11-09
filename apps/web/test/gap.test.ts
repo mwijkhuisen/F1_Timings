@@ -78,6 +78,7 @@ const tokens: ChartTokens = {
   bg: '#15151e',
   amber: '#ffb020',
   live: '#ff6b6b',
+  rain: '#4da6ff',
   light: false,
 };
 const driver = (number: number, acronym: string, team: string | null): Driver => ({

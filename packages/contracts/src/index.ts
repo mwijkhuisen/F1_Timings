@@ -131,6 +131,22 @@ export const RaceControl = z.array(
   }),
 );
 
+// P5a: the track-side station's samples, by date (A§7). Temperatures °C, humidity %, pressure mbar (hPa), rainfall
+// 0 or 1, wind direction in degrees, wind speed m/s; any of them may be null.
+const reading = z.number().nullable();
+export const Weather = z.array(
+  z.strictObject({
+    date,
+    air_temperature: reading,
+    track_temperature: reading,
+    humidity: reading,
+    pressure: reading,
+    rainfall: int.nullable(),
+    wind_direction: int.nullable(),
+    wind_speed: reading,
+  }),
+);
+
 export const Status = z.strictObject({
   states: z.strictObject({ scheduled: int, due: int, fetched: int, final: int, failed: int }),
   cancelled: int,
@@ -208,6 +224,7 @@ export type Laps = z.infer<typeof Laps>;
 export type Stints = z.infer<typeof Stints>;
 export type Pits = z.infer<typeof Pits>;
 export type RaceControl = z.infer<typeof RaceControl>;
+export type Weather = z.infer<typeof Weather>;
 export type Status = z.infer<typeof Status>;
 export type Live = z.infer<typeof Live>;
 export type Recordings = z.infer<typeof Recordings>;

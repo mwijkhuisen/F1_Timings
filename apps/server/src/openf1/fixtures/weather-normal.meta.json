@@ -1,0 +1,13 @@
+{
+  "url": "https://api.openf1.org/v1/weather?session_key=11388",
+  "fetchedAt": "2026-11-09T07:35:20.631Z",
+  "status": 200,
+  "trim": {
+    "drivers": null,
+    "laps": null
+  },
+  "rows": {
+    "fetched": 160,
+    "kept": 160
+  }
+}

@@ -1,4 +1,15 @@
-import { Laps, Live, RaceControl, Recordings, Season, Seasons, SessionDetail, Status, Stints } from '@f1/contracts';
+import {
+  Laps,
+  Live,
+  RaceControl,
+  Recordings,
+  Season,
+  Seasons,
+  SessionDetail,
+  Status,
+  Stints,
+  Weather,
+} from '@f1/contracts';
 import { QueryClient, queryOptions, useQuery } from '@tanstack/react-query';
 import { ZodError } from 'zod';
 
@@ -78,6 +89,14 @@ export const useRaceControl = (key: number, enabled: boolean) =>
     queryFn: ({ signal }) => getJson(`/api/v1/sessions/${key}/race-control`, RaceControl, signal),
     staleTime: STALE_MS,
     enabled,
+  });
+
+/** The weather samples (P5a): the Weather tab and the session head's line. */
+export const useWeather = (key: number) =>
+  useQuery({
+    queryKey: ['weather', key],
+    queryFn: ({ signal }) => getJson(`/api/v1/sessions/${key}/weather`, Weather, signal),
+    staleTime: STALE_MS,
   });
 
 /** `refetchMs`: poll, such as every 60 s on `/live`. */

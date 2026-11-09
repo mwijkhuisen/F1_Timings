@@ -10,6 +10,7 @@ import { LapsTab } from './LapsTab.tsx';
 import { MiniSectors } from './MiniSectors.tsx';
 import { SessionHeadLoader } from './SessionHead.tsx';
 import { StintsTab } from './Stints.tsx';
+import { WeatherTab } from './Weather.tsx';
 
 const pathOf = (d: SessionDetail, view: View) =>
   sessionPath(
@@ -19,7 +20,7 @@ const pathOf = (d: SessionDetail, view: View) =>
     view,
   );
 
-// One session: its header, the tabs Laps | Compare | Mini-sectors | Stints, and the view (D1, D11).
+// One session: its header, the tabs Laps | Compare | Mini-sectors | Stints | Weather, and the view (D1, D11).
 export function Session({ session, view }: { session: number; view: View }) {
   const detail = useSession(session);
   const laps = useLaps(session);
@@ -70,7 +71,10 @@ export function Session({ session, view }: { session: number; view: View }) {
       {picks && laps.data && (
         <DriverPicker drivers={order} selected={numbers} onToggle={toggle} showReference={view === 'compare'} />
       )}
-      {!laps.data ? (
+      {view === 'weather' ? (
+        // The weather needs no laps; a race's laps add the leader's lap once they arrive.
+        <WeatherTab session={session} detail={d} laps={laps.data ?? null} />
+      ) : !laps.data ? (
         <Pending error={laps.error} />
       ) : view === 'laps' ? (
         <LapsTab session={session} detail={d} laps={laps.data} />

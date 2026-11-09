@@ -314,6 +314,7 @@ describe('quali phase', () => {
         pit: [],
         race_control: golden<RaceControl>('race_control-quali'),
         session_result: golden<SessionResult>('session_result-quali'),
+        weather: [],
       },
       'Qualifying',
     );

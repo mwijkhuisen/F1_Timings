@@ -13,7 +13,7 @@ const acronym = (drivers: Drivers, n: number) => drivers.find((d) => d.driver_nu
 /** "ANT · L55". */
 const holder = (drivers: Drivers, l: Lap) => `${acronym(drivers, l.driver_number)} · L${l.lap_number}`;
 
-function Tile({
+export function Tile({
   id,
   label,
   value,

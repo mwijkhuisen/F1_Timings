@@ -30,7 +30,7 @@ const CASES: Record<number, string> = { 11388: 'normal', 11392: 'quali', 11383: 
 const EMPTY = 11465; // 2026 testing, day 1: served the *-empty fixtures (OpenF1's 404 "No results found.")
 // The 10 sessions sessions-year marks is_cancelled (Bahrain and Saudi Arabia, April 2026).
 const CANCELLED = [11254, 11255, 11256, 11257, 11261, 11262, 11263, 11264, 11265, 11269];
-const TABLES = ['driver', 'lap', 'stint', 'pit', 'race_control', 'result', 'raw_response'] as const;
+const TABLES = ['driver', 'lap', 'stint', 'pit', 'race_control', 'result', 'weather', 'raw_response'] as const;
 
 const raw = (name: string): unknown => JSON.parse(readFileSync(join(FIXTURES, `${name}.raw`), 'utf8'));
 function fixture(name: string): Response {
@@ -176,7 +176,7 @@ describe('ingest (fixtures through msw, f1_ingest login)', { timeout: 120_000 },
     const before = beats;
     at = new Date('2026-10-25T12:00:00Z');
     expect(await tick(deps)).toBe(95);
-    expect(beats - before).toBe(94 * 6 + 2 + 95 + 1); // after each OpenF1 call (11388 fails at its 2nd), each session, the tick
+    expect(beats - before).toBe(94 * 7 + 2 + 95 + 1); // after each OpenF1 call (11388 fails at its 2nd), each session, the tick
     expect(logged('live session: over')).toBe(1);
     expect(await states()).toEqual({ final: 92, fetched: 2, due: 1, scheduled: 36 });
     expect(await session(11388)).toMatchObject({
@@ -193,6 +193,7 @@ describe('ingest (fixtures through msw, f1_ingest login)', { timeout: 120_000 },
       pit: 0,
       race_control: 0,
       result: 0,
+      weather: 0,
       raw_response: 0,
     });
     expect(await session(11392)).toMatchObject({
@@ -247,7 +248,8 @@ describe('ingest (fixtures through msw, f1_ingest login)', { timeout: 120_000 },
       pit: 5,
       race_control: 155,
       result: 22,
-      raw_response: 6,
+      weather: 160,
+      raw_response: 7,
     });
     expect(await rowCounts(11392)).toEqual({
       driver: 4,
@@ -256,7 +258,8 @@ describe('ingest (fixtures through msw, f1_ingest login)', { timeout: 120_000 },
       pit: 16,
       race_control: 39,
       result: 22,
-      raw_response: 6,
+      weather: 77,
+      raw_response: 7,
     });
     expect(await rowCounts(11383)).toEqual({
       driver: 4,
@@ -265,7 +268,8 @@ describe('ingest (fixtures through msw, f1_ingest login)', { timeout: 120_000 },
       pit: 10,
       race_control: 159,
       result: 22,
-      raw_response: 6,
+      weather: 127,
+      raw_response: 7,
     });
     expect(await rowCounts(EMPTY)).toEqual({
       driver: 0,
@@ -274,10 +278,11 @@ describe('ingest (fixtures through msw, f1_ingest login)', { timeout: 120_000 },
       pit: 0,
       race_control: 0,
       result: 0,
-      raw_response: 6,
+      weather: 0,
+      raw_response: 7,
     });
     expect(await session(EMPTY)).toMatchObject({ ingest_state: 'final', fetch_count: 2 });
-    expect(await countWhere('raw_response', EMPTY, "http_status = 404 AND body = '[]'")).toBe(6);
+    expect(await countWhere('raw_response', EMPTY, "http_status = 404 AND body = '[]'")).toBe(7);
 
     // [11388 race, 11392 quali, 11383 sprint]: the fixtures' own null counts.
     const per = async (table: string, where: string) =>
@@ -299,6 +304,32 @@ describe('ingest (fixtures through msw, f1_ingest login)', { timeout: 120_000 },
     expect(await per('result', "gaps_ms = '{NULL}'")).toEqual([8, 0, 0]);
     expect(await per('result', 'gaps_ms IS NULL')).toEqual([4, 0, 9]);
     expect(await per('result', 'cardinality(durations_ms) = 3')).toEqual([0, 22, 0]);
+    // P5a weather: the sprint was wet for 20 samples; the race and the qualifying were dry.
+    expect(await per('weather', 'rainfall = 1')).toEqual([0, 0, 20]);
+    expect(await per('weather', 'rainfall = 0')).toEqual([160, 77, 107]);
+    expect(
+      await db
+        .selectFrom('weather')
+        .selectAll()
+        .where('session_key', '=', 11388)
+        .orderBy('date')
+        .limit(1)
+        .executeTakeFirst(),
+    ).toEqual({
+      session_key: 11388,
+      source: 'openf1',
+      date: new Date('2026-10-11T11:07:56.727Z'),
+      air_temperature: 30,
+      track_temperature: 44,
+      humidity: 69.6,
+      pressure: 1008.9,
+      rainfall: 0,
+      wind_direction: 147,
+      wind_speed: 1.5,
+    });
+    // The per-session log line counts the weather rows, never a value.
+    const line = lines.map((l) => JSON.parse(l)).findLast((l) => l.session_key === 11388 && l.msg === 'session');
+    expect(line?.rows).toMatchObject({ weather: 160 });
 
     expect(
       await db
@@ -349,7 +380,7 @@ describe('ingest (fixtures through msw, f1_ingest login)', { timeout: 120_000 },
     const changed = [{ ...laps[0], lap_duration: 99.999 }, ...laps.slice(1, -2)];
     openf1((endpoint, key) => (endpoint === 'laps' && key === 11388 ? HttpResponse.json(changed) : undefined));
     expect(await processSession(deps, 11388, true)).toEqual({ ok: true, value: 'final' });
-    expect(await rowCounts(11388)).toMatchObject({ lap: 60, raw_response: 6 });
+    expect(await rowCounts(11388)).toMatchObject({ lap: 60, raw_response: 7 });
     const lap = (driver: number, n: number) =>
       db
         .selectFrom('lap')
@@ -365,6 +396,53 @@ describe('ingest (fixtures through msw, f1_ingest login)', { timeout: 120_000 },
     openf1();
     expect(await processSession(deps, 11388, true)).toEqual({ ok: true, value: 'final' });
     expect((await rowCounts(11388)).lap).toBe(62);
+  });
+
+  it('weather: a duplicate date keeps the last row (skipped), an empty reply after rows is `empty` and keeps them', async () => {
+    const weather = raw('weather-normal') as Record<string, unknown>[];
+    const first = weather[0] as Record<string, unknown>;
+    const FIRST = new Date('2026-10-11T11:07:56.727Z');
+    const firstRow = () =>
+      db
+        .selectFrom('weather')
+        .select(['air_temperature', 'rainfall'])
+        .where('session_key', '=', 11388)
+        .where('date', '=', FIRST)
+        .execute();
+    // The same instant again, spelt without the trailing zeros and with other values: the last row wins.
+    const twice = [...weather, { ...first, date: '2026-10-11T11:07:56.727+00:00', air_temperature: 99.5, rainfall: 1 }];
+    openf1((endpoint, key) => (endpoint === 'weather' && key === 11388 ? HttpResponse.json(twice) : undefined));
+    expect(await processSession(deps, 11388, true)).toEqual({ ok: true, value: 'final' });
+    expect(await rowCounts(11388)).toMatchObject({ weather: 160, raw_response: 7 });
+    expect(await firstRow()).toEqual([{ air_temperature: 99.5, rainfall: 1 }]);
+    expect(JSON.parse(lines.at(-1) ?? '{}')).toMatchObject({ session_key: 11388, rows: { weather: 160 }, skipped: 1 });
+
+    // An empty weather reply where the stored raw had rows: a refetch changes nothing, the daemon records `empty`.
+    const empty = (endpoint: string, key: number) =>
+      endpoint === 'weather' && key === 11388 ? fixture('weather-empty') : undefined;
+    openf1(empty);
+    expect(await processSession(deps, 11388, true)).toEqual({ ok: false, error: 'empty' });
+    expect(await rowCounts(11388)).toMatchObject({ weather: 160, raw_response: 7 });
+    expect(await processSession(deps, 11388)).toEqual({ ok: false, error: 'empty' });
+    expect(await session(11388)).toMatchObject({ ingest_state: 'due', fail_count: 1, last_error: 'empty' });
+    expect(await rowCounts(11388)).toMatchObject({ weather: 160, raw_response: 7 });
+    expect(await firstRow()).toEqual([{ air_temperature: 99.5, rainfall: 1 }]);
+
+    // A weather schema failure fails the session's fetch like any endpoint: the path and code, never the value.
+    const bad = [{ ...first, rainfall: 0.5 }, ...weather.slice(1)];
+    openf1((endpoint, key) => (endpoint === 'weather' && key === 11388 ? HttpResponse.json(bad) : undefined));
+    expect(await processSession(deps, 11388, true)).toEqual({ ok: false, error: 'schema' });
+    expect(JSON.parse(lines.at(-1) ?? '{}')).toMatchObject({
+      state: 'unchanged',
+      last_error: 'schema',
+      endpoint: 'weather',
+      issues: [{ path: '[0].rainfall', code: 'invalid_type' }],
+    });
+
+    openf1();
+    expect(await processSession(deps, 11388, true)).toEqual({ ok: true, value: 'final' });
+    expect(await firstRow()).toEqual([{ air_temperature: 30, rainfall: 0 }]);
+    expect(await session(11388)).toMatchObject({ ingest_state: 'final', fail_count: 0, last_error: null });
   });
 
   it('a sync moves next_fetch_at only while scheduled, and a cancelled session never gets one', async () => {

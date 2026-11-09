@@ -37,6 +37,8 @@ const COMPOUNDS = ['soft', 'medium', 'hard', 'intermediate', 'wet', 'unknown'];
 const DECORATION = ['line', 'line-soft', 'cmp-ring', 'on-cmp', 'display'];
 // Translucent washes behind text (`rgb(r g b / a)`), checked composited over --bg.
 const WASHES = ['purple-wash', 'heat-1', 'heat-2', 'heat-3'];
+// Chart bands (P5a): drawn translucent under the lines, named by a text key whose swatch is the full colour.
+const BANDS = ['rain'];
 
 // ---- the oracle
 
@@ -102,7 +104,7 @@ describe('the oracle', () => {
 
 describe('the tokens', () => {
   it('classifies every token, so none skips a check', () => {
-    const known = new Set([...SURFACES, ...TEXT, ...FILLS, ...COMPOUNDS, ...DECORATION, ...WASHES]);
+    const known = new Set([...SURFACES, ...TEXT, ...FILLS, ...COMPOUNDS, ...DECORATION, ...WASHES, ...BANDS]);
     for (const k of [...Object.keys(darkOwn), ...Object.keys(lightOwn)]) expect(known.has(k), `--${k}`).toBe(true);
     for (const k of known) expect(darkOwn, `--${k}`).toHaveProperty(k);
   });
@@ -152,6 +154,12 @@ describe.each([
 
   it.each(FILLS)('the mini-sector fill --%s reaches 3:1 on --bg', (token) => {
     expect(contrast(hex(theme, token), hex(theme, 'bg'))).toBeGreaterThanOrEqual(3);
+  });
+
+  // A graphic (WCAG 1.4.11): the rain key's swatch frame is the full colour, on --panel inside a card.
+  it.each(BANDS)('the band colour --%s reaches 3:1 on --bg and --panel', (token) => {
+    expect(contrast(hex(theme, token), hex(theme, 'bg'))).toBeGreaterThanOrEqual(3);
+    expect(contrast(hex(theme, token), hex(theme, 'panel'))).toBeGreaterThanOrEqual(3);
   });
 
   // The compound dot and the stint bars put --on-cmp text on a compound fill; an unknown compound gets --unknown.

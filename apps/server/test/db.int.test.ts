@@ -18,6 +18,7 @@ const TABLES = [
   'race_control',
   'result',
   'raw_response',
+  'weather',
   'recording',
   'recorder_status',
 ];
@@ -64,6 +65,13 @@ it('f1_ingest writes data but cannot create tables or delete meetings and sessio
   await c.query("INSERT INTO raw_response VALUES (10, 'openf1', 'laps', now(), 200, '[]')");
   await c.query("INSERT INTO lap (session_key, source, driver_number, lap_number) VALUES (10, 'openf1', 1, 1)");
   await c.query('DELETE FROM lap WHERE session_key = 10');
+  await c.query(
+    "INSERT INTO weather (session_key, source, date, rainfall) VALUES (10, 'openf1', now(), 1), (10, 'openf1', now() - interval '1 minute', 0)",
+  );
+  await c.query('DELETE FROM weather WHERE rainfall = 0');
+  await c.query('UPDATE weather SET air_temperature = 24.5 WHERE session_key = 10');
+  await c.query("INSERT INTO raw_response VALUES (10, 'openf1', 'weather', now(), 200, '[]')");
+  expect(await code(c.query("INSERT INTO raw_response VALUES (10, 'openf1', 'nope', now(), 200, '[]')"))).toBe('23514');
   await c.query("UPDATE session SET ingest_state = 'due' WHERE session_key = 10");
   expect(await code(c.query('CREATE TABLE nope (a int)'))).toBe('42501');
   expect(await code(c.query('DELETE FROM session'))).toBe('42501');
@@ -73,6 +81,12 @@ it('f1_ingest writes data but cannot create tables or delete meetings and sessio
 it('f1_api reads but cannot write, and cannot read raw_response', async () => {
   const c = await connect(db.urls.f1_api);
   expect((await c.query('SELECT * FROM race_control')).rowCount).toBe(1);
+  expect((await c.query('SELECT * FROM weather')).rows).toEqual([expect.objectContaining({ air_temperature: 24.5 })]);
+  expect(await code(c.query("INSERT INTO weather (session_key, source, date) VALUES (10, 'openf1', now())"))).toBe(
+    '42501',
+  );
+  expect(await code(c.query('UPDATE weather SET rainfall = 0'))).toBe('42501');
+  expect(await code(c.query('DELETE FROM weather'))).toBe('42501');
   expect(await code(c.query("INSERT INTO meeting (meeting_key, source, year) VALUES (2, 'openf1', 2026)"))).toBe(
     '42501',
   );

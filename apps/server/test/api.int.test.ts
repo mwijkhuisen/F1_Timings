@@ -1,7 +1,7 @@
 import { readFileSync } from 'node:fs';
 import { createServer } from 'node:net';
 import { join } from 'node:path';
-import { Laps, Pits, RaceControl, Season, Seasons, SessionDetail, Status, Stints } from '@f1/contracts';
+import { Laps, Pits, RaceControl, Season, Seasons, SessionDetail, Status, Stints, Weather } from '@f1/contracts';
 import type { Hono } from 'hono';
 import type { Kysely } from 'kysely';
 import { HttpResponse, http, passthrough } from 'msw';
@@ -83,6 +83,7 @@ const ROUTES = [
   [`/api/v1/sessions/${QUALI}/stints`, 'Stints', Stints],
   [`/api/v1/sessions/${QUALI}/pits`, 'Pits', Pits],
   [`/api/v1/sessions/${QUALI}/race-control`, 'RaceControl', RaceControl],
+  [`/api/v1/sessions/${QUALI}/weather`, 'Weather', Weather],
   ['/api/v1/status', 'Status', Status],
 ] as const;
 
@@ -203,7 +204,7 @@ describe('api (f1_api login, Access JWT)', { timeout: 120_000 }, () => {
 
   it('Cache-Control: private, max-age=86400 for a final session, no-store otherwise and on every error', async () => {
     const cacheOf = async (path: string, method = 'GET') => (await get(path, method)).headers.get('cache-control');
-    for (const tail of ['', '/laps', '/stints', '/pits', '/race-control']) {
+    for (const tail of ['', '/laps', '/stints', '/pits', '/race-control', '/weather']) {
       expect(await cacheOf(`/api/v1/sessions/${QUALI}${tail}`)).toBe('private, max-age=86400');
       expect(await cacheOf(`/api/v1/sessions/${QUALI}${tail}`, 'HEAD')).toBe('private, max-age=86400');
       expect(await cacheOf(`/api/v1/sessions/${RACE}${tail}`)).toBe('no-store');
@@ -215,10 +216,13 @@ describe('api (f1_api login, Access JWT)', { timeout: 120_000 }, () => {
       ['/api/v1/sessions/1234567890', 400, 'bad request'],
       ['/api/v1/sessions/-1/laps', 400, 'bad request'],
       ['/api/v1/sessions/11388x/pits', 400, 'bad request'],
+      ['/api/v1/sessions/-1/weather', 400, 'bad request'],
+      ['/api/v1/sessions/1234567890/weather', 400, 'bad request'],
       ['/api/v1/seasons/26', 400, 'bad request'],
       ['/api/v1/seasons/20266', 400, 'bad request'],
       ['/api/v1/sessions/999999', 404, 'not found'],
       ['/api/v1/sessions/999999/laps', 404, 'not found'],
+      ['/api/v1/sessions/999999/weather', 404, 'not found'],
       ['/api/v1/seasons/2025', 404, 'not found'],
       ['/api/v1/nothing', 404, 'not found'],
     ] as const;
@@ -269,6 +273,18 @@ describe('api (f1_api login, Access JWT)', { timeout: 120_000 }, () => {
       [87, 14, 'TRACK LIMITS AT TURN 11'],
     ]);
     expect(new Set(laps.map((l) => l.quali_phase))).toEqual(new Set([1, 2, 3, null]));
+  });
+
+  it('weather: every sample in date order with the A§7 column names; the sprint was wet for 20 of them', async () => {
+    const rows = await body(`/api/v1/sessions/${SPRINT}/weather`, Weather);
+    expect(rows).toHaveLength(127);
+    const dates = rows.map((r) => Date.parse(r.date));
+    expect(dates).toEqual([...dates].sort((a, b) => a - b));
+    expect(rows.filter((r) => r.rainfall === 1)).toHaveLength(20);
+    const [first] = read('weather-sprint') as Record<string, unknown>[];
+    const { session_key: _, meeting_key: __, date, ...values } = first ?? {};
+    expect(rows[0]).toEqual({ date: new Date(String(date)).toISOString(), ...values });
+    expect(await body(`/api/v1/sessions/${RACE}/weather`, Weather)).toHaveLength(160);
   });
 
   it('seasons, a season, a session and the status', async () => {

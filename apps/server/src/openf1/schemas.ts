@@ -22,6 +22,8 @@ const date = z.iso.datetime({ offset: true });
 // Rounded to integer ms / km/h by the normaliser: the bounds keep the result in int / smallint.
 const seconds = z.number().min(-2_147_483).max(2_147_483);
 const kph = z.number().min(-32_768).max(32_767);
+// A `real` (float4) column: PostgreSQL refuses a value past ±3.4e38 and also a non-zero one that would round to 0.
+const real = z.number().refine((v) => v === 0 || (Math.abs(v) >= 1e-37 && Math.abs(v) <= 3.4e38), 'real');
 // 0 = n/a, 2048 yellow, 2049 green, 2051 purple, 2064 pit lane (A§6.1); single segments can be null.
 const segments = opt(z.array(int16.nullable()));
 // A race gives one number (gap_to_leader may be a string such as "+1 LAP"); qualifying gives Q1–Q3.
@@ -125,6 +127,21 @@ const SessionResult = z.object({
   gap_to_leader: opt(z.union([seconds, z.string(), perPhase])),
 });
 
+// P5a: the track-side station, about one sample a minute (A§6.1). Temperatures °C, humidity %, pressure mbar,
+// rainfall 0 or 1, wind direction in degrees, wind speed m/s.
+const Weather = z.object({
+  session_key: int32,
+  date,
+  meeting_key: opt(int32), // not stored
+  air_temperature: opt(real),
+  track_temperature: opt(real),
+  humidity: opt(real),
+  pressure: opt(real),
+  rainfall: opt(int16),
+  wind_direction: opt(int16),
+  wind_speed: opt(real),
+});
+
 export const schemas = {
   meetings: z.array(Meeting),
   sessions: z.array(Session),
@@ -134,6 +151,7 @@ export const schemas = {
   pit: z.array(Pit),
   race_control: z.array(RaceControl),
   session_result: z.array(SessionResult),
+  weather: z.array(Weather),
 };
 
 export type Endpoint = keyof typeof schemas;
@@ -147,6 +165,7 @@ export type Stint = z.infer<typeof Stint>;
 export type Pit = z.infer<typeof Pit>;
 export type RaceControl = z.infer<typeof RaceControl>;
 export type SessionResult = z.infer<typeof SessionResult>;
+export type Weather = z.infer<typeof Weather>;
 
 /** Paths and codes only, never a value from the body. */
 export type ShapeError = { code: 'shape'; issues: { path: string; code: string }[] };

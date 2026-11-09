@@ -40,6 +40,16 @@ const clock = new Intl.DateTimeFormat('en-GB', {
 /** Epoch ms as Amsterdam wall-clock time, `HH:mm:ss`. */
 export const fmtClock = (ms: number): string => clock.format(ms);
 
+const hm = new Intl.DateTimeFormat('en-GB', {
+  timeZone: 'Europe/Amsterdam',
+  hour: '2-digit',
+  minute: '2-digit',
+  hourCycle: 'h23',
+});
+
+/** Epoch ms as Amsterdam wall-clock time, `HH:mm` (the weather chart's axis, the rain periods). */
+export const fmtHm = (ms: number): string => hm.format(ms);
+
 const HMS = /^([01]\d|2[0-3]):([0-5]\d):([0-5]\d)$/;
 const DAY = 86_400_000;
 

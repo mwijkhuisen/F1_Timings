@@ -202,7 +202,15 @@ export const openf1: Oracle = async (key, type) => {
   if (!stints.ok) return JSON.stringify(stints.error);
   const [l, s] = [parse('laps', laps.value.body), parse('stints', stints.value.body)];
   if (!l.ok || !s.ok) return 'shape';
-  const data = { laps: l.value, stints: s.value, drivers: [], pit: [], race_control: [], session_result: [] };
+  const data = {
+    laps: l.value,
+    stints: s.value,
+    drivers: [],
+    pit: [],
+    race_control: [],
+    session_result: [],
+    weather: [],
+  };
   const { rows } = normaliseSession(key, data, type);
   return { laps: rows.lap, stints: rows.stint };
 };
