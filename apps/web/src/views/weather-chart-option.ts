@@ -52,7 +52,6 @@ export function weatherChartOption(samples: readonly WeatherRow[], tokens: Chart
     color,
     lineStyle: { type, width: 2 },
     symbol: 'none',
-    showAllSymbol: true,
     data: rows.map((r, i) => [t[i], value(r)]),
     connectNulls: false,
     clip: true,

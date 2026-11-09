@@ -81,13 +81,14 @@ describe('the Weather tab', () => {
     expect(view(dry)).not.toContain('rainkey');
   });
 
-  it('says the weather is still to come before the first fetch, and that OpenF1 has none after it', () => {
-    for (const state of ['scheduled', 'due'] as const)
-      expect(view([], withState(race, state))).toBe(
-        '<p>Weather arrives with the laps, about 35 min after the session ends.</p>',
-      );
-    for (const state of ['fetched', 'final', 'failed'] as const)
-      expect(view([], withState(race, state))).toBe('<p>No weather in the OpenF1 data.</p>');
+  it('says without rows whether the weather is still to come, queued for a new fetch, or not in the data', () => {
+    // The test session ends 2026-10-31T21:00Z: an hour later its first fetch is pending, a week later it is re-queued.
+    const at = (h: number) => Date.parse('2026-10-31T21:00:00Z') + h * 3_600_000;
+    const empty = (state: SessionDetail['session']['ingest_state'], h: number) =>
+      renderToStaticMarkup(<WeatherView rows={[]} detail={withState(race, state)} laps={laps} now={at(h)} />);
+    expect(empty('due', 1)).toBe('<p>Weather arrives with the laps, about 35 min after the session ends.</p>');
+    expect(empty('fetched', 168)).toBe('<p>Weather is queued for a new fetch; check back later.</p>');
+    expect(empty('final', 168)).toBe('<p>No weather in the OpenF1 data.</p>');
   });
 });
 

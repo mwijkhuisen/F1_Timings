@@ -1,7 +1,15 @@
 import type { Laps, SessionDetail, Weather as WeatherRows } from '@f1/contracts';
 import { useCallback, useMemo } from 'react';
 import { useWeather } from '../lib/api.ts';
-import { fmtRange, periodText, type RainPeriod, rainPeriods, type Summary, summarise } from '../lib/weather.ts';
+import {
+  fmtRange,
+  noWeatherText,
+  periodText,
+  type RainPeriod,
+  rainPeriods,
+  type Summary,
+  summarise,
+} from '../lib/weather.ts';
 import { Pending } from '../ui/ErrorView.tsx';
 import { Note } from '../ui/Note.tsx';
 import { Chart } from './Chart.tsx';
@@ -13,9 +21,6 @@ import { weatherChartOption } from './weather-chart-option.ts';
 // the session. The tiles and the rain periods are the chart's text alternative.
 
 type Data = { detail: SessionDetail; laps: Laps | null };
-
-/** Before the first fetch there is nothing to show yet; after it, no rows means OpenF1 has none. */
-const NOT_FETCHED = new Set(['scheduled', 'due']);
 
 export function WeatherTab({ session, ...data }: Data & { session: number }) {
   const weather = useWeather(session);
@@ -102,7 +107,8 @@ export function WeatherSummary({
   );
 }
 
-export function WeatherView({ rows, detail, laps }: Data & { rows: WeatherRows }) {
+/** `now` (epoch ms) tells a session queued for a new fetch from one OpenF1 has no weather for (`noWeatherText`). */
+export function WeatherView({ rows, detail, laps, now = Date.now() }: Data & { rows: WeatherRows; now?: number }) {
   const type = detail.session.type;
   const summary = useMemo(() => summarise(rows), [rows]);
   const periods = useMemo(() => rainPeriods(rows), [rows]);
@@ -110,14 +116,7 @@ export function WeatherView({ rows, detail, laps }: Data & { rows: WeatherRows }
     (t: ChartTokens) => weatherChartOption(rows, t, { periods, laps, type }),
     [rows, periods, laps, type],
   );
-  if (rows.length === 0)
-    return (
-      <p>
-        {NOT_FETCHED.has(detail.session.ingest_state)
-          ? 'Weather arrives with the laps, about 35 min after the session ends.'
-          : 'No weather in the OpenF1 data.'}
-      </p>
-    );
+  if (rows.length === 0) return <p>{noWeatherText(detail.session, now)}</p>;
   return (
     <>
       <WeatherSummary summary={summary} periods={periods} laps={laps} type={type} />

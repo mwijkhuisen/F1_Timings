@@ -4,6 +4,7 @@ import {
   fmtRange,
   headLine,
   leaderLap,
+  noWeatherText,
   periodText,
   rainPeriods,
   reading,
@@ -209,6 +210,40 @@ describe('leaderLap', () => {
   it('is null outside Race-type sessions, and without laps', () => {
     for (const type of ['Qualifying', 'Practice', null]) expect(leaderLap(laps, T0 + 90 * MIN, type)).toBeNull();
     expect(leaderLap([], T0 + 90 * MIN, 'Race')).toBeNull();
+  });
+});
+
+describe('noWeatherText (a session without rows)', () => {
+  const END = '2026-10-31T21:00:00.000Z';
+  const at = (h: number) => Date.parse(END) + h * 3_600_000;
+  const s = (ingest_state: 'scheduled' | 'due' | 'fetched' | 'final' | 'failed', is_cancelled = false) => ({
+    ingest_state,
+    is_cancelled,
+    date_end: END,
+  });
+  const ARRIVES = 'Weather arrives with the laps, about 35 min after the session ends.';
+  const QUEUED = 'Weather is queued for a new fetch; check back later.';
+  const NONE = 'No weather in the OpenF1 data.';
+
+  it('before its first fetch: the weather arrives with the laps', () => {
+    expect(noWeatherText(s('scheduled'), at(-2))).toBe(ARRIVES);
+    expect(noWeatherText(s('due'), at(1))).toBe(ARRIVES); // the first fetch, or a retry of it, within the day
+  });
+
+  it('fetched or due more than 24 h after date_end: queued for a new fetch (the P5a re-queue, a retry)', () => {
+    expect(noWeatherText(s('fetched'), at(24) + 1)).toBe(QUEUED);
+    expect(noWeatherText(s('due'), at(24 * 30))).toBe(QUEUED);
+    expect(noWeatherText(s('scheduled'), at(24 * 30))).toBe(ARRIVES);
+  });
+
+  it('fetched within the day, final or failed: OpenF1 has none', () => {
+    expect(noWeatherText(s('fetched'), at(24))).toBe(NONE);
+    expect(noWeatherText(s('final'), at(48))).toBe(NONE);
+    expect(noWeatherText(s('failed'), at(48))).toBe(NONE);
+  });
+
+  it('a cancelled session says so', () => {
+    expect(noWeatherText(s('scheduled', true), at(48))).toBe('No weather: the session was cancelled.');
   });
 });
 
