@@ -40,9 +40,10 @@ const render = (url: string) => {
     ]),
   );
   client.setQueryData(['laps', KEY], [lap(1, 1), lap(3, 1), lap(63, 1)]);
-  // Everything is in the cache, so nothing is fetched: the head shows without its season and recordings.
+  // Everything is in the cache, so nothing is fetched: the head shows without its season, recordings and weather.
   client.setQueryData(['season', 2026], null);
   client.setQueryData(['recordings'], null);
+  client.setQueryData(['weather', KEY], []);
   act(() =>
     root.render(
       <QueryClientProvider client={client}>

@@ -37,6 +37,8 @@
   /* Red: live, a red flag or a failure only. Amber: SC and VSC only. */
   --live: #ff6b6b;
   --amber: #ffb020;
+  /* The weather chart's rain bands (P5a), drawn at 20 % under the lines; 3:1 on --bg as its key's swatch. */
+  --rain: #4da6ff;
   /* One-hue steps behind a value (P4b). */
   --heat-1: rgb(255 210 63 / 0.1);
   --heat-2: rgb(255 210 63 / 0.2);
@@ -77,6 +79,7 @@
     --ms-other: #9a7d1f;
     --live: #c0262d;
     --amber: #a24b00;
+    --rain: #1f5fbf;
     --heat-1: rgb(162 75 0 / 0.08);
     --heat-2: rgb(162 75 0 / 0.16);
     --heat-3: rgb(162 75 0 / 0.26);
@@ -1130,6 +1133,32 @@ header .links {
 .tiles .who {
   color: var(--muted);
   font-size: 12px;
+}
+
+/* The Weather tab (P5a): the rain tile takes the full row once it lists periods, one per line. */
+.tiles > .rain {
+  grid-column: 1 / -1;
+}
+
+.tiles ul {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+/* The rain key's swatch: the band's colour at the band's 20 %, framed so it shows on any surface. */
+.rainkey {
+  display: inline-block;
+  width: 1.4em;
+  height: 0.9em;
+  vertical-align: -0.1em;
+  border: 1px solid var(--rain);
+  background: color-mix(in srgb, var(--rain) 20%, transparent);
+}
+
+/* The session head's weather line, under the meta line. */
+.head > .wxline {
+  margin: 2px 0 0;
 }
 
 /* Qualifying by phase: the margin under each time, and a 2 px --fg knock-out line with its label (owner D4). */

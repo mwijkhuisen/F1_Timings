@@ -36,6 +36,7 @@ export function Chart({ label, option }: { label: string; option: (t: ChartToken
           bg: token('bg'),
           amber: token('amber'),
           live: token('live'),
+          rain: token('rain'),
           light: matchMedia('(prefers-color-scheme: light)').matches,
         });
       })

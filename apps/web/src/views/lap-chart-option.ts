@@ -14,6 +14,8 @@ export type ChartTokens = {
   bg: string;
   amber: string;
   live: string;
+  /** The rain bands of the weather chart (P5a). */
+  rain: string;
   light: boolean;
 };
 
