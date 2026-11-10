@@ -1,7 +1,7 @@
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { archiveEvents, readStreams } from '../src/archive/files.ts';
+import { archiveEvents, isArchivePath, readStreams } from '../src/archive/files.ts';
 import { archiveRows, gmtOffset, indexPlan } from '../src/archive/rows.ts';
 import { archiveT0, type FeedEvent } from '../src/live/read.ts';
 
@@ -15,6 +15,7 @@ const NOW = Date.parse('2026-11-10T12:00:00Z');
 const at = (ms: number) => new Date(T0 + ms).toISOString();
 const sd = (t: number, payload: unknown): FeedEvent => ({ t, topic: 'SessionData', payload });
 const hb = (t: number, utc: string): FeedEvent => ({ t, topic: 'Heartbeat', payload: { Utc: utc } });
+const ec = (t: number, utc: string): FeedEvent => ({ t, topic: 'ExtrapolatedClock', payload: { Utc: utc } });
 
 describe('archiveT0', () => {
   it('takes the most frequent Utc − t of SessionData entries, list and dict forms, over the first-line outlier', () => {
@@ -44,6 +45,49 @@ describe('archiveT0', () => {
     const later = [sd(3000, { Series: { 0: { Utc: at(3005) } } }), sd(4000, { Series: { 0: { Utc: at(4005) } } })];
     expect(archiveT0([], [...tie, ...later])).toEqual({ t0: T0, from: 'sessiondata' });
     expect(archiveT0([], [...later, ...tie])).toEqual({ t0: T0 + 5, from: 'sessiondata' });
+  });
+
+  it('falls back to the ExtrapolatedClock mode without 2 agreeing SessionData entries, before the Heartbeat', () => {
+    const heartbeat = [hb(500, at(470_000))]; // minutes off
+    const clock = [
+      ec(1000, at(1000)),
+      ec(2000, at(2000)),
+      ec(3000, at(3500)), // an outlier
+      { t: 4000, topic: 'ExtrapolatedClock', payload: { Extrapolating: false } }, // no Utc
+      ec(5000, at(5000).slice(0, -1)), // without a Z, as UTC
+    ];
+    expect(archiveT0(heartbeat, [], clock)).toEqual({ t0: T0, from: 'clock' });
+    const one = [sd(5000, { StatusSeries: { 1: { Utc: at(5005) } } })];
+    expect(archiveT0(heartbeat, one, clock)).toEqual({ t0: T0, from: 'clock' });
+  });
+
+  it('prefers SessionData over a disagreeing ExtrapolatedClock', () => {
+    const data = [sd(1000, { Series: { 0: { Utc: at(1000) } } }), sd(2000, { Series: { 0: { Utc: at(2000) } } })];
+    const clock = [ec(1000, at(1300)), ec(2000, at(2300)), ec(3000, at(3300))];
+    expect(archiveT0([], data, clock)).toEqual({ t0: T0, from: 'sessiondata' });
+  });
+
+  it('falls to the Heartbeat with a single ExtrapolatedClock entry', () => {
+    expect(archiveT0([hb(500, at(2500))], [], [ec(1000, at(1000))])).toEqual({ t0: T0 + 2000, from: 'heartbeat' });
+    expect(archiveT0([], [], [ec(1000, at(1000))])).toBeUndefined();
+  });
+});
+
+describe('isArchivePath', () => {
+  it('takes letters of any script, digits, _ and -, and nothing else inside a segment', () => {
+    expect(isArchivePath('2021/2021-11-14_São_Paulo_Grand_Prix/2021-11-14_Race/')).toBe(true);
+    expect(isArchivePath('2019/2019-03-17_Synthetic_Grand_Prix/2019-03-17_Race/')).toBe(true);
+    for (const bad of [
+      '2021/../2021-11-14_Race/',
+      '2021/%2e%2e/2021-11-14_Race/',
+      '2021/a/b/c/',
+      '2021/a.b/2021-11-14_Race/',
+      '2021/a b/2021-11-14_Race/',
+      '2021/a\u0007b/2021-11-14_Race/',
+      '2021/a\nb/2021-11-14_Race/',
+      '2021/a/b',
+    ])
+      expect(isArchivePath(bad), bad).toBe(false);
   });
 });
 

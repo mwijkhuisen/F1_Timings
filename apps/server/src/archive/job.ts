@@ -21,6 +21,7 @@ export const TOPICS = [
   'SessionInfo',
   'Heartbeat',
   'SessionData',
+  'ExtrapolatedClock',
   'TimingData',
   'TimingAppData',
   'DriverList',

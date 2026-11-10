@@ -120,28 +120,49 @@ export const utc = (v: unknown): number | null => {
 
 const values = (v: unknown): unknown[] => (typeof v === 'object' && v !== null ? Object.values(v) : []);
 
+/** The most frequent value when at least 2 agree (a tie: the value seen first), else undefined. */
+function mode(offsets: Iterable<number>): number | undefined {
+  const counts = new Map<number, number>();
+  for (const v of offsets) counts.set(v, (counts.get(v) ?? 0) + 1);
+  let best: [number, number] = [0, 1];
+  for (const entry of counts) if (entry[1] > best[1]) best = entry;
+  return best[1] >= 2 ? best[0] : undefined;
+}
+
+export type T0From = 'sessiondata' | 'clock' | 'heartbeat';
+
 /**
  * The archive's epoch (A§6.2). Each SessionData `Series` and `StatusSeries` entry outside the stream's first line
  * sits at its own `Utc`, which is OpenF1's timebase to the ms; the first line (a list) holds older entries. So t0 is
  * the most frequent `Utc` minus session-relative time over those entries, list and dict forms, when at least 2
- * agree (a tie: the value seen first). Otherwise the first Heartbeat's `Utc` minus its time, which runs about 2 s
- * late. The events are parsed with t0Ms = 0, so their `t` is that relative time.
+ * agree (a tie: the value seen first). Else the same over ExtrapolatedClock's `Utc`, which equals the SessionData t0
+ * where both exist (an archive may answer 403 for SessionData). Else the first Heartbeat's `Utc` minus its time,
+ * which runs about 2 s late and can be minutes off. The events are parsed with t0Ms = 0, so their `t` is that
+ * relative time.
  */
 export function archiveT0(
   heartbeat: readonly FeedEvent[],
   sessionData: readonly FeedEvent[] = [],
-): { t0: number; from: 'sessiondata' | 'heartbeat' } | undefined {
-  const counts = new Map<number, number>();
-  for (const ev of sessionData) {
-    if (ev.topic !== 'SessionData' || !isObj(ev.payload)) continue;
-    for (const entry of [...values(ev.payload.Series), ...values(ev.payload.StatusSeries)]) {
-      const at = isObj(entry) ? utc(entry.Utc) : null;
-      if (at !== null) counts.set(at - ev.t, (counts.get(at - ev.t) ?? 0) + 1);
-    }
-  }
-  let best: [number, number] = [0, 1];
-  for (const entry of counts) if (entry[1] > best[1]) best = entry;
-  if (best[1] >= 2) return { t0: best[0], from: 'sessiondata' };
+  clock: readonly FeedEvent[] = [],
+): { t0: number; from: T0From } | undefined {
+  const fromData = mode(
+    sessionData.flatMap((ev) =>
+      ev.topic === 'SessionData' && isObj(ev.payload)
+        ? [...values(ev.payload.Series), ...values(ev.payload.StatusSeries)].flatMap((entry) => {
+            const at = isObj(entry) ? utc(entry.Utc) : null;
+            return at === null ? [] : [at - ev.t];
+          })
+        : [],
+    ),
+  );
+  if (fromData !== undefined) return { t0: fromData, from: 'sessiondata' };
+  const fromClock = mode(
+    clock.flatMap((ev) => {
+      const at = ev.topic === 'ExtrapolatedClock' && isObj(ev.payload) ? utc(ev.payload.Utc) : null;
+      return at === null ? [] : [at - ev.t];
+    }),
+  );
+  if (fromClock !== undefined) return { t0: fromClock, from: 'clock' };
   for (const ev of heartbeat) {
     const at = ev.topic === 'Heartbeat' && isObj(ev.payload) ? utc(ev.payload.Utc) : null;
     if (at !== null) return { t0: at - ev.t, from: 'heartbeat' };

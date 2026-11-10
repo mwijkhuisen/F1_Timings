@@ -125,14 +125,15 @@ describe('archive (fixtures through msw, f1_ingest login)', { timeout: 120_000 }
     expect(await count('lap', 'deleted')).toBe(1);
     expect(await count('lap', 'quali_phase = 2')).toBe(3);
 
-    // 1 Index + 2 sessions × 8 topics + the all-403 session's SessionInfo, one at a time, 2 s apart, with the token.
-    expect(requests.length).toBe(18);
+    // 1 Index + 2 sessions × 9 topics + the all-403 session's SessionInfo, one at a time, 2 s apart, with the token.
+    expect(requests.length).toBe(20);
     for (const [i, r] of requests.entries()) {
       expect(r.auth).toBe(`Bearer ${TOKEN}`);
       if (i > 0) expect(r.at - (requests[i - 1]?.at ?? 0)).toBeGreaterThanOrEqual(GAP_MS);
     }
     expect(readdirSync(join(args.dir, '9102')).sort()).toEqual([
       'DriverList.jsonStream',
+      'ExtrapolatedClock.missing',
       'Heartbeat.jsonStream',
       'RaceControlMessages.jsonStream',
       'SessionData.jsonStream',
@@ -151,7 +152,7 @@ describe('archive (fixtures through msw, f1_ingest login)', { timeout: 120_000 }
       year: 2019,
       type: 'Race',
       files: 8,
-      skipped_files: 0,
+      skipped_files: 1,
       t0: 'sessiondata',
       t0_heartbeat_delta_ms: -2000,
       laps: 6,
@@ -161,7 +162,7 @@ describe('archive (fixtures through msw, f1_ingest login)', { timeout: 120_000 }
       weather: 3,
       phases: 0,
     });
-    expect(bySession[9101]).toMatchObject({ files: 7, skipped_files: 1, t0_heartbeat_delta_ms: null, phases: 2 });
+    expect(bySession[9101]).toMatchObject({ files: 7, skipped_files: 2, t0_heartbeat_delta_ms: null, phases: 2 });
     expect(bySession[9111]).toMatchObject({ files: 0, skipped_files: 1, error: 'incomplete' });
     expect(logged('archive_done').at(-1)).toMatchObject({
       imported: 2,

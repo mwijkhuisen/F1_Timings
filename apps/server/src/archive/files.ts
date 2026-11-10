@@ -3,7 +3,7 @@ import { join, resolve, sep } from 'node:path';
 import { view } from '@f1/contracts';
 import { createLaps } from '../live/laps.ts';
 import { createFeed } from '../live/merge.ts';
-import { archiveT0, type FeedEvent, parseJsonStream } from '../live/read.ts';
+import { archiveT0, type FeedEvent, parseJsonStream, type T0From } from '../live/read.ts';
 import type { Result } from '../openf1/schemas.ts';
 
 // The F1 archive (A§6.2): downloads from livetiming.formula1.com/static and the reading of a session's
@@ -18,7 +18,8 @@ export const MAX_BYTES = 64 * 1024 * 1024;
 
 export type Failure = { code: 'http'; status: number } | { code: 'network' | 'timeout' | 'too_large' | 'host' };
 
-const PATH = /^\d{4}\/[A-Za-z0-9_-]+\/[A-Za-z0-9_-]+\/$/;
+/** Letters and digits of any script (São Paulo), `_` and `-`: never `.`, `/`, `%`, a space or a control character. */
+const PATH = /^\d{4}\/[\p{L}\p{N}_-]+\/[\p{L}\p{N}_-]+\/$/u;
 
 export const isArchivePath = (path: string): boolean => PATH.test(path);
 
@@ -114,7 +115,7 @@ export type ArchiveEvents = {
   events: FeedEvent[];
   skipped: number;
   t0: number;
-  from: 'sessiondata' | 'heartbeat';
+  from: T0From;
   /** The first Heartbeat's t0, for the log's delta; undefined without a Heartbeat. */
   heartbeat: number | undefined;
 };
@@ -133,8 +134,8 @@ export function archiveEvents(files: ReadonlyMap<string, string>): ArchiveEvents
       return [topic, p.events] as const;
     }),
   );
-  const [heartbeat, sessionData] = [parsed.get('Heartbeat') ?? [], parsed.get('SessionData') ?? []];
-  const found = archiveT0(heartbeat, sessionData);
+  const heartbeat = parsed.get('Heartbeat') ?? [];
+  const found = archiveT0(heartbeat, parsed.get('SessionData'), parsed.get('ExtrapolatedClock'));
   if (found === undefined) return undefined;
   const hb = archiveT0(heartbeat)?.t0;
   const events = [...parsed.values()].flat();

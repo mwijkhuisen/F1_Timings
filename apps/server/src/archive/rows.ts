@@ -2,7 +2,7 @@ import { view, weatherRow } from '@f1/contracts';
 import type { Insertable } from 'kysely';
 import type { DB } from '../db/db.ts';
 import { createFeed } from '../live/merge.ts';
-import { utc } from '../live/read.ts';
+import { type T0From, utc } from '../live/read.ts';
 import type { Result } from '../openf1/schemas.ts';
 import { markLaps, type RuleCounts, type RuleMessage } from '../timing/rules.ts';
 import { archiveEvents, type IndexSession, indexSessions, isArchivePath, reconstruct } from './files.ts';
@@ -137,7 +137,7 @@ export function indexPlan(
 }
 
 export type Stats = {
-  t0: 'sessiondata' | 'heartbeat';
+  t0: T0From;
   t0_heartbeat_delta_ms: number | null;
   phases: number;
   rules: RuleCounts;
