@@ -442,6 +442,19 @@ describe('rain job (Open-Meteo through msw, f1_ingest login)', { timeout: 120_00
     ]);
   });
 
+  it('an f1-archive session on a mapped circuit, ended long ago, gets no grid and spends no budget', async () => {
+    await meeting(MC, 'Monte Carlo');
+    await session(7001, MC, ['2019-05-26T13:00:00Z', '2019-05-26T15:00:00Z'], { source: 'f1-archive' });
+    const p = daemon();
+    at = new Date('2026-11-09T12:00:00Z');
+    const before = p.budget.used();
+    await p.run();
+    await p.run();
+    expect(seen).toEqual([]);
+    expect(await grid(7001)).toBeUndefined();
+    expect(p.budget.used()).toEqual(before);
+  });
+
   it('a budget refusal ends the step, logged once per streak; live grids still get their share', async () => {
     await meeting(MC, 'Monte Carlo');
     await session(9094, MC, ['2023-05-28T13:00:00Z', '2023-05-28T15:00:00Z']);

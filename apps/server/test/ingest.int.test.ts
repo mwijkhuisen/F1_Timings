@@ -593,6 +593,54 @@ describe('ingest (fixtures through msw, f1_ingest login)', { timeout: 120_000 },
     expect(await session(11396)).toMatchObject({ ingest_state: 'fetched', fetch_count: 2 });
   });
 
+  it('an f1-archive session is never fetched, written or marked due: processSession, refetch, tick, backfill', async () => {
+    const KEY = 5001;
+    await db
+      .insertInto('meeting')
+      .values({ meeting_key: KEY, source: 'f1-archive', year: 2019, name: 'Archive GP' })
+      .execute();
+    await db
+      .insertInto('session')
+      .values({
+        session_key: KEY,
+        source: 'f1-archive',
+        meeting_key: KEY,
+        type: 'Race',
+        name: 'Race',
+        date_start: new Date('2019-05-01T13:00:00Z'),
+        date_end: new Date('2019-05-01T15:00:00Z'),
+        ingest_state: 'fetched',
+        next_fetch_at: new Date('2019-05-01T15:35:00Z'),
+        fetch_count: 1,
+      })
+      .execute();
+    await db
+      .insertInto('lap')
+      .values({ session_key: KEY, source: 'f1-archive', driver_number: 1, lap_number: 1, lap_ms: 90_000 })
+      .execute();
+    const before = { session: await session(KEY), rows: await rowCounts(KEY) };
+    expect(before.rows.lap).toBe(1);
+    const sent = requests.length;
+    openf1(); // any OpenF1 request would be answered (and counted) here
+
+    expect(await processSession(deps, KEY)).toEqual({ ok: false, error: 'not_openf1' });
+    expect(await processSession(deps, KEY, true)).toEqual({ ok: false, error: 'not_openf1' });
+    expect(JSON.parse(lines.at(-1) ?? '{}')).toMatchObject({
+      session_key: KEY,
+      state: 'unchanged',
+      error: 'not_openf1',
+    });
+    expect(
+      await run(['refetch', String(KEY)], { PATH: process.env.PATH, DATABASE_URL: testDb.urls.f1_ingest }, () => {}),
+    ).toBe(1);
+
+    at = new Date('2026-11-02T12:00:00Z'); // long after next_fetch_at, outside every live window
+    await tick(deps);
+    await backfill(deps);
+    expect(requests.slice(sent).filter((r) => r.includes(`session_key=${KEY}`))).toEqual([]);
+    expect({ session: await session(KEY), rows: await rowCounts(KEY) }).toEqual(before);
+  });
+
   it('logs one line per session with fixed codes: no URL, password or response body', () => {
     const text = lines.join('');
     expect(text).not.toMatch(/openf1\.org|https?:|TRACK LIMITS|No results/);

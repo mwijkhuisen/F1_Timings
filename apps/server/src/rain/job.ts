@@ -63,6 +63,7 @@ const gridless = (db: Kysely<DB>) =>
   db
     .selectFrom('session')
     .innerJoin('meeting', 'meeting.meeting_key', 'session.meeting_key')
+    .where('session.source', '=', 'openf1') // archive sessions (2018-2022) get no grid: Open-Meteo's history starts in 2022
     .where(({ not, exists, selectFrom }) =>
       not(
         exists(

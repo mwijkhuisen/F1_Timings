@@ -39,7 +39,7 @@ export type Deps = {
   /** The daemon's rain step (P5c, `createRainStep`), after the tick every minute; it never rejects. */
   rainStep?: (stopping: () => boolean) => Promise<void>;
 };
-export type Outcome = Result<IngestState, ErrorCode | 'unknown_session' | 'live_session'>;
+export type Outcome = Result<IngestState, ErrorCode | 'unknown_session' | 'live_session' | 'not_openf1'>;
 
 export const chunks = <T>(rows: readonly T[]) =>
   Array.from({ length: Math.ceil(rows.length / CHUNK) }, (_, i) => rows.slice(i * CHUNK, (i + 1) * CHUNK));
@@ -192,10 +192,19 @@ export async function processSession(deps: Deps, key: number, refetch = false): 
 
   let type: string | null;
   try {
-    const found = await db.selectFrom('session').select('type').where('session_key', '=', key).executeTakeFirst();
+    const found = await db
+      .selectFrom('session')
+      .select(['type', 'source'])
+      .where('session_key', '=', key)
+      .executeTakeFirst();
     if (!found) {
       log.error(line({ error: 'unknown_session' }), 'session');
       return { ok: false, error: 'unknown_session' };
+    }
+    // The root guard: [] from OpenF1 must never replace the F1 archive's rows (they have no raw_response to protect them).
+    if (found.source !== 'openf1') {
+      log.error(line({ state: 'unchanged', error: 'not_openf1' }), 'session');
+      return { ok: false, error: 'not_openf1' };
     }
     type = found.type;
     // A manual refetch waits for the live window too (A§8): it writes nothing and fails.
@@ -305,6 +314,7 @@ export async function tick(deps: Deps, stopping: () => boolean = () => false): P
     .updateTable('session')
     .set({ ingest_state: 'due' })
     .where('ingest_state', 'in', ['scheduled', 'fetched'])
+    .where('source', '=', 'openf1')
     .where('is_cancelled', '=', false)
     .where('next_fetch_at', '<=', at)
     .execute();
@@ -312,6 +322,7 @@ export async function tick(deps: Deps, stopping: () => boolean = () => false): P
     .selectFrom('session')
     .select('session_key')
     .where('ingest_state', '=', 'due')
+    .where('source', '=', 'openf1')
     .where('is_cancelled', '=', false)
     .where('next_fetch_at', '<=', at)
     .orderBy('date_end', 'desc')
@@ -352,6 +363,7 @@ export async function backfill(deps: Deps): Promise<boolean> {
     .selectFrom('session')
     .select('session_key')
     .where('ingest_state', '<>', 'final')
+    .where('source', '=', 'openf1')
     .where('is_cancelled', '=', false)
     .where('date_end', '<=', new Date(deps.now().getTime() - FIRST_FETCH_AFTER_MS))
     .orderBy('date_end', 'desc')
