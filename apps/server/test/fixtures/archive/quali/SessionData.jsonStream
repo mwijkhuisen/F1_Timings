@@ -1,0 +1,5 @@
+﻿00:25:00.000{"Series":[],"StatusSeries":[{"Utc":"2019-03-16T05:20:00","TrackStatus":"AllClear"}]}
+00:30:00.000{"Series":{"0":{"Utc":"2019-03-16T06:00:00.000Z","QualifyingPart":1}},"StatusSeries":{"1":{"Utc":"2019-03-16T06:00:00.000Z","SessionStatus":"Started"}}}
+00:40:00.000{"StatusSeries":{"2":{"Utc":"2019-03-16T06:10:00.000Z","SessionStatus":"Finished"}}}
+00:45:00.000{"Series":{"1":{"Utc":"2019-03-16T06:15:00.000Z","QualifyingPart":2}},"StatusSeries":{"3":{"Utc":"2019-03-16T06:15:00.000Z","SessionStatus":"Started"}}}
+00:50:00.000{"StatusSeries":{"4":{"Utc":"2019-03-16T06:20:00.000Z","SessionStatus":"Finished"}}}
