@@ -18,10 +18,10 @@ export const MAX_BYTES = 64 * 1024 * 1024;
 /**
  * A session's topic files in all, before the job reads and parses them: this, not MAX_BYTES, bounds its memory.
  * WSL [box] peak RSS: 157 MB at 0.41 MB of input and 271 MB at 6.61 MB, about 18 MB of RSS per MB above a ~150 MB
- * base, against the job's 512m limit. 24 MiB is 3.6 times the largest session seen; the linear fit puts it near
- * 600 MB, so a session close to the cap may still be OOM-killed: lower the cap if one is.
+ * base, against the job's 512m limit. 16 MiB is 2.5 times the largest session seen, and the linear fit puts it near
+ * 450 MB, inside the limit.
  */
-export const MAX_SESSION_BYTES = 24 * 1024 * 1024;
+export const MAX_SESSION_BYTES = 16 * 1024 * 1024;
 
 /** `empty` is the job's: a 200 without a byte. */
 export type Failure =
