@@ -262,6 +262,10 @@ Remaining 2026 weekends (OpenF1 schedule): Austin (race 25 Oct) · Mexico City 3
   - **H14, measure first:** the first full archive download (all topics, telemetry included) runs on the owner's machine for one season and measures size, time and RSS. The caps and the VM run come after.
   - **H15, telemetry:** it gets its own phase (P7), after P3e.
   - **H16, order:** the probes first (P3d), then P3e, P3c, P3f, P3b and P3g. P7 comes after P3e.
+- **Related issues:**
+  - #96 (pit-lane topics, its topic check) and #126 (2018 compound names) take facts from P3d;
+  - #122 is P7;
+  - #123 (standings) can take Jolpica's standings from 1950 once P3c is in.
 - **Keys for sessions without one** (Jolpica and FIA before 2018; a proposal, P3c confirms and records it in A§7):
   - The keys are derived in a reserved range that collides with neither the archive (session keys under 7,200 through 2021) nor OpenF1 (7,763 on).
   - `meeting_key = 1YYYYRR` (7 digits) and `session_key = 1YYYYRRTT` (9 digits, within the API's `^\d{1,9}$`). `TT` is a fixed code per session type.
@@ -291,7 +295,8 @@ Remaining 2026 weekends (OpenF1 schedule): Austin (race 25 Oct) · Mexico City 3
     Counts per topic and per field only, through `feed-keys.ts`.
   - [owner] the F1 TV data screens (H9): the owner opens one of those 2018 sessions and one pre-2018 replay in the F1 TV web app with the browser's developer tools. They note which JSON requests the data screens make, by host, path pattern and topic names, never a body or a token. Video does not count.
   - [box] testing sessions: which years' Indexes list pre-season testing, and with which topics.
-  - [box] the per-session `Index.json` (FastF1 says it exists from the 2018 US GP FP1): the full topic list per year, as the input to P3e's topic list.
+  - [box] the per-session `Index.json` (FastF1 says it exists from the 2018 US GP FP1): the full topic list per year, as the input to P3e's topic list. This shares #96's topic check (its `--topic` option on `fetch-archive.ts`): whichever lands first, the other reuses it.
+  - [box] the 2018 tyre names in `TimingAppData` over every 2018 session, for #126.
 - **Acceptance:**
   - [CI] the probe script's argument checks, the `CI` refusal and its output on msw fixtures (statuses only).
   - [box] the probe's output for 2011–2018 and the 2018-gap counts are written into A§6.2, and the F1 TV findings into A§6.3. If F1 TV serves pre-2018 timing, the owner decides before P3e whether H1 changes.
@@ -693,11 +698,12 @@ Remaining 2026 weekends (OpenF1 schedule): Austin (race 25 Oct) · Mexico City 3
   3. An ADR on recording F1 TV audio (terms, storage; as ADR-0005), then P6c's scope, sized by those numbers: 20 streams × the session's length, disk per race, CPU on the VM.
 - **Acceptance:** written into this section and the issue once the gate has passed.
 
-### P7: Telemetry (owner, 2026-11-10; after P3e)
+### P7: Telemetry (owner, 2026-11-10; after P3e; the plan of #122)
 
-- **Goal:** car telemetry (speed, throttle, brake, gear, RPM, DRS) and track position, per lap, in the site (H15).
+- **Goal:** car telemetry (speed, throttle, brake, gear, RPM, DRS) and track position, per lap, in the site (H15). This is the phase that #122 (owner, 2026-11-09: telemetry traces and a car-position map reopen A§1) plans. Its spike is this gate, and its questions are answered in the PR that writes P7's scope.
 - **Sources:** the archive's `CarData.z` and `Position.z` (2018 on, downloaded raw by P3e) and the recordings (P2c, 19 topics with a token). OpenF1's `car_data` and `location` (2023 on, about 3.7 Hz) are the cross-check. Their rows are live-ingested and can have holes (A§11.3).
-- **Gate first** [box]:
+- **Gate first** [box], #122's spike:
+  - the `.z` decoder (bounded inflate) and the CarData channel layout;
   - from P3e's measurements, the rows and bytes per session once parsed;
   - the PostgreSQL size for 2018 to now, against the A§14.1 disk;
   - whether a table (perhaps partitioned per season) or compressed files next to the archive serve the views better.
