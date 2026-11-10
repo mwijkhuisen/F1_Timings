@@ -166,7 +166,7 @@ The token lasts about 4 days. The panel warns 24 h before it expires, when a ses
 
 ## Fetch the F1 archive of 2018–2022 (the `archive` job) [owner]
 
-`archive` (A§4, A§6.2) downloads the archive files of the 2018–2022 sessions into `/srv/f1/archive` and loads their laps into the database. `f1-update` never runs it and no timer does: you start it, one year at a time (`archive <year> [<session_key>…]`; the keys limit it to those sessions). `f1-install` creates `/srv/f1/archive` (62532, 0700); the job's other options (`--token-file`, `--dir`) default to the container's paths and are not needed on the VM.
+`archive` (A§4, A§6.2) downloads the archive files of the 2018–2022 sessions into `/srv/f1/archive` and loads their laps into the database. `f1-update` never runs it and no timer does: you start it, one year at a time (`archive <year> [<session_key>…]`; the keys limit it to those sessions). `f1-install` creates `/srv/f1/archive` (62532, 0700); the job's other options (`--token-file`, `--dir`) default to the container's paths and are not needed on the VM. `--dir` takes only `/srv/f1/archive` or a path with a `fixtures-private` segment (exit 64 otherwise), so archive files never land in a tracked directory.
 
 ```bash
 sudo docker compose -p f1 -f /etc/f1/compose.yaml --env-file /srv/f1/state/current.env \
@@ -177,6 +177,8 @@ sudo docker compose -p f1 -f /etc/f1/compose.yaml --env-file /srv/f1/state/curre
 - **Live window:** it stops inside a live window and exits 1. Run it between weekends.
 - **Resume:** a rerun skips the files already present in `/srv/f1/archive`, so after a stop or a failure run the same command again.
 - **Missing topics:** a topic the archive answered 403 or 404 for gets an empty `<Topic>.missing` marker, and a rerun never asks for it again. To ask again (after a 403 that was not the archive's, say), clear the markers of that session: `sudo rm /srv/f1/archive/<session_key>/*.missing`. SessionInfo and TimingData never get one.
+- **Heartbeat t0:** a session with neither SessionData nor ExtrapolatedClock is imported on the Heartbeat t0 and logs its `archive` line at error level (`"t0":"heartbeat"`, counted in `t0_heartbeat`): such a session's times can be minutes off.
+- **Temp files:** a kill can leave `<file>.<uuid>.tmp` files in `/srv/f1/archive/<session_key>/`; they are never read and can be deleted.
 - **Stops (exit 1):** `busy` (another archive run holds the lock: wait for it), `token_expired` (also mid-run, 60 s before the token's expiry: paste a new token and rerun), `disk_low` (under 5 GiB free in `/srv/f1/archive`, the recorder's warning level: free space first), `live_session`, `http_401`.
 - **Rate:** one request every 2 s, about 3 h for all of 2018–2022 (run a year at a time; `tmux` or `nohup` keeps it alive after the SSH session ends).
 - **Years:** it never runs for 2023 and later (exit 64); those come from OpenF1.
