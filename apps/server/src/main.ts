@@ -1,8 +1,11 @@
 import type { Server } from 'node:http';
+import { setTimeout as sleep } from 'node:timers/promises';
+import { parseArgs } from 'node:util';
 import { serve } from '@hono/node-server';
 import pino from 'pino';
 import { access, accessConfig } from './api/access.ts';
 import { createApp } from './api/app.ts';
+import { ARCHIVE_DIR, archive, TOKEN_FILE } from './archive/job.ts';
 import { codeOf, createDb } from './db/db.ts';
 import { dbUrl, EXIT_CONFIG, runMigrate } from './db/migrate.ts';
 import { pingHealthchecks } from './healthchecks.ts';
@@ -24,7 +27,9 @@ export const API_PORT = 8080;
 
 type Env = Readonly<Record<string, string | undefined>>;
 
-const USAGE = `usage: main.js <${ROLES.join('|')}> (refetch takes a session_key)`;
+const USAGE =
+  `usage: main.js <${ROLES.join('|')}> (refetch takes a session_key; ` +
+  'archive <year 2018-2022> [<session_key>...] [--token-file <path>] [--dir <path>])';
 
 /**
  * Resolves with the exit code. Roles without a phase yet exit EXIT_NOT_IMPLEMENTED. `apiPort` is a
@@ -37,6 +42,7 @@ export async function run(
   apiPort = API_PORT,
 ): Promise<number> {
   const [role, ...rest] = argv;
+  if (role === 'archive') return runArchive(rest, env, log);
   const args = role === 'refetch' ? 1 : 0;
   if (
     role === undefined ||
@@ -85,6 +91,47 @@ async function runIngest(role: 'ingest' | 'backfill' | 'refetch', key: number, e
   } finally {
     await db.destroy();
   }
+}
+
+/** The archive job (A§6.2, P3a) as f1_ingest: years 2018–2022 only, 2023 on is OpenF1's. */
+async function runArchive(argv: readonly string[], env: Env, log: (line: string) => void): Promise<number> {
+  let parsed: ReturnType<typeof parseArchive>;
+  try {
+    parsed = parseArchive(argv);
+  } catch {
+    parsed = undefined;
+  }
+  if (parsed === undefined) {
+    log(USAGE);
+    return EXIT_USAGE;
+  }
+  const url = dbUrl('f1_ingest', env);
+  if (typeof url === 'string') {
+    log(`archive: ${url}`);
+    return EXIT_CONFIG;
+  }
+  const logger = pino({ base: { role: 'archive' } });
+  const db = createDb(url, (err) => logger.error({ cause: codeOf(err) }, 'database pool error'));
+  try {
+    return (await archive({ db, now: () => new Date(), sleep: (ms) => sleep(ms), log: logger }, parsed)) ? 0 : 1;
+  } catch (err) {
+    logger.error({ cause: codeOf(err) }, 'archive failed');
+    return 1;
+  } finally {
+    await db.destroy();
+  }
+}
+
+/** `<year> [<session_key>…] [--token-file <path>] [--dir <path>]`, or undefined; parseArgs throws on an unknown flag. */
+function parseArchive(argv: readonly string[]) {
+  const { values, positionals } = parseArgs({
+    args: [...argv],
+    allowPositionals: true,
+    options: { 'token-file': { type: 'string', default: TOKEN_FILE }, dir: { type: 'string', default: ARCHIVE_DIR } },
+  });
+  const [year = '', ...keys] = positionals;
+  if (!/^20(1[89]|2[0-2])$/.test(year) || !keys.every((k) => /^\d{1,9}$/.test(k))) return undefined;
+  return { year: Number(year), keys: keys.map(Number), tokenFile: values['token-file'], dir: values.dir };
 }
 
 /** The recorder daemon (A§11.2), as f1_ingest. Resolves after SIGTERM/SIGINT, with the running recording closed. */

@@ -41,7 +41,7 @@ export type Deps = {
 };
 export type Outcome = Result<IngestState, ErrorCode | 'unknown_session' | 'live_session'>;
 
-const chunks = <T>(rows: readonly T[]) =>
+export const chunks = <T>(rows: readonly T[]) =>
   Array.from({ length: Math.ceil(rows.length / CHUNK) }, (_, i) => rows.slice(i * CHUNK, (i + 1) * CHUNK));
 
 /** Log-ready: the code, the endpoint and, for a schema failure, zod's paths and codes (never a value). */
@@ -281,7 +281,7 @@ export async function processSession(deps: Deps, key: number, refetch = false): 
  * a refetch wait it out. Cancelled sessions open no window, and neither does a row longer
  * than 12 h (a bad date must not stop ingest for days).
  */
-async function live({ db, now }: Deps): Promise<boolean> {
+export async function live({ db, now }: Pick<Deps, 'db' | 'now'>): Promise<boolean> {
   const at = now().getTime();
   const margin = 30 * 60_000;
   const row = await db
