@@ -113,6 +113,41 @@ services:
     healthcheck:
       disable: true
 
+  # A job (A§4, A§6.2): f1-update never runs it; the owner runs `compose --profile jobs run --rm archive
+  # archive <year>` to fetch the F1 archive of 2018-2022. tcp/443 out through f1-egress. The token dir
+  # is read-only: it only reads the token that live caches (A§12.3), so no F1 TV password secret, and
+  # /srv/f1/state itself is never mounted (O1). Like live's, both host directories come from f1-install.
+  archive:
+    <<: *hardening
+    image: ${F1_SERVER_IMAGE:?}
+    command: [archive]
+    profiles: [jobs]
+    restart: "no"
+    user: "62532:62532"
+    group_add: ["62003"]
+    secrets: [db_f1_ingest]
+    networks: [f1-egress, f1-db]
+    depends_on:
+      db:
+        condition: service_healthy
+    volumes:
+      - type: bind
+        source: /srv/f1/archive
+        target: /srv/f1/archive
+        bind:
+          create_host_path: false
+      - type: bind
+        source: /srv/f1/state/live
+        target: /srv/f1/state
+        read_only: true
+        bind:
+          create_host_path: false
+    mem_limit: 512m
+    cpus: 1.0
+    pids_limit: 64
+    healthcheck:
+      disable: true
+
   # The API (A§10) on :8080, never published: caddy reaches it on f1-edge. Its only way out is
   # f1-api-egress: tcp/443 to Cloudflare's ranges for the Access certs (nftables, A§14.3).
   # It reads the recordings for playback (A§11.3): /srv/f1/live, read-only.
@@ -293,7 +328,7 @@ networks:
     ipam:
       config:
         - subnet: 10.62.2.0/24
-  # ingest and live: tcp/443 anywhere public, DNS to the host's resolvers.
+  # ingest, live and archive: tcp/443 anywhere public, DNS to the host's resolvers.
   f1-egress:
     name: f1-egress
     enable_ipv6: false

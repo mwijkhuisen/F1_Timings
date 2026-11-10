@@ -224,7 +224,7 @@ describe('read', () => {
       skipped: 4,
     });
     const { events } = parseJsonStream('1.00:00:01.500{"Utc":"2026-10-31T18:30:01.500Z"}\r\n', 'Heartbeat', 0);
-    expect(archiveT0(events)).toBe(Date.parse('2026-10-30T18:30:00Z'));
+    expect(archiveT0(events)).toEqual({ t0: Date.parse('2026-10-30T18:30:00Z'), from: 'heartbeat' });
   });
 
   it('decodes a quoted payload as a JSON string, else strips its quotes as FastF1 does', () => {
@@ -238,7 +238,7 @@ describe('read', () => {
       'Heartbeat',
       0,
     );
-    expect(archiveT0(events)).toBe(Date.parse('2026-10-30T18:30:00Z'));
+    expect(archiveT0(events)).toEqual({ t0: Date.parse('2026-10-30T18:30:00Z'), from: 'heartbeat' });
     expect(archiveT0([{ t: 0, topic: 'Heartbeat', payload: { Utc: 'soon' } }])).toBeUndefined();
   });
 

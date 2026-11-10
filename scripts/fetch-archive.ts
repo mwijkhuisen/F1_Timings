@@ -1,22 +1,29 @@
 import { mkdirSync, writeFileSync } from 'node:fs';
-import { join, resolve, sep } from 'node:path';
+import { join } from 'node:path';
 import { parseArgs } from 'node:util';
+import {
+  download,
+  type Failure,
+  indexSessions,
+  isArchivePath,
+  ORIGIN,
+  outDir,
+  safe,
+} from '../apps/server/src/archive/files.ts';
 import { checkToken, readTokenFile } from '../apps/server/src/live/token.ts';
 import { EXIT_USAGE } from '../apps/server/src/main.ts';
-import type { Result } from '../apps/server/src/openf1/schemas.ts';
 
 // Downloads one session's F1 archive files (`<Topic>.jsonStream` and `<Topic>.json`, A§6.2) into
 // fixtures-private/archive/<session_key>/. Run on the owner's machine only: CI never calls F1
 // (A§12.1 invariant 4). The F1 TV token comes from a 0600 file (P2b D2) and goes only to
-// livetiming.formula1.com, in an Authorization header. It is never logged, put in argv or env, and
-// no error carries a body or an exception message: a fixed code plus the HTTP status.
+// livetiming.formula1.com, in an Authorization header (download(), apps/server/src/archive/files.ts). It is
+// never logged, put in argv or env, and no error carries a body or an exception message.
 
-export const ORIGIN = 'https://livetiming.formula1.com';
+export { indexSessions, isArchivePath, ORIGIN, outDir };
+
 const BASE = `${ORIGIN}/static/`;
 export const PRIVATE = join(import.meta.dirname, '../fixtures-private');
 const USAGE = 'usage: fetch-archive.ts <year> <session_key> --token-file <path> [--path <year/meeting/session/>]';
-const TIMEOUT_MS = 60_000;
-export const MAX_BYTES = 256 * 1024 * 1024;
 
 /** The 11 topics the views need, plus SessionData and Heartbeat (the archive's t0). */
 export const TOPICS = [
@@ -34,81 +41,6 @@ export const TOPICS = [
   'SessionData',
   'Heartbeat',
 ];
-
-export type Failure = { code: 'http'; status: number } | { code: 'network' | 'timeout' | 'too_large' | 'host' };
-
-const PATH = /^\d{4}\/[A-Za-z0-9_-]+\/[A-Za-z0-9_-]+\/$/;
-
-export const isArchivePath = (path: string): boolean => PATH.test(path);
-
-/** Printable ASCII only: Index.json text is remote data and may hold control characters. */
-export const safe = (value: unknown) => String(value).replace(/[^\x20-\x7e]/g, '?');
-
-/**
- * `<root>/archive/<session_key>`, or undefined when the key is no plain number or the resolved
- * path would leave `<root>/archive`.
- */
-export function outDir(root: string, sessionKey: string): string | undefined {
-  if (!/^\d{1,9}$/.test(sessionKey)) return undefined;
-  const base = resolve(root, 'archive');
-  const dir = resolve(base, sessionKey);
-  return dir.startsWith(base + sep) ? dir : undefined;
-}
-
-export type IndexSession = { Key: unknown; Type: unknown; Name: unknown; Path: string };
-
-/** Every session of an Index.json (Meetings[].Sessions[]) that has a Path. The BOM is stripped here. */
-export function indexSessions(text: string): IndexSession[] | undefined {
-  let index: unknown;
-  try {
-    index = JSON.parse(text.replace(/^﻿/, ''));
-  } catch {
-    return undefined;
-  }
-  const meetings = (index as { Meetings?: unknown } | null)?.Meetings;
-  if (!Array.isArray(meetings)) return undefined;
-  return meetings.flatMap((m: { Sessions?: unknown } | null) =>
-    Array.isArray(m?.Sessions)
-      ? (m.Sessions as IndexSession[]).filter((s) => typeof s === 'object' && s !== null && typeof s.Path === 'string')
-      : [],
-  );
-}
-
-/** One GET to the F1 host with the token. No redirects, a 60 s deadline, a 256 MiB cap. Never throws. */
-export async function download(
-  target: string,
-  token: string,
-): Promise<Result<{ status: number; bytes: Buffer }, Failure>> {
-  if (new URL(target).origin !== ORIGIN) return { ok: false, error: { code: 'host' } };
-  const signal = AbortSignal.timeout(TIMEOUT_MS);
-  try {
-    const response = await fetch(target, {
-      headers: { authorization: `Bearer ${token}` },
-      redirect: 'error', // the token never follows a redirect to another host
-      signal,
-    });
-    const { status } = response;
-    if (!response.ok || response.body === null) {
-      await response.body?.cancel();
-      return { ok: false, error: { code: 'http', status } };
-    }
-    const reader = response.body.getReader();
-    const parts: Uint8Array[] = [];
-    let size = 0;
-    for (;;) {
-      const { done, value } = await reader.read();
-      if (done) return { ok: true, value: { status, bytes: Buffer.concat(parts) } };
-      size += value.byteLength;
-      if (size > MAX_BYTES) {
-        await reader.cancel();
-        return { ok: false, error: { code: 'too_large' } };
-      }
-      parts.push(value);
-    }
-  } catch {
-    return { ok: false, error: { code: signal.aborted ? 'timeout' : 'network' } };
-  }
-}
 
 const describe = (error: Failure) => (error.code === 'http' ? `http ${error.status}` : error.code);
 

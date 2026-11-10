@@ -1,0 +1,2 @@
+﻿23:45:00.000{"Lines":{"3":{"RacingNumber":"3","Line":1,"GridPos":"1","Stints":[{"Compound":"MEDIUM","New":"true","TyresNotChanged":"0","TotalLaps":0,"StartLaps":0}]},"8":{"RacingNumber":"8","Line":2,"GridPos":"2","Stints":[{"Compound":"SOFT","New":"false","TyresNotChanged":"0","TotalLaps":2,"StartLaps":2}]}}}
+23:53:30.000{"Lines":{"8":{"Stints":{"1":{"Compound":"HARD","New":"true","TyresNotChanged":"0","TotalLaps":0,"StartLaps":0}}}}}

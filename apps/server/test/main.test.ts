@@ -4,7 +4,7 @@ import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { dbUrl, EXIT_CONFIG, migratorUrl } from '../src/db/migrate.ts';
 import { HEARTBEAT_MAX_AGE_MS, healthy, startHeartbeat, touch } from '../src/heartbeat.ts';
-import { EXIT_NOT_IMPLEMENTED, EXIT_USAGE, run } from '../src/main.ts';
+import { EXIT_USAGE, run } from '../src/main.ts';
 
 const tmp = () => mkdtempSync(join(tmpdir(), 'f1-test-'));
 
@@ -17,24 +17,37 @@ describe('run', () => {
     [['refetch']],
     [['refetch', 'abc']],
     [['refetch', '11388', '11392']],
+    [['archive']],
+    [['archive', '2017']],
+    [['archive', '2023']],
+    [['archive', '2019', 'abc']],
+    [['archive', '2019', '0123456789']],
+    [['archive', '2019', '--path', 'x']],
+    [['archive', '2019', '--dir']],
+    // --dir only where git never sees the files (invariant 3)
+    [['archive', '2019', '--dir', '/tmp/x']],
+    [['archive', '2019', '--dir', join(import.meta.dirname, 'fixtures/archive')]],
+    [['archive', '2019', '--dir', '/home/x/F1_Timing/fixtures-private-evil/archive']],
+    [['archive', '2019', '--dir', '/srv/f1/archive/../x']],
   ])('%j is a usage error', async (argv) => {
     const lines: string[] = [];
     expect(await run(argv, {}, (l) => lines.push(l))).toBe(EXIT_USAGE);
     expect(lines[0]).toMatch(/^usage: main\.js <api\|ingest\|/);
   });
 
-  it('archive is not implemented yet', async () => {
-    expect(await run(['archive'], {}, () => {})).toBe(EXIT_NOT_IMPLEMENTED);
+  it.each([
+    [['ingest']],
+    [['backfill']],
+    [['refetch', '11388']],
+    [['live']],
+    [['archive', '2018']],
+    [['archive', '2022', '1', '--token-file', '/x', '--dir', '/srv/f1/archive']],
+    [['archive', '2019', '--dir', '/home/x/F1_Timing/fixtures-private/archive']],
+  ])('%j without a database setting is a config error', async (argv) => {
+    const lines: string[] = [];
+    expect(await run(argv, { DATABASE_URL: 'mysql://x/y' }, (l) => lines.push(l))).toBe(EXIT_CONFIG);
+    expect(lines).toEqual([`${argv[0]}: DATABASE_URL is not a postgres URL`]);
   });
-
-  it.each([[['ingest']], [['backfill']], [['refetch', '11388']], [['live']]])(
-    '%j without a database setting is a config error',
-    async (argv) => {
-      const lines: string[] = [];
-      expect(await run(argv, { DATABASE_URL: 'mysql://x/y' }, (l) => lines.push(l))).toBe(EXIT_CONFIG);
-      expect(lines).toEqual([`${argv[0]}: DATABASE_URL is not a postgres URL`]);
-    },
-  );
 
   it.each([
     [{}, 'CF_ACCESS_TEAM'],

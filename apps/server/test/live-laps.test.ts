@@ -268,7 +268,7 @@ describe('createLaps', () => {
       const line = `${new Date(ev.t - t0).toISOString().slice(11, 23)}${JSON.stringify(ev.payload)}\r\n`;
       files.set(ev.topic, (files.get(ev.topic) ?? '﻿') + line);
     }
-    expect(archiveT0(parseJsonStream(files.get('Heartbeat') ?? '', 'Heartbeat', 0).events)).toBe(t0);
+    expect(archiveT0(parseJsonStream(files.get('Heartbeat') ?? '', 'Heartbeat', 0).events)?.t0).toBe(t0);
     // By time, then topic, as OpenF1 orders archive messages.
     const archive = [...files]
       .sort(([a], [b]) => (a < b ? -1 : 1))

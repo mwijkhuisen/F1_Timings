@@ -1,8 +1,12 @@
 import type { Server } from 'node:http';
+import { resolve, sep } from 'node:path';
+import { setTimeout as sleep } from 'node:timers/promises';
+import { parseArgs } from 'node:util';
 import { serve } from '@hono/node-server';
 import pino from 'pino';
 import { access, accessConfig } from './api/access.ts';
 import { createApp } from './api/app.ts';
+import { ARCHIVE_DIR, archive, TOKEN_FILE } from './archive/job.ts';
 import { codeOf, createDb } from './db/db.ts';
 import { dbUrl, EXIT_CONFIG, runMigrate } from './db/migrate.ts';
 import { pingHealthchecks } from './healthchecks.ts';
@@ -17,18 +21,18 @@ import { createRainStep } from './rain/job.ts';
 export const ROLES = ['api', 'ingest', 'live', 'migrate', 'healthcheck', 'refetch', 'backfill', 'archive'] as const;
 export type Role = (typeof ROLES)[number];
 
-export const EXIT_NOT_IMPLEMENTED = 2;
 export const EXIT_USAGE = 64;
 /** Caddy proxies /api to api:8080 (P1f). */
 export const API_PORT = 8080;
 
 type Env = Readonly<Record<string, string | undefined>>;
 
-const USAGE = `usage: main.js <${ROLES.join('|')}> (refetch takes a session_key)`;
+const USAGE =
+  `usage: main.js <${ROLES.join('|')}> (refetch takes a session_key; ` +
+  'archive <year 2018-2022> [<session_key>...] [--token-file <path>] [--dir <path>])';
 
 /**
- * Resolves with the exit code. Roles without a phase yet exit EXIT_NOT_IMPLEMENTED. `apiPort` is a
- * test seam only (not configurable in production: Caddy proxies to api:8080).
+ * Resolves with the exit code. `apiPort` is a test seam only (not configurable in production: Caddy proxies to api:8080).
  */
 export async function run(
   argv: readonly string[],
@@ -37,24 +41,25 @@ export async function run(
   apiPort = API_PORT,
 ): Promise<number> {
   const [role, ...rest] = argv;
-  const args = role === 'refetch' ? 1 : 0;
-  if (
-    role === undefined ||
-    !(ROLES as readonly string[]).includes(role) ||
-    rest.length !== args ||
-    (role === 'refetch' && !/^\d{1,9}$/.test(rest[0] ?? ''))
-  ) {
+  const usage = () => {
     log(USAGE);
     return EXIT_USAGE;
+  };
+  if (!isRole(role)) return usage();
+  if (role === 'archive') return runArchive(rest, env, log);
+  if (rest.length !== (role === 'refetch' ? 1 : 0) || (role === 'refetch' && !/^\d{1,9}$/.test(rest[0] ?? ''))) {
+    return usage();
   }
   if (role === 'healthcheck') return healthy() ? 0 : 1;
   if (role === 'migrate') return runMigrate(env, log);
   if (role === 'api') return runApi(env, log, apiPort);
   if (role === 'ingest' || role === 'backfill' || role === 'refetch') return runIngest(role, Number(rest[0]), env, log);
   if (role === 'live') return runLive(env, log);
-  log(`role ${role} is not implemented yet`);
-  return EXIT_NOT_IMPLEMENTED;
+  role satisfies never; // a new role fails to compile until it is dispatched above
+  return usage();
 }
+
+const isRole = (role: string | undefined): role is Role => (ROLES as readonly string[]).includes(role ?? '');
 
 /** The f1_ingest roles (A§8): the daemon, the backfill job and `refetch <session_key>`. */
 async function runIngest(role: 'ingest' | 'backfill' | 'refetch', key: number, env: Env, log: (line: string) => void) {
@@ -86,6 +91,57 @@ async function runIngest(role: 'ingest' | 'backfill' | 'refetch', key: number, e
     await db.destroy();
   }
 }
+
+/** The archive job (A§6.2, P3a) as f1_ingest: years 2018–2022 only, 2023 on is OpenF1's. */
+async function runArchive(argv: readonly string[], env: Env, log: (line: string) => void): Promise<number> {
+  let parsed: ReturnType<typeof parseArchive>;
+  try {
+    parsed = parseArchive(argv);
+  } catch {
+    parsed = undefined;
+  }
+  if (parsed === undefined) {
+    log(USAGE);
+    return EXIT_USAGE;
+  }
+  const url = dbUrl('f1_ingest', env);
+  if (typeof url === 'string') {
+    log(`archive: ${url}`);
+    return EXIT_CONFIG;
+  }
+  const logger = pino({ base: { role: 'archive' } });
+  const db = createDb(url, (err) => logger.error({ cause: codeOf(err) }, 'database pool error'));
+  try {
+    return (await archive({ db, now: () => new Date(), sleep: (ms) => sleep(ms), log: logger }, parsed)) ? 0 : 1;
+  } catch (err) {
+    logger.error({ cause: codeOf(err) }, 'archive failed');
+    return 1;
+  } finally {
+    await db.destroy();
+  }
+}
+
+/** `<year> [<session_key>…] [--token-file <path>] [--dir <path>]`, or undefined; parseArgs throws on an unknown flag. */
+function parseArchive(argv: readonly string[]) {
+  const { values, positionals } = parseArgs({
+    args: [...argv],
+    allowPositionals: true,
+    options: { 'token-file': { type: 'string', default: TOKEN_FILE }, dir: { type: 'string', default: ARCHIVE_DIR } },
+  });
+  const [year = '', ...keys] = positionals;
+  if (!/^20(1[89]|2[0-2])$/.test(year) || !keys.every((k) => /^\d{1,9}$/.test(k))) return undefined;
+  if (!archiveDir(values.dir)) return undefined;
+  return { year: Number(year), keys: keys.map(Number), tokenFile: values['token-file'], dir: values.dir };
+}
+
+/**
+ * Real F1 archive files land only where git never sees them (invariant 3): the VM's /srv/f1/archive, or a directory
+ * with a path segment named exactly `fixtures-private` (gitignored).
+ */
+const archiveDir = (dir: string) => {
+  const path = resolve(dir);
+  return path === ARCHIVE_DIR || path.split(sep).includes('fixtures-private');
+};
 
 /** The recorder daemon (A§11.2), as f1_ingest. Resolves after SIGTERM/SIGINT, with the running recording closed. */
 async function runLive(env: Env, log: (line: string) => void): Promise<number> {

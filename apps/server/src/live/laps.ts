@@ -27,7 +27,7 @@ import type { Obj } from '@f1/contracts';
 import type { Insertable } from 'kysely';
 import type { DB } from '../db/db.ts';
 import { markPitIn } from '../ingest/normalise.ts';
-import { duration, type FeedEvent, isObj } from './read.ts';
+import { duration, type FeedEvent, isObj, utc } from './read.ts';
 
 // Feed deltas → the lap and stint rows OpenF1 builds (A§11.3). Pure and incremental: push() takes each event with
 // the delta createFeed().apply returned for it, rows() returns the rows so far.
@@ -96,11 +96,6 @@ const iso = (ms: number | null) =>
 // OpenF1 reads a sector with float(): plain seconds only, so "1:05.123" is no value.
 const seconds = (v: unknown) => (typeof v === 'string' && /^\d+(\.\d*)?$/.test(v) ? fit(duration(v)) : null);
 const text = (v: unknown) => (typeof v === 'string' && !v.includes('\0') ? v : null);
-// A feed Utc as UTC, with or without its Z.
-const utc = (v: unknown) => {
-  const at = typeof v === 'string' ? Date.parse(v.endsWith('Z') ? v : `${v}Z`) : Number.NaN;
-  return Number.isNaN(at) ? null : at;
-};
 
 const newLap = (driver: number, n: number): Lap => ({
   driver_number: driver,
@@ -128,6 +123,7 @@ export function createLaps(
   let race = false;
   let open = false;
   let chequered: number | null = null;
+  let started: number | null = null; // the last "Started" of a race
   const laps = new Map<number, Lap[]>();
   const marked = new Set<Lap>();
   const shown = new Map<Lap, LapRow>();
@@ -156,6 +152,12 @@ export function createLaps(
     const list = laps.get(driver);
     if (list) return list.at(-1) as Lap;
     const first = newLap(driver, 1);
+    // 2018–2019 archives send no driver data before the start, so every lap 1 is created after "Started" and the
+    // branch below never sees it: it starts there. Live recordings and OpenF1 are unchanged.
+    if (source === 'f1-archive' && started !== null) {
+      first.date_start = started;
+      marked.add(first);
+    }
     laps.set(driver, [first]);
     return first;
   }
@@ -345,6 +347,7 @@ export function createLaps(
         for (const status of items(delta.StatusSeries)) {
           const at = isObj(status) && status.SessionStatus === 'Started' ? utc(status.Utc) : null;
           if (at === null) continue;
+          started = at;
           for (const [first, ...more] of laps.values()) {
             if (!first || more.length > 0 || first.lap_number !== 1) continue;
             first.date_start = at;

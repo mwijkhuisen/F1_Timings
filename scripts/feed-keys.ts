@@ -1,10 +1,10 @@
 import { parseArgs } from 'node:util';
+import { safe } from '../apps/server/src/archive/files.ts';
 import { createFeed } from '../apps/server/src/live/merge.ts';
 import type { FeedEvent } from '../apps/server/src/live/read.ts';
 import { EXIT_USAGE } from '../apps/server/src/main.ts';
 import { view } from '../packages/contracts/src/index.ts';
 import { readInput } from './compare-laps.ts';
-import { safe } from './fetch-archive.ts';
 
 // The keys one feed topic carries, per session (A§11.3): every key path in the topic's messages, with the number of
 // messages that carry it. Array indices and numeric keys (driver numbers, sectors, qualifying parts) print as #. A

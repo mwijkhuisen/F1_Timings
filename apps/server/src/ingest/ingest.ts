@@ -39,9 +39,9 @@ export type Deps = {
   /** The daemon's rain step (P5c, `createRainStep`), after the tick every minute; it never rejects. */
   rainStep?: (stopping: () => boolean) => Promise<void>;
 };
-export type Outcome = Result<IngestState, ErrorCode | 'unknown_session' | 'live_session'>;
+export type Outcome = Result<IngestState, ErrorCode | 'unknown_session' | 'live_session' | 'not_openf1'>;
 
-const chunks = <T>(rows: readonly T[]) =>
+export const chunks = <T>(rows: readonly T[]) =>
   Array.from({ length: Math.ceil(rows.length / CHUNK) }, (_, i) => rows.slice(i * CHUNK, (i + 1) * CHUNK));
 
 /** Log-ready: the code, the endpoint and, for a schema failure, zod's paths and codes (never a value). */
@@ -95,19 +95,23 @@ export async function syncSchedule(deps: Deps, years: readonly number[]): Promis
             .insertInto('meeting')
             .values(chunk)
             .onConflict((oc) =>
-              oc.column('meeting_key').doUpdateSet((eb) => ({
-                source: eb.ref('excluded.source'),
-                year: eb.ref('excluded.year'),
-                name: eb.ref('excluded.name'),
-                official_name: eb.ref('excluded.official_name'),
-                location: eb.ref('excluded.location'),
-                country_code: eb.ref('excluded.country_code'),
-                circuit_short_name: eb.ref('excluded.circuit_short_name'),
-                gmt_offset: eb.ref('excluded.gmt_offset'),
-                date_start: eb.ref('excluded.date_start'),
-                date_end: eb.ref('excluded.date_end'),
-                is_cancelled: eb.ref('excluded.is_cancelled'),
-              })),
+              oc
+                .column('meeting_key')
+                .doUpdateSet((eb) => ({
+                  source: eb.ref('excluded.source'),
+                  year: eb.ref('excluded.year'),
+                  name: eb.ref('excluded.name'),
+                  official_name: eb.ref('excluded.official_name'),
+                  location: eb.ref('excluded.location'),
+                  country_code: eb.ref('excluded.country_code'),
+                  circuit_short_name: eb.ref('excluded.circuit_short_name'),
+                  gmt_offset: eb.ref('excluded.gmt_offset'),
+                  date_start: eb.ref('excluded.date_start'),
+                  date_end: eb.ref('excluded.date_end'),
+                  is_cancelled: eb.ref('excluded.is_cancelled'),
+                }))
+                // An F1 archive meeting with the same key stays as it is (the archive job refuses the other way).
+                .where('meeting.source', '=', 'openf1'),
             )
             .execute();
         }
@@ -116,21 +120,24 @@ export async function syncSchedule(deps: Deps, years: readonly number[]): Promis
             .insertInto('session')
             .values(chunk)
             .onConflict((oc) =>
-              oc.column('session_key').doUpdateSet((eb) => ({
-                source: eb.ref('excluded.source'),
-                meeting_key: eb.ref('excluded.meeting_key'),
-                type: eb.ref('excluded.type'),
-                name: eb.ref('excluded.name'),
-                date_start: eb.ref('excluded.date_start'),
-                date_end: eb.ref('excluded.date_end'),
-                is_cancelled: eb.ref('excluded.is_cancelled'),
-                next_fetch_at: eb
-                  .case()
-                  .when('session.ingest_state', '=', 'scheduled')
-                  .then(eb.ref('excluded.next_fetch_at'))
-                  .else(eb.ref('session.next_fetch_at'))
-                  .end(),
-              })),
+              oc
+                .column('session_key')
+                .doUpdateSet((eb) => ({
+                  source: eb.ref('excluded.source'),
+                  meeting_key: eb.ref('excluded.meeting_key'),
+                  type: eb.ref('excluded.type'),
+                  name: eb.ref('excluded.name'),
+                  date_start: eb.ref('excluded.date_start'),
+                  date_end: eb.ref('excluded.date_end'),
+                  is_cancelled: eb.ref('excluded.is_cancelled'),
+                  next_fetch_at: eb
+                    .case()
+                    .when('session.ingest_state', '=', 'scheduled')
+                    .then(eb.ref('excluded.next_fetch_at'))
+                    .else(eb.ref('session.next_fetch_at'))
+                    .end(),
+                }))
+                .where('session.source', '=', 'openf1'),
             )
             .execute();
         }
@@ -192,10 +199,19 @@ export async function processSession(deps: Deps, key: number, refetch = false): 
 
   let type: string | null;
   try {
-    const found = await db.selectFrom('session').select('type').where('session_key', '=', key).executeTakeFirst();
+    const found = await db
+      .selectFrom('session')
+      .select(['type', 'source'])
+      .where('session_key', '=', key)
+      .executeTakeFirst();
     if (!found) {
       log.error(line({ error: 'unknown_session' }), 'session');
       return { ok: false, error: 'unknown_session' };
+    }
+    // The root guard: [] from OpenF1 must never replace the F1 archive's rows (they have no raw_response to protect them).
+    if (found.source !== 'openf1') {
+      log.error(line({ state: 'unchanged', error: 'not_openf1' }), 'session');
+      return { ok: false, error: 'not_openf1' };
     }
     type = found.type;
     // A manual refetch waits for the live window too (A§8): it writes nothing and fails.
@@ -281,7 +297,7 @@ export async function processSession(deps: Deps, key: number, refetch = false): 
  * a refetch wait it out. Cancelled sessions open no window, and neither does a row longer
  * than 12 h (a bad date must not stop ingest for days).
  */
-async function live({ db, now }: Deps): Promise<boolean> {
+export async function live({ db, now }: Pick<Deps, 'db' | 'now'>): Promise<boolean> {
   const at = now().getTime();
   const margin = 30 * 60_000;
   const row = await db
@@ -305,6 +321,7 @@ export async function tick(deps: Deps, stopping: () => boolean = () => false): P
     .updateTable('session')
     .set({ ingest_state: 'due' })
     .where('ingest_state', 'in', ['scheduled', 'fetched'])
+    .where('source', '=', 'openf1')
     .where('is_cancelled', '=', false)
     .where('next_fetch_at', '<=', at)
     .execute();
@@ -312,6 +329,7 @@ export async function tick(deps: Deps, stopping: () => boolean = () => false): P
     .selectFrom('session')
     .select('session_key')
     .where('ingest_state', '=', 'due')
+    .where('source', '=', 'openf1')
     .where('is_cancelled', '=', false)
     .where('next_fetch_at', '<=', at)
     .orderBy('date_end', 'desc')
@@ -352,6 +370,7 @@ export async function backfill(deps: Deps): Promise<boolean> {
     .selectFrom('session')
     .select('session_key')
     .where('ingest_state', '<>', 'final')
+    .where('source', '=', 'openf1')
     .where('is_cancelled', '=', false)
     .where('date_end', '<=', new Date(deps.now().getTime() - FIRST_FETCH_AFTER_MS))
     .orderBy('date_end', 'desc')

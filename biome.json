@@ -6,6 +6,7 @@
       "**",
       "!**/openf1/fixtures",
       "!**/rain/fixtures",
+      "!**/test/fixtures/archive",
       "!apps/server/src/db/types.ts",
       "!**/*.md",
       "!**/*.yaml",
