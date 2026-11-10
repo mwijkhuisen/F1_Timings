@@ -6,7 +6,7 @@
 # without ingest the session table is empty, so it idles and calls nothing (asserted here). It needs
 # the images f1-server:ci and f1-web:ci (built by the job) and nft, curl, flock and systemd-analyze.
 #   1. f1-install twice: the second run makes 0 changes; systemd-analyze verify on the units;
-#      /srv/f1/live and /srv/f1/state/live are 62532:62532 0700 and /srv/f1/state stays root 0700.
+#      /srv/f1/live, /srv/f1/archive and /srv/f1/state/live are 62532:62532 0700 and /srv/f1/state stays root 0700.
 #   2. Dummy cf_tunnel_token, hc_ping_key, f1tv_username and f1tv_password (f1-update says "not
 #      configured" while one is empty), and f1.env with CF_ACCESS_TEAM=ci and a 64-hex AUD.
 #   3. f1-update --server f1-server:ci --web f1-web:ci: exit 0, current.env, /healthz 200 on
@@ -105,8 +105,9 @@ systemd-analyze verify /etc/systemd/system/f1-* || fail "systemd-analyze verify 
 for d in /srv/f1/live /srv/f1/state/live; do
   [[ $(stat -c '%a %u:%g' "$d") == '700 62532:62532' ]] || fail "$d is not 62532:62532 0700: $(stat -c '%a %u:%g' "$d")"
 done
+[[ $(stat -c '%a %u:%g' /srv/f1/archive) == '700 62532:62532' ]] || fail "/srv/f1/archive is not 62532:62532 0700: $(stat -c '%a %u:%g' /srv/f1/archive)"
 [[ $(stat -c '%a %u:%g' /srv/f1/state) == '700 0:0' ]] || fail "/srv/f1/state is not root 0700: $(stat -c '%a %u:%g' /srv/f1/state)"
-proof "f1-install ran twice, the second: '$(tail -n 1 "$tmp/install2")'; f1-firewall.service active, table inet f1 loaded (resolvers4 $(nft list set inet f1 resolvers4 | grep -o 'elements = {[^}]*}' || echo empty)); systemd-analyze verify passes: $(echo /etc/systemd/system/f1-*); /srv/f1/live and /srv/f1/state/live are 62532:62532 0700, /srv/f1/state is still root 0700"
+proof "f1-install ran twice, the second: '$(tail -n 1 "$tmp/install2")'; f1-firewall.service active, table inet f1 loaded (resolvers4 $(nft list set inet f1 resolvers4 | grep -o 'elements = {[^}]*}' || echo empty)); systemd-analyze verify passes: $(echo /etc/systemd/system/f1-*); /srv/f1/live, /srv/f1/archive and /srv/f1/state/live are 62532:62532 0700, /srv/f1/state is still root 0700"
 
 # ------------------------------------------------------------------ 2
 step "2. Dummy secrets (live reads the F1 TV ones only for a login, and none is due here), and f1.env"

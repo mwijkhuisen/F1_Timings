@@ -25,7 +25,7 @@ program='
 | ($c.services | to_entries) as $s
 | ($c.networks // {}) as $n
 | {
-  services: (($c.services | keys) == ["api", "caddy", "cloudflared", "db", "ingest", "live", "migrate"]),
+  services: (($c.services | keys) == ["api", "archive", "caddy", "cloudflared", "db", "ingest", "live", "migrate"]),
   read_only: all($s[]; .value.read_only == true),
   cap_drop_all: all($s[]; .value.cap_drop == ["ALL"]),
   no_new_privileges: all($s[]; any(.value.security_opt[]?; . == "no-new-privileges:true")),
@@ -39,6 +39,8 @@ program='
   only_bind_allowlist: ([$s[] | .key as $k | .value.volumes[]? | select(.type == "bind")
       | {svc: $k, source, target, read_only: (.read_only // false)}] | sort_by(.svc, .source)
     == [{svc: "api", source: "/srv/f1/live", target: "/srv/f1/live", read_only: true},
+        {svc: "archive", source: "/srv/f1/archive", target: "/srv/f1/archive", read_only: false},
+        {svc: "archive", source: "/srv/f1/state/live", target: "/srv/f1/state", read_only: true},
         {svc: "db", source: "/etc/f1/postgres/roles.sql", target: "/docker-entrypoint-initdb.d/10-roles.sql", read_only: true},
         {svc: "live", source: "/srv/f1/live", target: "/srv/f1/live", read_only: false},
         {svc: "live", source: "/srv/f1/state/live", target: "/srv/f1/state", read_only: false}]),
@@ -53,7 +55,7 @@ program='
   tunnel_token_file: any($c.services.cloudflared.command[]?; . == "--token-file"),
   # http2 over tcp/7844 only (P2f): QUIC fails on the VM and the firewall has no udp/7844 (nft-check.sh).
   tunnel_http2: (($c.services.cloudflared.command // []) | index(["--protocol", "http2"]) != null),
-  healthchecks: all($s[] | select(.key != "migrate"); .value.healthcheck.test != null and .value.healthcheck.disable != true),
+  healthchecks: all($s[] | select(.key != "migrate" and .key != "archive"); .value.healthcheck.test != null and .value.healthcheck.disable != true),
   images_pinned: all($s[]; .value.image | test("@sha256:[0-9a-f]{64}$") or . == "f1-server:ci" or . == "f1-web:ci"),
   networks_named_f1: ($n != {} and all($n | to_entries[]; (.key | test("^f1-[a-z-]+$")) and .value.name == .key
     and .value.driver_opts["com.docker.network.bridge.name"] == .key)),
@@ -62,14 +64,15 @@ program='
   ipv4_only: all($n[]; .enable_ipv6 != true),
   icc_off_unless_internal: all($n[]; .internal == true or .driver_opts["com.docker.network.bridge.enable_icc"] == "false"),
   network_members: (([$n | keys[] as $k | {($k): ([$s[] | select((.value.networks // {}) | has($k)) | .key] | sort)}] | add) == {
-    "f1-db": ["api", "db", "ingest", "live", "migrate"], "f1-edge": ["api", "caddy"], "f1-egress": ["ingest", "live"],
+    "f1-db": ["api", "archive", "db", "ingest", "live", "migrate"], "f1-edge": ["api", "caddy"],
+    "f1-egress": ["archive", "ingest", "live"],
     "f1-api-egress": ["api"], "f1-tunnel": ["cloudflared"], "f1-tunnel-edge": ["caddy", "cloudflared"],
     "f1-publish": ["caddy"]}),
   one_external_network: all($s[]; [(.value.networks // {}) | keys[] | select($n[.].internal != true)] | length <= 1),
   secret_files: ((($c.secrets // {}) | keys) == ($gid | keys)
     and all($c.secrets | to_entries[]; .value.file == "/etc/f1/secrets/" + .key)),
   secret_consumers: (([$s[] | {(.key): ([.value.secrets[]?.source] | sort)}] | add) == {
-    api: ["db_f1_api"], caddy: [], cloudflared: ["cf_tunnel_token"],
+    api: ["db_f1_api"], archive: ["db_f1_ingest"], caddy: [], cloudflared: ["cf_tunnel_token"],
     db: ["db_f1_api", "db_f1_ingest", "db_f1_migrator", "db_postgres"],
     ingest: ["db_f1_ingest", "hc_ping_key"], live: ["db_f1_ingest", "f1tv_password", "f1tv_username", "hc_ping_key"],
     migrate: ["db_f1_migrator"]}),
@@ -88,7 +91,7 @@ fi
 echo "hardening: deploy/compose.yaml passes $n checks"
 
 # The negative cases: the program must catch each of these, and name the failed check. The second is
-# the O1 rule: live may mount /srv/f1/state/live but never /srv/f1/state itself.
+# the O1 rule: live and archive may mount /srv/f1/state/live but never /srv/f1/state itself.
 negative() {
   local label=$1 check=$2 filter=$3 err
   jq "$filter" "$tmp/config.json" >"$tmp/broken.json"
@@ -107,6 +110,10 @@ negative "live without the core limit" no_core_dumps 'del(.services.live.ulimits
 negative "caddy with a core size" no_core_dumps '.services.caddy.ulimits.core = {soft: 1, hard: 1}'
 negative "live with /srv/f1/state as a source" only_bind_allowlist \
   '(.services.live.volumes[] | select(.target == "/srv/f1/state") | .source) = "/srv/f1/state"'
+negative "archive with /srv/f1/state as a source" only_bind_allowlist \
+  '(.services.archive.volumes[] | select(.target == "/srv/f1/state") | .source) = "/srv/f1/state"'
+negative "archive with the token directory read-write" only_bind_allowlist \
+  '(.services.archive.volumes[] | select(.target == "/srv/f1/state") | .read_only) = false'
 negative "api with /srv/f1/live read-write" only_bind_allowlist \
   '(.services.api.volumes[] | select(.target == "/srv/f1/live") | .read_only) = false'
 negative "api with an extra bind" only_bind_allowlist \
