@@ -2,15 +2,15 @@ import { createReadStream, readdirSync, readFileSync, statSync } from 'node:fs';
 import { join } from 'node:path';
 import { createInterface } from 'node:readline';
 import { parseArgs } from 'node:util';
+import { archiveEvents, readStreams, reconstruct, safe } from '../apps/server/src/archive/files.ts';
 import { normaliseSession } from '../apps/server/src/ingest/normalise.ts';
-import { createLaps } from '../apps/server/src/live/laps.ts';
-import { createFeed } from '../apps/server/src/live/merge.ts';
-import { archiveT0, type FeedEvent, parseFeedLine, parseJsonStream } from '../apps/server/src/live/read.ts';
+import { type FeedEvent, parseFeedLine } from '../apps/server/src/live/read.ts';
 import { EXIT_USAGE } from '../apps/server/src/main.ts';
 import { createClient } from '../apps/server/src/openf1/client.ts';
 import { parse } from '../apps/server/src/openf1/schemas.ts';
-import { merge, view } from '../packages/contracts/src/index.ts';
-import { safe } from './fetch-archive.ts';
+import { merge } from '../packages/contracts/src/index.ts';
+
+export { reconstruct };
 
 // The P2b [box] judge: laps reconstructed from a P2a recording (feed.jsonl or its directory) or an
 // archive directory (fetch-archive.ts) against OpenF1's laps and stints. Run on the owner's machine
@@ -152,41 +152,11 @@ export async function readInput(input: string): Promise<Input | undefined> {
       }
       return { events, skipped: 0 };
     }
-    const files = readdirSync(input)
-      .filter((f) => f.endsWith('.jsonStream'))
-      .sort();
-    const text = (f: string) => readFileSync(join(input, f), 'utf8');
-    const t0 = archiveT0(
-      files.includes('Heartbeat.jsonStream')
-        ? parseJsonStream(text('Heartbeat.jsonStream'), 'Heartbeat', 0).events
-        : [],
-    );
-    if (t0 === undefined) return undefined;
-    let skipped = 0;
-    // Stable sort: events at the same t stay in file-name order.
-    const events = files.flatMap((f) => {
-      const parsed = parseJsonStream(text(f), f.slice(0, -'.jsonStream'.length), t0);
-      skipped += parsed.skipped;
-      return parsed.events;
-    });
-    return { events: events.sort((a, b) => a.t - b.t), archiveDir: input, skipped };
+    const archive = archiveEvents(readStreams(input));
+    return archive && { events: archive.events, archiveDir: input, skipped: archive.skipped };
   } catch {
     return undefined;
   }
-}
-
-/** Our rows. Two passes: the first finds the session key and type (SessionInfo), the second builds the rows. */
-export function reconstruct(events: readonly FeedEvent[], source: 'f1-live' | 'f1-archive') {
-  const first = createFeed();
-  for (const ev of events) first.apply(ev);
-  const info = view(first.state, 'SessionInfo');
-  if (info?.Key === undefined) return { state: first.state, info };
-  const [feed, laps] = [createFeed(), createLaps(info.Key, source)];
-  for (const ev of events) {
-    const delta = feed.apply(ev);
-    if (delta !== undefined) laps.push(ev, delta);
-  }
-  return { state: first.state, info, rows: laps.rows() };
 }
 
 export type Oracle = (key: number, type: string | null) => Promise<{ laps: Row[]; stints: Row[] } | string>;

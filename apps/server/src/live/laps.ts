@@ -27,7 +27,7 @@ import type { Obj } from '@f1/contracts';
 import type { Insertable } from 'kysely';
 import type { DB } from '../db/db.ts';
 import { markPitIn } from '../ingest/normalise.ts';
-import { duration, type FeedEvent, isObj } from './read.ts';
+import { duration, type FeedEvent, isObj, utc } from './read.ts';
 
 // Feed deltas → the lap and stint rows OpenF1 builds (A§11.3). Pure and incremental: push() takes each event with
 // the delta createFeed().apply returned for it, rows() returns the rows so far.
@@ -96,11 +96,6 @@ const iso = (ms: number | null) =>
 // OpenF1 reads a sector with float(): plain seconds only, so "1:05.123" is no value.
 const seconds = (v: unknown) => (typeof v === 'string' && /^\d+(\.\d*)?$/.test(v) ? fit(duration(v)) : null);
 const text = (v: unknown) => (typeof v === 'string' && !v.includes('\0') ? v : null);
-// A feed Utc as UTC, with or without its Z.
-const utc = (v: unknown) => {
-  const at = typeof v === 'string' ? Date.parse(v.endsWith('Z') ? v : `${v}Z`) : Number.NaN;
-  return Number.isNaN(at) ? null : at;
-};
 
 const newLap = (driver: number, n: number): Lap => ({
   driver_number: driver,
