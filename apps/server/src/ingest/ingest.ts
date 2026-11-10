@@ -95,19 +95,23 @@ export async function syncSchedule(deps: Deps, years: readonly number[]): Promis
             .insertInto('meeting')
             .values(chunk)
             .onConflict((oc) =>
-              oc.column('meeting_key').doUpdateSet((eb) => ({
-                source: eb.ref('excluded.source'),
-                year: eb.ref('excluded.year'),
-                name: eb.ref('excluded.name'),
-                official_name: eb.ref('excluded.official_name'),
-                location: eb.ref('excluded.location'),
-                country_code: eb.ref('excluded.country_code'),
-                circuit_short_name: eb.ref('excluded.circuit_short_name'),
-                gmt_offset: eb.ref('excluded.gmt_offset'),
-                date_start: eb.ref('excluded.date_start'),
-                date_end: eb.ref('excluded.date_end'),
-                is_cancelled: eb.ref('excluded.is_cancelled'),
-              })),
+              oc
+                .column('meeting_key')
+                .doUpdateSet((eb) => ({
+                  source: eb.ref('excluded.source'),
+                  year: eb.ref('excluded.year'),
+                  name: eb.ref('excluded.name'),
+                  official_name: eb.ref('excluded.official_name'),
+                  location: eb.ref('excluded.location'),
+                  country_code: eb.ref('excluded.country_code'),
+                  circuit_short_name: eb.ref('excluded.circuit_short_name'),
+                  gmt_offset: eb.ref('excluded.gmt_offset'),
+                  date_start: eb.ref('excluded.date_start'),
+                  date_end: eb.ref('excluded.date_end'),
+                  is_cancelled: eb.ref('excluded.is_cancelled'),
+                }))
+                // An F1 archive meeting with the same key stays as it is (the archive job refuses the other way).
+                .where('meeting.source', '=', 'openf1'),
             )
             .execute();
         }
@@ -116,21 +120,24 @@ export async function syncSchedule(deps: Deps, years: readonly number[]): Promis
             .insertInto('session')
             .values(chunk)
             .onConflict((oc) =>
-              oc.column('session_key').doUpdateSet((eb) => ({
-                source: eb.ref('excluded.source'),
-                meeting_key: eb.ref('excluded.meeting_key'),
-                type: eb.ref('excluded.type'),
-                name: eb.ref('excluded.name'),
-                date_start: eb.ref('excluded.date_start'),
-                date_end: eb.ref('excluded.date_end'),
-                is_cancelled: eb.ref('excluded.is_cancelled'),
-                next_fetch_at: eb
-                  .case()
-                  .when('session.ingest_state', '=', 'scheduled')
-                  .then(eb.ref('excluded.next_fetch_at'))
-                  .else(eb.ref('session.next_fetch_at'))
-                  .end(),
-              })),
+              oc
+                .column('session_key')
+                .doUpdateSet((eb) => ({
+                  source: eb.ref('excluded.source'),
+                  meeting_key: eb.ref('excluded.meeting_key'),
+                  type: eb.ref('excluded.type'),
+                  name: eb.ref('excluded.name'),
+                  date_start: eb.ref('excluded.date_start'),
+                  date_end: eb.ref('excluded.date_end'),
+                  is_cancelled: eb.ref('excluded.is_cancelled'),
+                  next_fetch_at: eb
+                    .case()
+                    .when('session.ingest_state', '=', 'scheduled')
+                    .then(eb.ref('excluded.next_fetch_at'))
+                    .else(eb.ref('session.next_fetch_at'))
+                    .end(),
+                }))
+                .where('session.source', '=', 'openf1'),
             )
             .execute();
         }
