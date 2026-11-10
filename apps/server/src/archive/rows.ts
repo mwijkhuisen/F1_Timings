@@ -2,10 +2,10 @@ import { view, weatherRow } from '@f1/contracts';
 import type { Insertable } from 'kysely';
 import type { DB } from '../db/db.ts';
 import { createFeed } from '../live/merge.ts';
-import { type T0From, utc } from '../live/read.ts';
+import { type FeedEvent, isObj, type T0From, utc } from '../live/read.ts';
 import type { Result } from '../openf1/schemas.ts';
 import { markLaps, type RuleCounts, type RuleMessage } from '../timing/rules.ts';
-import { archiveEvents, type IndexSession, indexSessions, isArchivePath, reconstruct } from './files.ts';
+import { archiveEvents, byTime, type IndexSession, indexSessions, isArchivePath, reconstruct } from './files.ts';
 
 // The F1 archive (A§6.2) → A§7 rows with source 'f1-archive'. Pure: the Index gives the meeting and session rows,
 // one session's streams the child rows. No pit rows: no view reads them yet.
@@ -136,6 +136,31 @@ export function indexPlan(
   return { sessions, badPath, badIndex: all.length - ok.length };
 }
 
+/**
+ * A 2018–2019 archive has no SessionData (403, A§6.2). Without one SessionData event, it is rebuilt at its sources' t:
+ * a StatusSeries entry per SessionStatus `Status`, a Series entry per change of TimingData's top-level `SessionPart`
+ * (QualifyingPart), each with that t as its Utc, merged in archiveEvents' order. Runs after archiveT0, so it never
+ * gives a t0. Events with SessionData come back as they are.
+ */
+export function rebuildSessionData(events: readonly FeedEvent[]): readonly FeedEvent[] {
+  if (events.some((ev) => ev.topic === 'SessionData')) return events;
+  const added: FeedEvent[] = [];
+  let [status, series] = [0, 0];
+  let part: number | undefined;
+  for (const { t, topic, payload } of events) {
+    if (!isObj(payload)) continue;
+    const Utc = new Date(t).toISOString();
+    if (topic === 'SessionStatus' && typeof payload.Status === 'string') {
+      const entry = { Utc, SessionStatus: payload.Status };
+      added.push({ t, topic: 'SessionData', payload: { StatusSeries: { [status++]: entry } } });
+    } else if (topic === 'TimingData' && typeof payload.SessionPart === 'number' && payload.SessionPart !== part) {
+      part = payload.SessionPart;
+      added.push({ t, topic: 'SessionData', payload: { Series: { [series++]: { Utc, QualifyingPart: part } } } });
+    }
+  }
+  return added.length === 0 ? events : [...events, ...added].sort(byTime);
+}
+
 export type Stats = {
   t0: T0From;
   t0_heartbeat_delta_ms: number | null;
@@ -145,7 +170,7 @@ export type Stats = {
 };
 
 /**
- * One session's streams (topic → text) → its child rows. `incomplete` without SessionInfo, TimingData or a t0;
+ * One session's streams (topic → text) → its child rows, SessionData rebuilt when absent (rebuildSessionData). `incomplete` without SessionInfo, TimingData or a t0;
  * `key_mismatch` when SessionInfo's Key is not the Index Key.
  */
 export function archiveRows(
@@ -155,10 +180,10 @@ export function archiveRows(
 ): Result<{ rows: ArchiveRows; stats: Stats }, 'incomplete' | 'key_mismatch'> {
   const archive = files.has('SessionInfo') && files.has('TimingData') ? archiveEvents(files) : undefined;
   if (archive === undefined) return { ok: false, error: 'incomplete' };
-  const { state, info, rows } = reconstruct(archive.events, source);
+  const { state, info, rows } = reconstruct(rebuildSessionData(archive.events), source);
   if (info?.Key !== key || rows === undefined) return { ok: false, error: 'key_mismatch' };
 
-  // The qualifying part in force from each change on (SessionData Series), in time order.
+  // The qualifying part in force from each change on (SessionData Series, or its rebuild), in time order.
   const phases: { at: number; part: number }[] = [];
   const series = Object.values(view(state, 'SessionData')?.Series ?? {})
     .map((s) => ({ at: utc(s?.Utc), part: s?.QualifyingPart }))

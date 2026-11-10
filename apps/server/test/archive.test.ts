@@ -2,7 +2,7 @@ import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { archiveEvents, isArchivePath, readStreams } from '../src/archive/files.ts';
-import { archiveRows, gmtOffset, indexPlan } from '../src/archive/rows.ts';
+import { archiveRows, gmtOffset, indexPlan, rebuildSessionData } from '../src/archive/rows.ts';
 import { archiveT0, type FeedEvent } from '../src/live/read.ts';
 
 // fixtures/archive/ is synthetic and hand-written: every name, time and value is invented (A§12.1 invariant 3).
@@ -262,6 +262,88 @@ describe('archiveRows: the qualifying', () => {
   });
 });
 
+describe('rebuildSessionData', () => {
+  const ev = (t: number, topic: string, payload: unknown): FeedEvent => ({ t: T0 + t, topic, payload });
+
+  it('turns each SessionStatus Status into a StatusSeries entry at its t, merged in time and topic order', () => {
+    const events = [
+      ev(0, 'SessionInfo', { Key: 1 }),
+      ev(1000, 'SessionStatus', { Status: 'Inactive' }),
+      ev(5000, 'SessionInfo', { Key: 1 }),
+      ev(5000, 'SessionStatus', { Status: 'Started' }),
+      ev(5000, 'TimingData', { Lines: {} }),
+      ev(6000, 'SessionStatus', { Started: 'Started' }), // no Status
+    ];
+    expect(rebuildSessionData(events).map((e) => [e.t - T0, e.topic, e.payload])).toEqual([
+      [0, 'SessionInfo', { Key: 1 }],
+      [1000, 'SessionData', { StatusSeries: { 0: { Utc: at(1000), SessionStatus: 'Inactive' } } }],
+      [1000, 'SessionStatus', { Status: 'Inactive' }],
+      [5000, 'SessionInfo', { Key: 1 }],
+      [5000, 'SessionData', { StatusSeries: { 1: { Utc: at(5000), SessionStatus: 'Started' } } }],
+      [5000, 'SessionStatus', { Status: 'Started' }],
+      [5000, 'TimingData', { Lines: {} }],
+      [6000, 'SessionStatus', { Started: 'Started' }],
+    ]);
+  });
+
+  it("turns each change of TimingData's SessionPart into a Series QualifyingPart entry, none for an unchanged one", () => {
+    const events = [
+      ev(1000, 'TimingData', { SessionPart: 0 }),
+      ev(2000, 'TimingData', { SessionPart: 1, Lines: {} }),
+      ev(3000, 'TimingData', { SessionPart: 1 }),
+      ev(3500, 'TimingData', { Lines: { 3: { SessionPart: 3 } } }), // not top-level
+      ev(4000, 'TimingData', { SessionPart: '2' }), // no number
+      ev(5000, 'TimingData', { SessionPart: 2 }),
+    ];
+    expect(
+      rebuildSessionData(events)
+        .filter((e) => e.topic === 'SessionData')
+        .map((e) => [e.t - T0, e.payload]),
+    ).toEqual([
+      [1000, { Series: { 0: { Utc: at(1000), QualifyingPart: 0 } } }],
+      [2000, { Series: { 1: { Utc: at(2000), QualifyingPart: 1 } } }],
+      [5000, { Series: { 2: { Utc: at(5000), QualifyingPart: 2 } } }],
+    ]);
+  });
+
+  it('rebuilds nothing when there is SessionData', () => {
+    const events = [
+      ev(0, 'SessionData', { Series: [] }),
+      ev(1000, 'SessionStatus', { Status: 'Started' }),
+      ev(2000, 'TimingData', { SessionPart: 1 }),
+    ];
+    expect(rebuildSessionData(events)).toBe(events);
+  });
+});
+
+describe('archiveRows: 2019-style archives without SessionData', () => {
+  const rekey = <T extends { session_key?: unknown }>(rows: readonly T[], session_key: number) =>
+    rows.map((r) => ({ ...r, session_key }));
+
+  it('times the race on the ExtrapolatedClock t0 and starts lap 1 at the SessionStatus Started line', () => {
+    const race = built(streams('race'), 9102, 'Race');
+    const old = built(streams('old-race'), 9122, 'Race');
+    expect(old.stats).toEqual({ ...race.stats, t0: 'clock' });
+    expect(old.rows.lap).toEqual(rekey(race.rows.lap, 9122));
+    expect(old.rows.lap.filter((l) => l.lap_number === 1).map((l) => l.date_start)).toEqual([
+      '2019-03-17T05:10:00.000Z',
+      '2019-03-17T05:10:00.000Z',
+    ]);
+    // Without SessionStatus, lap 1 has no start.
+    const files = new Map(streams('old-race'));
+    files.delete('SessionStatus');
+    expect(built(files, 9122, 'Race').rows.lap.filter((l) => l.lap_number === 1 && l.date_start !== null)).toEqual([]);
+  });
+
+  it("takes the qualifying's phases from TimingData's SessionPart", () => {
+    const quali = built(streams('quali'), 9101, 'Qualifying');
+    const old = built(streams('old-quali'), 9121, 'Qualifying');
+    expect(old.stats).toEqual({ ...quali.stats, t0: 'clock', phases: 2 });
+    expect(old.rows.lap).toEqual(rekey(quali.rows.lap, 9121));
+    expect(old.rows.race_control).toEqual(rekey(quali.rows.race_control, 9121));
+  });
+});
+
 describe('indexPlan', () => {
   it('gives the meeting and session rows, in UTC from GmtOffset, the meeting spanning its sessions', () => {
     const plan = indexPlan(INDEX, 2019, NOW);
@@ -271,6 +353,7 @@ describe('indexPlan', () => {
       [9101, 'Qualifying', '2019-03-16T06:00:00.000Z', '2019-03-16T07:00:00.000Z'],
       [9102, 'Race', '2019-03-17T05:10:00.000Z', '2019-03-17T07:10:00.000Z'],
       [9111, 'Practice', '2019-03-29T15:00:00.000Z', '2019-03-29T16:00:00.000Z'],
+      [9121, 'Qualifying', '2019-04-13T07:00:00.000Z', '2019-04-13T08:00:00.000Z'],
     ]);
     expect(plan?.sessions[1]?.meeting).toEqual({
       meeting_key: 9100,

@@ -20,6 +20,7 @@ const MEETING = '2019-03-17_Synthetic_Grand_Prix';
 const DIRS: Record<string, string> = {
   [`${MEETING}/2019-03-17_Race`]: 'race',
   [`${MEETING}/2019-03-16_Qualifying`]: 'quali',
+  '2019-04-14_Old_Grand_Prix/2019-04-13_Qualifying': 'old-quali', // 2019-style: no SessionData
 };
 const TABLES = ['driver', 'lap', 'stint', 'race_control', 'result', 'weather'] as const;
 
@@ -102,7 +103,7 @@ describe('archive (fixtures through msw, f1_ingest login)', { timeout: 120_000 }
     await testDb?.drop();
   });
 
-  it('imports the race and the qualifying as final f1-archive sessions; the all-403 session gets no rows', async () => {
+  it('imports the race and both qualifyings as final f1-archive sessions; the all-403 session gets no rows', async () => {
     f1();
     expect(await archive(deps, args)).toBe(true);
 
@@ -115,18 +116,27 @@ describe('archive (fixtures through msw, f1_ingest login)', { timeout: 120_000 }
     ).toEqual([
       { session_key: 9101, source: 'f1-archive', ingest_state: 'final', next_fetch_at: null },
       { session_key: 9102, source: 'f1-archive', ingest_state: 'final', next_fetch_at: null },
+      { session_key: 9121, source: 'f1-archive', ingest_state: 'final', next_fetch_at: null },
     ]);
-    expect(await admin.selectFrom('meeting').select(['meeting_key', 'source', 'gmt_offset']).execute()).toEqual([
+    expect(
+      await admin
+        .selectFrom('meeting')
+        .select(['meeting_key', 'source', 'gmt_offset'])
+        .orderBy('meeting_key')
+        .execute(),
+    ).toEqual([
       { meeting_key: 9100, source: 'f1-archive', gmt_offset: '11:00:00' },
+      { meeting_key: 9120, source: 'f1-archive', gmt_offset: '08:00:00' },
     ]);
     const counts = Object.fromEntries(await Promise.all(TABLES.map(async (t) => [t, await count(t)])));
-    expect(counts).toEqual({ driver: 4, lap: 16, stint: 6, race_control: 6, result: 4, weather: 5 });
+    expect(counts).toEqual({ driver: 6, lap: 26, stint: 9, race_control: 9, result: 6, weather: 7 });
     for (const table of TABLES) expect(await count(table, "source <> 'f1-archive'")).toBe(0);
-    expect(await count('lap', 'deleted')).toBe(1);
-    expect(await count('lap', 'quali_phase = 2')).toBe(3);
+    expect(await count('lap', 'deleted')).toBe(2);
+    expect(await count('lap', 'quali_phase = 2')).toBe(6);
+    expect(await count('lap', 'session_key = 9121 AND quali_phase IS NULL')).toBe(0);
 
-    // 1 Index + 2 sessions × 9 topics + the all-403 session's SessionInfo, one at a time, 2 s apart, with the token.
-    expect(requests.length).toBe(20);
+    // 1 Index + 3 sessions × 10 topics + the all-403 session's SessionInfo, one at a time, 2 s apart, with the token.
+    expect(requests.length).toBe(32);
     for (const [i, r] of requests.entries()) {
       expect(r.auth).toBe(`Bearer ${TOKEN}`);
       if (i > 0) expect(r.at - (requests[i - 1]?.at ?? 0)).toBeGreaterThanOrEqual(GAP_MS);
@@ -138,11 +148,13 @@ describe('archive (fixtures through msw, f1_ingest login)', { timeout: 120_000 }
       'RaceControlMessages.jsonStream',
       'SessionData.jsonStream',
       'SessionInfo.jsonStream',
+      'SessionStatus.missing',
       'TimingAppData.jsonStream',
       'TimingData.jsonStream',
       'WeatherData.jsonStream',
     ]);
     expect(existsSync(join(args.dir, '9101', 'Heartbeat.missing'))).toBe(true);
+    expect(existsSync(join(args.dir, '9121', 'SessionData.missing'))).toBe(true);
     // No marker for SessionInfo or TimingData: a rerun asks again.
     expect(readdirSync(join(args.dir, '9111'))).toEqual([]);
     expect(readFileSync(join(args.dir, 'index-2019.json'))).toEqual(readFileSync(join(FIXTURES, 'index-2019.json')));
@@ -152,7 +164,7 @@ describe('archive (fixtures through msw, f1_ingest login)', { timeout: 120_000 }
       year: 2019,
       type: 'Race',
       files: 8,
-      skipped_files: 1,
+      skipped_files: 2,
       t0: 'sessiondata',
       t0_heartbeat_delta_ms: -2000,
       laps: 6,
@@ -162,10 +174,11 @@ describe('archive (fixtures through msw, f1_ingest login)', { timeout: 120_000 }
       weather: 3,
       phases: 0,
     });
-    expect(bySession[9101]).toMatchObject({ files: 7, skipped_files: 2, t0_heartbeat_delta_ms: null, phases: 2 });
+    expect(bySession[9101]).toMatchObject({ files: 7, skipped_files: 3, t0_heartbeat_delta_ms: null, phases: 2 });
+    expect(bySession[9121]).toMatchObject({ files: 8, skipped_files: 2, t0: 'clock', laps: 10, phases: 2 });
     expect(bySession[9111]).toMatchObject({ files: 0, skipped_files: 1, error: 'incomplete' });
     expect(logged('archive_done').at(-1)).toMatchObject({
-      imported: 2,
+      imported: 3,
       failed: 0,
       incomplete: 1,
       bad_path: 0,
@@ -229,19 +242,20 @@ describe('archive (fixtures through msw, f1_ingest login)', { timeout: 120_000 }
   });
 
   it('another failure fails that session only, and the run goes on', async () => {
-    f1((path) => (path.includes('Qualifying/TimingData') ? 500 : undefined));
+    f1((path) => (path.includes(`${MEETING}/2019-03-16_Qualifying/TimingData`) ? 500 : undefined));
     const fresh = { ...args, dir: mkdtempSync(join(tmpdir(), 'f1-archive-')) };
     expect(await archive(deps, fresh)).toBe(false);
     expect(
       logged('archive')
-        .slice(-3)
+        .slice(-4)
         .map((l) => [l.session_key, l.error]),
     ).toEqual([
       [9101, 'http_500'],
       [9102, undefined],
       [9111, 'incomplete'],
+      [9121, undefined],
     ]);
-    expect(logged('archive_done').at(-1)).toMatchObject({ imported: 1, failed: 1, incomplete: 1 });
+    expect(logged('archive_done').at(-1)).toMatchObject({ imported: 2, failed: 1, incomplete: 1 });
     // The failed session keeps what it got; the rerun asks for the rest.
     expect(existsSync(join(fresh.dir, '9101', 'TimingData.jsonStream'))).toBe(false);
     expect(existsSync(join(fresh.dir, '9101', 'SessionData.jsonStream'))).toBe(true);

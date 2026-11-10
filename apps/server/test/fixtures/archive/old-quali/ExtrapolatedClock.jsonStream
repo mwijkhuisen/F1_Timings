@@ -1,0 +1,4 @@
+﻿00:25:00.000{"Utc":"2019-03-16T05:55:00.000Z","Remaining":"00:18:00","Extrapolating":false}
+00:30:00.000{"Utc":"2019-03-16T06:00:00.000Z","Remaining":"00:18:00","Extrapolating":true}
+00:40:00.000{"Utc":"2019-03-16T06:10:00.000Z","Remaining":"00:08:00","Extrapolating":false}
+00:45:00.000{"Utc":"2019-03-16T06:15:00.000Z","Remaining":"00:15:00","Extrapolating":true}

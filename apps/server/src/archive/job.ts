@@ -27,6 +27,7 @@ export const TOPICS = [
   'DriverList',
   'RaceControlMessages',
   'WeatherData',
+  'SessionStatus', // SessionData's StatusSeries where SessionData is a 403 (2018–2019)
 ] as const;
 /** One request at a time, at least this long between request starts (≤ 1,800 an hour). */
 export const GAP_MS = 2_000;

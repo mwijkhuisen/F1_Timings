@@ -140,9 +140,13 @@ export function archiveEvents(files: ReadonlyMap<string, string>): ArchiveEvents
   const hb = archiveT0(heartbeat)?.t0;
   const events = [...parsed.values()].flat();
   for (const ev of events) ev.t += found.t0;
-  const first = (ev: FeedEvent) => Number(ev.topic === 'SessionInfo');
-  return { events: events.sort((a, b) => a.t - b.t || first(b) - first(a)), skipped, ...found, heartbeat: hb };
+  return { events: events.sort(byTime), skipped, ...found, heartbeat: hb };
 }
+
+const first = (ev: FeedEvent) => Number(ev.topic === 'SessionInfo');
+/** archiveEvents' order: by t, then SessionInfo first, then topic name (stable within a topic). */
+export const byTime = (a: FeedEvent, b: FeedEvent): number =>
+  a.t - b.t || first(b) - first(a) || (a.topic < b.topic ? -1 : a.topic > b.topic ? 1 : 0);
 
 /** Our rows. Two passes: the first finds the session key and type (SessionInfo), the second builds the rows. */
 export function reconstruct(events: readonly FeedEvent[], source: 'f1-live' | 'f1-archive') {
