@@ -3,6 +3,7 @@ import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { archiveEvents, isArchivePath, readStreams } from '../src/archive/files.ts';
 import { archiveRows, gmtOffset, indexPlan, rebuildSessionData } from '../src/archive/rows.ts';
+import { createLaps } from '../src/live/laps.ts';
 import { archiveT0, type FeedEvent } from '../src/live/read.ts';
 
 // fixtures/archive/ is synthetic and hand-written: every name, time and value is invented (A§12.1 invariant 3).
@@ -333,6 +334,23 @@ describe('archiveRows: 2019-style archives without SessionData', () => {
     const files = new Map(streams('old-race'));
     files.delete('SessionStatus');
     expect(built(files, 9122, 'Race').rows.lap.filter((l) => l.lap_number === 1 && l.date_start !== null)).toEqual([]);
+  });
+
+  it("starts a race's lap 1 created after Started there, for the archive source only", () => {
+    // 2018–2019: no driver data before the start, so lap 1 exists only after Started.
+    const lap1 = (source: 'f1-live' | 'f1-archive') => {
+      const laps = createLaps(7, source);
+      const push = (t: number, topic: string, delta: object) => laps.push({ t, topic, payload: delta }, delta);
+      push(T0, 'SessionInfo', { Key: 7, Type: 'Race' });
+      push(T0 + 1000, 'TimingAppData', { Lines: { 1: { Stints: { 0: { Compound: 'SOFT' } } } } });
+      push(T0 + 2000, 'SessionData', { StatusSeries: { 0: { Utc: at(2000), SessionStatus: 'Started' } } });
+      push(T0 + 60_000, 'TimingData', { Lines: { 1: { Sectors: { 1: { Value: '40.000' } } } } });
+      push(T0 + 100_000, 'TimingData', { Lines: { 1: { NumberOfLaps: 1 } } });
+      push(T0 + 101_000, 'TimingData', { Lines: { 1: { Sectors: { 2: { Value: '25.000' } } } } });
+      return laps.rows().laps.find((l) => l.driver_number === 1 && l.lap_number === 1);
+    };
+    expect(lap1('f1-archive')).toMatchObject({ date_start: at(2000), lap_ms: 98_000 });
+    expect(lap1('f1-live')).toMatchObject({ date_start: null, lap_ms: null });
   });
 
   it("takes the qualifying's phases from TimingData's SessionPart", () => {

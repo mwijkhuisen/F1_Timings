@@ -123,6 +123,7 @@ export function createLaps(
   let race = false;
   let open = false;
   let chequered: number | null = null;
+  let started: number | null = null; // the last "Started" of a race
   const laps = new Map<number, Lap[]>();
   const marked = new Set<Lap>();
   const shown = new Map<Lap, LapRow>();
@@ -151,6 +152,12 @@ export function createLaps(
     const list = laps.get(driver);
     if (list) return list.at(-1) as Lap;
     const first = newLap(driver, 1);
+    // 2018–2019 archives send no driver data before the start, so every lap 1 is created after "Started" and the
+    // branch below never sees it: it starts there. Live recordings and OpenF1 are unchanged.
+    if (source === 'f1-archive' && started !== null) {
+      first.date_start = started;
+      marked.add(first);
+    }
     laps.set(driver, [first]);
     return first;
   }
@@ -340,6 +347,7 @@ export function createLaps(
         for (const status of items(delta.StatusSeries)) {
           const at = isObj(status) && status.SessionStatus === 'Started' ? utc(status.Utc) : null;
           if (at === null) continue;
+          started = at;
           for (const [first, ...more] of laps.values()) {
             if (!first || more.length > 0 || first.lap_number !== 1) continue;
             first.date_start = at;
