@@ -176,6 +176,8 @@ sudo docker compose -p f1 -f /etc/f1/compose.yaml --env-file /srv/f1/state/curre
 - **Token:** it needs a valid F1 TV token in `/srv/f1/state/live/f1tv-token` (the job sees it read-only as `/srv/f1/state/f1tv-token`; it never logs in and has no F1 TV password). `live` refreshes that file only within 48 h of a session (A§12.3), so between weekends it is usually expired: paste one as under "F1 TV token by hand" first.
 - **Live window:** it stops inside a live window and exits 1. Run it between weekends.
 - **Resume:** a rerun skips the files already present in `/srv/f1/archive`, so after a stop or a failure run the same command again.
+- **Missing topics:** a topic the archive answered 403 or 404 for gets an empty `<Topic>.missing` marker, and a rerun never asks for it again. To ask again (after a 403 that was not the archive's, say), clear the markers of that session: `sudo rm /srv/f1/archive/<session_key>/*.missing`. SessionInfo and TimingData never get one.
+- **Stops (exit 1):** `busy` (another archive run holds the lock: wait for it), `token_expired` (also mid-run, 60 s before the token's expiry: paste a new token and rerun), `disk_low` (under 5 GiB free in `/srv/f1/archive`, the recorder's warning level: free space first), `live_session`, `http_401`.
 - **Rate:** one request every 2 s, about 2.5 h for all of 2018–2022 (run a year at a time; `tmux` or `nohup` keeps it alive after the SSH session ends).
 - **Years:** it never runs for 2023 and later (exit 64); those come from OpenF1.
 
