@@ -164,6 +164,21 @@ Paste the value, press Enter, then Ctrl-D. The terminal shows what you paste: cl
 
 The token lasts about 4 days. The panel warns 24 h before it expires, when a session is due within 48 h.
 
+## Fetch the F1 archive of 2018–2022 (the `archive` job) [owner]
+
+`archive` (A§4, A§6.2) downloads the archive files of the 2018–2022 sessions into `/srv/f1/archive` and loads their laps into the database. `f1-update` never runs it and no timer does: you start it, one year at a time (`archive <year> [<session_key>…]`; the keys limit it to those sessions). `f1-install` creates `/srv/f1/archive` (62532, 0700); the job's other options (`--token-file`, `--dir`) default to the container's paths and are not needed on the VM.
+
+```bash
+sudo docker compose -p f1 -f /etc/f1/compose.yaml --env-file /srv/f1/state/current.env \
+  --profile jobs run --rm archive archive 2019
+```
+
+- **Token:** it needs a valid F1 TV token in `/srv/f1/state/live/f1tv-token` (the job sees it read-only as `/srv/f1/state/f1tv-token`; it never logs in and has no F1 TV password). `live` refreshes that file only within 48 h of a session (A§12.3), so between weekends it is usually expired: paste one as under "F1 TV token by hand" first.
+- **Live window:** it stops inside a live window and exits 1. Run it between weekends.
+- **Resume:** a rerun skips the files already present in `/srv/f1/archive`, so after a stop or a failure run the same command again.
+- **Rate:** one request every 2 s, about 2.5 h for all of 2018–2022 (run a year at a time; `tmux` or `nohup` keeps it alive after the SSH session ends).
+- **Years:** it never runs for 2023 and later (exit 64); those come from OpenF1.
+
 ## Check a recording [box]
 
 After a session, plus 30 minutes (`<path>` is the `path` column, `<session_key>-<startedAt>`). These commands print counts and metadata only, never feed payloads:
