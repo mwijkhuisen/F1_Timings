@@ -54,12 +54,14 @@ const local = (v: unknown, offset: number) =>
 /**
  * An Index.json of `year` → one plan per session with an archive Path, with its meeting and session rows; the
  * session dates in UTC from its GmtOffset, the meeting's as the min and max of its sessions. A Path that is no
- * archive path of the year counts as `badPath`, a session without a numeric Key or valid dates as `badIndex`.
- * Undefined when the text is no Index.
+ * archive path of the year counts as `badPath`, a session without a numeric Key or valid dates as `badIndex`, and so
+ * does one whose UTC dates leave `year`, end before they start or end after `now` (epoch ms): an archive row must never
+ * look like a coming session to the recorder or ingest's live window. Undefined when the text is no Index.
  */
 export function indexPlan(
   text: string,
   year: number,
+  now: number,
 ): { sessions: Planned[]; badPath: number[]; badIndex: number } | undefined {
   const all = indexSessions(text);
   if (all === undefined) return undefined;
@@ -70,8 +72,16 @@ export function indexPlan(
     const end = offset ? local(EndDate, offset.ms) : Number.NaN;
     return { s, offset, start, end, key: int(s.Key, 999_999_999), meetingKey: int(s.meeting.Key, 2_147_483_647) };
   });
+  const inYear = (ms: number) => new Date(ms).getUTCFullYear() === year;
   const ok = dated.filter(
-    (d) => d.key !== null && d.meetingKey !== null && d.offset && !Number.isNaN(d.start) && !Number.isNaN(d.end),
+    (d) =>
+      d.key !== null &&
+      d.meetingKey !== null &&
+      d.offset &&
+      inYear(d.start) &&
+      inYear(d.end) &&
+      d.start <= d.end &&
+      d.end < now,
   );
   const span = new Map<IndexSession['meeting'], [number, number]>(); // keyed on the meeting object
   for (const { s, start, end } of ok) {

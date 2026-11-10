@@ -13,6 +13,8 @@
 #      127.0.0.1:8180 (caddy, api and db as 62532; the publish through f1-publish; local tags),
 #      every container healthy when it returns (the smoke test waits for that); live is idle on an
 #      empty schedule.
+#  3b. The archive job (profile jobs) without a token file: exit 1 with token_file, after its f1_ingest
+#      login and before any request (it never reaches the Index: invariant 4).
 #   4. Egress from api to a non-Cloudflare host is blocked.
 #  4b. f1-measure 60s 2 in the background; after 8 s `docker restart f1-live-1`, then SIGTERM: exit 0
 #      and the summary (the signal path), stats rows for db, api, caddy and live, the disk rows
@@ -138,6 +140,17 @@ for h in "${health[@]}"; do [[ $h == *'(healthy)' ]] || fail "not healthy when f
 live_status=$(docker exec f1-db-1 psql -U postgres -d f1 -tAc "SELECT state, (SELECT count(*) FROM session) FROM recorder_status")
 [[ $live_status == 'idle|0' ]] || fail "recorder_status.state and the session count are '$live_status', not 'idle|0'"
 proof "f1-update deployed the local tags f1-server:ci and f1-web:ci (exit 0, current.env written); $URL answers 200 through caddy, api and db (db as 62532 on a new f1_pgdata, roles.sql through initdb, migrate as f1_migrator) with table inet f1 loaded; containers: ${services% } (no ingest, no cloudflared), each healthy when f1-update returned; live idle on an empty schedule (state|sessions: $live_status)"
+
+# ------------------------------------------------------------------ 3b
+step "3b. The archive job without a token file exits 1 before any request"
+[[ ! -e /srv/f1/state/live/f1tv-token ]] || fail "a token file exists: the archive job would call F1"
+run "$tmp/archive" docker compose -p f1 -f /etc/f1/compose.yaml -f "$F1_COMPOSE_OVERRIDE" --env-file "$STATE/current.env" \
+  --profile jobs run --rm -T archive archive 2019
+((rc == 1)) || fail "the archive job exited $rc, not 1"
+done_line=$(grep '"msg":"archive_done"' "$tmp/archive" || true)
+[[ $done_line == *'"error":"token_file"'* ]] || fail "the archive job did not stop on token_file: $done_line"
+grep -q '"msg":"archive_start"' "$tmp/archive" && fail "the archive job got past the token check"
+proof "compose --profile jobs run --rm archive archive 2019 without /srv/f1/state/live/f1tv-token: exit 1, archive_done error token_file (after the f1_ingest advisory lock, before the Index request)"
 
 # ------------------------------------------------------------------ 4
 step "4. Egress from api to a non-Cloudflare host is blocked"

@@ -20,7 +20,6 @@ import { createRainStep } from './rain/job.ts';
 export const ROLES = ['api', 'ingest', 'live', 'migrate', 'healthcheck', 'refetch', 'backfill', 'archive'] as const;
 export type Role = (typeof ROLES)[number];
 
-export const EXIT_NOT_IMPLEMENTED = 2;
 export const EXIT_USAGE = 64;
 /** Caddy proxies /api to api:8080 (P1f). */
 export const API_PORT = 8080;
@@ -32,8 +31,7 @@ const USAGE =
   'archive <year 2018-2022> [<session_key>...] [--token-file <path>] [--dir <path>])';
 
 /**
- * Resolves with the exit code. Roles without a phase yet exit EXIT_NOT_IMPLEMENTED. `apiPort` is a
- * test seam only (not configurable in production: Caddy proxies to api:8080).
+ * Resolves with the exit code. `apiPort` is a test seam only (not configurable in production: Caddy proxies to api:8080).
  */
 export async function run(
   argv: readonly string[],
@@ -57,9 +55,7 @@ export async function run(
   if (role === 'migrate') return runMigrate(env, log);
   if (role === 'api') return runApi(env, log, apiPort);
   if (role === 'ingest' || role === 'backfill' || role === 'refetch') return runIngest(role, Number(rest[0]), env, log);
-  if (role === 'live') return runLive(env, log);
-  log(`role ${role} is not implemented yet`);
-  return EXIT_NOT_IMPLEMENTED;
+  return runLive(env, log); // the last role
 }
 
 /** The f1_ingest roles (A§8): the daemon, the backfill job and `refetch <session_key>`. */

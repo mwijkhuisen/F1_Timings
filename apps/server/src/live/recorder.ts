@@ -33,7 +33,8 @@ const HARD_STOP_MS = 3 * HOUR;
 // ponytail: 60 s is a judgement call: about two reconnects at full backoff. Tighten it if a real recording with a
 // shorter gap turns out to miss laps.
 const MAX_GAP_MS = 60_000;
-const DISK_LOW_BYTES = 5 * 1024 ** 3;
+/** The recorder warns below it; the archive job (A§6.2) stops below it, so it never pushes the recorder to its floor. */
+export const DISK_LOW_BYTES = 5 * 1024 ** 3;
 /** The disk may be shared with PostgreSQL: the recorder stops before a write would fail. */
 const DISK_FLOOR_BYTES = 1024 ** 3;
 const DISK_COOLDOWN_MS = 5 * MINUTE;
@@ -123,7 +124,7 @@ type Run = {
   gzipFailures: number;
 };
 
-const freeBytes = (path: string) => {
+export const freeBytes = (path: string) => {
   const s = statfsSync(path);
   return s.bavail * s.bsize;
 };

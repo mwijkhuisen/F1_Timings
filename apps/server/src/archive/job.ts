@@ -1,9 +1,11 @@
+import { randomUUID } from 'node:crypto';
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import type { Kysely } from 'kysely';
+import { type Kysely, sql } from 'kysely';
 import type { Logger } from 'pino';
 import { codeOf, type DB } from '../db/db.ts';
 import { chunks, live } from '../ingest/ingest.ts';
+import { DISK_LOW_BYTES, freeBytes } from '../live/recorder.ts';
 import { checkToken, readTokenFile } from '../live/token.ts';
 import { download, type Failure, ORIGIN } from './files.ts';
 import { type ArchiveRows, archiveRows, indexPlan, type Planned } from './rows.ts';
@@ -27,6 +29,12 @@ export const TOPICS = [
 ] as const;
 /** One request at a time, at least this long between request starts (≤ 1,800 an hour). */
 export const GAP_MS = 2_000;
+/** The advisory lock that keeps a second run out (`busy`). */
+export const LOCK_KEY = 0x4631_4152; // 'F1AR'
+/** No request this close to the token's exp: the run stops with `token_expired` instead. */
+const EXP_MARGIN_MS = 60_000;
+/** A 403 or 404 on these leaves no marker: the session is incomplete for this run and a rerun asks again. */
+const REQUIRED = new Set<string>(['SessionInfo', 'TimingData']);
 const CHILDREN = ['driver', 'lap', 'stint', 'race_control', 'result', 'weather'] as const;
 
 export type ArchiveDeps = {
@@ -34,15 +42,17 @@ export type ArchiveDeps = {
   now: () => Date;
   sleep: (ms: number) => Promise<void>;
   log: Pick<Logger, 'info' | 'error'>;
+  /** Free bytes under a path (statfs); a test seam. */
+  freeBytes?: (path: string) => number;
 };
 export type ArchiveArgs = { year: number; keys: readonly number[]; tokenFile: string; dir: string };
 
 const code = (e: Failure) => (e.code === 'http' ? `http_${e.status}` : e.code);
 
-/** Temp file, then rename: a present file is a complete one. */
+/** Temp file (a fresh name, never an existing file), then rename: a present file is a complete one. */
 function put(path: string, bytes: Buffer | string) {
-  const tmp = `${path}.${process.pid}.tmp`;
-  writeFileSync(tmp, bytes);
+  const tmp = `${path}.${randomUUID()}.tmp`;
+  writeFileSync(tmp, bytes, { flag: 'wx' });
   renameSync(tmp, path);
 }
 
@@ -84,13 +94,30 @@ async function write(db: Kysely<DB>, plan: Planned, rows: ArchiveRows): Promise<
 }
 
 /**
- * The job. True when nothing failed (an incomplete session or a bad path is no failure). A bad token, a 401, an Index
- * failure or a live window stops it early with false. A database error outside a session's write throws.
+ * The job. True when nothing failed (an incomplete session or a bad path is no failure). Another run (`busy`), a bad
+ * or expiring token, a 401, an Index failure, low disk or a live window stops it early with false. A database error
+ * outside a session's write throws.
  */
 export async function archive(deps: ArchiveDeps, args: ArchiveArgs): Promise<boolean> {
-  const { db, now, sleep, log } = deps;
+  // One run at a time: two would double the token's request rate. A session-level lock on a connection held for the run.
+  return deps.db.connection().execute(async (conn) => {
+    const { rows } = await sql<{ ok: boolean }>`SELECT pg_try_advisory_lock(${LOCK_KEY}) AS ok`.execute(conn);
+    if (rows[0]?.ok !== true) {
+      deps.log.error({ year: args.year, error: 'busy' }, 'archive_done');
+      return false;
+    }
+    try {
+      return await job(deps, args);
+    } finally {
+      await sql`SELECT pg_advisory_unlock(${LOCK_KEY})`.execute(conn);
+    }
+  });
+}
+
+async function job(deps: ArchiveDeps, args: ArchiveArgs): Promise<boolean> {
+  const { db, now, sleep, log, freeBytes: free = freeBytes } = deps;
   const { year, dir } = args;
-  const counts = { imported: 0, failed: 0, incomplete: 0, bad_path: 0 };
+  const counts = { imported: 0, failed: 0, incomplete: 0, bad_path: 0, t0_heartbeat: 0 };
   const done = (ok: boolean, error?: string) => {
     const passed = ok && counts.failed === 0;
     log[passed ? 'info' : 'error']({ year, ...counts, error }, 'archive_done');
@@ -103,9 +130,11 @@ export async function archive(deps: ArchiveDeps, args: ArchiveArgs): Promise<boo
   log.info({ year, token_expires_at: new Date(exp * 1000).toISOString() }, 'archive_start');
 
   let last = Number.NEGATIVE_INFINITY;
+  /** Undefined once the token is about to expire: the caller stops the run with `token_expired`. */
   const get = async (path: string) => {
     const wait = last + GAP_MS - now().getTime();
     if (wait > 0) await sleep(wait);
+    if (now().getTime() >= exp * 1000 - EXP_MARGIN_MS) return undefined;
     last = now().getTime();
     return download(`${ORIGIN}/static/${path}`, token);
   };
@@ -114,10 +143,11 @@ export async function archive(deps: ArchiveDeps, args: ArchiveArgs): Promise<boo
   const before = await stopped();
   if (before) return done(false, before);
   const index = await get(`${year}/Index.json`);
+  if (index === undefined) return done(false, 'token_expired');
   if (!index.ok) return done(false, `index_${code(index.error)}`);
   mkdirSync(dir, { recursive: true });
   put(join(dir, `index-${year}.json`), index.value.bytes);
-  const plan = indexPlan(index.value.bytes.toString('utf8'), year);
+  const plan = indexPlan(index.value.bytes.toString('utf8'), year, now().getTime());
   if (plan === undefined) return done(false, 'index_format');
 
   const wanted = (key: number) => args.keys.length === 0 || args.keys.includes(key);
@@ -135,6 +165,8 @@ export async function archive(deps: ArchiveDeps, args: ArchiveArgs): Promise<boo
   for (const session of plan.sessions.filter((s) => wanted(s.key))) {
     const reason = await stopped();
     if (reason) return done(false, reason);
+    // The recorder warns at this and stops at 1 GiB (A§11.2): the archive never pushes it there.
+    if (free(dir) < DISK_LOW_BYTES) return done(false, 'disk_low');
     const started = performance.now();
     const line = (fields: Record<string, unknown>) => ({
       session_key: session.key,
@@ -150,15 +182,22 @@ export async function archive(deps: ArchiveDeps, args: ArchiveArgs): Promise<boo
     let error: string | undefined;
     for (const topic of TOPICS) {
       const path = join(into, `${topic}.jsonStream`);
-      // An empty marker: the archive answered 403 or 404, so a rerun does not ask again.
+      // An empty marker: the archive answered 403 or 404, so a rerun does not ask again (never for REQUIRED).
       const marker = join(into, `${topic}.missing`);
       if (!existsSync(path) && !existsSync(marker)) {
         const got = await get(`${session.path}${topic}.jsonStream`);
+        if (got === undefined || (!got.ok && got.error.code === 'http' && got.error.status === 401)) {
+          const stop = got === undefined ? 'token_expired' : 'http_401';
+          log.error(line({ error: stop }), 'archive');
+          return done(false, stop);
+        }
         if (got.ok) put(path, got.value.bytes);
-        else if (got.error.code === 'http' && (got.error.status === 403 || got.error.status === 404)) put(marker, '');
-        else if (got.error.code === 'http' && got.error.status === 401) {
-          log.error(line({ error: 'http_401' }), 'archive');
-          return done(false, 'http_401');
+        else if (got.error.code === 'http' && (got.error.status === 403 || got.error.status === 404)) {
+          if (REQUIRED.has(topic)) {
+            missing++;
+            break;
+          }
+          put(marker, '');
         } else {
           error = code(got.error);
           break;
@@ -209,6 +248,7 @@ export async function archive(deps: ArchiveDeps, args: ArchiveArgs): Promise<boo
       continue;
     }
     counts.imported++;
+    if (stats.t0 === 'heartbeat') counts.t0_heartbeat++;
     log.info(line(fields), 'archive');
   }
   return done(true);

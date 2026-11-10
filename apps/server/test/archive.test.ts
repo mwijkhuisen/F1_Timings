@@ -11,6 +11,7 @@ const streams = (dir: string) => readStreams(join(FIXTURES, dir));
 const INDEX = readFileSync(join(FIXTURES, 'index-2019.json'), 'utf8');
 
 const T0 = Date.parse('2019-03-17T05:00:00Z');
+const NOW = Date.parse('2026-11-10T12:00:00Z');
 const at = (ms: number) => new Date(T0 + ms).toISOString();
 const sd = (t: number, payload: unknown): FeedEvent => ({ t, topic: 'SessionData', payload });
 const hb = (t: number, utc: string): FeedEvent => ({ t, topic: 'Heartbeat', payload: { Utc: utc } });
@@ -219,7 +220,7 @@ describe('archiveRows: the qualifying', () => {
 
 describe('indexPlan', () => {
   it('gives the meeting and session rows, in UTC from GmtOffset, the meeting spanning its sessions', () => {
-    const plan = indexPlan(INDEX, 2019);
+    const plan = indexPlan(INDEX, 2019, NOW);
     expect(plan?.badPath).toEqual([]);
     expect(plan?.badIndex).toBe(0);
     expect(plan?.sessions.map((s) => [s.key, s.type, s.session.date_start, s.session.date_end])).toEqual([
@@ -269,11 +270,42 @@ describe('indexPlan', () => {
         },
       ],
     });
-    const plan = indexPlan(text, 2019);
+    const plan = indexPlan(text, 2019, NOW);
     expect(plan?.sessions.map((s) => s.key)).toEqual([1]);
     expect(plan?.badPath).toEqual([2, 3]);
     expect(plan?.badIndex).toBe(2);
-    expect(indexPlan('nope', 2019)).toBeUndefined();
+    expect(indexPlan('nope', 2019, NOW)).toBeUndefined();
+  });
+
+  it('counts a session dated outside its year, ending before it starts, or not yet over as bad_index', () => {
+    const session = (Key: number, StartDate: string, EndDate: string, GmtOffset = '00:00:00') => ({
+      Key,
+      Type: 'Race',
+      StartDate,
+      EndDate,
+      GmtOffset,
+      Path: `2019/a/${Key}/`,
+    });
+    const text = JSON.stringify({
+      Meetings: [
+        {
+          Key: 1,
+          Sessions: [
+            session(1, '2019-12-31T20:00:00', '2019-12-31T22:00:00', '-04:00:00'), // ends 2020-01-01 UTC
+            session(2, '2026-11-10T11:00:00', '2026-11-10T13:00:00'), // a 2019 path, dated now
+            session(3, '2019-03-16T18:00:00', '2019-03-16T17:00:00'),
+            session(4, '2019-03-16T17:00:00', '2019-03-16T18:00:00', '+01:00'),
+          ],
+        },
+      ],
+    });
+    expect(indexPlan(text, 2019, NOW)).toMatchObject({ badPath: [], badIndex: 3 });
+    expect(indexPlan(text, 2019, NOW)?.sessions.map((s) => s.key)).toEqual([4]);
+    // In the past only relative to the job's clock.
+    const early = JSON.stringify({
+      Meetings: [{ Key: 1, Sessions: [session(4, '2019-03-16T17:00:00', '2019-03-16T18:00:00')] }],
+    });
+    expect(indexPlan(early, 2019, Date.parse('2019-03-16T17:30:00Z'))?.badIndex).toBe(1);
   });
 
   it('normalises a GmtOffset to [-]HH:MM:SS', () => {

@@ -13,7 +13,8 @@ import type { Result } from '../openf1/schemas.ts';
 
 export const ORIGIN = 'https://livetiming.formula1.com';
 const TIMEOUT_MS = 60_000;
-export const MAX_BYTES = 256 * 1024 * 1024;
+/** Twice this (the parts and their concat) fits well inside the job's 512m; the largest file seen is about 7 MB. */
+export const MAX_BYTES = 64 * 1024 * 1024;
 
 export type Failure = { code: 'http'; status: number } | { code: 'network' | 'timeout' | 'too_large' | 'host' };
 
@@ -65,7 +66,7 @@ export function indexSessions(text: string): IndexSession[] | undefined {
   );
 }
 
-/** One GET to the F1 host with the token. No redirects, a 60 s deadline, a 256 MiB cap. Never throws. */
+/** One GET to the F1 host with the token. No redirects, a 60 s deadline, a 64 MiB cap. Never throws. */
 export async function download(
   target: string,
   token: string,
