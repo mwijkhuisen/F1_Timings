@@ -24,6 +24,11 @@ describe('run', () => {
     [['archive', '2019', '0123456789']],
     [['archive', '2019', '--path', 'x']],
     [['archive', '2019', '--dir']],
+    // --dir only where git never sees the files (invariant 3)
+    [['archive', '2019', '--dir', '/tmp/x']],
+    [['archive', '2019', '--dir', join(import.meta.dirname, 'fixtures/archive')]],
+    [['archive', '2019', '--dir', '/home/x/F1_Timing/fixtures-private-evil/archive']],
+    [['archive', '2019', '--dir', '/srv/f1/archive/../x']],
   ])('%j is a usage error', async (argv) => {
     const lines: string[] = [];
     expect(await run(argv, {}, (l) => lines.push(l))).toBe(EXIT_USAGE);
@@ -36,7 +41,8 @@ describe('run', () => {
     [['refetch', '11388']],
     [['live']],
     [['archive', '2018']],
-    [['archive', '2022', '1', '--token-file', '/x', '--dir', '/y']],
+    [['archive', '2022', '1', '--token-file', '/x', '--dir', '/srv/f1/archive']],
+    [['archive', '2019', '--dir', '/home/x/F1_Timing/fixtures-private/archive']],
   ])('%j without a database setting is a config error', async (argv) => {
     const lines: string[] = [];
     expect(await run(argv, { DATABASE_URL: 'mysql://x/y' }, (l) => lines.push(l))).toBe(EXIT_CONFIG);

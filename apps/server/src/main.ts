@@ -1,4 +1,5 @@
 import type { Server } from 'node:http';
+import { resolve, sep } from 'node:path';
 import { setTimeout as sleep } from 'node:timers/promises';
 import { parseArgs } from 'node:util';
 import { serve } from '@hono/node-server';
@@ -40,23 +41,25 @@ export async function run(
   apiPort = API_PORT,
 ): Promise<number> {
   const [role, ...rest] = argv;
-  if (role === 'archive') return runArchive(rest, env, log);
-  const args = role === 'refetch' ? 1 : 0;
-  if (
-    role === undefined ||
-    !(ROLES as readonly string[]).includes(role) ||
-    rest.length !== args ||
-    (role === 'refetch' && !/^\d{1,9}$/.test(rest[0] ?? ''))
-  ) {
+  const usage = () => {
     log(USAGE);
     return EXIT_USAGE;
+  };
+  if (!isRole(role)) return usage();
+  if (role === 'archive') return runArchive(rest, env, log);
+  if (rest.length !== (role === 'refetch' ? 1 : 0) || (role === 'refetch' && !/^\d{1,9}$/.test(rest[0] ?? ''))) {
+    return usage();
   }
   if (role === 'healthcheck') return healthy() ? 0 : 1;
   if (role === 'migrate') return runMigrate(env, log);
   if (role === 'api') return runApi(env, log, apiPort);
   if (role === 'ingest' || role === 'backfill' || role === 'refetch') return runIngest(role, Number(rest[0]), env, log);
-  return runLive(env, log); // the last role
+  if (role === 'live') return runLive(env, log);
+  role satisfies never; // a new role fails to compile until it is dispatched above
+  return usage();
 }
+
+const isRole = (role: string | undefined): role is Role => (ROLES as readonly string[]).includes(role ?? '');
 
 /** The f1_ingest roles (A§8): the daemon, the backfill job and `refetch <session_key>`. */
 async function runIngest(role: 'ingest' | 'backfill' | 'refetch', key: number, env: Env, log: (line: string) => void) {
@@ -127,8 +130,18 @@ function parseArchive(argv: readonly string[]) {
   });
   const [year = '', ...keys] = positionals;
   if (!/^20(1[89]|2[0-2])$/.test(year) || !keys.every((k) => /^\d{1,9}$/.test(k))) return undefined;
+  if (!archiveDir(values.dir)) return undefined;
   return { year: Number(year), keys: keys.map(Number), tokenFile: values['token-file'], dir: values.dir };
 }
+
+/**
+ * Real F1 archive files land only where git never sees them (invariant 3): the VM's /srv/f1/archive, or a directory
+ * with a path segment named exactly `fixtures-private` (gitignored).
+ */
+const archiveDir = (dir: string) => {
+  const path = resolve(dir);
+  return path === ARCHIVE_DIR || path.split(sep).includes('fixtures-private');
+};
 
 /** The recorder daemon (A§11.2), as f1_ingest. Resolves after SIGTERM/SIGINT, with the running recording closed. */
 async function runLive(env: Env, log: (line: string) => void): Promise<number> {

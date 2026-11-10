@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, renameSync, statSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { type Kysely, sql } from 'kysely';
 import type { Logger } from 'pino';
@@ -7,7 +7,7 @@ import { codeOf, type DB } from '../db/db.ts';
 import { chunks, live } from '../ingest/ingest.ts';
 import { DISK_LOW_BYTES, freeBytes } from '../live/recorder.ts';
 import { checkToken, readTokenFile } from '../live/token.ts';
-import { download, type Failure, ORIGIN } from './files.ts';
+import { download, type Failure, MAX_SESSION_BYTES, ORIGIN } from './files.ts';
 import { type ArchiveRows, archiveRows, indexPlan, type Planned } from './rows.ts';
 
 // The archive job (A§6.2, P3a): `archive <year> [<session_key>…]` walks static/<year>/Index.json, downloads each
@@ -138,7 +138,9 @@ async function job(deps: ArchiveDeps, args: ArchiveArgs): Promise<boolean> {
     if (wait > 0) await sleep(wait);
     if (now().getTime() >= exp * 1000 - EXP_MARGIN_MS) return undefined;
     last = now().getTime();
-    return download(`${ORIGIN}/static/${path}`, token);
+    const got = await download(`${ORIGIN}/static/${path}`, token);
+    // A 200 without a byte is no file (a present file is a complete one): a failed request, and a rerun asks again.
+    return got.ok && got.value.bytes.length === 0 ? { ok: false as const, error: { code: 'empty' as const } } : got;
   };
   const stopped = async () => ((await live(deps)) ? 'live_session' : undefined);
 
@@ -179,7 +181,7 @@ async function job(deps: ArchiveDeps, args: ArchiveArgs): Promise<boolean> {
     });
     const into = join(dir, String(session.key));
     mkdirSync(into, { recursive: true });
-    const files = new Map<string, string>();
+    const paths = new Map<string, string>();
     let missing = 0;
     let error: string | undefined;
     for (const topic of TOPICS) {
@@ -205,14 +207,18 @@ async function job(deps: ArchiveDeps, args: ArchiveArgs): Promise<boolean> {
           break;
         }
       }
-      if (existsSync(path)) files.set(topic, readFileSync(path, 'utf8'));
+      if (existsSync(path)) paths.set(topic, path);
       else missing++;
     }
+    // Sized before anything is read: the parse holds the whole session in memory (MAX_SESSION_BYTES).
+    if (error === undefined && [...paths.values()].reduce((n, p) => n + statSync(p).size, 0) > MAX_SESSION_BYTES)
+      error = 'too_large';
     if (error !== undefined) {
       counts.failed++;
-      log.error(line({ files: files.size, skipped_files: missing, error }), 'archive');
+      log.error(line({ files: paths.size, skipped_files: missing, error }), 'archive');
       continue;
     }
+    const files = new Map([...paths].map(([topic, path]) => [topic, readFileSync(path, 'utf8')]));
 
     const built = archiveRows(files, session.key, session.type);
     if (!built.ok) {
@@ -251,7 +257,8 @@ async function job(deps: ArchiveDeps, args: ArchiveArgs): Promise<boolean> {
     }
     counts.imported++;
     if (stats.t0 === 'heartbeat') counts.t0_heartbeat++;
-    log.info(line(fields), 'archive');
+    // The Heartbeat t0 can be minutes off (A§6.2): imported, but an error line to look at.
+    log[stats.t0 === 'heartbeat' ? 'error' : 'info'](line(fields), 'archive');
   }
   return done(true);
 }

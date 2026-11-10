@@ -1,4 +1,13 @@
-import { chmodSync, existsSync, mkdtempSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
+import {
+  chmodSync,
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readdirSync,
+  readFileSync,
+  truncateSync,
+  writeFileSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { type Kysely, sql } from 'kysely';
@@ -6,7 +15,7 @@ import { HttpResponse, http } from 'msw';
 import pino from 'pino';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { server } from '../../../test/msw.setup.ts';
-import { ORIGIN } from '../src/archive/files.ts';
+import { MAX_SESSION_BYTES, ORIGIN } from '../src/archive/files.ts';
 import { type ArchiveArgs, type ArchiveDeps, archive, GAP_MS, LOCK_KEY } from '../src/archive/job.ts';
 import { createDb, type DB } from '../src/db/db.ts';
 import { run } from '../src/main.ts';
@@ -161,6 +170,7 @@ describe('archive (fixtures through msw, f1_ingest login)', { timeout: 120_000 }
 
     const bySession = Object.fromEntries(logged('archive').map((l) => [l.session_key, l]));
     expect(bySession[9102]).toMatchObject({
+      level: 30, // info
       year: 2019,
       type: 'Race',
       files: 8,
@@ -287,6 +297,71 @@ describe('archive (fixtures through msw, f1_ingest login)', { timeout: 120_000 }
     expect(existsSync(join(fresh.dir, '9102', 'TimingData.jsonStream'))).toBe(true);
   });
 
+  it('an empty 200 writes no file and no marker and fails like a failed request; the rerun asks again', async () => {
+    f1((path) => (path === '2019/Index.json' ? new HttpResponse('') : undefined));
+    const fresh = { ...args, keys: [9102], dir: mkdtempSync(join(tmpdir(), 'f1-archive-')) };
+    expect(await archive(deps, fresh)).toBe(false);
+    expect(logged('archive_done').at(-1)).toMatchObject({ error: 'index_empty' });
+    expect(readdirSync(fresh.dir)).toEqual([]);
+
+    f1((path) => (path.endsWith('_Race/TimingData.jsonStream') ? new HttpResponse('') : undefined));
+    expect(await archive(deps, fresh)).toBe(false);
+    expect(logged('archive').at(-1)).toMatchObject({ session_key: 9102, error: 'empty' });
+    expect(logged('archive_done').at(-1)).toMatchObject({ imported: 0, failed: 1 });
+    expect(readdirSync(join(fresh.dir, '9102')).filter((f) => f.startsWith('TimingData'))).toEqual([]);
+
+    f1();
+    const asked = requests.length;
+    expect(await archive(deps, fresh)).toBe(true);
+    expect(requests.slice(asked).map((r) => r.path)).toContain(`2019/${MEETING}/2019-03-17_Race/TimingData.jsonStream`);
+    expect(logged('archive_done').at(-1)).toMatchObject({ imported: 1, failed: 0 });
+  });
+
+  it('a session imported on the Heartbeat t0 logs its line at error level and counts in t0_heartbeat', async () => {
+    // The race without SessionData (and it has no ExtrapolatedClock): only the Heartbeat is left for the t0.
+    f1((path) => (path.endsWith('_Race/SessionData.jsonStream') ? 403 : undefined));
+    const fresh = { ...args, keys: [9102], dir: mkdtempSync(join(tmpdir(), 'f1-archive-')) };
+    expect(await archive(deps, fresh)).toBe(true);
+    expect(logged('archive').at(-1)).toMatchObject({ session_key: 9102, level: 50, t0: 'heartbeat' });
+    expect(logged('archive').at(-1)).not.toHaveProperty('error');
+    expect(logged('archive_done').at(-1)).toMatchObject({ imported: 1, failed: 0, t0_heartbeat: 1 });
+  });
+
+  it('counts a key not in the Index, a bad Path and a SessionInfo Key that is not the Index Key', async () => {
+    const index = JSON.parse(readFileSync(join(FIXTURES, 'index-2019.json'), 'utf8').replace(/^\uFEFF/, ''));
+    const race = index.Meetings[0].Sessions[1];
+    index.Meetings[0].Sessions.push(
+      { ...race, Key: 9131, Path: '2019/../uat/2019-03-17_Race/' },
+      { ...race, Key: 9132 }, // the race's Path, so its SessionInfo Key is 9102
+    );
+    f1((path) => (path === '2019/Index.json' ? HttpResponse.json(index) : undefined));
+    const fresh = { ...args, keys: [9131, 9132, 9999], dir: mkdtempSync(join(tmpdir(), 'f1-archive-')) };
+    expect(await archive(deps, fresh)).toBe(false);
+    expect(
+      logged('archive')
+        .slice(-3)
+        .map((l) => [l.session_key, l.error]),
+    ).toEqual([
+      [9131, 'bad_path'],
+      [9999, 'not_in_index'],
+      [9132, 'key_mismatch'],
+    ]);
+    expect(logged('archive_done').at(-1)).toMatchObject({ imported: 0, failed: 2, incomplete: 0, bad_path: 1 });
+    expect(await count('session', 'session_key IN (9131, 9132, 9999)')).toBe(0);
+  });
+
+  it('a session over MAX_SESSION_BYTES on disk fails as too_large before anything is read', async () => {
+    f1();
+    const fresh = { ...args, keys: [9102], dir: mkdtempSync(join(tmpdir(), 'f1-archive-')) };
+    const big = join(fresh.dir, '9102', 'TimingData.jsonStream');
+    mkdirSync(join(fresh.dir, '9102'));
+    writeFileSync(big, '');
+    truncateSync(big, MAX_SESSION_BYTES + 1); // sparse: no bytes written
+    expect(await archive(deps, fresh)).toBe(false);
+    expect(logged('archive').at(-1)).toMatchObject({ session_key: 9102, error: 'too_large' });
+    expect(logged('archive_done').at(-1)).toMatchObject({ imported: 0, failed: 1 });
+  });
+
   it('a token that expires mid-run stops it before the next request', async () => {
     f1();
     const asked = requests.length;
@@ -352,7 +427,8 @@ describe('archive (fixtures through msw, f1_ingest login)', { timeout: 120_000 }
   it('the role exits 1 on an expired token, logged in as f1_ingest, without a request', async () => {
     const asked = requests.length;
     const expired = tokenFile(`${b64({ alg: 'none' })}.${b64({ exp: 1 })}.${SIGNATURE}`);
-    const argv = ['archive', '2019', '--token-file', expired, '--dir', args.dir];
+    const dir = join(mkdtempSync(join(tmpdir(), 'f1-archive-')), 'fixtures-private'); // the CLI takes no other --dir
+    const argv = ['archive', '2019', '--token-file', expired, '--dir', dir];
     expect(await run(argv, { DATABASE_URL: testDb.urls.f1_ingest }, () => {})).toBe(1);
     expect(requests.length).toBe(asked);
   });

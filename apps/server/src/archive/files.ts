@@ -13,10 +13,20 @@ import type { Result } from '../openf1/schemas.ts';
 
 export const ORIGIN = 'https://livetiming.formula1.com';
 const TIMEOUT_MS = 60_000;
-/** Twice this (the parts and their concat) fits well inside the job's 512m; the largest file seen is about 7 MB. */
+/** One download, buffered twice (the parts and their concat); the largest file seen is about 7 MB. */
 export const MAX_BYTES = 64 * 1024 * 1024;
+/**
+ * A session's topic files in all, before the job reads and parses them: this, not MAX_BYTES, bounds its memory.
+ * WSL [box] peak RSS: 157 MB at 0.41 MB of input and 271 MB at 6.61 MB, about 18 MB of RSS per MB above a ~150 MB
+ * base, against the job's 512m limit. 24 MiB is 3.6 times the largest session seen; the linear fit puts it near
+ * 600 MB, so a session close to the cap may still be OOM-killed: lower the cap if one is.
+ */
+export const MAX_SESSION_BYTES = 24 * 1024 * 1024;
 
-export type Failure = { code: 'http'; status: number } | { code: 'network' | 'timeout' | 'too_large' | 'host' };
+/** `empty` is the job's: a 200 without a byte. */
+export type Failure =
+  | { code: 'http'; status: number }
+  | { code: 'network' | 'timeout' | 'too_large' | 'host' | 'empty' };
 
 /** Letters and digits of any script (São Paulo), `_` and `-`: never `.`, `/`, `%`, a space or a control character. */
 const PATH = /^\d{4}\/[\p{L}\p{N}_-]+\/[\p{L}\p{N}_-]+\/$/u;

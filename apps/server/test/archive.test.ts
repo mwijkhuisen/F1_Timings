@@ -1,7 +1,9 @@
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
+import { HttpResponse, http } from 'msw';
 import { describe, expect, it } from 'vitest';
-import { archiveEvents, isArchivePath, readStreams } from '../src/archive/files.ts';
+import { server } from '../../../test/msw.setup.ts';
+import { archiveEvents, download, isArchivePath, MAX_BYTES, ORIGIN, readStreams } from '../src/archive/files.ts';
 import { archiveRows, gmtOffset, indexPlan, rebuildSessionData } from '../src/archive/rows.ts';
 import { createLaps } from '../src/live/laps.ts';
 import { archiveT0, type FeedEvent } from '../src/live/read.ts';
@@ -89,6 +91,22 @@ describe('isArchivePath', () => {
       '2021/a/b',
     ])
       expect(isArchivePath(bad), bad).toBe(false);
+  });
+});
+
+describe('download', () => {
+  it('stops past MAX_BYTES with too_large (a finite stream of 1 MiB chunks)', async () => {
+    const chunk = new Uint8Array(1024 * 1024);
+    let pulls = 0;
+    const body = () =>
+      new ReadableStream<Uint8Array>({
+        pull(c) {
+          if (pulls++ <= MAX_BYTES / chunk.length) c.enqueue(chunk);
+          else c.close();
+        },
+      });
+    server.use(http.get(`${ORIGIN}/static/big`, () => new HttpResponse(body())));
+    expect(await download(`${ORIGIN}/static/big`, 'token')).toEqual({ ok: false, error: { code: 'too_large' } });
   });
 });
 
