@@ -105,10 +105,94 @@ describe('merge', () => {
       [3, 'f1-live', 92_000, {}],
     ]);
     expect(counts.added).toEqual({ 'f1-archive': 1, 'f1-live': 1 });
+    expect(counts.dup).toEqual({});
     expect(counts.rows).toBe(3);
     // Without OpenF1 the archive is the session's top source: only the recording's lap is added.
     const archive = merge([lap('f1-archive', 1, 1), lap('f1-live', 1, 1), lap('f1-live', 1, 2)], [], 'Race');
     expect(archive.counts.added).toEqual({ 'f1-live': 1 });
+  });
+
+  describe('E6: a lap only a lower source has is not added when it repeats the higher previous lap', () => {
+    const laps = (candidates: Candidate[]) => {
+      const { rows, counts } = merge(candidates, [], 'Race');
+      return { rows: rows.map((r) => [r.lap_number, r.source, r.lap_ms]), counts };
+    };
+
+    it("one within 1 ms of the higher source's lap n − 1 is not added and counts as `dup`", () => {
+      const { rows, counts } = laps([
+        lap('openf1', 1, 1, { lap_ms: 90_000 }),
+        lap('openf1', 1, 2, { lap_ms: 91_500 }), // lap 3's time
+        lap('jolpica', 1, 2, { lap_ms: 91_000 }),
+        lap('jolpica', 1, 3, { lap_ms: 91_501, s1_ms: 30_000 }),
+        lap('openf1', 1, 4, { lap_ms: 92_000 }),
+      ]);
+      expect(rows).toEqual([
+        [1, 'openf1', 90_000],
+        [2, 'openf1', 91_500],
+        [4, 'openf1', 92_000],
+      ]);
+      expect(counts).toMatchObject({ added: {}, dup: { jolpica: 1 }, filled: {}, diffs: { jolpica: { lap_ms: 1 } } });
+    });
+
+    it('one 2 ms off is added', () => {
+      const { rows, counts } = laps([
+        lap('openf1', 1, 1, { lap_ms: 90_000 }),
+        lap('jolpica', 1, 2, { lap_ms: 90_002 }),
+      ]);
+      expect(rows).toEqual([
+        [1, 'openf1', 90_000],
+        [2, 'jolpica', 90_002],
+      ]);
+      expect(counts).toMatchObject({ added: { jolpica: 1 }, dup: {} });
+    });
+
+    it('a block of added laps keeps two equal consecutive times, as its lap n − 1 is the same lower source', () => {
+      const { rows, counts } = laps([
+        lap('openf1', 1, 1, { lap_ms: 90_000 }),
+        lap('jolpica', 1, 2, { lap_ms: 91_000 }),
+        lap('jolpica', 1, 3, { lap_ms: 91_000 }),
+        lap('openf1', 1, 4),
+        lap('jolpica', 1, 4, { lap_ms: 92_000 }), // filled from jolpica
+        lap('jolpica', 1, 5, { lap_ms: 92_000 }),
+      ]);
+      expect(rows).toEqual([
+        [1, 'openf1', 90_000],
+        [2, 'jolpica', 91_000],
+        [3, 'jolpica', 91_000],
+        [4, 'openf1', 92_000],
+        [5, 'jolpica', 92_000],
+      ]);
+      expect(counts).toMatchObject({ added: { jolpica: 3 }, dup: {} });
+    });
+
+    it('a null on either side does not block', () => {
+      const { rows, counts } = laps([
+        lap('openf1', 1, 1),
+        lap('jolpica', 1, 2, { lap_ms: 90_000 }),
+        lap('openf1', 2, 1, { lap_ms: 90_000 }),
+        lap('jolpica', 2, 2, { s1_ms: 30_000 }),
+      ]);
+      expect(rows).toEqual([
+        [1, 'openf1', null],
+        [2, 'jolpica', 90_000],
+        [1, 'openf1', 90_000],
+        [2, 'jolpica', null],
+      ]);
+      expect(counts).toMatchObject({ added: { jolpica: 2 }, dup: {} });
+    });
+
+    it('with two lower sources, the first is skipped as `dup` and the second, with another time, is added', () => {
+      const { rows, counts } = laps([
+        lap('jolpica', 1, 2, { lap_ms: 91_000 }),
+        lap('openf1', 1, 1, { lap_ms: 90_000 }),
+        lap('f1-archive', 1, 2, { lap_ms: 90_001, s1_ms: 30_000 }),
+      ]);
+      expect(rows).toEqual([
+        [1, 'openf1', 90_000],
+        [2, 'jolpica', 91_000],
+      ]);
+      expect(counts).toMatchObject({ added: { jolpica: 1 }, dup: { 'f1-archive': 1 }, filled: {}, diffs: {} });
+    });
   });
 
   it('a null segment array is filled whole; a null element inside one is not', () => {
@@ -226,7 +310,7 @@ describe('merge', () => {
       .sort((a, b) => a.driver_number - b.driver_number || a.lap_number - b.lap_number);
     expect(rows).toEqual(expected);
     expect(rows.filter((r) => r.deleted)).toHaveLength(6);
-    expect(counts).toMatchObject({ rows: candidates.length, added: {}, filled: {}, diffs: {}, conflicts: {} });
+    expect(counts).toMatchObject({ rows: candidates.length, added: {}, dup: {}, filled: {}, diffs: {}, conflicts: {} });
     expect(counts.rules).toEqual(normalised.rules);
   });
 

@@ -42,6 +42,8 @@ export type MergeCounts = {
   rows: number;
   /** Laps that only a lower source has, per source. */
   added: Record<string, number>;
+  /** Laps not added from a lower source (E6): their lap time repeats the previous lap's, which a higher one gave. */
+  dup: Record<string, number>;
   filled: PerColumn;
   diffs: PerColumn;
   /** Laps a source filled nothing on: a lap or sector time both have differs by more than 1 ms. */
@@ -71,7 +73,9 @@ function same(column: Column, a: unknown, b: unknown): boolean {
 /**
  * The merge (H6): per (driver, lap), the highest-ranked candidate is the base and gives the row its `source`. Each
  * lower candidate in order fills the row's null values, unless a lap or sector time both have differs by more than
- * 1 ms (a conflict: it fills nothing). Then the A§9 rules run on the merged rows: `markPitIn`, and `markLaps` on the
+ * 1 ms (a conflict: it fills nothing). A lap only lower sources have is added from the first of them in order whose
+ * lap time is not within 1 ms of the previous lap's (n − 1), where that previous value comes from a higher source than
+ * it (E6: a live-ingest hole that put lap n + 1's time on lap n); a skipped candidate leaves nothing. Then the A§9 rules run on the merged rows: `markPitIn`, and `markLaps` on the
  * session's race control. Each row keeps a merged `quali_phase`, because the archive's phases come from SessionData
  * boundaries that `race_control` does not store; only where it is null does the race control's phase count. The same
  * candidates in any order give the same rows, sorted by driver, then lap.
@@ -86,6 +90,7 @@ export function merge(
   );
   const top = sorted.reduce<number>((min, c) => Math.min(min, rank(c)), ORDER.length);
   const added: MergeCounts['added'] = {};
+  const dup: MergeCounts['dup'] = {};
   const filled: PerColumn = {};
   const diffs: PerColumn = {};
   const conflicts: MergeCounts['conflicts'] = {};
@@ -93,6 +98,19 @@ export function merge(
   for (const c of sorted) {
     const row = rows.at(-1);
     if (row?.driver_number !== c.driver_number || row.lap_number !== c.lap_number) {
+      // `row` is lap n − 1 when it is the same driver's; its lap_ms came from `filled.lap_ms`, else from its base.
+      const from = row?.filled.lap_ms ?? row?.source;
+      if (
+        row?.driver_number === c.driver_number &&
+        row.lap_number === c.lap_number - 1 &&
+        row.lap_ms !== null &&
+        c.lap_ms !== null &&
+        ORDER.indexOf(from as Source) < rank(c) &&
+        same('lap_ms', row.lap_ms, c.lap_ms)
+      ) {
+        bump(dup, c.source);
+        continue;
+      }
       rows.push({ ...c, is_pit_in: false, deleted: false, deleted_reason: null, filled: {} });
       if (rank(c) !== top) bump(added, c.source);
       continue;
@@ -115,5 +133,5 @@ export function merge(
   const phases = rows.map((r) => r.quali_phase);
   const rules = markLaps(rows, raceControl, type);
   for (const [i, r] of rows.entries()) r.quali_phase = phases[i] ?? r.quali_phase;
-  return { rows, counts: { rows: rows.length, added, filled, diffs, conflicts, rules } };
+  return { rows, counts: { rows: rows.length, added, dup, filled, diffs, conflicts, rules } };
 }

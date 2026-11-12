@@ -178,7 +178,7 @@ describe('the 2018+ tier (synthetic dump, f1_ingest login)', { timeout: 120_000 
       round: 1,
       laps: 4,
       skipped: { unknown_driver: 2, no_number: 1, lap_dup: 0 },
-      merge: { added: { jolpica: 1 }, filled: { jolpica: { lap_ms: 1 } }, conflicts: { jolpica: 1 } },
+      merge: { added: { jolpica: 1 }, dup: {}, filled: { jolpica: { lap_ms: 1 } }, conflicts: { jolpica: 1 } },
     });
     expect(own('jolpica_attach').find((l) => l.skip === 'no_match')).toMatchObject({ year: 2019, round: 2 });
     expect(own('jolpica_done').at(-1)).toMatchObject({
@@ -219,6 +219,49 @@ describe('the 2018+ tier (synthetic dump, f1_ingest login)', { timeout: 120_000 
       .where('lap_number', '=', 2)
       .where('driver_number', '=', 5)
       .execute();
+  });
+
+  // The 11353 shape (E6): OpenF1's lap 42 carries lap 43's time and lacks lap 43, so Jolpica's lap 43 repeats it.
+  it('a Jolpica lap that repeats OpenF1 lap n − 1 is not added, and the TIME deletion stays on lap n − 1', async () => {
+    const HOLE = 9803;
+    await admin
+      .insertInto('session')
+      .values({
+        session_key: HOLE,
+        source: 'openf1',
+        meeting_key: 9800,
+        name: 'Race',
+        type: 'Race',
+        date_start: new Date('2018-04-08T06:10:00Z'),
+        date_end: new Date('2018-04-08T08:10:00Z'),
+      })
+      .execute();
+    await admin
+      .insertInto('race_control')
+      .values({
+        session_key: HOLE,
+        source: 'openf1',
+        date: new Date('2018-04-08T07:00:00Z'),
+        message: 'CAR 33 (XXX) TIME 1:31.500 DELETED - TRACK LIMITS AT TURN 4 LAP 43 07:00:00',
+      })
+      .execute();
+    const lap = (lap_number: number, lap_ms: number) => ({ driver_number: 33, lap_number, lap_ms }) as never;
+    const merge = await db.transaction().execute(async (trx) => {
+      await writeLaps(trx, HOLE, 'openf1', [lap(41, 90_000), lap(42, 91_500), lap(44, 92_000)]);
+      return writeLaps(trx, HOLE, 'jolpica', [lap(41, 90_000), lap(42, 91_000), lap(43, 91_500), lap(44, 92_000)]);
+    });
+    const rows = await admin
+      .selectFrom('lap')
+      .select(['lap_number', 'source', 'lap_ms', 'deleted'])
+      .where('session_key', '=', HOLE)
+      .orderBy('lap_number')
+      .execute();
+    expect(rows).toEqual([
+      { lap_number: 41, source: 'openf1', lap_ms: 90_000, deleted: false },
+      { lap_number: 42, source: 'openf1', lap_ms: 91_500, deleted: true },
+      { lap_number: 44, source: 'openf1', lap_ms: 92_000, deleted: false },
+    ]);
+    expect(merge).toMatchObject({ added: {}, dup: { jolpica: 1 }, conflicts: { jolpica: 1 }, rules: { deleted: 1 } });
   });
 
   it('never logs a name, a time or a path', () => {
