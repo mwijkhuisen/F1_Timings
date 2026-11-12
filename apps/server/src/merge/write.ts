@@ -8,6 +8,9 @@ const CHUNK = 1_000;
 export const chunks = <T>(rows: readonly T[]) =>
   Array.from({ length: Math.ceil(rows.length / CHUNK) }, (_, i) => rows.slice(i * CHUNK, (i + 1) * CHUNK));
 
+const lock = (trx: Transaction<DB>, key: number) =>
+  trx.selectFrom('session').select('type').where('session_key', '=', key).forUpdate().executeTakeFirstOrThrow();
+
 /**
  * The one lap write path (P3b, A§7), inside the writer's transaction: lock the session row, replace this source's
  * candidates in lap_source, merge every source's candidates of the session and replace its `lap` rows with the result.
@@ -19,12 +22,7 @@ export async function writeLaps(
   source: Source,
   laps: readonly Insertable<DB['lap']>[],
 ): Promise<MergeCounts> {
-  const { type } = await trx
-    .selectFrom('session')
-    .select('type')
-    .where('session_key', '=', key)
-    .forUpdate()
-    .executeTakeFirstOrThrow();
+  await lock(trx, key);
   await trx.deleteFrom('lap_source').where('session_key', '=', key).where('source', '=', source).execute();
   // The lap_source columns only: is_pit_in, deleted and deleted_reason are derived after the merge.
   const own = laps.map(
@@ -38,6 +36,12 @@ export async function writeLaps(
       }) as Insertable<DB['lap_source']>,
   );
   for (const chunk of chunks(own)) await trx.insertInto('lap_source').values(chunk).execute();
+  return mergeSession(trx, key);
+}
+
+/** Merges the session's stored candidates again and replaces its `lap` rows (the `fill` job without files). */
+export async function mergeSession(trx: Transaction<DB>, key: number): Promise<MergeCounts> {
+  const { type } = await lock(trx, key); // a second lock in the same transaction is a no-op
 
   // pg gives a timestamptz as a Date; an ISO string keeps its ms (Date.parse of a Date would drop them).
   const candidates = (await trx.selectFrom('lap_source').selectAll().where('session_key', '=', key).execute()).map(
