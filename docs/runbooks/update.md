@@ -216,18 +216,19 @@ sudo docker compose -p f1 -f /etc/f1/compose.yaml --env-file /srv/f1/state/curre
    sha256sum "$d/jolpica-f1-csv.zip"
    ```
 
-   The size and the sha256 must equal `file_size` and `file_hash` of `delayed_dumps.csv`. Stop if they differ (a partial download or an error page).
+   The size and the sha256 must equal `file_size` and `file_hash` of `delayed_dumps.csv`. Stop if they differ (a partial download or an error page). Both come from the same host as the zip, so they check integrity (truncation, an error page), not authenticity: a changed host could serve a matching pair.
 2. **Unpack** into `/srv/f1/jolpica`, as root. The zip is flat: 18 `formula_one_<table>.csv` files and no directory.
 
    ```bash
    sudo python3 -I -m zipfile -l "$d/jolpica-f1-csv.zip"
+   sudo python3 -I -c 'import sys, zipfile; i = zipfile.ZipFile(sys.argv[1]).infolist(); bad = [f for f in i if "/" in f.filename or "\\" in f.filename or ".." in f.filename]; total = sum(f.file_size for f in i); print(len(i), "files", total, "bytes", len(bad), "bad names"); sys.exit(1 if bad or total > 512 * 1024**2 else 0)' "$d/jolpica-f1-csv.zip" && echo zip ok
    sudo rm -f /srv/f1/jolpica/formula_one_*.csv
    sudo python3 -I -m zipfile -e "$d/jolpica-f1-csv.zip" /srv/f1/jolpica/
    rm -r "$d"
    sudo ls -ld /srv/f1/jolpica && sudo ls -l /srv/f1/jolpica | head -n 4
    ```
 
-   (`unzip` does the same.) Expected: the directory is `root:62532 0750` and the files are `0644` (root's umask 022), so the job's group can read them. A different mode or owner means `f1-install` did not run: run it again. The job refuses a symlink in place of a file (`not_file`), so do not link the files from elsewhere.
+   Extract only after `zip ok`: the check refuses more than 512 MB uncompressed in total (the 2026-10-27 dump is 18 files, 45 MB) and any name with `/`, `\` or `..`, before anything is written. (`unzip` extracts the same.) Expected: the directory is `root:62532 0750` and the files are `0644` (root's umask 022), so the job's group can read them. A different mode or owner means `f1-install` did not run: run it again. The job refuses a symlink in place of a file (`not_file`), so do not link the files from elsewhere.
 3. **Run** it. The years are optional (none means every year in the dump); all of them took 33 s and 439 MB on the build's real dump.
 
    ```bash
@@ -237,10 +238,21 @@ sudo docker compose -p f1 -f /etc/f1/compose.yaml --env-file /srv/f1/state/curre
      --profile jobs run --rm jolpica jolpica 1996 2005
    ```
 
-   It logs one `jolpica` line per session and a `jolpica_done` line, counts and codes only. Check that `jolpica_done` has `failed` 0 and no `error`.
-4. **Exit codes:** 0 when the dump was read and no session failed. 1 when it was not or one failed: `bad_dump` (in `jolpica_done`, with `code` and `file`: a missing or renamed file, a changed header, a file over the caps), `busy` (another run holds the lock: wait for it), and per session `bad_key` (a round number outside 1–99), `not_jolpica` (the meeting or session key already exists with another source: nothing is written for it) or `db`. 64 for a usage error (a year that is not four digits or outside 1950 to this year, an unknown flag, or `--dir` other than `/srv/f1/jolpica` or a path with a `fixtures-private` segment). 78 without the database secret.
-5. **Rerun** after a newer dump: every session is replaced (idempotent), so a second run over the same dump changes nothing. A 2018+ round that has no session in the database yet is counted and skipped (`no_match`); run it again after the archive or OpenF1 has that session.
-6. **Before an image rollback past P3c** (only after a `jolpica` run): the schema stays, as for every rollback (expand-only, above), but an image older than P3c throws in the merge on any session that holds jolpica candidates (A§7, "Rollback"). Delete them first, then roll the image back (`Manual rollback` above):
+   It logs one `jolpica` line per session and a `jolpica_done` line, counts and codes only. Check that `jolpica_done` has `failed` 0 and no `error`, and that `bad_time`, `bad_pit_time` and `no_year` are 0: a value of another shape there (a duration, a pit stop's time of day, a season without a year) is read as null or skipped, so a nonzero count is a format change in the dump.
+4. **Verify [box]** after a run over every year, with the repository's `scripts/jolpica-counts.py` and `scripts/jolpica-facts.sql` copied to the VM (both print counts and keys only). The first counts the dump's own races, qualifyings, race entries without status 40/41, qualifying entries, race laps and pit stops per year 1950–2017, by the documented rules and independently of the job; the second counts the same from the `jolpica` rows, then the 1996–2017 races without laps and the 2018+ tier's fills and added laps (A§7):
+
+   ```bash
+   sudo python3 -I jolpica-counts.py /srv/f1/jolpica > dump-counts.tsv
+   sudo docker compose -p f1 -f /etc/f1/compose.yaml --env-file /srv/f1/state/current.env exec -T db \
+     psql -U postgres -d f1 -X -q -v ON_ERROR_STOP=1 -f - < jolpica-facts.sql > facts.out
+   sed -n '/^year/,/^TOTAL/p' facts.out | diff dump-counts.tsv - && echo counts equal
+   sed -n '/^2\./,$p' facts.out
+   ```
+
+   The two count tables must be equal, row by row (`counts equal`); a difference names the year and the column to look into. The rest must show 0 races without laps, `lap_ms` as the only filled column, and added laps only in sessions where OpenF1 or the archive lost laps (on the build's dev database: 395 races, 0 without laps; 90 `lap_ms` fills; 449 added laps, 446 in 10033 and 3 in 11234). The snapshot diff of every set `lap` value before and after (17 columns, A§7 [box]) was a one-off on the build machine and is not part of this check.
+5. **Exit codes:** 0 when the dump was read and no session failed. 1 when it was not or one failed: `bad_dump` (in `jolpica_done`, with `code` and `file`: a missing or renamed file, a changed header, a file over the caps; `too_large` is a file over 64 MiB, and the cap in `jolpica/csv.ts` and the service's `mem_limit` are raised together), `busy` (another run holds the lock: wait for it), and per session `bad_key` (a round number outside 1–99), `not_jolpica` (the meeting or session key already exists with another source: nothing is written for it), `stale_lap` (a 2018+ session whose `lap` row lacks its own candidate, after an image rollback: refetch or re-archive that session, then run the job again) or `db`. 64 for a usage error (a year that is not four digits or outside 1950 to this year, an unknown flag, or `--dir` other than `/srv/f1/jolpica` or a path with a `fixtures-private` segment). 78 without the database secret.
+6. **Rerun** after a newer dump: every session is replaced (idempotent), so a second run over the same dump changes nothing. A 2018+ round that has no session in the database yet is counted and skipped (`no_match`); run it again after the archive or OpenF1 has that session.
+7. **Before an image rollback past P3c** (only after a `jolpica` run): the schema stays, as for every rollback (expand-only, above), but an image older than P3c throws in the merge on any session that holds jolpica candidates (A§7, "Rollback"). Delete them first, then roll the image back (`Manual rollback` above):
 
    ```bash
    sudo docker compose -p f1 -f /etc/f1/compose.yaml --env-file /srv/f1/state/current.env exec -T db \
@@ -248,7 +260,7 @@ sudo docker compose -p f1 -f /etc/f1/compose.yaml --env-file /srv/f1/state/curre
    ```
 
    The 1950–2017 sessions stay readable. The old image's `fill` leaves them unchanged and counts them as `stale_lap`, and its ingest never touches them. Its next refetch of a 2018+ session drops the jolpica fills from that session's laps. After rolling forward again, run the job again (step 3).
-7. **The dump stays on the VM.** It is CC BY-NC-SA 4.0 (ADR-0009): never copy it anywhere else, never commit it, and never put it in an image, a log or an issue. The site's attribution line (`third-party-licences.txt`, section 4) already names it.
+8. **The dump stays on the VM.** It is CC BY-NC-SA 4.0 (ADR-0009): never copy it anywhere else, never commit it, and never put it in an image, a log or an issue. The site's attribution line (`third-party-licences.txt`, section 4) already names it.
 
 ## Check a recording [box]
 
