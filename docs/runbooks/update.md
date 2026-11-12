@@ -202,6 +202,57 @@ sudo docker compose -p f1 -f /etc/f1/compose.yaml --env-file /srv/f1/state/curre
 - **After an image rollback:** an image before P3b writes `lap` only, so `lap_source` goes stale for the sessions it wrote. Once rolled forward, refetch (`refetch <session_key>`) or re-archive those sessions before running `fill` on them. `fill` leaves a session unchanged and fails it as `stale_lap` when any `lap` row has no candidate of its own source (the old image wrote it), files or not; it cannot tell a candidate that is present but stale (a session the old image refetched), hence the refetch first.
 - **Browser cache:** a final session's laps stay cached in the browser for up to 24 h (A§10, `max-age=86400`), so check a filled session with a hard reload.
 
+## Import Jolpica (the `jolpica` job) [owner]
+
+`jolpica` (A§4, A§6.3, A§7) reads the Jolpica-F1 CSV dump in `/srv/f1/jolpica` and writes the races and qualifyings of 1950–2017 as `jolpica` rows; from 2018 on it adds lap candidates to the sessions that already exist. It never reaches the network, so the download is your step. `f1-update` never runs it and no timer does. `f1-install` creates `/srv/f1/jolpica` (`root:62532 0750`: root unpacks the dump, the job only reads it).
+
+1. **Download.** The free (delayed) copy is 14 days behind, which does not matter for finished seasons. Read the hash and the upload time from the info JSON first, into a directory of its own:
+
+   ```bash
+   d=$(mktemp -d)
+   curl -sS https://api.jolpi.ca/data/dumps/download/ | python3 -I -m json.tool   # delayed_dumps.csv: uploaded_at, file_size, file_hash
+   curl -sSL -o "$d/jolpica-f1-csv.zip" 'https://api.jolpi.ca/data/dumps/download/delayed/?dump_type=csv'
+   stat -c %s "$d/jolpica-f1-csv.zip"
+   sha256sum "$d/jolpica-f1-csv.zip"
+   ```
+
+   The size and the sha256 must equal `file_size` and `file_hash` of `delayed_dumps.csv`. Stop if they differ (a partial download or an error page).
+2. **Unpack** into `/srv/f1/jolpica`, as root. The zip is flat: 18 `formula_one_<table>.csv` files and no directory.
+
+   ```bash
+   sudo python3 -I -m zipfile -l "$d/jolpica-f1-csv.zip"
+   sudo rm -f /srv/f1/jolpica/formula_one_*.csv
+   sudo python3 -I -m zipfile -e "$d/jolpica-f1-csv.zip" /srv/f1/jolpica/
+   rm -r "$d"
+   sudo ls -ld /srv/f1/jolpica && sudo ls -l /srv/f1/jolpica | head -n 4
+   ```
+
+   (`unzip` does the same.) Expected: the directory is `root:62532 0750` and the files are `0644` (root's umask 022), so the job's group can read them. A different mode or owner means `f1-install` did not run: run it again. The job refuses a symlink in place of a file (`not_file`), so do not link the files from elsewhere.
+3. **Run** it. The years are optional (none means every year in the dump); all of them took 33 s and 439 MB on the build's real dump.
+
+   ```bash
+   sudo docker compose -p f1 -f /etc/f1/compose.yaml --env-file /srv/f1/state/current.env \
+     --profile jobs run --rm jolpica jolpica
+   sudo docker compose -p f1 -f /etc/f1/compose.yaml --env-file /srv/f1/state/current.env \
+     --profile jobs run --rm jolpica jolpica 1996 2005
+   ```
+
+   It logs one `jolpica` line per session and a `jolpica_done` line, counts and codes only. Check that `jolpica_done` has `failed` 0 and no `error`.
+4. **Exit codes:** 0 when the dump was read and no session failed. 1 when it was not or one failed: `bad_dump` (in `jolpica_done`, with `code` and `file`: a missing or renamed file, a changed header, a file over the caps), `busy` (another run holds the lock: wait for it), and per session `bad_key` (a round number outside 1–99), `not_jolpica` (the meeting or session key already exists with another source: nothing is written for it) or `db`. 64 for a usage error (a year that is not four digits or outside 1950 to this year, an unknown flag, or `--dir` other than `/srv/f1/jolpica` or a path with a `fixtures-private` segment). 78 without the database secret.
+5. **Rerun** after a newer dump: every session is replaced (idempotent), so a second run over the same dump changes nothing. A 2018+ round that has no session in the database yet is counted and skipped (`no_match`); run it again after the archive or OpenF1 has that session.
+6. **Roll back** the data and the schema (A§7: an image older than P3c throws in the merge on any session that holds jolpica candidates). Stop the timer first, so `:main` does not deploy again, then run the migration's `down` part and forget its version (`<repo>` is the owner's checkout of the repository). It deletes every `jolpica` row, drops `result.grid` and restores the three-value CHECKs, in one transaction. Then roll the image back (`Manual rollback` above):
+
+   ```bash
+   sudo systemctl stop f1-update.timer
+   { sed -n '/^-- migrate:down/,$p' <repo>/db/migrations/20261113000001_jolpica.sql
+     echo "DELETE FROM schema_migrations WHERE version = '20261113000001';"; } |
+     sudo docker compose -p f1 -f /etc/f1/compose.yaml --env-file /srv/f1/state/current.env exec -T db \
+       psql -U postgres -d f1 -1 -v ON_ERROR_STOP=1
+   ```
+
+   The next deploy of a P3c image runs `migrate`, which applies the migration again; run the job again after it.
+7. **The dump stays on the VM.** It is CC BY-NC-SA 4.0 (ADR-0009): never copy it anywhere else, never commit it, and never put it in an image, a log or an issue. The site's attribution line (`third-party-licences.txt`, section 4) already names it.
+
 ## Check a recording [box]
 
 After a session, plus 30 minutes (`<path>` is the `path` column, `<session_key>-<startedAt>`). These commands print counts and metadata only, never feed payloads:
