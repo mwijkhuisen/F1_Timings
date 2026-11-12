@@ -180,6 +180,7 @@ sudo docker compose -p f1 -f /etc/f1/compose.yaml --env-file /srv/f1/state/curre
 - **Heartbeat t0:** a session with neither SessionData nor ExtrapolatedClock is imported on the Heartbeat t0 and logs its `archive` line at error level (`"t0":"heartbeat"`, counted in `t0_heartbeat`): such a session's times can be minutes off.
 - **Temp files:** a kill can leave `<file>.<uuid>.tmp` files in `/srv/f1/archive/<session_key>/`; they are never read and can be deleted.
 - **Stops (exit 1):** `busy` (another archive run holds the lock: wait for it), `token_expired` (also mid-run, 60 s before the token's expiry: paste a new token and rerun), `disk_low` (under 5 GiB free in `/srv/f1/archive`, the recorder's warning level: free space first), `live_session`, `http_401`.
+- **Expected failures (2026-11-12):** a 2021 run always ends with `failed: 1` (exit 1): 2021 Abu Dhabi Practice 1 (7165) is skipped as `key_mismatch` (A§6.2). A 2022 run ends with `index_http_403` and imports nothing while F1 refuses that year; run `archive 2022` again later. A loop over the years that stops on a failure therefore stops after 2021.
 - **Rate:** one request every 2 s, about 3 h for all of 2018–2022 (run a year at a time; `tmux` or `nohup` keeps it alive after the SSH session ends).
 - **Years:** it never runs for 2023 and later (exit 64); those come from OpenF1.
 
