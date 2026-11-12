@@ -1,9 +1,11 @@
 import { join } from 'node:path';
 import { type CsvRecord, DumpError, readCsv } from './csv.ts';
+import { QUALI } from './rows.ts';
 
 // The tables of the Jolpica-F1 CSV dump that the importer needs (P3c, A§6.3), one `formula_one_<table>.csv` each,
 // read by header name. The small tables go into maps; `sessionentry`, `pitstop` and `lap` keep only the rows of the
-// wanted sessions. Durations become integer ms; a value of another shape is null and counted (`bad_time`).
+// wanted sessions. Durations become integer ms; a value of another shape is null and counted (`bad_time`), and so is
+// a pit stop's local time (`bad_pit_time`).
 
 const COLUMNS = {
   season: ['id', 'year'],
@@ -31,7 +33,7 @@ const COLUMNS = {
 type Table = keyof typeof COLUMNS;
 
 /** The session types whose entries the importer reads: the race and every qualifying type. */
-export const ENTRY_TYPES: ReadonlySet<string> = new Set(['R', 'Q1', 'Q2', 'Q3', 'QA', 'QB', 'QO']);
+export const ENTRY_TYPES: ReadonlySet<string> = new Set(['R', ...QUALI.keys()]);
 
 export type Round = {
   id: number;
@@ -82,6 +84,8 @@ export type Dump = {
   pits: Map<number, Pit[]>;
   /** durations of an unknown shape, read as null */
   badTime: number;
+  /** pit stop local times other than `HH:MM:SS`, read as null */
+  badPitTime: number;
 };
 
 const int = (v: string | null) => (v !== null && /^-?\d{1,9}$/.test(v) ? Number(v) : null);
@@ -125,6 +129,7 @@ async function* rows(dir: string, table: Table): AsyncGenerator<[number, CsvReco
  */
 export async function loadDump(dir: string, keep: (year: number, type: string) => boolean): Promise<Dump> {
   let badTime = 0;
+  let badPitTime = 0;
   const ms = (v: string | null) => {
     const d = duration(v);
     if (d !== undefined) return d;
@@ -217,12 +222,17 @@ export async function loadDump(dir: string, keep: (year: number, type: string) =
   for await (const [id, r] of rows(dir, 'pitstop')) {
     const entry = int(r.session_entry_id ?? null);
     if (entry === null || !kept.has(entry)) continue;
-    const pit: Pit = { id: id, lap: null, ms: ms(r.duration ?? null), local: clock(r.local_timestamp ?? null) };
+    const local = clock(r.local_timestamp ?? null);
+    if (local === null && r.local_timestamp != null) badPitTime++;
+    const pit: Pit = { id: id, lap: null, ms: ms(r.duration ?? null), local };
     const list = pits.get(entry) ?? [];
     pits.set(entry, list);
     list.push(pit);
     const lapId = int(r.lap_id ?? null);
-    if (lapId !== null) pitLaps.set(lapId, [...(pitLaps.get(lapId) ?? []), pit]);
+    if (lapId === null) continue;
+    const named = pitLaps.get(lapId);
+    if (named) named.push(pit);
+    else pitLaps.set(lapId, [pit]);
   }
   const laps: Dump['laps'] = new Map();
   for await (const [id, r] of rows(dir, 'lap')) {
@@ -235,5 +245,5 @@ export async function loadDump(dir: string, keep: (year: number, type: string) =
     list.push({ number, ms: ms(r.time ?? null) });
   }
 
-  return { rounds, circuits, drivers, teams, teamDrivers, roundEntries, entries, laps, pits, badTime };
+  return { rounds, circuits, drivers, teams, teamDrivers, roundEntries, entries, laps, pits, badTime, badPitTime };
 }

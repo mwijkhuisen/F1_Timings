@@ -103,33 +103,43 @@ export async function attachRound(
     log.info({ ...at, skip: 'no_date' }, 'jolpica_attach');
     return;
   }
-  const near = await db
-    .selectFrom('session')
-    .select(['session_key', 'source', 'type', 'name', 'is_cancelled', 'date_start'])
-    .where('date_start', '>=', new Date(start - HOUR))
-    .where('date_start', '<=', new Date(start + HOUR))
-    .execute();
-  const match = matchRace(
-    start,
-    near.map((s) => ({ ...s, date_start: s.date_start.getTime() })),
-  );
-  if (!match.ok) {
-    counts[match.error]++;
-    log.info({ ...at, skip: match.error }, 'jolpica_attach');
-    return;
-  }
-  const key = match.value;
-  let done: 'stale_lap' | (ReturnType<typeof lapCandidates> & { merge: Awaited<ReturnType<typeof writeLaps>> });
+  let key: number | undefined; // set once matched, for the log lines
+  let done:
+    | 'no_match'
+    | 'ambiguous'
+    | 'stale_lap'
+    | (ReturnType<typeof lapCandidates> & { merge: Awaited<ReturnType<typeof writeLaps>> });
   try {
-    done = await db.transaction().execute(async (trx) => {
-      if (await staleLap(trx, key)) return 'stale_lap' as const; // nothing written
-      const drivers = await trx.selectFrom('driver').select('driver_number').where('session_key', '=', key).execute();
-      const built = lapCandidates(dump, race, key, new Set(drivers.map((d) => d.driver_number)));
-      return { ...built, merge: await writeLaps(trx, key, 'jolpica', built.lap) };
-    });
+    // Inside the try: a database error here fails this round only, and the run goes on to `jolpica_done`.
+    const near = await db
+      .selectFrom('session')
+      .select(['session_key', 'source', 'type', 'name', 'is_cancelled', 'date_start'])
+      .where('date_start', '>=', new Date(start - HOUR))
+      .where('date_start', '<=', new Date(start + HOUR))
+      .execute();
+    const match = matchRace(
+      start,
+      near.map((s) => ({ ...s, date_start: s.date_start.getTime() })),
+    );
+    if (!match.ok) done = match.error;
+    else {
+      const k = match.value;
+      key = k;
+      done = await db.transaction().execute(async (trx) => {
+        if (await staleLap(trx, k)) return 'stale_lap' as const; // nothing written
+        const drivers = await trx.selectFrom('driver').select('driver_number').where('session_key', '=', k).execute();
+        const built = lapCandidates(dump, race, k, new Set(drivers.map((d) => d.driver_number)));
+        return { ...built, merge: await writeLaps(trx, k, 'jolpica', built.lap) };
+      });
+    }
   } catch (err) {
     counts.failed++;
     log.error({ session_key: key, ...at, error: 'db', cause: codeOf(err) }, 'jolpica_attach');
+    return;
+  }
+  if (done === 'no_match' || done === 'ambiguous') {
+    counts[done]++;
+    log.info({ ...at, skip: done }, 'jolpica_attach');
     return;
   }
   if (done === 'stale_lap') {

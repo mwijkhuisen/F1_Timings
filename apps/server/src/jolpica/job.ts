@@ -86,6 +86,8 @@ async function job({ db, log }: JolpicaDeps, args: JolpicaArgs): Promise<boolean
     bad_key: 0,
     no_date: 0,
     bad_time: 0,
+    bad_pit_time: 0,
+    no_year: 0,
     // the 2018+ tier
     attached: 0,
     no_laps: 0,
@@ -111,6 +113,8 @@ async function job({ db, log }: JolpicaDeps, args: JolpicaArgs): Promise<boolean
     throw err;
   }
   counts.bad_time = dump.badTime;
+  counts.bad_pit_time = dump.badPitTime;
+  counts.no_year = [...dump.rounds.values()].filter((r) => r.year === null).length; // its season has no year
 
   const rounds = [...dump.rounds.values()]
     .filter((r): r is typeof r & { year: number } => r.year !== null && wanted(r.year))

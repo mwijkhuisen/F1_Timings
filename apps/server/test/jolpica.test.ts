@@ -1,6 +1,6 @@
 import { join } from 'node:path';
 import { beforeAll, describe, expect, it } from 'vitest';
-import { lapCandidates, matchRace, type Ours } from '../src/jolpica/attach.ts';
+import { type AttachCounts, attachRound, lapCandidates, matchRace, type Ours } from '../src/jolpica/attach.ts';
 import { type Dump, duration, loadDump, type Round } from '../src/jolpica/dump.ts';
 import { meetingKey, sessionKey, TT } from '../src/jolpica/keys.ts';
 import { type RoundRows, roundRows, type SessionRows, zoneOffset } from '../src/jolpica/rows.ts';
@@ -361,6 +361,20 @@ describe('the 2018+ tier', () => {
       error: 'ambiguous',
     });
     expect(matchRace(T, [race(1, T), race(2, T, { is_cancelled: true })])).toEqual({ ok: true, value: 1 });
+  });
+
+  it('a database error while matching fails that round only (db), and the run goes on', async () => {
+    const counts = { failed: 0, no_match: 0 } as AttachCounts;
+    const errors: unknown[] = [];
+    const db = {
+      selectFrom: () => {
+        throw new Error('connection lost');
+      },
+    } as never;
+    const log = { info: () => {}, error: (o: unknown) => void errors.push(o) } as never;
+    await attachRound({ db, log }, dump, round(2018, 1) as Round & { year: number }, counts);
+    expect(counts).toEqual({ failed: 1, no_match: 0 });
+    expect(errors).toEqual([expect.objectContaining({ year: 2018, round: 1, error: 'db' })]);
   });
 
   it('lap candidates carry the number and time of known drivers only', () => {

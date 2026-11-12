@@ -3,7 +3,7 @@ import { mkdtempSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { basename, join } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { type Caps, DumpError, readCsv } from '../src/jolpica/csv.ts';
+import { type Caps, DumpError, MAX_FILE_BYTES, readCsv } from '../src/jolpica/csv.ts';
 
 const dir = mkdtempSync(join(tmpdir(), 'f1-jolpica-csv-'));
 let n = 0;
@@ -68,12 +68,14 @@ describe('readCsv (PostgreSQL COPY … CSV HEADER)', () => {
     ['a lone CR', 'a,b\r\n1,2\r3,4\r\n', 'bad_record'],
     ['a missing column', 'a,c\r\n1,2\r\n', 'bad_header'],
     ['a duplicate column', 'a,b,a\r\n1,2,3\r\n', 'bad_header'],
+    ['a __proto__ column', 'a,b,__proto__\r\n1,2,3\r\n', 'bad_header'],
   ])('%s is bad_dump with a code and the file name only', async (_, content, code) => {
     const path = file(content);
     await fails(read(path, ['a', 'b']), code, basename(path));
   });
 
   it('caps a field, a record and a file, and never puts content in the error', async () => {
+    expect(MAX_FILE_BYTES).toBe(64 * 1024 ** 2); // the job's 768m mem_limit holds a file this size
     const field = file('a\r\n123456789\r\n');
     await fails(read(field, [], CAPS), 'field_cap', basename(field));
     const quoted = file('a\r\n"1234""5678"\r\n'); // 9 characters once unescaped

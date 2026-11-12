@@ -228,7 +228,17 @@ describe('the fill job (f1_ingest login, synthetic files)', { timeout: 120_000 }
     expect(await laps(ARCHIVED)).toEqual(before);
   });
 
-  it('--all goes through every session, newest first, and counts the failures', async () => {
+  it('--all goes through every session but the jolpica ones, newest first, and counts the failures', async () => {
+    await admin
+      .insertInto('session')
+      .values({
+        session_key: 9709,
+        source: 'jolpica',
+        meeting_key: M,
+        date_start: new Date(T0 + 4 * 86_400_000),
+        date_end: new Date(T0 + 4 * 86_400_000 + 3_600_000),
+      })
+      .execute(); // the newest, but never filled
     expect(await fill({ db, log }, args('all'))).toBe(false); // BARE's recording is another session's
     const all = lines.splice(0);
     expect(all.filter((l) => l.msg === 'fill').map((l) => l.session_key)).toEqual([ARCHIVED, BARE, OPENF1]);

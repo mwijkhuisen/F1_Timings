@@ -27,6 +27,33 @@ const code = (p: Promise<unknown>) =>
 const count = async (table: string) =>
   Number((await sql<{ n: string }>`SELECT count(*) AS n FROM ${sql.table(table)}`.execute(admin)).rows[0]?.n);
 
+/** One 'jolpica' row per table, on the openf1 session 10, valid but for the source: a refusal is the CHECK (23514). */
+const PROBES = {
+  stint: sql`INSERT INTO stint (session_key, source, driver_number, stint_number) VALUES (10, 'jolpica', 9, 1)`,
+  race_control: sql`INSERT INTO race_control (session_key, source) VALUES (10, 'jolpica')`,
+  raw_response: sql`INSERT INTO raw_response (session_key, source, endpoint, fetched_at, http_status, body)
+    VALUES (10, 'jolpica', 'laps', '2026-10-11T15:00:00Z', 200, '[]')`,
+  weather: sql`INSERT INTO weather (session_key, source, date) VALUES (10, 'jolpica', '2026-10-11T12:00:00Z')`,
+  recording: sql`INSERT INTO recording (session_key, source, path, started_at)
+    VALUES (10, 'jolpica', '10-1', '2026-10-11T12:00:00Z')`,
+  meeting: sql`INSERT INTO meeting (meeting_key, source, year) VALUES (2, 'jolpica', 2026)`,
+  session: sql`INSERT INTO session (session_key, source, meeting_key, date_start, date_end)
+    VALUES (11, 'jolpica', 1, '2026-10-11T12:00:00Z', '2026-10-11T14:00:00Z')`,
+  driver: sql`INSERT INTO driver (session_key, source, driver_number) VALUES (10, 'jolpica', 9)`,
+  lap: sql`INSERT INTO lap (session_key, source, driver_number, lap_number) VALUES (10, 'jolpica', 9, 1)`,
+  lap_source: sql`INSERT INTO lap_source (session_key, source, driver_number, lap_number) VALUES (10, 'jolpica', 9, 1)`,
+  pit: sql`INSERT INTO pit (session_key, source, driver_number, lap_number) VALUES (10, 'jolpica', 9, 1)`,
+  result: sql`INSERT INTO result (session_key, source, driver_number) VALUES (10, 'jolpica', 9)`,
+};
+const UNTOUCHED = ['stint', 'race_control', 'raw_response', 'weather', 'recording'] as const;
+const SEVEN = ['meeting', 'session', 'driver', 'lap', 'lap_source', 'pit', 'result'] as const;
+const refusals = async (tables: readonly (keyof typeof PROBES)[]) => {
+  const out: Record<string, unknown> = {};
+  for (const t of tables) out[t] = await code(PROBES[t].execute(admin));
+  return out;
+};
+const refused = (tables: readonly string[]) => Object.fromEntries(tables.map((t) => [t, '23514']));
+
 const seed = async (db: Kysely<DB>) => {
   await sql`INSERT INTO meeting (meeting_key, source, year) VALUES (1950, 'jolpica', 1950)`.execute(db);
   await sql`INSERT INTO session (session_key, source, meeting_key, date_start, date_end)
@@ -76,14 +103,8 @@ it('accepts source jolpica in the seven tables as f1_ingest, and result.grid exi
   expect(r.rows).toEqual([{ grid: 0 }]);
 });
 
-it('still refuses jolpica in stint', async () => {
-  expect(
-    await code(
-      sql`INSERT INTO stint (session_key, source, driver_number, stint_number) VALUES (19501, 'jolpica', 1, 1)`.execute(
-        admin,
-      ),
-    ),
-  ).toBe('23514');
+it('still refuses jolpica in the five tables the job never writes', async () => {
+  expect(await refusals(UNTOUCHED)).toEqual(refused(UNTOUCHED));
 });
 
 it('rolls back: jolpica rows gone (also a candidate on another session), grid gone, old CHECK back; applies again', async () => {
@@ -103,13 +124,7 @@ it('rolls back: jolpica rows gone (also a candidate on another session), grid go
   }
   expect(await count('lap_source')).toBe(1);
   expect(await code(sql`SELECT grid FROM result`.execute(admin))).toBe('42703');
-  expect(
-    await code(
-      sql`INSERT INTO lap_source (session_key, source, driver_number, lap_number) VALUES (10, 'jolpica', 2, 1)`.execute(
-        admin,
-      ),
-    ),
-  ).toBe('23514');
+  expect(await refusals(SEVEN)).toEqual(refused(SEVEN)); // every old CHECK back
   expect(await run(['migrate'], env, () => {})).toBe(0);
   await seed(admin);
   expect(await count('result')).toBe(1);

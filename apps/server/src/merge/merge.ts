@@ -42,7 +42,7 @@ export type MergeCounts = {
   rows: number;
   /** Laps that only a lower source has, per source. */
   added: Record<string, number>;
-  /** Laps not added from a lower source (E6): their lap time repeats the previous lap's, which a higher one gave. */
+  /** Laps not added from a lower source (E6): the time repeats the higher lap n − 1, its own lap n − 1 does not. */
   dup: Record<string, number>;
   filled: PerColumn;
   diffs: PerColumn;
@@ -73,10 +73,12 @@ function same(column: Column, a: unknown, b: unknown): boolean {
 /**
  * The merge (H6): per (driver, lap), the highest-ranked candidate is the base and gives the row its `source`. Each
  * lower candidate in order fills the row's null values, unless a lap or sector time both have differs by more than
- * 1 ms (a conflict: it fills nothing). A lap only lower sources have is added from the first of them in order whose
- * lap time is not within 1 ms of the previous lap's (n − 1), where that previous value comes from a higher source than
- * it (E6: a live-ingest hole that put lap n + 1's time on lap n); a skipped candidate leaves nothing. Then the A§9 rules run on the merged rows: `markPitIn`, and `markLaps` on the
- * session's race control. Each row keeps a merged `quali_phase`, because the archive's phases come from SessionData
+ * 1 ms (a conflict: it fills nothing). A lap only lower sources have is added from the first of them in order that
+ * does not show a shift (E6: a live-ingest hole that put lap n + 1's time on lap n): its lap time is within 1 ms of
+ * the previous lap's (n − 1), that previous value comes from a higher source than it, and its own lap n − 1 is
+ * absent, timeless or more than 1 ms off that value. A skipped candidate leaves nothing; one whose own lap n − 1
+ * agrees is a genuine repeat and is added. Then the A§9 rules run on the merged rows: `markPitIn`, and `markLaps` on
+ * the session's race control. Each row keeps a merged `quali_phase`, because the archive's phases come from SessionData
  * boundaries that `race_control` does not store; only where it is null does the race control's phase count. The same
  * candidates in any order give the same rows, sorted by driver, then lap.
  */
@@ -88,6 +90,7 @@ export function merge(
   const sorted = candidates.toSorted(
     (a, b) => a.driver_number - b.driver_number || a.lap_number - b.lap_number || rank(a) - rank(b),
   );
+  const own = new Map(sorted.map((c) => [`${c.driver_number}:${c.lap_number}:${c.source}`, c.lap_ms]));
   const top = sorted.reduce<number>((min, c) => Math.min(min, rank(c)), ORDER.length);
   const added: MergeCounts['added'] = {};
   const dup: MergeCounts['dup'] = {};
@@ -100,13 +103,15 @@ export function merge(
     if (row?.driver_number !== c.driver_number || row.lap_number !== c.lap_number) {
       // `row` is lap n − 1 when it is the same driver's; its lap_ms came from `filled.lap_ms`, else from its base.
       const from = row?.filled.lap_ms ?? row?.source;
+      const before = own.get(`${c.driver_number}:${c.lap_number - 1}:${c.source}`); // c's source's own lap n − 1
       if (
         row?.driver_number === c.driver_number &&
         row.lap_number === c.lap_number - 1 &&
         row.lap_ms !== null &&
         c.lap_ms !== null &&
         ORDER.indexOf(from as Source) < rank(c) &&
-        same('lap_ms', row.lap_ms, c.lap_ms)
+        same('lap_ms', row.lap_ms, c.lap_ms) &&
+        (before == null || !same('lap_ms', row.lap_ms, before))
       ) {
         bump(dup, c.source);
         continue;

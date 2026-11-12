@@ -12,7 +12,7 @@ const source = 'jolpica';
 const HOUR = 3_600_000;
 const DAY = 86_400_000;
 /** The qualifying types and their part order: Q1–Q3 by name, the single-session types by number and time. */
-const QUALI: ReadonlyMap<string, number> = new Map([
+export const QUALI: ReadonlyMap<string, number> = new Map([
   ['QA', 0],
   ['QB', 0],
   ['QO', 0],
@@ -273,9 +273,10 @@ function qualifyingRows(
 
   const numbers = numbering();
   const numbered = rows.map((r) => ({ r, n: numbers.next(get(dump.roundEntries, r.roundEntry)?.car ?? null) }));
-  const [first] = parts;
-  const last = parts.at(-1);
-  if (first === undefined || last === undefined) return undefined;
+  if (parts.length === 0) return undefined;
+  // The earliest and latest part start, whatever the part order (N1): date_end never falls before date_start.
+  const from = Math.min(...parts.map((p) => p.start));
+  const to = Math.max(...parts.map((p) => p.start));
   const timed = parts.every((p) => p.timed);
   return {
     key,
@@ -284,8 +285,8 @@ function qualifyingRows(
       key,
       meeting,
       'Qualifying',
-      timed ? first.start : day(first.start),
-      timed ? last.start + HOUR : day(first.start),
+      timed ? from : day(from),
+      timed ? to + HOUR : day(from),
       parts.every((p) => p.cancelled),
     ),
     driver: numbered.map(({ r, n }) => driverRow(dump, key, n, r.roundEntry)),

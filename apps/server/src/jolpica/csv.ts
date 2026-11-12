@@ -8,7 +8,8 @@ import { basename } from 'node:path';
 // and the file's base name, never its content.
 
 /** About 4× the largest file of the 2026-10-27 dump (formula_one_lap.csv, 37 MB). */
-export const MAX_FILE_BYTES = 160 * 1024 ** 2;
+/** The largest real file is 37 MB (lap, 2026-10-27; 172 MB peak RSS): raise this and the job's mem_limit together. */
+export const MAX_FILE_BYTES = 64 * 1024 ** 2;
 export const MAX_FIELD_CHARS = 64 * 1024;
 export const MAX_COLUMNS = 64;
 
@@ -85,8 +86,9 @@ export async function* readCsv(
       record = [];
       if (header === undefined) {
         const names = values.map((v) => v ?? '');
-        if (names.includes('') || new Set(names).size !== names.length || columns.some((c) => !names.includes(c)))
-          fail('bad_header');
+        // `__proto__` as a key would set the record's prototype (N4).
+        const bad = names.includes('') || names.includes('__proto__') || new Set(names).size !== names.length;
+        if (bad || columns.some((c) => !names.includes(c))) fail('bad_header');
         header = names;
         return undefined;
       }

@@ -165,6 +165,21 @@ describe('merge', () => {
       expect(counts).toMatchObject({ added: { jolpica: 3 }, dup: {} });
     });
 
+    it("a repeat is kept when the lower source's own lap n − 1 agrees with the higher one (no shift)", () => {
+      const { rows, counts } = laps([
+        lap('openf1', 1, 1, { lap_ms: 90_000 }),
+        lap('openf1', 1, 2, { lap_ms: 91_000 }),
+        lap('jolpica', 1, 2, { lap_ms: 91_001 }),
+        lap('jolpica', 1, 3, { lap_ms: 91_000 }), // equal consecutive times at the hole boundary
+      ]);
+      expect(rows).toEqual([
+        [1, 'openf1', 90_000],
+        [2, 'openf1', 91_000],
+        [3, 'jolpica', 91_000],
+      ]);
+      expect(counts).toMatchObject({ added: { jolpica: 1 }, dup: {} });
+    });
+
     it('a null on either side does not block', () => {
       const { rows, counts } = laps([
         lap('openf1', 1, 1),

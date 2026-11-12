@@ -141,7 +141,8 @@ async function fillSession(deps: FillDeps, args: Omit<FillArgs, 'keys'>, key: nu
 
 /**
  * The job. True when nothing failed. An unknown session, a failing source, a stale lap or a database error fails that
- * session only. `'all'` is every session, newest first.
+ * session only. `'all'` is every session but
+ * the jolpica ones, newest first.
  */
 export async function fill(deps: FillDeps, args: FillArgs): Promise<boolean> {
   const { db, log } = deps;
@@ -151,6 +152,7 @@ export async function fill(deps: FillDeps, args: FillArgs): Promise<boolean> {
           await db
             .selectFrom('session')
             .select('session_key')
+            .where('source', '<>', 'jolpica') // nothing in a jolpica session can change (its laps have one source)
             .orderBy('date_end', (o) => o.desc().nullsLast())
             .orderBy('session_key', 'desc')
             .execute()
