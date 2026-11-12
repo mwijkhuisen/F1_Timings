@@ -182,6 +182,7 @@ export interface Result {
   dsq: boolean | null;
   durations_ms: number[] | null;
   gaps_ms: number[] | null;
+  grid: number | null;
   laps: number | null;
   position: number | null;
   session_key: number;

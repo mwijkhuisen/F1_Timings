@@ -6,8 +6,8 @@ import { markLaps, type RuleCounts, type RuleMessage } from '../timing/rules.ts'
 // P3b (A§7, owner D2–D4): one session's lap candidates from every source → one `lap` row per (driver, lap). Pure.
 // Only counts leave it besides the rows: they go into a log line, never a value.
 
-/** The H6 order, highest first; P3c and P3f append 'fia' and 'jolpica' together with their CHECK migration. */
-export const ORDER = ['openf1', 'f1-archive', 'f1-live'] as const;
+/** The H6 order, highest first; P3f inserts 'fia' before 'jolpica' together with its CHECK migration. */
+export const ORDER = ['openf1', 'f1-archive', 'f1-live', 'jolpica'] as const;
 export type Source = (typeof ORDER)[number];
 /** The columns merged per value; `filled` names only these. */
 export const VALUES = [
