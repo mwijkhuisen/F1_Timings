@@ -2,6 +2,8 @@ import { Cron } from 'croner';
 import { type Insertable, type Kysely, sql, type Transaction } from 'kysely';
 import type { Logger } from 'pino';
 import { codeOf, type DB } from '../db/db.ts';
+import type { MergeCounts } from '../merge/merge.ts';
+import { chunks, writeLaps } from '../merge/write.ts';
 import type { createClient, Query } from '../openf1/client.ts';
 import { type Endpoint, parse, type Result, type Rows, type ShapeError } from '../openf1/schemas.ts';
 import { meetingRow, normaliseSession, type SessionData, type SessionRows, sessionRow } from './normalise.ts';
@@ -22,9 +24,8 @@ import {
 
 const FIRST_YEAR = 2023;
 const SESSION_ENDPOINTS = ['drivers', 'laps', 'stints', 'pit', 'race_control', 'session_result', 'weather'] as const;
-const REPLACED = ['raw_response', 'driver', 'lap', 'stint', 'pit', 'race_control', 'result', 'weather'] as const;
-// 1,000 rows × ≤ 20 columns stays far below PostgreSQL's 65,535 bind parameters.
-const CHUNK = 1_000;
+// Laps are not among them: writeLaps replaces OpenF1's candidates only and rebuilds `lap` (P3b).
+const REPLACED = ['raw_response', 'driver', 'stint', 'pit', 'race_control', 'result', 'weather'] as const;
 
 export type Deps = {
   db: Kysely<DB>;
@@ -40,9 +41,6 @@ export type Deps = {
   rainStep?: (stopping: () => boolean) => Promise<void>;
 };
 export type Outcome = Result<IngestState, ErrorCode | 'unknown_session' | 'live_session' | 'not_openf1'>;
-
-export const chunks = <T>(rows: readonly T[]) =>
-  Array.from({ length: Math.ceil(rows.length / CHUNK) }, (_, i) => rows.slice(i * CHUNK, (i + 1) * CHUNK));
 
 /** Log-ready: the code, the endpoint and, for a schema failure, zod's paths and codes (never a value). */
 type FetchError = { last_error: ErrorCode; endpoint: Endpoint; issues?: ShapeError['issues'] };
@@ -166,8 +164,9 @@ const setProgress = (trx: Transaction<DB>, key: number, p: Progress) =>
 
 /**
  * D6: fetch all seven endpoints (no write on any error), then one transaction: lock the
- * session row, decide from the locked row, replace raw responses and child rows, set the
- * state. A failure is its own short locked write. `refetch` never changes state on failure.
+ * session row, decide from the locked row, replace raw responses and child rows (the laps
+ * through the merge, after race_control), set the state. A failure is its own short locked
+ * write. `refetch` never changes state on failure.
  * Never throws; logs one line per session.
  */
 export async function processSession(deps: Deps, key: number, refetch = false): Promise<Outcome> {
@@ -249,7 +248,7 @@ export async function processSession(deps: Deps, key: number, refetch = false): 
   }
   const { rows, skipped, rules } = normalised;
 
-  let done: { next: Progress; empty: boolean };
+  let done: { next: Progress; empty: boolean; merge?: MergeCounts };
   try {
     done = await db.transaction().execute(async (trx) => {
       const row = await lockSession(trx, key);
@@ -267,17 +266,19 @@ export async function processSession(deps: Deps, key: number, refetch = false): 
       }
       for (const table of REPLACED) await trx.deleteFrom(table).where('session_key', '=', key).execute();
       await trx.insertInto('raw_response').values(raw).execute();
+      const { lap, ...children } = rows;
       // The cast: Kysely cannot relate a table name from a loop to its row type.
-      for (const [table, list] of Object.entries(rows) as [keyof SessionRows, object[]][]) {
+      for (const [table, list] of Object.entries(children) as [keyof SessionRows, object[]][]) {
         for (const chunk of chunks(list))
           await trx
             .insertInto(table)
             .values(chunk as never)
             .execute();
       }
+      const merge = await writeLaps(trx, key, 'openf1', lap);
       const next = afterSuccess(row, now());
       await setProgress(trx, key, next);
-      return { next, empty: false };
+      return { next, empty: false, merge };
     });
   } catch (err) {
     return fail('db', { cause: codeOf(err) });
@@ -287,7 +288,7 @@ export async function processSession(deps: Deps, key: number, refetch = false): 
     return { ok: false, error: 'empty' };
   }
   const counts = Object.fromEntries(Object.entries(rows).map(([table, list]) => [table, list.length]));
-  log.info(line({ state: done.next.ingest_state, rows: counts, skipped, rules }), 'session');
+  log.info(line({ state: done.next.ingest_state, rows: counts, skipped, rules, merge: done.merge }), 'session');
   return { ok: true, value: done.next.ingest_state };
 }
 

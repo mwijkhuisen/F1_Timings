@@ -184,6 +184,24 @@ sudo docker compose -p f1 -f /etc/f1/compose.yaml --env-file /srv/f1/state/curre
 - **Rate:** one request every 2 s, about 3 h for all of 2018–2022 (run a year at a time; `tmux` or `nohup` keeps it alive after the SSH session ends).
 - **Years:** it never runs for 2023 and later (exit 64); those come from OpenF1.
 
+## Merge the archive files and recordings into the laps (the `fill` job) [owner]
+
+`fill` (A§4, A§7) reads, for each OpenF1 session, its archive files in `/srv/f1/archive/<session_key>/` and its complete recording in `/srv/f1/live`, stores their laps as candidates and merges the session's laps again. It never reaches the network. `f1-update` never runs it and no timer does: you start it, for every session (`--all`, newest first) or for the keys you give.
+
+```bash
+sudo docker compose -p f1 -f /etc/f1/compose.yaml --env-file /srv/f1/state/current.env \
+  --profile jobs run --rm fill fill --all
+sudo docker compose -p f1 -f /etc/f1/compose.yaml --env-file /srv/f1/state/current.env \
+  --profile jobs run --rm fill fill 11388 11392
+```
+
+- **Exit codes:** 0 when no session failed; 1 when one did (an unknown key, a failing source, `stale_lap` or a database error: the session's `fill` line is at error level with the code, and `fill_done` counts the failures); 64 for a usage error (keys and `--all` together or neither, a key that is not digits, an unknown flag, a directory outside the rule below); 78 without the database secret.
+- **Directories:** `--archive-dir` and `--live-dir` default to the container's paths and are not needed on the VM. They take only `/srv/f1/archive` and `/srv/f1/live` or a path with a `fixtures-private` segment (exit 64 otherwise).
+- **Recordings:** only a complete recording counts (`recording.complete = t`), the earliest one of the session, found through the table. A recording still running or one that ended incomplete is ignored.
+- **A failing source** (`too_large`, `key_mismatch`, `t0_heartbeat`, `not_file`, and for a recording `recording_missing` (its directory is not under `--live-dir`) or `incomplete` (no sealed segment or no SessionInfo), under `errors` in the line) keeps its stored candidates; the other source is still stored and the session merged. Absent files (or an archive without a t0) are no failure.
+- **After an image rollback:** an image before P3b writes `lap` only, so `lap_source` goes stale for the sessions it wrote. Once rolled forward, refetch (`refetch <session_key>`) or re-archive those sessions before running `fill` on them. `fill` leaves a session unchanged and fails it as `stale_lap` when any `lap` row has no candidate of its own source (the old image wrote it), files or not; it cannot tell a candidate that is present but stale (a session the old image refetched), hence the refetch first.
+- **Browser cache:** a final session's laps stay cached in the browser for up to 24 h (A§10, `max-age=86400`), so check a filled session with a hard reload.
+
 ## Check a recording [box]
 
 After a session, plus 30 minutes (`<path>` is the `path` column, `<session_key>-<startedAt>`). These commands print counts and metadata only, never feed payloads:

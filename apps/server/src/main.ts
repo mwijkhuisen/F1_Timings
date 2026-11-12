@@ -13,12 +13,23 @@ import { pingHealthchecks } from './healthchecks.ts';
 import { healthy, startHeartbeat, touch } from './heartbeat.ts';
 import { backfill, processSession, startIngest } from './ingest/ingest.ts';
 import { LIVE_DIR, startRecorder } from './live/recorder.ts';
+import { fill } from './merge/fill.ts';
 import { createClient, systemClock } from './openf1/client.ts';
 import { createBudget, createRainClient } from './rain/client.ts';
 import { createRainStep } from './rain/job.ts';
 
 /** Roles of the single server image (A§4); the first argument picks one. */
-export const ROLES = ['api', 'ingest', 'live', 'migrate', 'healthcheck', 'refetch', 'backfill', 'archive'] as const;
+export const ROLES = [
+  'api',
+  'ingest',
+  'live',
+  'migrate',
+  'healthcheck',
+  'refetch',
+  'backfill',
+  'archive',
+  'fill',
+] as const;
 export type Role = (typeof ROLES)[number];
 
 export const EXIT_USAGE = 64;
@@ -29,7 +40,8 @@ type Env = Readonly<Record<string, string | undefined>>;
 
 const USAGE =
   `usage: main.js <${ROLES.join('|')}> (refetch takes a session_key; ` +
-  'archive <year 2018-2022> [<session_key>...] [--token-file <path>] [--dir <path>])';
+  'archive <year 2018-2022> [<session_key>...] [--token-file <path>] [--dir <path>]; ' +
+  'fill <session_key>...|--all [--archive-dir <path>] [--live-dir <path>])';
 
 /**
  * Resolves with the exit code. `apiPort` is a test seam only (not configurable in production: Caddy proxies to api:8080).
@@ -47,6 +59,7 @@ export async function run(
   };
   if (!isRole(role)) return usage();
   if (role === 'archive') return runArchive(rest, env, log);
+  if (role === 'fill') return runFill(rest, env, log);
   if (rest.length !== (role === 'refetch' ? 1 : 0) || (role === 'refetch' && !/^\d{1,9}$/.test(rest[0] ?? ''))) {
     return usage();
   }
@@ -130,18 +143,65 @@ function parseArchive(argv: readonly string[]) {
   });
   const [year = '', ...keys] = positionals;
   if (!/^20(1[89]|2[0-2])$/.test(year) || !keys.every((k) => /^\d{1,9}$/.test(k))) return undefined;
-  if (!archiveDir(values.dir)) return undefined;
+  if (!privateDir(values.dir, ARCHIVE_DIR)) return undefined;
   return { year: Number(year), keys: keys.map(Number), tokenFile: values['token-file'], dir: values.dir };
 }
 
 /**
- * Real F1 archive files land only where git never sees them (invariant 3): the VM's /srv/f1/archive, or a directory
- * with a path segment named exactly `fixtures-private` (gitignored).
+ * Real F1 files are read and written only where git never sees them (invariant 3): the VM's own directory (`standard`),
+ * or one with a path segment named exactly `fixtures-private` (gitignored).
  */
-const archiveDir = (dir: string) => {
+const privateDir = (dir: string, standard: string) => {
   const path = resolve(dir);
-  return path === ARCHIVE_DIR || path.split(sep).includes('fixtures-private');
+  return path === standard || path.split(sep).includes('fixtures-private');
 };
+
+/** The fill job (P3b): the files of the archive and of the recorder into the lap merge, as f1_ingest. No network. */
+async function runFill(argv: readonly string[], env: Env, log: (line: string) => void): Promise<number> {
+  let parsed: ReturnType<typeof parseFill>;
+  try {
+    parsed = parseFill(argv);
+  } catch {
+    parsed = undefined;
+  }
+  if (parsed === undefined) {
+    log(USAGE);
+    return EXIT_USAGE;
+  }
+  const url = dbUrl('f1_ingest', env);
+  if (typeof url === 'string') {
+    log(`fill: ${url}`);
+    return EXIT_CONFIG;
+  }
+  const logger = pino({ base: { role: 'fill' } });
+  const db = createDb(url, (err) => logger.error({ cause: codeOf(err) }, 'database pool error'));
+  try {
+    return (await fill({ db, log: logger }, parsed)) ? 0 : 1;
+  } catch (err) {
+    logger.error({ cause: codeOf(err) }, 'fill failed');
+    return 1;
+  } finally {
+    await db.destroy();
+  }
+}
+
+/** `<session_key>… | --all`, then `[--archive-dir <path>] [--live-dir <path>]`, or undefined; parseArgs throws on an unknown flag. */
+function parseFill(argv: readonly string[]) {
+  const { values, positionals } = parseArgs({
+    args: [...argv],
+    allowPositionals: true,
+    options: {
+      all: { type: 'boolean', default: false },
+      'archive-dir': { type: 'string', default: ARCHIVE_DIR },
+      'live-dir': { type: 'string', default: LIVE_DIR },
+    },
+  });
+  const keys = values.all ? positionals.length === 0 : positionals.length > 0; // keys xor --all
+  if (!keys || !positionals.every((k) => /^\d{1,9}$/.test(k))) return undefined;
+  const [archiveDir, liveDir] = [values['archive-dir'], values['live-dir']];
+  if (!privateDir(archiveDir, ARCHIVE_DIR) || !privateDir(liveDir, LIVE_DIR)) return undefined;
+  return { keys: values.all ? ('all' as const) : positionals.map(Number), archiveDir, liveDir };
+}
 
 /** The recorder daemon (A§11.2), as f1_ingest. Resolves after SIGTERM/SIGINT, with the running recording closed. */
 async function runLive(env: Env, log: (line: string) => void): Promise<number> {

@@ -109,7 +109,7 @@ function splitter(): (chunk: Buffer) => Line[] {
 }
 
 /** A sealed segment: the plain file while it is there (it is complete once renamed), else its gzip. */
-async function* segment(dir: string, base: string, plain: boolean): AsyncGenerator<Line> {
+export async function* segment(dir: string, base: string, plain: boolean): AsyncGenerator<Line> {
   const fh = plain ? await open(join(dir, base), NOFOLLOW).catch(missing) : undefined;
   const file = (fh ?? (await open(join(dir, `${base}.gz`), NOFOLLOW))).createReadStream(); // closes its handle
   const source = fh ? file : pipeline(file, createGunzip(), () => {}); // an error surfaces in the loop below
@@ -123,7 +123,7 @@ async function* segment(dir: string, base: string, plain: boolean): AsyncGenerat
 }
 
 /** The sealed segments in numeric order of their first receivedAt. `*.tmp` never matches. */
-async function segments(dir: string): Promise<{ ms: number; base: string; plain: boolean }[]> {
+export async function segments(dir: string): Promise<{ ms: number; base: string; plain: boolean }[]> {
   const found = new Map<number, { ms: number; base: string; plain: boolean }>();
   for (const name of await readdir(dir)) {
     const m = SEGMENT.exec(name);

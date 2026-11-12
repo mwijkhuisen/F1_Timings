@@ -31,7 +31,7 @@ const DIRS: Record<string, string> = {
   [`${MEETING}/2019-03-16_Qualifying`]: 'quali',
   '2019-04-14_Old_Grand_Prix/2019-04-13_Qualifying': 'old-quali', // 2019-style: no SessionData
 };
-const TABLES = ['driver', 'lap', 'stint', 'race_control', 'result', 'weather'] as const;
+const TABLES = ['driver', 'lap', 'lap_source', 'stint', 'race_control', 'result', 'weather'] as const;
 
 let clock = Date.parse('2026-11-10T12:00:00Z');
 const b64 = (o: unknown) => Buffer.from(JSON.stringify(o)).toString('base64url');
@@ -138,7 +138,7 @@ describe('archive (fixtures through msw, f1_ingest login)', { timeout: 120_000 }
       { meeting_key: 9120, source: 'f1-archive', gmt_offset: '08:00:00' },
     ]);
     const counts = Object.fromEntries(await Promise.all(TABLES.map(async (t) => [t, await count(t)])));
-    expect(counts).toEqual({ driver: 6, lap: 26, stint: 9, race_control: 9, result: 6, weather: 7 });
+    expect(counts).toEqual({ driver: 6, lap: 26, lap_source: 26, stint: 9, race_control: 9, result: 6, weather: 7 });
     for (const table of TABLES) expect(await count(table, "source <> 'f1-archive'")).toBe(0);
     expect(await count('lap', 'deleted')).toBe(2);
     expect(await count('lap', 'quali_phase = 2')).toBe(6);
@@ -194,6 +194,19 @@ describe('archive (fixtures through msw, f1_ingest login)', { timeout: 120_000 }
       bad_path: 0,
       t0_heartbeat: 0,
     });
+  });
+
+  it('P3b: each lap row is its own lap_source candidate with `filled` {}, and the merge kept the deletions', async () => {
+    const { rows } = await sql<{ n: string }>`
+      SELECT count(*) AS n FROM lap l JOIN lap_source c USING (session_key, driver_number, lap_number, source)
+      WHERE l.filled = '{}' AND to_jsonb(l) - 'is_pit_in' - 'deleted' - 'deleted_reason' - 'filled' = to_jsonb(c)`.execute(
+      admin,
+    );
+    expect(Number(rows[0]?.n)).toBe(26);
+    const imported = logged('archive').filter((l) => l.error === undefined);
+    expect(imported.map((l) => l.session_key).sort()).toEqual([9101, 9102, 9121]);
+    for (const l of imported)
+      expect(l.merge).toEqual({ rows: l.laps, added: {}, filled: {}, diffs: {}, conflicts: {}, rules: l.rules });
   });
 
   it('a second run asks for the Index and the missing SessionInfo only, and gives identical rows', async () => {

@@ -13,6 +13,7 @@ const TABLES = [
   'session',
   'driver',
   'lap',
+  'lap_source',
   'stint',
   'pit',
   'race_control',
@@ -78,6 +79,27 @@ it('f1_ingest writes data but cannot create tables or delete meetings and sessio
   expect(await code(c.query('CREATE TABLE nope (a int)'))).toBe('42501');
   expect(await code(c.query('DELETE FROM session'))).toBe('42501');
   expect(await code(c.query('DELETE FROM meeting'))).toBe('42501');
+});
+
+it('lap_source: f1_ingest has exactly SELECT, INSERT and DELETE, f1_api nothing', async () => {
+  const c = await connect(db.urls.admin);
+  const privileges = async (role: string) =>
+    (
+      await c.query(
+        "SELECT privilege_type FROM information_schema.role_table_grants WHERE table_name = 'lap_source' AND grantee = $1 ORDER BY 1",
+        [role],
+      )
+    ).rows.map((r) => r.privilege_type);
+  expect(await privileges('f1_ingest')).toEqual(['DELETE', 'INSERT', 'SELECT']);
+  expect(await privileges('f1_api')).toEqual([]);
+  const ingest = await connect(db.urls.f1_ingest);
+  await ingest.query(
+    "INSERT INTO lap_source (session_key, driver_number, lap_number, source) VALUES (10, 1, 1, 'f1-archive')",
+  );
+  expect(await code(ingest.query('UPDATE lap_source SET lap_ms = 1'))).toBe('42501');
+  await ingest.query('DELETE FROM lap_source WHERE session_key = 10');
+  const api = await connect(db.urls.f1_api);
+  expect(await code(api.query('SELECT * FROM lap_source'))).toBe('42501');
 });
 
 it('f1_api reads but cannot write, and cannot read raw_response', async () => {

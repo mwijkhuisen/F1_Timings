@@ -50,7 +50,7 @@ type Times = Record<Field, number | null>;
 // Every column given.
 type Full<T> = { [K in keyof T]-?: Exclude<T[K], undefined> };
 /** A lap row, plus the epoch ms at which each time was set (progressiveColours); strip `at` before an insert. */
-export type LapRow = Full<Insertable<DB['lap']>> & { at: Times };
+export type LapRow = Full<Omit<Insertable<DB['lap']>, 'filled'>> & { at: Times };
 export type StintRow = Full<Insertable<DB['stint']>>;
 
 type Segments = (number | null)[] | null;

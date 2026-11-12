@@ -29,6 +29,20 @@ describe('run', () => {
     [['archive', '2019', '--dir', join(import.meta.dirname, 'fixtures/archive')]],
     [['archive', '2019', '--dir', '/home/x/F1_Timing/fixtures-private-evil/archive']],
     [['archive', '2019', '--dir', '/srv/f1/archive/../x']],
+    [['fill']],
+    [['fill', 'abc']],
+    [['fill', '0123456789']],
+    [['fill', '11388', '--all']],
+    [['fill', '--all', '11388']],
+    [['fill', '--force']],
+    [['fill', '--all', '--archive-dir']],
+    // the directories only where git never sees the files (invariant 3)
+    [['fill', '--all', '--archive-dir', '/tmp/x']],
+    [['fill', '--all', '--archive-dir', join(import.meta.dirname, 'fixtures/archive')]],
+    [['fill', '--all', '--live-dir', '/tmp/x']],
+    [['fill', '--all', '--live-dir', '/srv/f1/archive']], // the archive's default is not the live dir's
+    [['fill', '--all', '--archive-dir', '/srv/f1/live']],
+    [['fill', '--all', '--live-dir', '/home/x/F1_Timing/fixtures-private-evil/live']],
   ])('%j is a usage error', async (argv) => {
     const lines: string[] = [];
     expect(await run(argv, {}, (l) => lines.push(l))).toBe(EXIT_USAGE);
@@ -43,6 +57,18 @@ describe('run', () => {
     [['archive', '2018']],
     [['archive', '2022', '1', '--token-file', '/x', '--dir', '/srv/f1/archive']],
     [['archive', '2019', '--dir', '/home/x/F1_Timing/fixtures-private/archive']],
+    [['fill', '--all']],
+    [['fill', '11388', '11392', '--live-dir', '/srv/f1/live', '--archive-dir', '/srv/f1/archive']],
+    [
+      [
+        'fill',
+        '--all',
+        '--archive-dir',
+        '/home/x/F1_Timing/fixtures-private/archive',
+        '--live-dir',
+        '/home/x/fixtures-private/live',
+      ],
+    ],
   ])('%j without a database setting is a config error', async (argv) => {
     const lines: string[] = [];
     expect(await run(argv, { DATABASE_URL: 'mysql://x/y' }, (l) => lines.push(l))).toBe(EXIT_CONFIG);
