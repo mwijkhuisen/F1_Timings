@@ -193,6 +193,21 @@ Checked against the live APIs on 2026-10-25 (Austin quali `11392`, Marina Bay ra
 ### 6.2 Official F1 archive (`livetiming.formula1.com/static`), P3 source
 
 - Since ~15 Oct 2026 it returns 401 without a token. It needs F1 TV Access/Pro/Premium (the owner has Pro). Seasons 2018+.
+- **How far back** (research, 2026-11-10; P3 decisions H1–H16, sources in ADR-0009):
+  - FastF1's maintainer: "the lap timing isn't available either before 2018 on the F1 API" (FastF1 discussion #550). The docs say timing, car and position data are "available from 2018 onwards".
+  - Without a token every year answers 401, 2016, 2017 and even 2099 (checked from a datacenter IP, which also gets CloudFront's 403 with a token). So whether `static/2017/Index.json` exists is **[U]**, for P3d's probe with the token.
+  - FastF1's public mirror answers 404 for 2017–2019 and 200 for 2021, which shows only what the mirror holds.
+  - The per-session `Index.json`, which lists a session's topics, exists from the 2018 US GP FP1 on (FastF1 #248, which lists 31 topic names).
+  - Testing sessions are in the archive, but "hasn't always been replay data available" (FastF1 #688). Its path code has `Day_N` fixes for the 2025 and 2026 tests.
+- **Known 2018 gaps** (FastF1 issues; **[U]** until P3d counts them):
+  - Australia FP2 has about 2 s of position data in all (#677).
+  - The Italian GP race has phantom stint messages (#930, open).
+  - Delayed tyre data dropped stints, for example Azerbaijan (#863).
+  - `CountryCode` and `HeadshotUrl` are empty (#668).
+  - 2018–2020 stints were reported wrong, then judged plausible (#841).
+- **What the archive has beyond OpenF1 for 2023 on** (from the #248 topic list and FastF1's `_api`; **[U]**):
+  - `TimingStats` (best sectors, speed-trap ranks), the finish-line speed (`FL`; OpenF1 has none), `TyreStintSeries`, `CurrentTyres`, `DriverRaceInfo`, `LapSeries`, `PitLaneTimeCollection`, `ChampionshipPrediction`, `TopThree`, `SessionData` and the full `TeamRadio` list;
+  - mini-sectors in races (OpenF1: "Segments are not available during races").
 - Structure: `static/<year>/Index.json` → meetings → sessions (`Path`) → `<Path><Topic>.jsonStream` (and `.json`). The topics are the same as the live feed (A§11.1), with a session-relative timestamp on each line.
 - The Index `Key` equals OpenF1's `session_key` (checked on 11392, 11397 and 11404).
 - A topic the session lacks answers **403**, not 404 (`LapCount` outside a race). `scripts/fetch-archive.ts` skips 403 and 404 per file and stops only on 401, since the Index has already proved the token.
@@ -236,7 +251,27 @@ Checked against the live APIs on 2026-10-25 (Austin quali `11392`, Marina Bay ra
 
 ### 6.3 Others
 
-- **Jolpica-F1** (`api.jolpi.ca/ergast`): results and lap times since 1996, **no sectors**. Optional in P3 for pre-2018 lap times.
+- **Jolpica-F1** (`api.jolpi.ca/ergast`, the Ergast successor; P3c, owner 2026-11-10). Checked 2026-11-10 against its docs and API:
+  - **Coverage:** results and driver standings from 1950, constructor standings from 1958, and sprints from 2021.
+  - **Qualifying:** complete from 2003, nearly complete for 1994–1995 and partial for 1996–2002 (for example 22 of about 373 entries in 2001). None before 1994.
+  - **Laps:** races only, from 1996 (1995: 0 laps; rounds 1 and 8 of every season 1996–2026 have laps; every round is **[U]** until P3c's [box] count).
+  - **Pit stops:** lap and duration from 2011 (2010: 0). No tyre compound.
+  - **No sectors, mini-sectors or speed traps.**
+  - **Terms:** the data is CC BY-NC-SA 4.0 (non-commercial; ADR-0009). The API allows 4 req/s and 500 req/h. A CSV dump is at `api.jolpi.ca/data/dumps/download/`; the free copy is about 14 days behind.
+  - P3c imports the dump (H12), never from CI.
+- **FIA timing PDFs** (`fia.com/f1-archives`; P3f, owner 2026-11-10). Checked 2026-11-10 by reading 2012, 2014 and 2017 files:
+  - **Seasons:** tabs from 2012 to 2025. Where 2026 lives, and anything before 2012, are **[U]**.
+  - **Per event:** for practice and qualifying, the lap times. For the race, the lap chart, history chart, lap analysis, best sector times, speed trap, maximum speeds and pit stop summary.
+  - **Sectors:** the 2012–2017 files carry lap times with the pit laps marked, plus each driver's best sectors and the top-10 trap table, so no per-lap sectors.
+  - **Race Sector Analysis:** per-lap sectors and speeds, seen for 2023 (Saudi Arabia). Its first year is **[U]**.
+  - **File names:** for example `2017_15_mas_f1_r0_timing_racespeedtrap_v01.pdf`.
+  - **Terms:** © FOWC, "No part … may be reproduced … without prior permission"; the site terms allow private, non-commercial use. Treated like F1 TV data (H10, A§12.1).
+- **Not used** (2026-11-10):
+  - formula1.com's results pages: its legal notice allows "personal, non-commercial use only", and its guidelines bar text and data mining. They hold nothing the FIA PDFs and Jolpica lack (classifications from 1950, pit stop summaries in 2003 and 2015).
+  - The Kaggle and TracingInsights copies of Ergast: they are marked CC0, but they derive from NC-SA data.
+  - statsf1, forix and motorsportstats: no open licence.
+  - No public recording of the pre-2018 live-timing applet was found.
+- **F1 TV data screens** (H9, P3d [owner]): **[U]** whether the F1 TV web app fetches timing JSON for a replay beyond the archive. Only such JSON counts; never video, OCR or anything that gets around DRM.
 - **FastF1** (MIT, Python): not a dependency. It is the reference for the archive/feed format, lap reconstruction and the F1 TV login flow. Any ported logic keeps its MIT notice.
 - **Open-Meteo** (owner, 2026-11-07, P5c; `apps/server/src/rain/`, licences in ADR-0008): the rain map's source. It is a weather **model**, not radar. Checked on 2026-11-09, the U facts with their proof (a dozen plain requests, `user-agent: f1-timings`, no key):
   - **Hosts and terms:** `https://api.open-meteo.com/v1/forecast` and `https://historical-forecast-api.open-meteo.com/v1/forecast` (from 2022), the same parameters. Free and keyless for non-commercial use (a private site without ads or subscriptions counts), CC BY 4.0, 600 calls/min, 5,000/h, 10,000/day, 300,000/month. Errors are HTTP 400 `{"error":true,"reason":…}`; a 429 is undocumented. A one-location answer is a single object, a multi-location answer a list in request order, so the client always asks for 49 points and takes anything else as `schema`.
@@ -252,7 +287,7 @@ Checked against the live APIs on 2026-10-25 (Austin quali `11392`, Marina Bay ra
 
 ## 7. Data model (PostgreSQL 18)
 
-All times are `timestamptz` in UTC, durations are integer milliseconds, and speeds are smallint km/h. Every row carries `source` (`openf1` | `f1-archive` | `f1-live`).
+All times are `timestamptz` in UTC, durations are integer milliseconds, and speeds are smallint km/h. Every row carries `source` (`openf1` | `f1-archive` | `f1-live`; P3c adds `jolpica` and P3f `fia`, and P3b adds a per-value source, owner 2026-11-10).
 
 | Table | Key | Columns (outline) |
 |---|---|---|
@@ -547,8 +582,8 @@ Roles (owner, 2026-10-25; built in P1b): `deploy/postgres/roles.sql`, a PostgreS
 
 1. No secret in git, environment variables, image layers, logs or error messages. Secrets are files under `/etc/f1/secrets`, `root:<gid> 0440`, and only the consuming container has that GID.
 2. Nothing is reachable without Cloudflare Access. The origin publishes only `127.0.0.1:8180` for the update smoke test, and `/api` checks the Access JWT itself.
-3. Data from the F1 TV feed or the archive is never committed. Public fixtures for those parsers are synthetic, and real recordings stay in the gitignored `fixtures-private/` folder and on the VM.
-4. CI never calls OpenF1, F1, Jolpica, Open-Meteo or Overpass.
+3. Data from the F1 TV feed, the archive or the FIA timing PDFs (owner, 2026-11-10) is never committed, and neither is the Jolpica dump. Public fixtures for those parsers are synthetic, and real files stay in the gitignored `fixtures-private/` folder and on the VM.
+4. CI never calls OpenF1, F1, Jolpica, the FIA, Open-Meteo or Overpass.
 5. The F1 stack shares nothing with Waterheight: networks, volumes, secrets, GIDs, ports, subnets, the nftables table, timers and the healthchecks group are all separate. Nothing touches `/etc/rws`, `/srv/rws` or the `rws` project.
 6. Strict CSP as in Waterheight: `default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'self'; …`. The browser makes no third-party requests (no driver headshots from formula1.com).
 7. Containers are hardened: `read_only`, `cap_drop: ALL`, `no-new-privileges`, non-root UID in its own range, memory/CPU/PID limits.
@@ -853,3 +888,4 @@ The limits stay **[U]** until the P2f follow-up PR tunes them from the Las Vegas
 | [0006](../adr/0006-one-ts-parser-for-feed-and-archive.md) | One TS parser for the live feed and the archive; no Python |
 | [0007](../adr/0007-server-side-playback.md) | Live and replay as server-side playback over SSE |
 | [0008](../adr/0008-map-and-weather-data-licences.md) | Licences of the map and rain data: bacinger MIT, OpenStreetMap ODbL as separate files (route B), Open-Meteo CC BY 4.0, the attribution strings (accepted, owner, 2026-11-09) |
+| [0009](../adr/0009-history-sources-and-licences.md) | History sources and their terms: the F1 archive 2018+, Jolpica (CC BY-NC-SA 4.0) 1950–2017, the FIA timing PDFs (© FOWC, private use) 2012+; formula1.com not used (Proposed) |
