@@ -15,7 +15,7 @@ import { setTimeout as sleep } from 'node:timers/promises';
 import { gunzipSync } from 'node:zlib';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { server } from '../../../test/msw.setup.ts';
-import { type Closed, connect, TOPICS } from '../src/live/feed-client.ts';
+import { type Closed, type ConnectOptions, connect, TOPICS } from '../src/live/feed-client.ts';
 import { parseFeedLine } from '../src/live/read.ts';
 import { gzipLeftovers, openRecording, type Recording } from '../src/live/recording.ts';
 import {
@@ -57,7 +57,7 @@ async function until(what: () => boolean, ms = 5000): Promise<void> {
 }
 
 /** What the recorder's loop will do, scaled down: connect, record, on a close back off and connect again. */
-function runLoop(fake: FakeSignalR, rec: Recording) {
+function runLoop(fake: FakeSignalR, rec: Recording, options: ConnectOptions = {}) {
   let stopped = false;
   let conn: ReturnType<typeof connect> | undefined;
   const closes: Closed[] = [];
@@ -69,7 +69,7 @@ function runLoop(fake: FakeSignalR, rec: Recording) {
   const done = (async () => {
     let backoff = 5; // ms, for the recorder's 1 s
     while (!stopped) {
-      conn = connect(TOKEN, onFeed, { base: fake.base, onSubscribed: (r, at) => rec.subscribed(at, r) });
+      conn = connect(TOKEN, onFeed, { base: fake.base, onSubscribed: (r, at) => rec.subscribed(at, r), ...options });
       closes.push(await conn.closed);
       if (stopped) break;
       await sleep(backoff);
@@ -306,6 +306,58 @@ describe('feed client against the fake server', () => {
     expect(clear).toHaveBeenCalledWith(set.mock.results[pingIndex()]?.value);
     set.mockRestore();
     clear.mockRestore();
+  });
+
+  // The silence watchdog (#94). The server pings every 5 ms, well inside the 50 ms idle timer: a close before the
+  // silence ran out would be the idle timer, so it would show that the pings stopped, or that they ended the silence.
+  describe('a feed that stops while the pings go on', () => {
+    const idleMs = 50;
+    const silentMs = 200;
+    beforeEach(() => {
+      fake.behaviour.pingMs = 5;
+    });
+
+    it('ends with feed_timeout once silentMs passed since the last feed message, and the loop reconnects', async () => {
+      const loop = runLoop(fake, record(), { idleMs, silentMs });
+      await until(() => fake.subscribes.length === 1);
+      fake.feed([numbered(1)]);
+      await until(() => loop.fed() === 1);
+      const lastFeed = Date.now();
+      await until(() => loop.closes.length === 1);
+      const silentFor = Date.now() - lastFeed;
+      expect(loop.closes[0]).toEqual({ error: 'feed_timeout' });
+      expect(silentFor).toBeGreaterThanOrEqual(silentMs - 20);
+      expect(silentFor).toBeLessThan(silentMs + 1000);
+      await until(() => fake.subscribes.length === 2);
+      await loop.stop();
+    });
+
+    it('a feed message resets the silence, a ping never does', async () => {
+      let fed = 0;
+      let closed = false;
+      const conn = connect(TOKEN, () => fed++, { base: fake.base, idleMs, silentMs });
+      void conn.closed.then(() => {
+        closed = true;
+      });
+      await conn.subscribed;
+      for (let n = 1; n <= 30; n++) {
+        fake.feed([numbered(n)]);
+        await sleep(20);
+      }
+      await until(() => fed === 30);
+      expect(closed).toBe(false); // 600 ms, three silences long
+      const lastFeed = Date.now();
+      await expect(conn.closed).resolves.toEqual({ error: 'feed_timeout' });
+      expect(Date.now() - lastFeed).toBeGreaterThanOrEqual(silentMs - 50);
+    });
+
+    it('is not armed before the first feed message: the quiet before a session and after Ends (A§11.1)', async () => {
+      const conn = connect(TOKEN, () => {}, { base: fake.base, idleMs, silentMs: 30 });
+      await conn.subscribed;
+      await expect(Promise.race([conn.closed, sleep(300).then(() => 'open')])).resolves.toBe('open');
+      conn.close();
+      await expect(conn.closed).resolves.toEqual({});
+    });
   });
 
   it('gives feed_timeout for an upgrade that is never answered', async () => {

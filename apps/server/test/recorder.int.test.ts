@@ -713,6 +713,48 @@ describe('recorder (real PostgreSQL as f1_ingest, fake SignalR)', { timeout: 30_
       expect(pings).toEqual(['f1-live', 'f1-live/fail']);
     });
 
+    // Las Vegas FP1 → FP2 and FP3 → Q (#94): 2.5 h apart, so the next lead begins at END + 90 min, before a late
+    // Ends + 30 min, and long before the hard stop that no Ends at all would wait for.
+    it.each([
+      ['a late Ends', END + 70 * MIN],
+      ['no Ends', undefined],
+    ] as const)('sessions 2.5 h apart, %s: handed over at the next lead, and both complete', async (_name, endsAt) => {
+      const next = END + 150 * MIN;
+      const lead = next - HOUR;
+      await seed(1, T0, END);
+      await seed(2, next, next + HOUR);
+      writeToken(tokenPath, tokenUntil(GOOD_UNTIL));
+      fake.behaviour.fullState = { SessionStatus: { Status: 'Started' } };
+      const h = start();
+      await recording();
+      clock = T0;
+      await h.ticks();
+      if (endsAt !== undefined) {
+        clock = endsAt;
+        await sendStatus(h, 'Ends');
+      }
+      clock = lead - 1;
+      await h.ticks();
+      expect((await rows()).map((r) => r.session_key)).toEqual([1]);
+      expect(logged('"msg":"handover"')).toBe(false);
+
+      clock = lead;
+      await until(async () => (await rows()).length === 2);
+      const [a, b] = await rows();
+      expect(a).toMatchObject({ session_key: 1, complete: true, ended_at: new Date(lead) });
+      expect(b).toMatchObject({ session_key: 2, started_at: new Date(lead), ended_at: null });
+      expect(logged('"session_key":1,"next_session_key":2,"msg":"handover"')).toBe(true);
+
+      await recording();
+      await h.ticks(); // the new full state's Started is seen before its Ends replaces it
+      clock = next + HOUR + 10 * MIN;
+      await sendStatus(h, 'Ends');
+      clock += 30 * MIN;
+      expect(await endedRow()).toMatchObject({ session_key: 2, complete: true });
+      await until(() => pings.length === 2);
+      expect(pings).toEqual(['f1-live', 'f1-live']);
+    });
+
     it('a mid-session restart closes the open row, gzips its leftover and starts a new row', async () => {
       await seed(KEY);
       const oldPath = `${KEY}-${T0 - 2 * MIN}`;
