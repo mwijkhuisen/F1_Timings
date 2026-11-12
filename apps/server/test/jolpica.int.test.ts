@@ -62,7 +62,7 @@ describe('jolpica (synthetic dump, f1_ingest login)', { timeout: 120_000 }, () =
     await testDb?.drop();
   });
 
-  it('imports the 1950–2017 races and qualifyings with the expected rows; 2018 waits for the 2018+ tier', async () => {
+  it('imports the 1950–2017 races and qualifyings with the expected rows; 2018 on matches no race here', async () => {
     expect(await jolpica(deps, args)).toBe(true);
     const counts = Object.fromEntries(await Promise.all(TABLES.map(async (t) => [t, await count(t)])));
     expect(counts).toEqual({ meeting: 6, session: 10, driver: 27, result: 27, pit: 1, lap: 17, lap_source: 17 });
@@ -88,7 +88,9 @@ describe('jolpica (synthetic dump, f1_ingest login)', { timeout: 120_000 }, () =
       bad_key: 0,
       no_date: 0,
       bad_time: 1,
-      later: 1,
+      attached: 0,
+      no_match: 3, // no OpenF1 or archive race here: the 2018+ tier has nothing to attach to
+      no_laps: 1,
     });
     const race = logged('jolpica').find((l) => l.session_key === RACE_2014);
     expect(race).toMatchObject({

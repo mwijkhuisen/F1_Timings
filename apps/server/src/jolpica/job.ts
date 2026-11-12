@@ -4,13 +4,15 @@ import type { Logger } from 'pino';
 import { codeOf, type DB } from '../db/db.ts';
 import type { MergeCounts } from '../merge/merge.ts';
 import { chunks, writeLaps } from '../merge/write.ts';
+import { attachRound } from './attach.ts';
 import { DumpError } from './csv.ts';
 import { loadDump } from './dump.ts';
 import { LAST_YEAR } from './keys.ts';
 import { roundRows, type SessionRows } from './rows.ts';
 
 // The jolpica job (P3c, A§7): `jolpica [<year>…] [--dir <path>]` reads the Jolpica-F1 CSV dump that the owner put in
-// <dir> and writes its 1950–2017 races and qualifyings as f1_ingest, one transaction per session. No network: the
+// <dir> and writes its 1950–2017 races and qualifyings as f1_ingest, one transaction per session. From 2018 on it adds
+// race lap times to the matching OpenF1 or archive race (attach.ts, the 2018+ tier). No network: the
 // dump is a local copy (ADR-0009). Logs carry keys, counts and fixed codes only: never a name, time, path or value.
 
 export const JOLPICA_DIR = '/srv/f1/jolpica';
@@ -77,7 +79,21 @@ export async function jolpica(deps: JolpicaDeps, args: JolpicaArgs): Promise<boo
 }
 
 async function job({ db, log }: JolpicaDeps, args: JolpicaArgs): Promise<boolean> {
-  const counts = { rounds: 0, imported: 0, failed: 0, bad_key: 0, no_date: 0, bad_time: 0, later: 0 };
+  const counts = {
+    rounds: 0,
+    imported: 0,
+    failed: 0,
+    bad_key: 0,
+    no_date: 0,
+    bad_time: 0,
+    // the 2018+ tier
+    attached: 0,
+    no_laps: 0,
+    no_match: 0,
+    ambiguous: 0,
+    unknown_driver: 0,
+    stale_lap: 0,
+  };
   const done = (ok: boolean, error?: string, extra?: object) => {
     const passed = ok && counts.failed === 0;
     log[passed ? 'info' : 'error']({ years: args.years, ...counts, error, ...extra }, 'jolpica_done');
@@ -88,8 +104,8 @@ async function job({ db, log }: JolpicaDeps, args: JolpicaArgs): Promise<boolean
 
   let dump: Awaited<ReturnType<typeof loadDump>>;
   try {
-    // S4 (the 2018+ tier) widens this to the later years' race laps.
-    dump = await loadDump(args.dir, (year) => wanted(year) && year <= LAST_YEAR);
+    // From 2018 on only the race laps (the 2018+ tier).
+    dump = await loadDump(args.dir, (year, type) => wanted(year) && (year <= LAST_YEAR || type === 'R'));
   } catch (err) {
     if (err instanceof DumpError) return done(false, 'bad_dump', { code: err.code, file: err.file });
     throw err;
@@ -101,7 +117,7 @@ async function job({ db, log }: JolpicaDeps, args: JolpicaArgs): Promise<boolean
     .sort((a, b) => a.year - b.year || (a.number ?? 0) - (b.number ?? 0) || a.id - b.id);
   for (const round of rounds) {
     if (round.year > LAST_YEAR) {
-      counts.later++; // S4: the 2018+ tier (attach.ts) takes these rounds
+      await attachRound({ db, log }, dump, round, counts);
       continue;
     }
     const built = roundRows(dump, round);

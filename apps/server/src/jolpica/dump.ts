@@ -119,10 +119,11 @@ async function* rows(dir: string, table: Table): AsyncGenerator<[number, CsvReco
 }
 
 /**
- * Reads the dump in `dir`. `keep` picks the years whose race and qualifying entries, pit stops and laps are kept.
+ * Reads the dump in `dir`. `keep` picks the years and session types (R, Q1…) whose race and qualifying entries, pit
+ * stops and laps are kept.
  * Throws a DumpError on a missing or unreadable file, a missing column or a record over the caps.
  */
-export async function loadDump(dir: string, keep: (year: number) => boolean): Promise<Dump> {
+export async function loadDump(dir: string, keep: (year: number, type: string) => boolean): Promise<Dump> {
   let badTime = 0;
   const ms = (v: string | null) => {
     const d = duration(v);
@@ -160,7 +161,8 @@ export async function loadDump(dir: string, keep: (year: number) => boolean): Pr
     };
     const round = session.round === null ? undefined : rounds.get(session.round);
     round?.sessions.push(session);
-    if (round?.year != null && keep(round.year) && ENTRY_TYPES.has(session.type ?? '')) wanted.add(id);
+    const { type } = session;
+    if (round?.year != null && type !== null && ENTRY_TYPES.has(type) && keep(round.year, type)) wanted.add(id);
   }
 
   const circuits: Dump['circuits'] = new Map();

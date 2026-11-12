@@ -16,3 +16,6 @@ id,api_id,completed_distance,completed_laps,has_time_data,is_cancelled,number,po
 15,se15,,,t,f,1,1,6,,2014-05-09 08:00:00+00:00,Europe/Madrid,FP1
 16,se16,,,t,f,7,1,6,,2014-05-11 12:00:00+00:00,Europe/Madrid,R
 17,se17,,,t,f,7,1,7,,2018-03-25 05:10:00+00:00,Australia/Melbourne,R
+18,se18,,,t,f,7,1,8,,2019-03-17 05:10:00+00:00,Australia/Melbourne,R
+19,se19,,,t,f,7,1,9,,2019-03-31 15:10:00+00:00,Europe/Madrid,R
+20,se20,,,t,f,7,1,10,,2019-04-14 06:10:00+00:00,Europe/Madrid,R

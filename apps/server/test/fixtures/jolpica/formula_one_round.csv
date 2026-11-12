@@ -6,3 +6,6 @@ id,api_id,circuit_id,date,is_cancelled,name,number,race_number,season_id,wikiped
 5,r5,1,2010-04-04,f,Echo Grand Prix,4,4,5,
 6,r6,2,2014-05-11,f,Foxtrot Grand Prix,5,5,6,
 7,r7,1,2018-03-25,f,Golf Grand Prix,1,1,7,
+8,r8,2,2019-03-17,f,Hotel Grand Prix,1,1,8,
+9,r9,1,2019-03-31,f,Kilo Grand Prix,2,2,8,
+10,r10,2,2019-04-14,f,Mike Grand Prix,3,3,8,

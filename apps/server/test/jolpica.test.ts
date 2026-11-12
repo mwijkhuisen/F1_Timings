@@ -1,5 +1,6 @@
 import { join } from 'node:path';
 import { beforeAll, describe, expect, it } from 'vitest';
+import { lapCandidates, matchRace, type Ours } from '../src/jolpica/attach.ts';
 import { type Dump, duration, loadDump, type Round } from '../src/jolpica/dump.ts';
 import { meetingKey, sessionKey, TT } from '../src/jolpica/keys.ts';
 import { type RoundRows, roundRows, type SessionRows, zoneOffset } from '../src/jolpica/rows.ts';
@@ -316,5 +317,72 @@ describe('rows', () => {
 
   it('a 2018 race yields no rows here', () => {
     expect(roundRows(dump, round(2018, 1))).toEqual({ ok: true, value: undefined });
+  });
+});
+
+describe('the 2018+ tier', () => {
+  const T = Date.parse('2018-03-25T05:10:00Z');
+  const HOUR = 3_600_000;
+  const race = (session_key: number, date_start: number, o: Partial<Ours> = {}): Ours => ({
+    session_key,
+    source: 'openf1',
+    type: 'Race',
+    name: 'Race',
+    is_cancelled: false,
+    date_start,
+    ...o,
+  });
+
+  it('matches the one race within 1 h, an archive race too', () => {
+    expect(matchRace(T, [race(1, T)])).toEqual({ ok: true, value: 1 });
+    expect(matchRace(T, [race(1, T + HOUR)])).toEqual({ ok: true, value: 1 });
+    expect(matchRace(T, [race(1, T - HOUR, { source: 'f1-archive' })])).toEqual({ ok: true, value: 1 });
+  });
+
+  it('just outside 1 h, a sprint, a cancelled race or another source is no match', () => {
+    for (const s of [
+      race(1, T + HOUR + 1),
+      race(1, T - HOUR - 1),
+      race(1, T, { name: 'Sprint' }),
+      race(1, T, { name: 'Sprint Qualifying' }),
+      race(1, T, { type: 'Qualifying', name: 'Qualifying' }),
+      race(1, T, { is_cancelled: true }),
+      race(1, T, { source: 'jolpica' }),
+      race(1, T, { source: 'f1-live' }),
+    ])
+      expect(matchRace(T, [s])).toEqual({ ok: false, error: 'no_match' });
+    expect(matchRace(T, [])).toEqual({ ok: false, error: 'no_match' });
+  });
+
+  it('a sprint at the same weekend leaves the race the only match; two races are ambiguous', () => {
+    expect(matchRace(T, [race(1, T - 1800_000, { name: 'Sprint' }), race(2, T)])).toEqual({ ok: true, value: 2 });
+    expect(matchRace(T, [race(1, T), race(2, T + 60_000, { source: 'f1-archive' })])).toEqual({
+      ok: false,
+      error: 'ambiguous',
+    });
+    expect(matchRace(T, [race(1, T), race(2, T, { is_cancelled: true })])).toEqual({ ok: true, value: 1 });
+  });
+
+  it('lap candidates carry the number and time of known drivers only', () => {
+    const r = round(2018, 1).sessions.find((s) => s.type === 'R');
+    if (!r) throw new Error('no race');
+    const { lap, skipped } = lapCandidates(dump, r, 7, new Set([33, 5]));
+    expect(skipped).toEqual({ unknown_driver: 2, no_number: 1, lap_dup: 0 });
+    expect(lap.map((l) => [l.driver_number, l.lap_number, l.lap_ms])).toEqual([
+      [33, 1, 90_000],
+      [33, 2, 91_000],
+      [33, 3, 92_000],
+      [33, 4, 93_000],
+    ]);
+    for (const l of lap)
+      expect(l).toEqual({
+        session_key: 7,
+        source: 'jolpica',
+        driver_number: 33,
+        lap_number: l.lap_number,
+        lap_ms: l.lap_ms,
+        date_start: null,
+        is_pit_out: null,
+      });
   });
 });
