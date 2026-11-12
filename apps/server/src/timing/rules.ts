@@ -25,9 +25,10 @@ export type Ruling = {
 export type RuleCounts = { deleted: number; reinstated: number; unmatched: number; unparsed: number };
 
 // After the whitespace collapse. The car comes from the text: driver_number is null in the data.
-// The trailing `LAP n hh:mm:ss ( (PIT))` is optional: "… (NEXT LAP)" forms carry none.
+// The trailing `LAP n hh:mm:ss ( (PIT))` is optional: "… (NEXT LAP)" forms carry none. A leading
+// `CORRECTION - ` is dropped and a driver tag the feed doubled ("(BOT) (BOT)") is taken once (VM check 2026-11-12).
 const DELETED =
-  /^CAR (\d{1,2}) \([A-Z]{3}\) (?:TIME (\d+):(\d{2}\.\d{3})|LAP) DELETED - (.+?)(?: LAP (\d{1,3}) \d{2}:\d{2}:\d{2}(?: \(PIT\))?)?$/;
+  /^(?:CORRECTION - )?CAR (\d{1,2}) (?:\([A-Z]{3}\) ){1,2}(?:TIME (\d+):(\d{2}\.\d{3})|LAP) DELETED - (.+?)(?: LAP (\d{1,3}) \d{2}:\d{2}:\d{2}(?: \(PIT\))?)?$/;
 const REINSTATED = /^CAR (\d{1,2}) \([A-Z]{3}\) (?:TIME (\d+):(\d{2}\.\d{3})|LAP (\d{1,3})) WILL BE REINSTATED$/;
 
 const ms = (min: string | undefined, sec: string | undefined) =>
