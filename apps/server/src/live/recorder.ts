@@ -450,7 +450,7 @@ export async function startRecorder(deps: RecorderDeps): Promise<void> {
     else if (status === 'Ends' && r.startedSeen) r.endsAt ??= ms();
     const decision = decide({ session: r.session, next, startedSeen: r.startedSeen, endsAt: r.endsAt, now: ms() });
     if (decision === 'handover') log.info({ session_key: r.key, next_session_key: next?.key }, 'handover');
-    if (decision !== 'continue') await end(r, decision === 'abort' ? 'abort' : 'stop');
+    if (decision !== 'continue') await end(r, decision === 'handover' ? 'stop' : decision);
   };
 
   /** The active row, and the next session (also while recording: the handover needs it). */
@@ -464,7 +464,8 @@ export async function startRecorder(deps: RecorderDeps): Promise<void> {
       );
       if (row) r.session = windowOf(row);
     }
-    const skip = r ? [...finished, r.key] : [...finished];
+    const skip = [...finished];
+    if (r) skip.push(r.key);
     const found = await dbStep(async () => ({
       row: await db
         .selectFrom('session')

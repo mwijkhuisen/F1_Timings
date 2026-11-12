@@ -217,7 +217,7 @@ sudo docker logs f1-live-1 2>&1 | grep -c '"last_error"'
 
 Pass:
 
-- `complete = t`, and `ended_at` about 30 minutes after the `Ends` status, which comes some time after the session's end (`date_end` + 3 h at the latest).
+- `complete = t`, and `ended_at` about 30 minutes after the `Ends` status, which comes some time after the session's end (`date_end` + 3 h at the latest), or at the next session's lead (`date_start` − 60 min) when that came first, with `handover` in the log (A§11.2).
 - Every segment passes `gzip -t`, and the line count is not 0.
 - A snapshot about every 30 s: the `snapshots` listing grows by two files a minute.
 - `f1-live` on healthchecks.io is green (`f1-live/fail` turns it red at once for a recording that ended incomplete), and the status panel shows `idle` and the token expiry.

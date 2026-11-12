@@ -61,16 +61,20 @@ function runLoop(fake: FakeSignalR, rec: Recording, options: ConnectOptions = {}
   let stopped = false;
   let conn: ReturnType<typeof connect> | undefined;
   const closes: Closed[] = [];
+  /** Wall-clock stamps where the client hands over a message and resolves a close: no polling lag in them. */
+  const at = { fed: 0, closed: [] as number[] };
   let fed = 0;
-  const onFeed = (topic: string, payload: unknown, ts: string, at: number) => {
+  const onFeed = (topic: string, payload: unknown, ts: string, receivedAt: number) => {
     fed++;
-    rec.feed(at, topic, payload, ts);
+    at.fed = Date.now();
+    rec.feed(receivedAt, topic, payload, ts);
   };
   const done = (async () => {
     let backoff = 5; // ms, for the recorder's 1 s
     while (!stopped) {
-      conn = connect(TOKEN, onFeed, { base: fake.base, onSubscribed: (r, at) => rec.subscribed(at, r), ...options });
+      conn = connect(TOKEN, onFeed, { base: fake.base, onSubscribed: (r, t) => rec.subscribed(t, r), ...options });
       closes.push(await conn.closed);
+      at.closed.push(Date.now());
       if (stopped) break;
       await sleep(backoff);
       backoff = Math.min(backoff * 2, 150); // for the recorder's 30 s
@@ -78,6 +82,7 @@ function runLoop(fake: FakeSignalR, rec: Recording, options: ConnectOptions = {}
   })();
   return {
     closes,
+    at,
     fed: () => fed,
     async stop() {
       stopped = true;
@@ -308,11 +313,12 @@ describe('feed client against the fake server', () => {
     clear.mockRestore();
   });
 
-  // The silence watchdog (#94). The server pings every 5 ms, well inside the 50 ms idle timer: a close before the
+  // The silence watchdog (#94). The server pings every 5 ms, well inside the 200 ms idle timer: a close before the
   // silence ran out would be the idle timer, so it would show that the pings stopped, or that they ended the silence.
+  // Stamps come from the callbacks, so a slow poll cannot shrink a measured silence.
   describe('a feed that stops while the pings go on', () => {
-    const idleMs = 50;
-    const silentMs = 200;
+    const idleMs = 200;
+    const silentMs = 500;
     beforeEach(() => {
       fake.behaviour.pingMs = 5;
     });
@@ -321,42 +327,62 @@ describe('feed client against the fake server', () => {
       const loop = runLoop(fake, record(), { idleMs, silentMs });
       await until(() => fake.subscribes.length === 1);
       fake.feed([numbered(1)]);
-      await until(() => loop.fed() === 1);
-      const lastFeed = Date.now();
       await until(() => loop.closes.length === 1);
-      const silentFor = Date.now() - lastFeed;
+      const silentFor = (loop.at.closed[0] ?? 0) - loop.at.fed;
+      expect(loop.fed()).toBe(1);
       expect(loop.closes[0]).toEqual({ error: 'feed_timeout' });
-      expect(silentFor).toBeGreaterThanOrEqual(silentMs - 20);
-      expect(silentFor).toBeLessThan(silentMs + 1000);
+      expect(silentFor).toBeGreaterThanOrEqual(silentMs - 5);
+      expect(silentFor).toBeLessThan(silentMs + 2000);
       await until(() => fake.subscribes.length === 2);
       await loop.stop();
     });
 
     it('a feed message resets the silence, a ping never does', async () => {
-      let fed = 0;
-      let closed = false;
-      const conn = connect(TOKEN, () => fed++, { base: fake.base, idleMs, silentMs });
+      let lastFeed = 0;
+      let closedAt = 0;
+      const conn = connect(
+        TOKEN,
+        () => {
+          lastFeed = Date.now();
+        },
+        { base: fake.base, idleMs, silentMs },
+      );
       void conn.closed.then(() => {
-        closed = true;
+        closedAt = Date.now();
       });
       await conn.subscribed;
-      for (let n = 1; n <= 30; n++) {
+      for (let n = 1; n <= 60; n++) {
         fake.feed([numbered(n)]);
         await sleep(20);
       }
-      await until(() => fed === 30);
-      expect(closed).toBe(false); // 600 ms, three silences long
-      const lastFeed = Date.now();
+      expect(closedAt).toBe(0); // 1.2 s, over two silences long
       await expect(conn.closed).resolves.toEqual({ error: 'feed_timeout' });
-      expect(Date.now() - lastFeed).toBeGreaterThanOrEqual(silentMs - 50);
+      expect(closedAt - lastFeed).toBeGreaterThanOrEqual(silentMs - 5);
     });
 
     it('is not armed before the first feed message: the quiet before a session and after Ends (A§11.1)', async () => {
       const conn = connect(TOKEN, () => {}, { base: fake.base, idleMs, silentMs: 30 });
       await conn.subscribed;
-      await expect(Promise.race([conn.closed, sleep(300).then(() => 'open')])).resolves.toBe('open');
+      await expect(Promise.race([conn.closed, sleep(600).then(() => 'open')])).resolves.toBe('open');
       conn.close();
       await expect(conn.closed).resolves.toEqual({});
+    });
+
+    it('close() clears the silence timer, so a closed connection holds nothing open', async () => {
+      // By identity, as the ping timer test: undici's own timers come and go.
+      const set = vi.spyOn(globalThis, 'setTimeout');
+      const clear = vi.spyOn(globalThis, 'clearTimeout');
+      let fed = 0;
+      const conn = connect(TOKEN, () => fed++, { base: fake.base, idleMs, silentMs: 4321 });
+      await conn.subscribed;
+      fake.feed([numbered(1)]);
+      await until(() => fed === 1);
+      const armed = set.mock.results[set.mock.calls.findIndex((call) => call[1] === 4321)]?.value;
+      expect(armed).toBeDefined();
+      conn.close();
+      expect(clear).toHaveBeenCalledWith(armed);
+      set.mockRestore();
+      clear.mockRestore();
     });
   });
 

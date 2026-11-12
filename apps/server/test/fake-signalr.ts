@@ -9,7 +9,7 @@ import { createFeed } from '../src/live/merge.ts';
 import { parseFeedLine } from '../src/live/read.ts';
 
 // A real local stand-in for the F1 SignalR endpoint: node:http and hand-written WebSocket frames, no dependency. It
-// sends only what a test tells it to, so every stream is finite.
+// sends only what a test tells it to, so every stream is finite; `pingMs` pings end with their socket.
 
 const RS = '\x1e';
 
