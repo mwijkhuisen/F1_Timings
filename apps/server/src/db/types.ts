@@ -40,9 +40,30 @@ export interface Lap {
   deleted: Generated<boolean>;
   deleted_reason: string | null;
   driver_number: number;
+  filled: Generated<Json>;
   i1_kph: number | null;
   i2_kph: number | null;
   is_pit_in: Generated<boolean>;
+  is_pit_out: boolean | null;
+  lap_ms: number | null;
+  lap_number: number;
+  quali_phase: number | null;
+  s1_ms: number | null;
+  s2_ms: number | null;
+  s3_ms: number | null;
+  seg1: number[] | null;
+  seg2: number[] | null;
+  seg3: number[] | null;
+  session_key: number;
+  source: string;
+  st_kph: number | null;
+}
+
+export interface LapSource {
+  date_start: Timestamp | null;
+  driver_number: number;
+  i1_kph: number | null;
+  i2_kph: number | null;
   is_pit_out: boolean | null;
   lap_ms: number | null;
   lap_number: number;
@@ -210,6 +231,7 @@ export interface Weather {
 export interface DB {
   driver: Driver;
   lap: Lap;
+  lap_source: LapSource;
   meeting: Meeting;
   pit: Pit;
   race_control: RaceControl;

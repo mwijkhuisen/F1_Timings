@@ -30,7 +30,17 @@ const CASES: Record<number, string> = { 11388: 'normal', 11392: 'quali', 11383: 
 const EMPTY = 11465; // 2026 testing, day 1: served the *-empty fixtures (OpenF1's 404 "No results found.")
 // The 10 sessions sessions-year marks is_cancelled (Bahrain and Saudi Arabia, April 2026).
 const CANCELLED = [11254, 11255, 11256, 11257, 11261, 11262, 11263, 11264, 11265, 11269];
-const TABLES = ['driver', 'lap', 'stint', 'pit', 'race_control', 'result', 'weather', 'raw_response'] as const;
+const TABLES = [
+  'driver',
+  'lap',
+  'lap_source',
+  'stint',
+  'pit',
+  'race_control',
+  'result',
+  'weather',
+  'raw_response',
+] as const;
 
 const raw = (name: string): unknown => JSON.parse(readFileSync(join(FIXTURES, `${name}.raw`), 'utf8'));
 function fixture(name: string): Response {
@@ -189,6 +199,7 @@ describe('ingest (fixtures through msw, f1_ingest login)', { timeout: 120_000 },
     expect(await rowCounts(11388)).toEqual({
       driver: 0,
       lap: 0,
+      lap_source: 0,
       stint: 0,
       pit: 0,
       race_control: 0,
@@ -244,6 +255,7 @@ describe('ingest (fixtures through msw, f1_ingest login)', { timeout: 120_000 },
     expect(await rowCounts(11388)).toEqual({
       driver: 4,
       lap: 62,
+      lap_source: 62,
       stint: 9,
       pit: 5,
       race_control: 155,
@@ -254,6 +266,7 @@ describe('ingest (fixtures through msw, f1_ingest login)', { timeout: 120_000 },
     expect(await rowCounts(11392)).toEqual({
       driver: 4,
       lap: 50,
+      lap_source: 50,
       stint: 16,
       pit: 16,
       race_control: 39,
@@ -264,6 +277,7 @@ describe('ingest (fixtures through msw, f1_ingest login)', { timeout: 120_000 },
     expect(await rowCounts(11383)).toEqual({
       driver: 4,
       lap: 57,
+      lap_source: 57,
       stint: 14,
       pit: 10,
       race_control: 159,
@@ -274,6 +288,7 @@ describe('ingest (fixtures through msw, f1_ingest login)', { timeout: 120_000 },
     expect(await rowCounts(EMPTY)).toEqual({
       driver: 0,
       lap: 0,
+      lap_source: 0,
       stint: 0,
       pit: 0,
       race_control: 0,

@@ -1,6 +1,6 @@
-// The A§9 timing rules on one session's lap rows. Pure. They run in the normaliser on the
-// rows before the insert, inside the ingest transaction (A§8). A race-control message is
-// never logged: the caller gets counts only.
+// The A§9 timing rules on one session's lap rows. Pure. They run on each source's rows (the
+// normaliser, the archive rows), and again on the merged rows inside the writer's transaction
+// (merge/write.ts, P3b). A race-control message is never logged: the caller gets counts only.
 
 export type RuleLap = {
   driver_number: number;

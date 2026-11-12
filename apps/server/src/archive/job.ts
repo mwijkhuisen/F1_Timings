@@ -4,9 +4,11 @@ import { join } from 'node:path';
 import { type Kysely, sql } from 'kysely';
 import type { Logger } from 'pino';
 import { codeOf, type DB } from '../db/db.ts';
-import { chunks, live } from '../ingest/ingest.ts';
+import { live } from '../ingest/ingest.ts';
 import { DISK_LOW_BYTES, freeBytes } from '../live/recorder.ts';
 import { checkToken, readTokenFile } from '../live/token.ts';
+import type { MergeCounts } from '../merge/merge.ts';
+import { chunks, writeLaps } from '../merge/write.ts';
 import { download, type Failure, MAX_SESSION_BYTES, ORIGIN } from './files.ts';
 import { type ArchiveRows, archiveRows, indexPlan, type Planned } from './rows.ts';
 
@@ -37,7 +39,8 @@ export const LOCK_KEY = 0x4631_4152; // 'F1AR'
 const EXP_MARGIN_MS = 60_000;
 /** A 403 or 404 on these leaves no marker: the session is incomplete for this run and a rerun asks again. */
 const REQUIRED = new Set<string>(['SessionInfo', 'TimingData']);
-const CHILDREN = ['driver', 'lap', 'stint', 'race_control', 'result', 'weather'] as const;
+// Laps are not among them: writeLaps replaces the archive's candidates only and rebuilds `lap` (P3b).
+const CHILDREN = ['driver', 'stint', 'race_control', 'result', 'weather'] as const;
 
 export type ArchiveDeps = {
   db: Kysely<DB>;
@@ -60,9 +63,9 @@ function put(path: string, bytes: Buffer | string) {
 
 /**
  * One transaction: lock the meeting and session rows, refuse (`not_archive`) when either exists with another
- * source, else upsert both as `final` and replace the child rows.
+ * source, else upsert both as `final`, replace the child rows and write the laps through the merge (its counts).
  */
-async function write(db: Kysely<DB>, plan: Planned, rows: ArchiveRows): Promise<'not_archive' | undefined> {
+async function write(db: Kysely<DB>, plan: Planned, rows: ArchiveRows): Promise<'not_archive' | MergeCounts> {
   return db.transaction().execute(async (trx) => {
     const { meeting_key } = plan.meeting;
     const m = await trx
@@ -83,15 +86,16 @@ async function write(db: Kysely<DB>, plan: Planned, rows: ArchiveRows): Promise<
     if (s) await trx.updateTable('session').set(plan.session).where('session_key', '=', plan.key).execute();
     else await trx.insertInto('session').values(plan.session).execute();
     for (const table of CHILDREN) await trx.deleteFrom(table).where('session_key', '=', plan.key).execute();
+    const { lap, ...children } = rows;
     // The cast: Kysely cannot relate a table name from a loop to its row type.
-    for (const [table, list] of Object.entries(rows) as [keyof ArchiveRows, object[]][]) {
+    for (const [table, list] of Object.entries(children) as [keyof ArchiveRows, object[]][]) {
       for (const chunk of chunks(list))
         await trx
           .insertInto(table)
           .values(chunk as never)
           .execute();
     }
-    return undefined;
+    return writeLaps(trx, plan.key, 'f1-archive', lap);
   });
 }
 
@@ -242,23 +246,23 @@ async function job(deps: ArchiveDeps, args: ArchiveArgs): Promise<boolean> {
       rules: stats.rules,
       skipped_lines: stats.skipped_lines,
     };
-    let refused: 'not_archive' | undefined;
+    let written: 'not_archive' | MergeCounts;
     try {
-      refused = await write(db, session, rows);
+      written = await write(db, session, rows);
     } catch (err) {
       counts.failed++;
       log.error(line({ ...fields, error: 'db', cause: codeOf(err) }), 'archive');
       continue;
     }
-    if (refused) {
+    if (written === 'not_archive') {
       counts.failed++;
-      log.error(line({ ...fields, error: refused }), 'archive');
+      log.error(line({ ...fields, error: written }), 'archive');
       continue;
     }
     counts.imported++;
     if (stats.t0 === 'heartbeat') counts.t0_heartbeat++;
     // The Heartbeat t0 can be minutes off (A§6.2): imported, but an error line to look at.
-    log[stats.t0 === 'heartbeat' ? 'error' : 'info'](line(fields), 'archive');
+    log[stats.t0 === 'heartbeat' ? 'error' : 'info'](line({ ...fields, merge: written }), 'archive');
   }
   return done(true);
 }
