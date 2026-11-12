@@ -317,6 +317,33 @@ describe('createLaps', () => {
     ]);
   });
 
+  it('a race state joins at count + 1, lap 1 at Started; a count of 0 outside a race keeps the old rule', () => {
+    const t0 = Date.parse('2026-01-11T14:05:00Z');
+    const state = (Type: string, lines: Obj) =>
+      parseFeedLine(
+        JSON.stringify([
+          t0,
+          '_subscribe',
+          {
+            SessionInfo: { Key: 9002, Type },
+            SessionData: { StatusSeries: [{ Utc: '2026-01-11T14:03:00', SessionStatus: 'Started' }] },
+            TimingAppData: { Lines: { 7: { Stints: [{ Compound: 'SOFT' }] }, 99: { Stints: [{ Compound: 'SOFT' }] } } },
+            TimingData: { Lines: lines },
+          },
+        ]),
+      );
+    const rows = (events: FeedEvent[]) =>
+      build(events, 9002).laps.map((l) => [l.driver_number, l.lap_number, l.date_start]);
+    const s1 = { Sectors: { 0: { Value: '30.000' } } }; // so each joined lap shows
+    // 7 has done 10 laps, so it is on lap 11; 99 has done none and is on lap 1, which started at Started.
+    expect(rows(state('Race', { 7: { NumberOfLaps: 10, ...s1 }, 99: { NumberOfLaps: 0, ...s1 } }))).toEqual([
+      [7, 11, null],
+      [99, 1, '2026-01-11T14:03:00.000Z'],
+    ]);
+    // Outside a race a count of 0 names no lap: lap 1 as before, started at the state's time.
+    expect(rows(state('Practice', { 99: { NumberOfLaps: 0, ...s1 } }))).toEqual([[99, 1, new Date(t0).toISOString()]]);
+  });
+
   it('the archive form of practice gives the same rows as its feed.jsonl form, apart from source', () => {
     const events = read('practice.jsonl');
     const t0 = (events[0] as FeedEvent).t;

@@ -224,7 +224,11 @@ export function createLaps(
     // (another lap's) are dropped. An honest gap (A§2.4). Only a state: a driver's first delta is its pit exit, which
     // carries its first count. Relies on TimingAppData coming before TimingData in a state, which opens the gate first.
     const joined = full && n !== null && n >= 1 && !laps.has(driver);
-    if (joined) laps.set(driver, [newLap(driver, n)]);
+    if (joined) {
+      const lap = newLap(driver, n);
+      if (race && n === 1) lap.date_start = started; // a race joined on lap 1 still has its start (Started, below)
+      laps.set(driver, [lap]);
+    }
     const last = isObj(line.LastLapTime) ? line.LastLapTime.Value : undefined;
     if (typeof last === 'string' && !joined) {
       const ms = fit(duration(last));

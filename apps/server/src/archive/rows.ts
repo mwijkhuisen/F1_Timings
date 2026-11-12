@@ -209,7 +209,7 @@ export function archiveRows(
     ];
   });
 
-  const lap = rows.laps.map(({ at, ...l }) => ({ ...l, date_start: l.date_start as string | null }));
+  const lap = rows.laps.map(({ at, ...l }) => l);
   // The phase boundaries as message-less rows, so a lap's phase follows SessionData exactly.
   const boundaries: RuleMessage[] = phases.map((p) => ({ date: iso(p.at), qualifying_phase: p.part, message: null }));
   const rules = markLaps(lap, [...race_control, ...boundaries], type);

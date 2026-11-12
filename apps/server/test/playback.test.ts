@@ -84,7 +84,7 @@ async function record(
 /**
  * The full replay as JSON: createFeed and createLaps over every line with receivedAt ≤ t, `.z` skipped (O1), the state
  * and the weather rows cleared before a SessionInfo with another Key than the state's, a weather row per applied
- * WeatherData delta (withWeatherRow).
+ * WeatherData delta (withWeatherRow), and A§9 from the final state when it is the session's own.
  */
 function full(values: Value[], t: number, key = 9001): { state: Obj; laps: Lap[]; stints: Stints; weather: Weather } {
   const [feed, laps] = [createFeed(), createLaps(key, 'f1-live')];
@@ -106,7 +106,8 @@ function full(values: Value[], t: number, key = 9001): { state: Obj; laps: Lap[]
         weather = withWeatherRow(weather, weatherRow(view(feed.state, 'WeatherData'), v[0]));
     }
   }
-  return plain({ state: feed.state, ...lapRows(laps.rows(), feed.state), weather });
+  const own = keyOf(feed.state.SessionInfo) === key ? feed.state : {};
+  return plain({ state: feed.state, ...lapRows(laps.rows(), own), weather });
 }
 
 /**
@@ -198,11 +199,70 @@ const text = (values: Value[]) => values.map((v) => `${JSON.stringify(v)}\n`).jo
 const weatherAt = (r: number, payload: Obj): Value => [r, 'WeatherData', payload, iso(r)];
 const byR = (values: Value[]) => values.sort((a, b) => a[0] - b[0]); // stable: a tie keeps its order
 
+// A§9 on the stream rows (#95): synthetic sessions, every value invented.
+const s = (sec: number) => T0 + sec * 1000;
+const at = (r: number, topic: string, payload: unknown): Value => [r, topic, payload, iso(r)];
+const utcOf = (r: number) => iso(r).slice(0, -1); // the feed's Utc has no Z
+const said = (r: number, i: number, Message: string): Value =>
+  at(r, 'RaceControlMessages', { Messages: { [i]: { Utc: utcOf(r), Category: 'Other', Message } } });
+const stints = { Lines: { 7: { Stints: [{ Compound: 'SOFT' }] }, 99: { Stints: [{ Compound: 'SOFT' }] } } };
+/** The snapshot at `t`: each lap as driver/lap → [deleted, reason, lap colour, quali_phase]. */
+async function seek(dir: string, t: number) {
+  const { gen, clock } = start(dir, { at: t });
+  const first = (await drain(gen, clock))[0]?.ev;
+  const laps = first?.event === 'snapshot' ? first.data.laps : [];
+  return Object.fromEntries(
+    laps.map((l) => [
+      `${l.driver_number}/${l.lap_number}`,
+      [l.deleted, l.deleted_reason, l.colour.lap, l.quali_phase] as const,
+    ]),
+  );
+}
+
+/** A practice: car 7's lap 2 deleted for track limits at s200 and reinstated at s300. */
+const RULED: Value[] = [
+  [s(0), '_subscribe', { SessionInfo: { Key: 9001, Type: 'Practice' }, TimingAppData: stints }],
+  at(s(1), 'TimingData', {
+    Lines: { 7: { NumberOfLaps: 1, PitOut: true }, 99: { NumberOfLaps: 1, PitOut: true } },
+  }),
+  at(s(100), 'TimingData', { Lines: { 7: { NumberOfLaps: 2 }, 99: { NumberOfLaps: 2 } } }),
+  at(s(190), 'TimingData', { Lines: { 7: { LastLapTime: { Value: '1:30.000' }, NumberOfLaps: 3 } } }),
+  at(s(191), 'TimingData', { Lines: { 99: { LastLapTime: { Value: '1:31.000' }, NumberOfLaps: 3 } } }),
+  // LAP 3 is lap 2 outside a race; the time names it too.
+  said(s(200), 0, 'CAR 7 (ABC) TIME 1:30.000 DELETED - TRACK LIMITS AT TURN 4 LAP 3 12:03:20'),
+  said(s(300), 1, 'CAR 7 (ABC) TIME 1:30.000 WILL BE REINSTATED'),
+  at(s(400), 'TimingData', { Lines: { 7: { NumberOfLaps: 4 } } }),
+];
+
+/** A qualifying (or, with another Type, a session whose series is not read): parts 1 at s20 and 2 at s300. */
+const quali = (Type: string): Value[] => [
+  [
+    s(0),
+    '_subscribe',
+    {
+      SessionInfo: { Key: 9001, Type },
+      SessionData: { Series: [] },
+      TimingAppData: stints,
+      // 99 joined mid-run: its lap 3 has no date_start, so no phase.
+      TimingData: { Lines: { 99: { NumberOfLaps: 3, Sectors: { 0: { Value: '28.000' } } } } },
+    },
+  ],
+  at(s(10), 'TimingData', { Lines: { 7: { NumberOfLaps: 1, PitOut: true } } }), // before Q1 starts
+  at(s(20), 'SessionData', { Series: { 0: { Utc: utcOf(s(20)), QualifyingPart: 1 } } }),
+  at(s(100), 'TimingData', { Lines: { 7: { NumberOfLaps: 2 } } }),
+  at(s(300), 'SessionData', { Series: { 1: { Utc: utcOf(s(300)), QualifyingPart: 2 } } }),
+  at(s(300), 'TimingData', { Lines: { 7: { NumberOfLaps: 3 } } }), // on the change: the new part
+  at(s(310), 'TimingData', { Lines: { 99: { NumberOfLaps: 4 } } }),
+];
+
 describe('playback', () => {
-  // With their sessions: both make laps and stints.
+  // With their sessions: all make laps and stints.
   const sources: [Value[], number][] = [
     [fixture('practice-reconnect.jsonl'), 9001],
     [fixture('race.jsonl'), 9002],
+    // A§9 on the rows (#95): a deleted and reinstated lap, and qualifying parts.
+    [RULED, 9001],
+    [quali('Qualifying'), 9001],
   ];
 
   it('state at T from snapshot + deltas equals a full replay from 0', async () => {
@@ -610,42 +670,9 @@ describe('playback', () => {
     expect(expected.laps.length).toBeGreaterThan(0);
   });
 
-  // A§9 on the stream rows (#95): synthetic sessions, every value invented.
-  const s = (sec: number) => T0 + sec * 1000;
-  const at = (r: number, topic: string, payload: unknown): Value => [r, topic, payload, iso(r)];
-  const utcOf = (r: number) => iso(r).slice(0, -1); // the feed's Utc has no Z
-  const said = (r: number, i: number, Message: string): Value =>
-    at(r, 'RaceControlMessages', { Messages: { [i]: { Utc: utcOf(r), Category: 'Other', Message } } });
-  const stints = { Lines: { 7: { Stints: [{ Compound: 'SOFT' }] }, 99: { Stints: [{ Compound: 'SOFT' }] } } };
-  /** The snapshot at `t`: each lap as driver/lap → [deleted, reason, lap colour, quali_phase]. */
-  async function seek(dir: string, t: number) {
-    const { gen, clock } = start(dir, { at: t });
-    const first = (await drain(gen, clock))[0]?.ev;
-    const laps = first?.event === 'snapshot' ? first.data.laps : [];
-    return Object.fromEntries(
-      laps.map((l) => [
-        `${l.driver_number}/${l.lap_number}`,
-        [l.deleted, l.deleted_reason, l.colour.lap, l.quali_phase] as const,
-      ]),
-    );
-  }
-
   it('a DELETED message strikes the stream lap from its time on, and a REINSTATED restores it', async () => {
-    const values: Value[] = [
-      [s(0), '_subscribe', { SessionInfo: { Key: 9001, Type: 'Practice' }, TimingAppData: stints }],
-      at(s(1), 'TimingData', {
-        Lines: { 7: { NumberOfLaps: 1, PitOut: true }, 99: { NumberOfLaps: 1, PitOut: true } },
-      }),
-      at(s(100), 'TimingData', { Lines: { 7: { NumberOfLaps: 2 }, 99: { NumberOfLaps: 2 } } }),
-      at(s(190), 'TimingData', { Lines: { 7: { LastLapTime: { Value: '1:30.000' }, NumberOfLaps: 3 } } }),
-      at(s(191), 'TimingData', { Lines: { 99: { LastLapTime: { Value: '1:31.000' }, NumberOfLaps: 3 } } }),
-      // LAP 3 is lap 2 outside a race; the time names it too.
-      said(s(200), 0, 'CAR 7 (ABC) TIME 1:30.000 DELETED - TRACK LIMITS AT TURN 4 LAP 3 12:03:20'),
-      said(s(300), 1, 'CAR 7 (ABC) TIME 1:30.000 WILL BE REINSTATED'),
-      at(s(400), 'TimingData', { Lines: { 7: { NumberOfLaps: 4 } } }),
-    ];
     const dir = tmp();
-    await record(dir, values, 3_600_000);
+    await record(dir, RULED, 3_600_000);
 
     const valid = [false, null, 'purple', null];
     const struck = [true, 'TRACK LIMITS AT TURN 4', 'yellow', null];
@@ -670,28 +697,9 @@ describe('playback', () => {
   });
 
   it('qualifying stream rows carry quali_phase by A§9: the part at or before the lap start, else null', async () => {
-    const values = (Type: string): Value[] => [
-      [
-        s(0),
-        '_subscribe',
-        {
-          SessionInfo: { Key: 9001, Type },
-          SessionData: { Series: [] },
-          TimingAppData: stints,
-          // 99 joined mid-run: its lap 3 has no date_start, so no phase.
-          TimingData: { Lines: { 99: { NumberOfLaps: 3, Sectors: { 0: { Value: '28.000' } } } } },
-        },
-      ],
-      at(s(10), 'TimingData', { Lines: { 7: { NumberOfLaps: 1, PitOut: true } } }), // before Q1 starts
-      at(s(20), 'SessionData', { Series: { 0: { Utc: utcOf(s(20)), QualifyingPart: 1 } } }),
-      at(s(100), 'TimingData', { Lines: { 7: { NumberOfLaps: 2 } } }),
-      at(s(300), 'SessionData', { Series: { 1: { Utc: utcOf(s(300)), QualifyingPart: 2 } } }),
-      at(s(300), 'TimingData', { Lines: { 7: { NumberOfLaps: 3 } } }), // on the change: the new part
-      at(s(310), 'TimingData', { Lines: { 99: { NumberOfLaps: 4 } } }),
-    ];
     const phases = async (Type: string) => {
       const dir = tmp();
-      await record(dir, values(Type), 3_600_000);
+      await record(dir, quali(Type), 3_600_000);
       return Object.entries(await seek(dir, s(400))).map(([key, row]) => [key, row[3]]);
     };
     expect(await phases('Qualifying')).toEqual([

@@ -276,7 +276,11 @@ export async function* playback(o: {
     });
   const rows = () => {
     dirty = false;
-    const all = lapRows(engine.rows(), feed.state);
+    // A§9 from the recording's own session only: after a switch to a later one, its rulings must not strike these laps.
+    // ponytail: re-reads every race-control message per laps check (about 200 in a race); cache the rulings per message
+    // key if a state ever holds far more.
+    const own = keyOf(feed.state.SessionInfo) === o.sessionKey ? feed.state : {};
+    const all = lapRows(engine.rows(), own);
     return {
       laps: unsent(all.laps, (l) => `lap ${l.driver_number} ${l.lap_number}`),
       stints: unsent(all.stints, (s) => `stint ${s.driver_number} ${s.stint_number}`),
