@@ -177,7 +177,7 @@ services:
         read_only: true
         bind:
           create_host_path: false
-    mem_limit: 512m
+    mem_limit: 768m
     cpus: 1.0
     pids_limit: 64
     healthcheck:

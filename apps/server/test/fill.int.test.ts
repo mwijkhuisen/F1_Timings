@@ -18,7 +18,7 @@ import { createDb, type DB } from '../src/db/db.ts';
 import { openRecording } from '../src/live/recording.ts';
 import { run } from '../src/main.ts';
 import { fill } from '../src/merge/fill.ts';
-import { writeLaps } from '../src/merge/write.ts';
+import { staleLap, writeLaps } from '../src/merge/write.ts';
 import { createTestDb, type TestDb } from './db.ts';
 
 // The fill job against a real PostgreSQL 18 (f1_ingest login). Every file is synthetic and built under a temp dir:
@@ -71,8 +71,11 @@ function archiveFiles(key: number, sessionKey = true) {
   return dir;
 }
 
-/** A recording of the synthetic practice feed as session `key`, sealed (gzip) through the real recorder. */
-async function record(key: number, path: string, session = key) {
+/**
+ * A recording of the synthetic practice feed as session `key`, sealed (gzip) through the real recorder. `pad`: the
+ * size of an extra TimingStats line, a topic the parser does not read.
+ */
+async function record(key: number, path: string, session = key, pad = 0) {
   const rec = openRecording({ dir: join(liveDir, path), now: () => T0, snapshotMs: 3_600_000 });
   const feed = readFileSync(join(FIXTURES, 'live/practice.jsonl'), 'utf8').trim().split('\n');
   for (const [i, line] of feed.entries()) {
@@ -82,6 +85,7 @@ async function record(key: number, path: string, session = key) {
       rec.feed(T0 + i * 50, 'SessionInfo', { ...info, Key: session }, 'undefined');
     } else rec.feed(T0 + i * 50, topic, payload, ts ?? 'undefined');
   }
+  if (pad > 0) rec.feed(T0, 'TimingStats', { pad: 'x'.repeat(pad) }, 'undefined');
   await rec.finish();
   const { id } = await admin
     .insertInto('recording')
@@ -197,6 +201,8 @@ describe('the fill job (f1_ingest login, synthetic files)', { timeout: 120_000 }
     const rows = await laps(OPENF1);
     expect(rows.filter((r) => r.source === 'f1-live').map((r) => r.driver_number)).toContain(7);
     expect((await candidates(OPENF1))['f1-live']).toBeGreaterThan(0);
+    // After a merge every `lap` row has its base candidate, so fill's guard has no false positive.
+    expect(await db.transaction().execute((trx) => staleLap(trx, OPENF1))).toBe(false);
   });
 
   it('a recording of another session fails that session and keeps its candidates', async () => {
@@ -300,7 +306,7 @@ describe('the fill job (f1_ingest login, synthetic files)', { timeout: 120_000 }
     it('an archive of another session fails that source only: the recording is stored and the session merged', async () => {
       const before = await candidates(FAULTY);
       archiveFiles(FAULTY, false);
-      const id = await record(FAULTY, `${FAULTY}-1`);
+      const id = await record(FAULTY, `${FAULTY}-1`, FAULTY, 50_000);
       await complete(id);
       expect(await faulty()).toBe(false);
       expect(one()).toMatchObject({
@@ -313,20 +319,49 @@ describe('the fill job (f1_ingest login, synthetic files)', { timeout: 120_000 }
       expect((await laps(FAULTY)).some((r) => r.source === 'f1-live')).toBe(true);
     });
 
-    it('a recording past the cap is too_large', async () => {
+    it('a recording past the cap is too_large; only the parsed topics count', async () => {
       rmSync(join(archiveDir, String(FAULTY)), { recursive: true });
       const before = await candidates(FAULTY);
+      expect(await faulty(40_000)).toBe(true); // the 50 kB TimingStats line does not count
+      expect(one().sources).toEqual({ 'f1-live': expect.any(Number) });
       expect(await faulty(1_000)).toBe(false);
       expect(one()).toMatchObject({ sources: {}, errors: { 'f1-live': 'too_large' } });
       expect(await candidates(FAULTY)).toEqual(before);
     });
 
-    it('a session with `lap` rows but no candidates is left as it is: no_candidates', async () => {
+    it('a complete recording without its directory is recording_missing, without a sealed segment incomplete', async () => {
+      const before = await candidates(FAULTY);
+      const id = await admin
+        .insertInto('recording')
+        .values({ session_key: FAULTY, path: `${FAULTY}-0`, started_at: new Date(T0 - 1000), complete: true })
+        .returning('id')
+        .executeTakeFirstOrThrow();
+      expect(await faulty()).toBe(false);
+      expect(one()).toMatchObject({
+        recording: Number(id.id),
+        sources: {},
+        errors: { 'f1-live': 'recording_missing' },
+      });
+      mkdirSync(join(liveDir, `${FAULTY}-0`));
+      expect(await faulty()).toBe(false);
+      expect(one()).toMatchObject({ sources: {}, errors: { 'f1-live': 'incomplete' } });
+      expect(await candidates(FAULTY)).toEqual(before);
+    });
+
+    it('a `lap` row without its own candidate leaves the session as it is: stale_lap, files or not', async () => {
       const before = await laps(OLD);
-      expect(await fill({ db, log }, args([OLD]))).toBe(false);
-      expect(one()).toMatchObject({ session_key: OLD, level: 50, sources: {}, merge: 'no_candidates' });
-      expect(await laps(OLD)).toEqual(before);
       expect(before).toHaveLength(1);
+      expect(await fill({ db, log }, args([OLD]))).toBe(false);
+      expect(one()).toMatchObject({ session_key: OLD, level: 50, error: 'stale_lap' });
+      archiveFiles(OLD);
+      await complete(await record(OLD, `${OLD}-1`));
+      expect(await fill({ db, log }, args([OLD]))).toBe(false);
+      expect(one()).toMatchObject({ session_key: OLD, level: 50, error: 'stale_lap' });
+      expect(await laps(OLD)).toEqual(before);
+      expect(await candidates(OLD)).toEqual({});
+      expect(
+        await run(['fill', String(OLD)], { PATH: process.env.PATH, DATABASE_URL: testDb.urls.f1_ingest }, () => {}),
+      ).toBe(1);
     });
   });
 

@@ -11,9 +11,6 @@ export const chunks = <T>(rows: readonly T[]) =>
 const lock = (trx: Transaction<DB>, key: number) =>
   trx.selectFrom('session').select('type').where('session_key', '=', key).forUpdate().executeTakeFirstOrThrow();
 
-/** The merge counts, or `no_candidates` (only with `keepWithoutCandidates`): `lap` rows but no candidates, nothing changed. */
-export type Written = MergeCounts | 'no_candidates';
-
 /**
  * The one lap write path (P3b, A§7), inside the writer's transaction: lock the session row, replace this source's
  * candidates in lap_source, merge every source's candidates of the session and replace its `lap` rows with the result.
@@ -54,21 +51,35 @@ export async function storeCandidates(
 }
 
 /**
- * Merges the session's stored candidates again and replaces its `lap` rows. With `keepWithoutCandidates` (the `fill`
- * job's only) a session with `lap` rows but no candidate (an older image wrote `lap` only, A§7) is left unchanged and
- * gives `no_candidates`: an empty merge would delete those laps. Without it, an empty merge deletes them.
+ * `fill`'s guard (A§7): locks the session row and tells whether a `lap` row lacks its own candidate, a lap_source row
+ * of its (driver, lap, source). After any merge each row has one (its base), so only an image before P3b, which wrote
+ * `lap` only, leaves such a row, and a merge would lose it.
  */
-export function mergeSession(
-  trx: Transaction<DB>,
-  key: number,
-  opts: { keepWithoutCandidates: true },
-): Promise<Written>;
-export function mergeSession(trx: Transaction<DB>, key: number): Promise<MergeCounts>;
-export async function mergeSession(
-  trx: Transaction<DB>,
-  key: number,
-  opts?: { keepWithoutCandidates: true },
-): Promise<Written> {
+export async function staleLap(trx: Transaction<DB>, key: number): Promise<boolean> {
+  await lock(trx, key);
+  const row = await trx
+    .selectFrom('lap as l')
+    .select('l.lap_number')
+    .where('l.session_key', '=', key)
+    .where(({ not, exists, selectFrom }) =>
+      not(
+        exists(
+          selectFrom('lap_source as c')
+            .select('c.lap_number')
+            .whereRef('c.session_key', '=', 'l.session_key')
+            .whereRef('c.driver_number', '=', 'l.driver_number')
+            .whereRef('c.lap_number', '=', 'l.lap_number')
+            .whereRef('c.source', '=', 'l.source'),
+        ),
+      ),
+    )
+    .limit(1)
+    .executeTakeFirst();
+  return row !== undefined;
+}
+
+/** Merges the session's stored candidates again and replaces its `lap` rows; an empty merge deletes them. */
+export async function mergeSession(trx: Transaction<DB>, key: number): Promise<MergeCounts> {
   const { type } = await lock(trx, key); // a second lock in the same transaction is a no-op
 
   // pg gives a timestamptz as a Date; an ISO string keeps its ms (Date.parse of a Date would drop them).
@@ -84,12 +95,6 @@ export async function mergeSession(
       .orderBy('id')
       .execute()
   ).map((m) => ({ ...m, date: m.date === null ? null : m.date.toISOString() }));
-  if (
-    opts?.keepWithoutCandidates &&
-    candidates.length === 0 &&
-    (await trx.selectFrom('lap').select('lap_number').where('session_key', '=', key).limit(1).executeTakeFirst())
-  )
-    return 'no_candidates';
   const { rows, counts } = merge(candidates, raceControl, type);
 
   await trx.deleteFrom('lap').where('session_key', '=', key).execute();

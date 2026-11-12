@@ -184,12 +184,31 @@ describe('the lap merge (11388 through msw, f1_ingest login)', { timeout: 120_00
     expect(await perSource()).toEqual({ openf1: 62, 'f1-archive': 3 });
   });
 
-  it("a writer with no laps and no other candidates deletes the session's laps (no `no_candidates` guard)", async () => {
+  it("a writer with no laps and no other candidates deletes the session's laps (`stale_lap` is fill's guard only)", async () => {
     await db.transaction().execute((trx) => writeLaps(trx, KEY, 'f1-archive', []));
     expect(await laps()).toBe(62);
     const counts = await db.transaction().execute((trx) => writeLaps(trx, KEY, 'openf1', []));
     expect(counts).toMatchObject({ rows: 0 });
     expect(await laps()).toBe(0);
     expect(await perSource()).toEqual({});
+  });
+
+  it('race control is read with its ms: rulings within one second go by time, not by id', async () => {
+    // Inserted DELETED (.900) first, REINSTATED (.100) second: by time the reinstatement finds no deleted lap, so the
+    // lap stays deleted; with the ms dropped, id order would reinstate it.
+    const rc = (date: string, message: string) => ({ session_key: KEY, source: 'openf1', date, message });
+    await db
+      .insertInto('race_control')
+      .values(rc('2026-10-11T14:00:00.900Z', 'CAR 99 (XXX) TIME 1:30.000 DELETED - TRACK LIMITS AT TURN 1'))
+      .execute();
+    await db
+      .insertInto('race_control')
+      .values(rc('2026-10-11T14:00:00.100Z', 'CAR 99 (XXX) TIME 1:30.000 WILL BE REINSTATED'))
+      .execute();
+    const lap = { driver_number: 99, lap_number: 5, lap_ms: 90_000 } as Insertable<DB['lap']>;
+    await db.transaction().execute((trx) => writeLaps(trx, KEY, 'openf1', [lap]));
+    expect(await db.selectFrom('lap').select(['deleted']).where('session_key', '=', KEY).execute()).toEqual([
+      { deleted: true },
+    ]);
   });
 });
