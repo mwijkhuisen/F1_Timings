@@ -43,6 +43,19 @@ describe('run', () => {
     [['fill', '--all', '--live-dir', '/srv/f1/archive']], // the archive's default is not the live dir's
     [['fill', '--all', '--archive-dir', '/srv/f1/live']],
     [['fill', '--all', '--live-dir', '/home/x/F1_Timing/fixtures-private-evil/live']],
+    [['jolpica', '1949']],
+    [['jolpica', String(new Date().getUTCFullYear() + 1)]],
+    [['jolpica', '195O']],
+    [['jolpica', '01950']],
+    [['jolpica', '1950', 'x']],
+    [['jolpica', '--year', '1950']],
+    [['jolpica', '--dir']],
+    // --dir only where git never sees the dump (invariant 3)
+    [['jolpica', '--dir', '/tmp/x']],
+    [['jolpica', '--dir', join(import.meta.dirname, 'fixtures/jolpica')]],
+    [['jolpica', '--dir', '/srv/f1/archive']],
+    [['jolpica', '--dir', '/srv/f1/jolpica/../archive']],
+    [['jolpica', '--dir', '/home/x/F1_Timing/fixtures-private-evil/jolpica']],
   ])('%j is a usage error', async (argv) => {
     const lines: string[] = [];
     expect(await run(argv, {}, (l) => lines.push(l))).toBe(EXIT_USAGE);
@@ -69,6 +82,9 @@ describe('run', () => {
         '/home/x/fixtures-private/live',
       ],
     ],
+    [['jolpica']],
+    [['jolpica', '1950', '2017', String(new Date().getUTCFullYear()), '--dir', '/srv/f1/jolpica']],
+    [['jolpica', '--dir', '/home/x/F1_Timing/fixtures-private/jolpica/2026-10-27/csv']],
   ])('%j without a database setting is a config error', async (argv) => {
     const lines: string[] = [];
     expect(await run(argv, { DATABASE_URL: 'mysql://x/y' }, (l) => lines.push(l))).toBe(EXIT_CONFIG);

@@ -12,6 +12,7 @@ import { dbUrl, EXIT_CONFIG, runMigrate } from './db/migrate.ts';
 import { pingHealthchecks } from './healthchecks.ts';
 import { healthy, startHeartbeat, touch } from './heartbeat.ts';
 import { backfill, processSession, startIngest } from './ingest/ingest.ts';
+import { JOLPICA_DIR, jolpica } from './jolpica/job.ts';
 import { LIVE_DIR, startRecorder } from './live/recorder.ts';
 import { fill } from './merge/fill.ts';
 import { createClient, systemClock } from './openf1/client.ts';
@@ -29,6 +30,7 @@ export const ROLES = [
   'backfill',
   'archive',
   'fill',
+  'jolpica',
 ] as const;
 export type Role = (typeof ROLES)[number];
 
@@ -41,7 +43,8 @@ type Env = Readonly<Record<string, string | undefined>>;
 const USAGE =
   `usage: main.js <${ROLES.join('|')}> (refetch takes a session_key; ` +
   'archive <year 2018-2022> [<session_key>...] [--token-file <path>] [--dir <path>]; ' +
-  'fill <session_key>...|--all [--archive-dir <path>] [--live-dir <path>])';
+  'fill <session_key>...|--all [--archive-dir <path>] [--live-dir <path>]; ' +
+  'jolpica [<year 1950->...] [--dir <path>])';
 
 /**
  * Resolves with the exit code. `apiPort` is a test seam only (not configurable in production: Caddy proxies to api:8080).
@@ -60,6 +63,7 @@ export async function run(
   if (!isRole(role)) return usage();
   if (role === 'archive') return runArchive(rest, env, log);
   if (role === 'fill') return runFill(rest, env, log);
+  if (role === 'jolpica') return runJolpica(rest, env, log);
   if (rest.length !== (role === 'refetch' ? 1 : 0) || (role === 'refetch' && !/^\d{1,9}$/.test(rest[0] ?? ''))) {
     return usage();
   }
@@ -201,6 +205,48 @@ function parseFill(argv: readonly string[]) {
   const [archiveDir, liveDir] = [values['archive-dir'], values['live-dir']];
   if (!privateDir(archiveDir, ARCHIVE_DIR) || !privateDir(liveDir, LIVE_DIR)) return undefined;
   return { keys: values.all ? ('all' as const) : positionals.map(Number), archiveDir, liveDir };
+}
+
+/** The jolpica job (P3c, A§7): the Jolpica-F1 CSV dump's 1950–2017 rows, as f1_ingest. No network. */
+async function runJolpica(argv: readonly string[], env: Env, log: (line: string) => void): Promise<number> {
+  let parsed: ReturnType<typeof parseJolpica>;
+  try {
+    parsed = parseJolpica(argv);
+  } catch {
+    parsed = undefined;
+  }
+  if (parsed === undefined) {
+    log(USAGE);
+    return EXIT_USAGE;
+  }
+  const url = dbUrl('f1_ingest', env);
+  if (typeof url === 'string') {
+    log(`jolpica: ${url}`);
+    return EXIT_CONFIG;
+  }
+  const logger = pino({ base: { role: 'jolpica' } });
+  const db = createDb(url, (err) => logger.error({ cause: codeOf(err) }, 'database pool error'));
+  try {
+    return (await jolpica({ db, log: logger }, parsed)) ? 0 : 1;
+  } catch (err) {
+    logger.error({ cause: codeOf(err) }, 'jolpica failed');
+    return 1;
+  } finally {
+    await db.destroy();
+  }
+}
+
+/** `[<year>…] [--dir <path>]`: years 1950 to this year, or undefined; parseArgs throws on an unknown flag. */
+function parseJolpica(argv: readonly string[]) {
+  const { values, positionals } = parseArgs({
+    args: [...argv],
+    allowPositionals: true,
+    options: { dir: { type: 'string', default: JOLPICA_DIR } },
+  });
+  const now = new Date().getUTCFullYear();
+  const ok = (y: string) => /^\d{4}$/.test(y) && Number(y) >= 1950 && Number(y) <= now;
+  if (!positionals.every(ok) || !privateDir(values.dir, JOLPICA_DIR)) return undefined;
+  return { years: [...new Set(positionals.map(Number))], dir: values.dir };
 }
 
 /** The recorder daemon (A§11.2), as f1_ingest. Resolves after SIGTERM/SIGINT, with the running recording closed. */
