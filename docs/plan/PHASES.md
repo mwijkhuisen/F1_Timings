@@ -261,7 +261,7 @@ Remaining 2026 weekends (OpenF1 schedule): Austin (race 25 Oct) · Mexico City 3
   - **H13, old-season views:** the views hide per-lap columns a session has no data for, and add a panel with the session's bests (best sectors and top speeds).
   - **H14, measure first:** the first full archive download (all topics, telemetry included) runs on the owner's machine for one season and measures size, time and RSS. The caps and the VM run come after.
   - **H15, telemetry:** it gets its own phase (P7), after P3e.
-  - **H16, order:** the probes first (P3d), then P3e, P3c, P3f, P3b and P3g. P7 comes after P3e.
+  - **H16, order:** the probes first (P3d), then P3e, P3c, P3f, P3b and P3g. P7 comes after P3e (owner decision D1, 2026-11-12: the P3b merge core comes before P3c; P3b is two PRs).
 - **Related issues:**
   - #96 (pit-lane topics, its topic check) and #126 (2018 compound names) take facts from P3d;
   - #122 is P7;
@@ -321,6 +321,7 @@ Remaining 2026 weekends (OpenF1 schedule): Austin (race 25 Oct) · Mexico City 3
   - an owner-run `jolpica` import from the CSV dump (`api.jolpi.ca/data/dumps/download/`), never from CI. The dump is kept under `/srv/f1/jolpica` and never committed (CC BY-NC-SA 4.0, ADR-0009). Rows get `source = 'jolpica'`.
   - the derived keys (P3 decisions) and the A§7 changes: the `source` CHECK, and `date_start` for old sessions, which the dump may give only as a date ([U]).
   - from 2018 on, Jolpica is the third source (H6): it cross-checks and fills what the archive and FIA leave empty.
+  - its lap rows go through `writeLaps` (P3b), as the `jolpica` candidates; it appends `jolpica` to the merge `ORDER` with the CHECK migration.
 - **Acceptance:**
   - [CI] the importer on a synthetic dump: the keys, a race with laps, a pit stop, a results-only 1950 race and a qualifying with Q1–Q3.
   - [box] counts per season, 1950–2017, against the dump's own counts. The laps for every 1996–2017 race the dump lists. 10 laps of a 2017 race spot-checked against its FIA PDF.
@@ -331,6 +332,7 @@ Remaining 2026 weekends (OpenF1 schedule): Austin (race 25 Oct) · Mexico City 3
 - **Scope in:**
   - an owner-run `fia` job: it walks the `fia.com/f1-archives` event pages per season, downloads the timing PDFs at a polite rate, keeps them under `/srv/f1/fia/<year>/<event>/`, parses them and writes rows with `source = 'fia'`. It is resumable like the archive job.
   - parsers for the history chart and lap analysis (lap times), best sectors, the speed trap and maximum speeds, the pit stop summary, the classification and the lap chart. Where the Race Sector Analysis exists (seen from 2023), it also gives per-lap sectors.
+  - its lap rows go through `writeLaps` (P3b), as the `fia` candidates; it appends `fia` to the merge `ORDER` with the CHECK migration.
   - a table for the per-session bests (best sectors and top speeds), which has no home in `lap`.
   - a PDF text library, with an ADR-lite line, or a hand-rolled reader. Decided in the phase.
 - **Acceptance:**
@@ -340,13 +342,25 @@ Remaining 2026 weekends (OpenF1 schedule): Austin (race 25 Oct) · Mexico City 3
 ### P3b: Combine the sources (owner, 2026-11-10)
 
 - **Goal:** one row per lap from every source, by the H6 order, with the source per value (H7, H8).
+- **Two PRs** (owner decision D1, 2026-11-12; issue #17, PR 1 says "Part of #17"):
+  - **PR 1:** the store, the marking, the merge on every lap write, the OpenF1, archive and recording tiers, the `fill` job and the Singapore [box].
+  - **PR 2:** after P3d, P3c and P3f. It adds their tiers (`fia`, `jolpica`), the archive's other files where P3d found they help, and the 2018 [box]. P3c and P3f write their 2018+ laps through `writeLaps`.
+- **Owner decisions** (2026-11-12):
+  - **D2, storage:** a candidate table `lap_source` per (session, driver, lap, source), each writer replaces only its own rows and `lap` is rebuilt per session; `lap.filled` is `{column: source}`.
+  - **D3, conflicts:** a higher value always stays; a lower source fills nothing on a lap where a lap or sector time both have differs by more than 1 ms; a lap the higher source lacks is added from the next source.
+  - **D4, recordings:** they come after the archive (`openf1` > `f1-archive` > `f1-live`, then `fia` and `jolpica` in PR 2), and only a session's `complete` recording fills (#95).
 - **Scope in:**
-  - a migration for the per-value source, so the view can mark a filled cell. Its shape (for example a `filled` map per row) is decided in the phase.
-  - the merge for 2018 on: OpenF1 or the archive first, then the archive's other files where P3d found they help, then FIA, then Jolpica. Every difference is logged as counts per session and field.
-  - recordings fill OpenF1 nulls too, as first planned.
+  - a migration for the per-value source, so the view can mark a filled cell: `lap_source` and `lap.filled` (A§7).
+  - the merge for 2018 on: OpenF1 or the archive first, then the archive's other files where P3d found they help (PR 2), then FIA, then Jolpica (PR 2). Every difference is logged as counts per session and field.
+  - recordings fill OpenF1 nulls too, as first planned (complete ones only, D4).
+  - PR 1: the owner-run `fill` job (A§4, A§14.2), which builds the archive and recording candidates from local files and merges again.
+- **Out of PR 1:**
+  - `stint`, `pit` and `result` are not merged (the scope is per lap).
+  - No API change: #132 exposes `filled`.
+  - No automatic fill: the owner runs `fill`. A timer can come when P3e downloads the 2023+ files.
 - **Acceptance:**
   - [CI] the order and the marking per value on fixtures where the sources disagree.
-  - [box] the Singapore 2026 race has fewer `—` cells than before, and so does each 2018 session P3d found broken.
+  - [box] the Singapore 2026 race has fewer `—` cells than before (PR 1), and so does each 2018 session P3d found broken (PR 2).
 
 ### P3g: Old-season views (owner, 2026-11-10)
 
