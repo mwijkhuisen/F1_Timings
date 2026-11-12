@@ -183,6 +183,36 @@ services:
     healthcheck:
       disable: true
 
+  # A job (A§4, A§7, P3c): f1-update never runs it and it has no timer; the owner runs
+  # `compose --profile jobs run --rm jolpica jolpica [<year>...]` to load the Jolpica dump (1950-2017) into the
+  # database. f1-db only: no network out and no token. It reads the dump from /srv/f1/jolpica, read-only, and
+  # writes the database as f1_ingest. It never mounts /srv/f1/state.
+  jolpica:
+    <<: *hardening
+    image: ${F1_SERVER_IMAGE:?}
+    command: [jolpica]
+    profiles: [jobs]
+    restart: "no"
+    user: "62532:62532"
+    group_add: ["62003"]
+    secrets: [db_f1_ingest]
+    networks: [f1-db]
+    depends_on:
+      db:
+        condition: service_healthy
+    volumes:
+      - type: bind
+        source: /srv/f1/jolpica
+        target: /srv/f1/jolpica
+        read_only: true
+        bind:
+          create_host_path: false
+    mem_limit: 768m
+    cpus: 1.0
+    pids_limit: 64
+    healthcheck:
+      disable: true
+
   # The API (A§10) on :8080, never published: caddy reaches it on f1-edge. Its only way out is
   # f1-api-egress: tcp/443 to Cloudflare's ranges for the Access certs (nftables, A§14.3).
   # It reads the recordings for playback (A§11.3): /srv/f1/live, read-only.

@@ -3,6 +3,7 @@ Third-party data on this site
 
 The rain map on the Weather tabs uses data from three sources. Each keeps its own licence;
 the licence of this site's code does not apply to them (docs/adr/0008-map-and-weather-data-licences.md).
+The history pages use Jolpica-F1 data (section 4; docs/adr/0009-history-sources-and-licences.md).
 
 
 1. Circuit outlines: bacinger/f1-circuits (MIT)
@@ -62,3 +63,14 @@ heavy). It is modelled, not radar.
 For Silverstone the model data includes UK Met Office data, under the Creative Commons
 Attribution-ShareAlike 4.0 International licence (CC BY-SA 4.0):
 https://creativecommons.org/licenses/by-sa/4.0/
+
+
+4. History: Jolpica-F1 (CC BY-NC-SA 4.0)
+----------------------------------------
+
+Data: Jolpica-F1 (Ergast), CC BY-NC-SA 4.0
+
+Terms: https://github.com/jolpica/jolpica-f1/blob/main/TERMS.md
+Licence: https://creativecommons.org/licenses/by-nc-sa/4.0/
+
+This site is private and non-commercial, and it publishes no adapted database.
