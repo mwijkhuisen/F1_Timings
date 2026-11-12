@@ -1,9 +1,19 @@
-import { cpSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import {
+  cpSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  symlinkSync,
+  truncateSync,
+  writeFileSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { Kysely } from 'kysely';
 import pino from 'pino';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { MAX_SESSION_BYTES } from '../src/archive/files.ts';
 import { createDb, type DB } from '../src/db/db.ts';
 import { openRecording } from '../src/live/recording.ts';
 import { run } from '../src/main.ts';
@@ -51,12 +61,14 @@ const candidates = async (key: number) => {
   return n;
 };
 
-/** `<archiveDir>/<key>/`: the synthetic race streams with the session Key changed. */
-function archiveFiles(key: number) {
+/** `<archiveDir>/<key>/`: the synthetic race streams with the session Key changed (unless `sessionKey` is false). */
+function archiveFiles(key: number, sessionKey = true) {
   const dir = join(archiveDir, String(key));
+  rmSync(dir, { recursive: true, force: true });
   cpSync(join(FIXTURES, 'archive/race'), dir, { recursive: true });
   const info = join(dir, 'SessionInfo.jsonStream');
-  writeFileSync(info, readFileSync(info, 'utf8').replace('"Key":9102', `"Key":${key}`));
+  if (sessionKey) writeFileSync(info, readFileSync(info, 'utf8').replace('"Key":9102', `"Key":${key}`));
+  return dir;
 }
 
 /** A recording of the synthetic practice feed as session `key`, sealed (gzip) through the real recorder. */
@@ -191,7 +203,12 @@ describe('the fill job (f1_ingest login, synthetic files)', { timeout: 120_000 }
     const before = await candidates(BARE);
     await complete(await record(BARE, `${BARE}-1`, OPENF1));
     expect(await fill({ db, log }, args([BARE]))).toBe(false);
-    expect(one()).toMatchObject({ session_key: BARE, error: 'key_mismatch' });
+    expect(one()).toMatchObject({
+      session_key: BARE,
+      level: 50,
+      errors: { 'f1-live': 'key_mismatch' },
+      merge: { rows: 1 },
+    });
     expect(await candidates(BARE)).toEqual(before);
   });
 
@@ -210,5 +227,112 @@ describe('the fill job (f1_ingest login, synthetic files)', { timeout: 120_000 }
     const all = lines.splice(0);
     expect(all.filter((l) => l.msg === 'fill').map((l) => l.session_key)).toEqual([ARCHIVED, BARE, OPENF1]);
     expect(all.at(-1)).toMatchObject({ msg: 'fill_done', sessions: 3, failed: 1 });
+  });
+
+  describe('per source', () => {
+    const FAULTY = 9704;
+    const OLD = 9705;
+    let dir: string;
+    beforeAll(async () => {
+      const session = (session_key: number) => ({
+        session_key,
+        source: 'openf1',
+        meeting_key: M,
+        name: 'Race',
+        type: 'Race',
+        date_start: new Date(T0 - 86_400_000),
+        date_end: new Date(T0 - 82_800_000),
+      });
+      await admin
+        .insertInto('session')
+        .values([session(FAULTY), session(OLD)])
+        .execute();
+      await db.transaction().execute(async (trx) => {
+        const lap = { driver_number: 40, lap_number: 1, lap_ms: 100_000 } as never;
+        await writeLaps(trx, FAULTY, 'openf1', [lap]);
+        await writeLaps(trx, FAULTY, 'f1-archive', [lap]);
+      });
+      // A `lap` row without candidates, as an image before P3b leaves it.
+      await admin
+        .insertInto('lap')
+        .values({ session_key: OLD, source: 'openf1', driver_number: 40, lap_number: 1, lap_ms: 100_000 })
+        .execute();
+    });
+    const faulty = (maxBytes = MAX_SESSION_BYTES) => fill({ db, log, maxBytes }, args([FAULTY]));
+
+    it('an archive without SessionInfo or TimingData, or without a t0, is absent: the stored candidates stay', async () => {
+      for (const gone of [['SessionInfo'], ['TimingData'], ['Heartbeat', 'SessionData']]) {
+        dir = archiveFiles(FAULTY);
+        for (const t of gone) rmSync(join(dir, `${t}.jsonStream`));
+        expect(await faulty()).toBe(true);
+        expect(one()).toMatchObject({ session_key: FAULTY, sources: {}, errors: {}, merge: { rows: 1 } });
+        expect(await candidates(FAULTY)).toEqual({ openf1: 1, 'f1-archive': 1 });
+      }
+    });
+
+    it('an archive on the Heartbeat t0 is skipped: t0_heartbeat', async () => {
+      dir = archiveFiles(FAULTY);
+      rmSync(join(dir, 'SessionData.jsonStream'));
+      expect(await faulty()).toBe(false);
+      expect(one()).toMatchObject({ level: 50, sources: {}, errors: { 'f1-archive': 't0_heartbeat' } });
+      expect(await candidates(FAULTY)).toEqual({ openf1: 1, 'f1-archive': 1 });
+    });
+
+    it('only the parsed topics count towards the cap, each a regular file', async () => {
+      dir = archiveFiles(FAULTY);
+      writeFileSync(join(dir, 'Position.z.jsonStream'), '');
+      truncateSync(join(dir, 'Position.z.jsonStream'), MAX_SESSION_BYTES + 1); // sparse: no disk use
+      expect(await faulty()).toBe(true);
+      expect(one().sources).toEqual({ 'f1-archive': expect.any(Number) });
+      const before = await candidates(FAULTY);
+
+      truncateSync(join(dir, 'WeatherData.jsonStream'), MAX_SESSION_BYTES + 1);
+      expect(await faulty()).toBe(false);
+      expect(one()).toMatchObject({ sources: {}, errors: { 'f1-archive': 'too_large' } });
+
+      rmSync(join(dir, 'WeatherData.jsonStream'));
+      symlinkSync(join(FIXTURES, 'archive/race/WeatherData.jsonStream'), join(dir, 'WeatherData.jsonStream'));
+      expect(await faulty()).toBe(false);
+      expect(one()).toMatchObject({ sources: {}, errors: { 'f1-archive': 'not_file' } });
+      expect(await candidates(FAULTY)).toEqual(before);
+    });
+
+    it('an archive of another session fails that source only: the recording is stored and the session merged', async () => {
+      const before = await candidates(FAULTY);
+      archiveFiles(FAULTY, false);
+      const id = await record(FAULTY, `${FAULTY}-1`);
+      await complete(id);
+      expect(await faulty()).toBe(false);
+      expect(one()).toMatchObject({
+        level: 50,
+        recording: Number(id),
+        sources: { 'f1-live': expect.any(Number) },
+        errors: { 'f1-archive': 'key_mismatch' },
+      });
+      expect(await candidates(FAULTY)).toEqual({ ...before, 'f1-live': expect.any(Number) });
+      expect((await laps(FAULTY)).some((r) => r.source === 'f1-live')).toBe(true);
+    });
+
+    it('a recording past the cap is too_large', async () => {
+      rmSync(join(archiveDir, String(FAULTY)), { recursive: true });
+      const before = await candidates(FAULTY);
+      expect(await faulty(1_000)).toBe(false);
+      expect(one()).toMatchObject({ sources: {}, errors: { 'f1-live': 'too_large' } });
+      expect(await candidates(FAULTY)).toEqual(before);
+    });
+
+    it('a session with `lap` rows but no candidates is left as it is: no_candidates', async () => {
+      const before = await laps(OLD);
+      expect(await fill({ db, log }, args([OLD]))).toBe(false);
+      expect(one()).toMatchObject({ session_key: OLD, level: 50, sources: {}, merge: 'no_candidates' });
+      expect(await laps(OLD)).toEqual(before);
+      expect(before).toHaveLength(1);
+    });
+  });
+
+  it('the fill role: exit 0, and 1 for an unknown session', async () => {
+    const env = { PATH: process.env.PATH, DATABASE_URL: testDb.urls.f1_ingest };
+    expect(await run(['fill', String(ARCHIVED)], env, () => {})).toBe(0);
+    expect(await run(['fill', '1'], env, () => {})).toBe(1);
   });
 });

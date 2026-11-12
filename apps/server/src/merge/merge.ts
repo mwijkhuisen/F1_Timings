@@ -49,7 +49,11 @@ export type MergeCounts = {
   rules: RuleCounts;
 };
 
-const rank = (c: Candidate) => ORDER.indexOf(c.source as Source);
+const rank = (c: Candidate) => {
+  const i = ORDER.indexOf(c.source as Source);
+  if (i < 0) throw new Error('a lap source outside ORDER'); // the CHECK on lap_source.source and ORDER disagree
+  return i;
+};
 const bump = <K extends string>(o: Partial<Record<K, number>>, k: K) => {
   o[k] = (o[k] ?? 0) + 1;
 };
@@ -68,9 +72,9 @@ function same(column: Column, a: unknown, b: unknown): boolean {
  * The merge (H6): per (driver, lap), the highest-ranked candidate is the base and gives the row its `source`. Each
  * lower candidate in order fills the row's null values, unless a lap or sector time both have differs by more than
  * 1 ms (a conflict: it fills nothing). Then the A§9 rules run on the merged rows: `markPitIn`, and `markLaps` on the
- * session's race control for the deletions only. Each row keeps its merged `quali_phase`, because the archive's
- * phases come from SessionData boundaries that `race_control` does not store. The same candidates in any order give
- * the same rows, sorted by driver, then lap.
+ * session's race control. Each row keeps a merged `quali_phase`, because the archive's phases come from SessionData
+ * boundaries that `race_control` does not store; only where it is null does the race control's phase count. The same
+ * candidates in any order give the same rows, sorted by driver, then lap.
  */
 export function merge(
   candidates: readonly Candidate[],
@@ -80,7 +84,7 @@ export function merge(
   const sorted = candidates.toSorted(
     (a, b) => a.driver_number - b.driver_number || a.lap_number - b.lap_number || rank(a) - rank(b),
   );
-  const top = Math.min(...sorted.map(rank));
+  const top = sorted.reduce<number>((min, c) => Math.min(min, rank(c)), ORDER.length);
   const added: MergeCounts['added'] = {};
   const filled: PerColumn = {};
   const diffs: PerColumn = {};
@@ -110,6 +114,6 @@ export function merge(
   markPitIn(rows);
   const phases = rows.map((r) => r.quali_phase);
   const rules = markLaps(rows, raceControl, type);
-  for (const [i, r] of rows.entries()) r.quali_phase = phases[i] ?? null;
+  for (const [i, r] of rows.entries()) r.quali_phase = phases[i] ?? r.quali_phase;
   return { rows, counts: { rows: rows.length, added, filled, diffs, conflicts, rules } };
 }

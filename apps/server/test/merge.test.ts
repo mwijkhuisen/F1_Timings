@@ -176,7 +176,7 @@ describe('merge', () => {
     ]);
   });
 
-  it('quali_phase stays the merged value, though the race control would give another', () => {
+  it('quali_phase keeps a merged value; only a null one comes from the race control', () => {
     const phase1 = [rc(null, '2026-10-24T21:00:00+00:00', 1)];
     const { rows } = merge(
       [
@@ -184,6 +184,9 @@ describe('merge', () => {
         lap('openf1', 1, 2, { date_start: '2026-10-24T21:07:00+00:00' }),
         lap('f1-archive', 1, 2, { quali_phase: 3 }),
         lap('openf1', 1, 3, { date_start: '2026-10-24T21:09:00+00:00' }),
+        lap('f1-live', 1, 4, { date_start: '2026-10-24T21:11:00+00:00' }), // a recording-only lap
+        lap('openf1', 1, 5),
+        lap('f1-archive', 1, 5, { date_start: '2026-10-24T21:13:00+00:00' }), // its date_start comes from the archive
       ],
       phase1,
       'Qualifying',
@@ -191,7 +194,9 @@ describe('merge', () => {
     expect(rows.map((r) => [r.quali_phase, r.filled])).toEqual([
       [2, {}],
       [3, { quali_phase: 'f1-archive' }],
-      [null, {}],
+      [1, {}],
+      [1, {}],
+      [1, { date_start: 'f1-archive' }],
     ]);
   });
 

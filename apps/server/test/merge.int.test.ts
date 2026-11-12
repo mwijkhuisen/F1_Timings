@@ -183,4 +183,13 @@ describe('the lap merge (11388 through msw, f1_ingest login)', { timeout: 120_00
     expect(await laps()).toBe(63);
     expect(await perSource()).toEqual({ openf1: 62, 'f1-archive': 3 });
   });
+
+  it("a writer with no laps and no other candidates deletes the session's laps (no `no_candidates` guard)", async () => {
+    await db.transaction().execute((trx) => writeLaps(trx, KEY, 'f1-archive', []));
+    expect(await laps()).toBe(62);
+    const counts = await db.transaction().execute((trx) => writeLaps(trx, KEY, 'openf1', []));
+    expect(counts).toMatchObject({ rows: 0 });
+    expect(await laps()).toBe(0);
+    expect(await perSource()).toEqual({});
+  });
 });

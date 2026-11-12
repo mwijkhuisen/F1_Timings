@@ -196,7 +196,8 @@ function parseFill(argv: readonly string[]) {
       'live-dir': { type: 'string', default: LIVE_DIR },
     },
   });
-  if (values.all === positionals.length > 0 || !positionals.every((k) => /^\d{1,9}$/.test(k))) return undefined;
+  const keys = values.all ? positionals.length === 0 : positionals.length > 0; // keys xor --all
+  if (!keys || !positionals.every((k) => /^\d{1,9}$/.test(k))) return undefined;
   const [archiveDir, liveDir] = [values['archive-dir'], values['live-dir']];
   if (!privateDir(archiveDir, ARCHIVE_DIR) || !privateDir(liveDir, LIVE_DIR)) return undefined;
   return { keys: values.all ? ('all' as const) : positionals.map(Number), archiveDir, liveDir };
