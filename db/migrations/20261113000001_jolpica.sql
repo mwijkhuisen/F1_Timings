@@ -3,8 +3,9 @@
 -- only their source CHECK learns 'jolpica'; stint, race_control, raw_response, weather and recording keep three values.
 -- No new grants: f1_ingest already writes all seven. result.grid is the race's starting grid position from Jolpica
 -- (0 = pit-lane start); OpenF1 and the archive leave it null.
--- Rollback: an image rollback past P3c needs this down migration first, because the previous image's merge rank()
--- (apps/server/src/merge/merge.ts) throws on a source outside its ORDER.
+-- Rollback: an image rollback runs no down migration (the schema is expand-only), but one past P3c after a jolpica run
+-- first deletes the jolpica lap candidates (runbook update.md): the previous image's merge rank()
+-- (apps/server/src/merge/merge.ts) throws on a source outside its ORDER. Every other jolpica row stays readable.
 
 ALTER TABLE meeting
   DROP CONSTRAINT meeting_source_check,

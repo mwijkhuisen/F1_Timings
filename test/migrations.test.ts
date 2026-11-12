@@ -13,7 +13,7 @@ const PINNED: Record<string, string> = {
   '20261109000001_weather.sql': '21c802b2bbcc2c1fcb7bbd96c0695748409a4886e43cea8b14637a7cc7832c25',
   '20261109000002_rain.sql': '1902d11ce8b5005a4d2f8208808d98e985a6edfc711e55939bb900a5a631dc23',
   '20261112000001_lap_source.sql': 'a460be81918e7f6e2763dc71e8e4ec7a7e72515918323c630e079e374044c9f2',
-  '20261113000001_jolpica.sql': '8133df6bcb296f55708ac6585fe9b79b419e7691f5c9ba5c8174d81a91e6d8fb',
+  '20261113000001_jolpica.sql': '73805a09329315ac72ced04ec3be90456919f94ba5bbe06cac84b336ba760e39',
 };
 
 it('every migration matches its pinned sha256, and no file is added or removed', () => {

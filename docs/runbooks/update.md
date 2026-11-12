@@ -240,17 +240,14 @@ sudo docker compose -p f1 -f /etc/f1/compose.yaml --env-file /srv/f1/state/curre
    It logs one `jolpica` line per session and a `jolpica_done` line, counts and codes only. Check that `jolpica_done` has `failed` 0 and no `error`.
 4. **Exit codes:** 0 when the dump was read and no session failed. 1 when it was not or one failed: `bad_dump` (in `jolpica_done`, with `code` and `file`: a missing or renamed file, a changed header, a file over the caps), `busy` (another run holds the lock: wait for it), and per session `bad_key` (a round number outside 1–99), `not_jolpica` (the meeting or session key already exists with another source: nothing is written for it) or `db`. 64 for a usage error (a year that is not four digits or outside 1950 to this year, an unknown flag, or `--dir` other than `/srv/f1/jolpica` or a path with a `fixtures-private` segment). 78 without the database secret.
 5. **Rerun** after a newer dump: every session is replaced (idempotent), so a second run over the same dump changes nothing. A 2018+ round that has no session in the database yet is counted and skipped (`no_match`); run it again after the archive or OpenF1 has that session.
-6. **Roll back** the data and the schema (A§7: an image older than P3c throws in the merge on any session that holds jolpica candidates). Stop the timer first, so `:main` does not deploy again, then run the migration's `down` part and forget its version (`<repo>` is the owner's checkout of the repository). It deletes every `jolpica` row, drops `result.grid` and restores the three-value CHECKs, in one transaction. Then roll the image back (`Manual rollback` above):
+6. **Before an image rollback past P3c** (only after a `jolpica` run): the schema stays, as for every rollback (expand-only, above), but an image older than P3c throws in the merge on any session that holds jolpica candidates (A§7, "Rollback"). Delete them first, then roll the image back (`Manual rollback` above):
 
    ```bash
-   sudo systemctl stop f1-update.timer
-   { sed -n '/^-- migrate:down/,$p' <repo>/db/migrations/20261113000001_jolpica.sql
-     echo "DELETE FROM schema_migrations WHERE version = '20261113000001';"; } |
-     sudo docker compose -p f1 -f /etc/f1/compose.yaml --env-file /srv/f1/state/current.env exec -T db \
-       psql -U postgres -d f1 -1 -v ON_ERROR_STOP=1
+   sudo docker compose -p f1 -f /etc/f1/compose.yaml --env-file /srv/f1/state/current.env exec -T db \
+     psql -U postgres -d f1 -c "DELETE FROM lap_source WHERE source = 'jolpica'"
    ```
 
-   The next deploy of a P3c image runs `migrate`, which applies the migration again; run the job again after it.
+   The 1950–2017 sessions stay readable. The old image's `fill` leaves them unchanged and counts them as `stale_lap`, and its ingest never touches them. Its next refetch of a 2018+ session drops the jolpica fills from that session's laps. After rolling forward again, run the job again (step 3).
 7. **The dump stays on the VM.** It is CC BY-NC-SA 4.0 (ADR-0009): never copy it anywhere else, never commit it, and never put it in an image, a log or an issue. The site's attribution line (`third-party-licences.txt`, section 4) already names it.
 
 ## Check a recording [box]
