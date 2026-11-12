@@ -1,0 +1,8 @@
+id,api_id,circuit_id,date,is_cancelled,name,number,race_number,season_id,wikipedia
+1,r1,1,1950-05-13,f,Alpha Grand Prix,1,1,1,
+2,r2,2,1994-05-01,f,Bravo Grand Prix,3,3,2,
+3,r3,1,1996-04-07,f,Charlie Grand Prix,2,2,3,
+4,r4,2,2005-03-06,f,Delta Grand Prix,1,1,4,
+5,r5,1,2010-04-04,f,Echo Grand Prix,4,4,5,
+6,r6,2,2014-05-11,f,Foxtrot Grand Prix,5,5,6,
+7,r7,1,2018-03-25,f,Golf Grand Prix,1,1,7,

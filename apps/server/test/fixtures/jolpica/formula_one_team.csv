@@ -1,0 +1,4 @@
+id,api_id,base_team_id,country_code,name,nationality,primary_color,reference,wikipedia
+1,team_one,,XAA,Team One,Testish,,team_one,
+2,team_two,,XBB,Team Two,Testish,#12AB34,team_two,
+3,team_three,,XCC,Team Three,Testish,red,team_three,
