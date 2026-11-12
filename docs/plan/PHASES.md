@@ -343,8 +343,9 @@ Remaining 2026 weekends (OpenF1 schedule): Austin (race 25 Oct) · Mexico City 3
 
 - **Goal:** one row per lap from every source, by the H6 order, with the source per value (H7, H8).
 - **Two PRs** (owner decision D1, 2026-11-12; issue #17, PR 1 says "Part of #17"):
-  - **PR 1:** the store, the marking, the merge on every lap write, the OpenF1, archive and recording tiers, the `fill` job and the Singapore [box].
-  - **PR 2:** after P3d, P3c and P3f. It adds their tiers (`fia`, `jolpica`), the archive's other files where P3d found they help, and the 2018 [box]. P3c and P3f write their 2018+ laps through `writeLaps`.
+  - **PR 1:** the store, the marking, the merge on every lap write, the OpenF1, archive and recording tiers, the `fill` job, and the [box] on the Mexico race 11404.
+  - **PR 2:** after P3d, P3c and P3f. It adds their tiers (`fia`, `jolpica`), the archive's other files where P3d found they help, the Singapore [box] and the 2018 [box]. P3c and P3f write their 2018+ laps through `writeLaps`.
+  - **The Singapore [box] moves to PR 2** (owner decision, 2026-11-12). The archive fills none of the Singapore 2026 race's (11388) `—` cells: our parser follows OpenF1's rules, so both build the same laps from the same feed (A§7, [box] P3b PR 1). FIA and Jolpica lap times can fill its empty lap times. Its empty speed traps are a follow-up issue.
 - **Owner decisions** (2026-11-12):
   - **D2, storage:** a candidate table `lap_source` per (session, driver, lap, source), each writer replaces only its own rows and `lap` is rebuilt per session; `lap.filled` is `{column: source}`.
   - **D3, conflicts:** a higher value always stays; a lower source fills nothing on a lap where a lap or sector time both have differs by more than 1 ms; a lap the higher source lacks is added from the next source.
@@ -360,7 +361,7 @@ Remaining 2026 weekends (OpenF1 schedule): Austin (race 25 Oct) · Mexico City 3
   - No automatic fill: the owner runs `fill`. A timer can come when P3e downloads the 2023+ files.
 - **Acceptance:**
   - [CI] the order and the marking per value on fixtures where the sources disagree.
-  - [box] the Singapore 2026 race has fewer `—` cells than before (PR 1), and so does each 2018 session P3d found broken (PR 2).
+  - [box] a 2023+ session with an OpenF1 live-ingest hole has fewer `—` cells than before, and they survive a refetch (PR 1: the Mexico race 11404). The Singapore 2026 race has fewer `—` cells than before, and so does each 2018 session P3d found broken (PR 2).
 
 ### P3g: Old-season views (owner, 2026-11-10)
 
