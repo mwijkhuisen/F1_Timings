@@ -214,6 +214,16 @@ describe('deleted laps', () => {
     });
     expect(parseRuling('GREEN LIGHT - PIT EXIT OPEN')).toBeUndefined();
   });
+
+  // Seen in the F1 archive on the VM (2026-11-12): a CORRECTION prefix and a doubled driver tag.
+  it('takes a CORRECTION prefix and a doubled driver tag as the plain form', () => {
+    const plain = { kind: 'deleted', car: 18, time_ms: 66_692, lap: null, reason: 'TRACK LIMITS AT TURN 9' };
+    expect(parseRuling('CORRECTION - CAR 18 (STR) TIME 1:06.692 DELETED - TRACK LIMITS AT TURN 9')).toEqual(plain);
+    expect(parseRuling('CAR 18 (STR) (STR) TIME 1:06.692 DELETED - TRACK LIMITS AT TURN 9')).toEqual(plain);
+    // Still unparsed: three tags, or a prefix of any other kind.
+    expect(parseRuling('CAR 18 (STR) (STR) (STR) TIME 1:06.692 DELETED - TRACK LIMITS AT TURN 9')).toBe('unparsed');
+    expect(parseRuling('NOTE - CAR 18 (STR) TIME 1:06.692 DELETED - TRACK LIMITS AT TURN 9')).toBe('unparsed');
+  });
 });
 
 // [U] lap linkage (A§9, owner 2026-10-26): in a race or sprint `LAP n` is the driver's lap n,
