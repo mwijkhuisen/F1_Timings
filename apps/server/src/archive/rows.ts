@@ -1,6 +1,7 @@
 import { view, weatherRow } from '@f1/contracts';
 import type { Insertable } from 'kysely';
 import type { DB } from '../db/db.ts';
+import { qualifyingParts } from '../live/laps.ts';
 import { createFeed } from '../live/merge.ts';
 import { type FeedEvent, isObj, type T0From, utc } from '../live/read.ts';
 import type { Result } from '../openf1/schemas.ts';
@@ -184,12 +185,7 @@ export function archiveRows(
   if (info?.Key !== key || rows === undefined) return { ok: false, error: 'key_mismatch' };
 
   // The qualifying part in force from each change on (SessionData Series, or its rebuild), in time order.
-  const phases: { at: number; part: number }[] = [];
-  const series = Object.values(view(state, 'SessionData')?.Series ?? {})
-    .map((s) => ({ at: utc(s?.Utc), part: s?.QualifyingPart }))
-    .filter((s): s is { at: number; part: number } => s.at !== null && int(s.part) !== null)
-    .sort((a, b) => a.at - b.at);
-  for (const s of series) if (phases.at(-1)?.part !== s.part) phases.push(s);
+  const phases = qualifyingParts(state);
   const phaseAt = (at: number | null) => (at === null ? null : (phases.findLast((p) => p.at <= at)?.part ?? null));
 
   const race_control = Object.values(view(state, 'RaceControlMessages')?.Messages ?? {}).flatMap((m) => {

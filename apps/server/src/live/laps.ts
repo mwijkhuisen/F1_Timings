@@ -23,7 +23,7 @@
 // OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 // SOFTWARE.
 
-import type { Obj } from '@f1/contracts';
+import { type Obj, view } from '@f1/contracts';
 import type { Insertable } from 'kysely';
 import type { DB } from '../db/db.ts';
 import { markPitIn } from '../ingest/normalise.ts';
@@ -50,7 +50,10 @@ type Times = Record<Field, number | null>;
 // Every column given.
 type Full<T> = { [K in keyof T]-?: Exclude<T[K], undefined> };
 /** A lap row, plus the epoch ms at which each time was set (progressiveColours); strip `at` before an insert. */
-export type LapRow = Full<Omit<Insertable<DB['lap']>, 'filled'>> & { at: Times };
+export type LapRow = Full<Omit<Insertable<DB['lap']>, 'filled' | 'date_start'>> & {
+  date_start: string | null;
+  at: Times;
+};
 export type StintRow = Full<Insertable<DB['stint']>>;
 
 type Segments = (number | null)[] | null;
@@ -210,10 +213,20 @@ export function createLaps(
     }
   }
 
-  // One driver line of TimingData, in OpenF1's order: LastLapTime, Sectors, Speeds, NumberOfLaps, PitOut.
-  function timing(driver: number, line: Obj, t: number) {
+  // One driver line of TimingData, in OpenF1's order: LastLapTime, Sectors, Speeds, NumberOfLaps, PitOut. `full`: the
+  // line comes from a Subscribe state.
+  function timing(driver: number, line: Obj, t: number, full: boolean) {
+    // A race counts one lower, as its start crosses no line; the +1 can leave smallint (null, as a bad count).
+    const count = int16(line.NumberOfLaps);
+    const n = count === null ? null : int16(count + (race ? 1 : 0));
+    // A driver first seen in a Subscribe state that already counts laps joined mid-session (a recording started late,
+    // A§11.2): it starts at that lap with no date_start, never a phantom lap 1, and the state's end-of-lap values
+    // (another lap's) are dropped. An honest gap (A§2.4). Only a state: a driver's first delta is its pit exit, which
+    // carries its first count. Relies on TimingAppData coming before TimingData in a state, which opens the gate first.
+    const joined = full && n !== null && n >= 1 && !laps.has(driver);
+    if (joined) laps.set(driver, [newLap(driver, n)]);
     const last = isObj(line.LastLapTime) ? line.LastLapTime.Value : undefined;
-    if (typeof last === 'string') {
+    if (typeof last === 'string' && !joined) {
       const ms = fit(duration(last));
       const lap = ms === null ? undefined : ending(driver, t);
       if (lap) set(lap, 'lap_ms', ms, t);
@@ -223,7 +236,7 @@ export function createLaps(
       const i = index(key, 3) as 0 | 1 | 2 | null;
       if (i === null || !isObj(sector)) continue;
       const [time, segs] = SECTORS[i];
-      const target = () => (i === 0 ? current(driver) : ending(driver, t));
+      const target = () => (i === 0 ? current(driver) : joined ? undefined : ending(driver, t));
       const ms = seconds(sector.Value);
       const lap = ms === null ? undefined : target();
       if (lap) set(lap, time, ms, t);
@@ -242,24 +255,23 @@ export function createLaps(
     }
     if (line.NumberOfLaps !== undefined && line.NumberOfLaps !== null) {
       // A count that is no integer skips the rest of the line, its emission included (OpenF1).
-      const count = int16(line.NumberOfLaps);
-      if (count === null) return;
-      // A higher number starts a new lap, without filling gaps; a race counts one lower, as its start crosses no
-      // line. A lap starts at the first count it sees (OpenF1; FastF1's own counter is not used).
-      const n = int16(count + (race ? 1 : 0)); // the +1 can leave smallint: skipped the same way
       if (n === null) return;
+      // A higher number starts a new lap, without filling gaps. A lap starts at the first count it sees (OpenF1;
+      // FastF1's own counter is not used).
       let lap = current(driver);
       if (n > lap.lap_number) {
         lap = newLap(driver, n);
         laps.get(driver)?.push(lap);
       }
-      if (lap.date_start === null) {
+      if (lap.date_start === null && !joined) {
         set(lap, 'date_start', t, t);
         if (race && lap.lap_number === 2) firstLap(driver, t);
       }
     }
-    // Any PitOut but null marks the current lap as an out-lap, false included (OpenF1; FastF1 ignores PitOut).
-    if (line.PitOut !== undefined && line.PitOut !== null) set(current(driver), 'is_pit_out', true, t);
+    // Any PitOut but null marks the current lap as an out-lap, false included (OpenF1; FastF1 ignores PitOut). A state
+    // always holds one, so a joined line marks it only when true.
+    const pitOut = line.PitOut !== undefined && line.PitOut !== null && (!joined || line.PitOut === true);
+    if (pitOut) set(current(driver), 'is_pit_out', true, t);
     for (const lap of marked) shown.set(lap, row(lap));
     marked.clear();
   }
@@ -369,7 +381,7 @@ export function createLaps(
           if (ev.topic === 'TimingAppData') tyres(driver, line.Stints, t);
           else {
             stintLaps(driver, line, t);
-            if (open) timing(driver, line, t);
+            if (open) timing(driver, line, t, ev.full === true);
           }
         }
       }
@@ -385,4 +397,18 @@ export function createLaps(
       };
     },
   };
+}
+
+/**
+ * The qualifying part in force from each change on, in time order: SessionData Series QualifyingPart at its Utc (A§9).
+ * The archive's rows and the playback's share it.
+ */
+export function qualifyingParts(state: Obj): { at: number; part: number }[] {
+  const parts: { at: number; part: number }[] = [];
+  const series = Object.values(view(state, 'SessionData')?.Series ?? {})
+    .map((s) => ({ at: utc(s?.Utc), part: s?.QualifyingPart }))
+    .filter((s): s is { at: number; part: number } => s.at !== null && (int16(s.part) ?? -1) >= 0)
+    .sort((a, b) => a.at - b.at);
+  for (const s of series) if (parts.at(-1)?.part !== s.part) parts.push(s);
+  return parts;
 }

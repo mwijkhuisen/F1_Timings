@@ -259,6 +259,64 @@ describe('createLaps', () => {
     );
   });
 
+  it('a recording that starts mid-session: each driver starts at its count with no date_start, and no lap 1', () => {
+    // A restart 20 min into qualifying (#95): the first line is a Subscribe state with counts already.
+    const q = session(9001, '2026-01-10');
+    const clock = (hms: string) => Date.parse(`2026-01-10T${hms}Z`);
+    const line = (hms: string, payload: Obj) => [clock(hms), 'TimingData', payload, `2026-01-10T${hms}.0000000Z`];
+    const lines = [
+      [
+        clock('12:20:00'),
+        '_subscribe',
+        {
+          SessionInfo: { Key: 9001, Type: 'Qualifying' },
+          TimingAppData: { Lines: { 7: { Stints: [{ Compound: 'SOFT' }] }, 99: { Stints: [{ Compound: 'MEDIUM' }] } } },
+          TimingData: {
+            Lines: {
+              // On track in lap 5: the state still holds lap 4's time, S2 and S3, and the PitOut false of any state.
+              7: {
+                NumberOfLaps: 5,
+                InPit: false,
+                PitOut: false,
+                LastLapTime: { Value: '1:31.000' },
+                Sectors: {
+                  0: { Value: '28.100', Segments: { 0: { Status: 2049 } } },
+                  1: { Value: '33.000', Segments: { 0: { Status: 2051 } } },
+                  2: { Value: '30.000' },
+                },
+                Speeds: { I1: { Value: '285' } },
+              },
+              // In the garage after an in-lap: lap 3 is its next out-lap.
+              99: { NumberOfLaps: 3, InPit: true, PitOut: false, LastLapTime: { Value: '1:45.000' } },
+            },
+          },
+        },
+      ],
+      line('12:20:20', { Lines: { 7: { Sectors: { 1: { Value: '33.100' } } } } }),
+      line('12:20:30', { Lines: { 99: { InPit: false, PitOut: true } } }),
+      line('12:20:50', {
+        Lines: { 7: { LastLapTime: { Value: '1:31.400' }, Sectors: { 2: { Value: '30.200' } }, NumberOfLaps: 6 } },
+      }),
+      line('12:22:20', { Lines: { 99: { NumberOfLaps: 4 } } }),
+    ];
+    const { laps } = build(
+      lines.flatMap((v) => parseFeedLine(JSON.stringify(v))),
+      9001,
+    );
+    expect(laps).toEqual([
+      q.lap(
+        7,
+        5,
+        '12:20:00',
+        { lap: [91_400, '12:20:50'], s1: [28_100, '12:20:00'], s2: [33_100, '12:20:20'], s3: [30_200, '12:20:50'] },
+        { date_start: null, i1_kph: 285, seg1: [2049] },
+      ),
+      q.lap(7, 6, '12:20:50'),
+      q.lap(99, 3, '12:20:00', {}, { date_start: null, is_pit_out: true }),
+      q.lap(99, 4, '12:22:20'),
+    ]);
+  });
+
   it('the archive form of practice gives the same rows as its feed.jsonl form, apart from source', () => {
     const events = read('practice.jsonl');
     const t0 = (events[0] as FeedEvent).t;
