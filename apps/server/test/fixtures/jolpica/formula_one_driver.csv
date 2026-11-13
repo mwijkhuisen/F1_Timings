@@ -1,0 +1,5 @@
+id,abbreviation,api_id,country_code,date_of_birth,forename,nationality,permanent_car_number,reference,surname,wikipedia
+1,,driver_alpha,XAA,1920-01-01,Driver,Testish,,driver_alpha,Alpha,
+2,DBR,driver_bravo,XBB,1921-02-02,Driver,Testish,,driver_bravo,Bravo,
+3,,driver_charlie,XCC,,Driver,Testish,,driver_charlie,Charlie,
+4,DDE,driver_delta,XDD,1923-04-04,Driver,Testish,,driver_delta,Delta,

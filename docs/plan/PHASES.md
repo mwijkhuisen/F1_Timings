@@ -266,7 +266,7 @@ Remaining 2026 weekends (OpenF1 schedule): Austin (race 25 Oct) · Mexico City 3
   - #96 (pit-lane topics, its topic check) and #126 (2018 compound names) take facts from P3d;
   - #122 is P7;
   - #123 (standings) can take Jolpica's standings from 1950 once P3c is in.
-- **Keys for sessions without one** (Jolpica and FIA before 2018; a proposal, P3c confirms and records it in A§7):
+- **Keys for sessions without one** (Jolpica and FIA before 2018; confirmed by P3c, 2026-11-12, with the `TT` table 01 FP1, 02 FP2, 03 FP3, 04 Qualifying, 05 Race, recorded in A§7):
   - The keys are derived in a reserved range that collides with neither the archive (session keys under 7,200 through 2021) nor OpenF1 (7,763 on).
   - `meeting_key = 1YYYYRR` (7 digits) and `session_key = 1YYYYRRTT` (9 digits, within the API's `^\d{1,9}$`). `TT` is a fixed code per session type.
   - FIA and Jolpica derive the same key for the same session, so they meet in one row.

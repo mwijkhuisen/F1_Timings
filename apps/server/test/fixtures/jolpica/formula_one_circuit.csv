@@ -1,0 +1,3 @@
+id,altitude,api_id,country,country_code,latitude,locality,longitude,name,reference,wikipedia
+1,100,test_ring,Testland,XTL,10.0,Testville,20.0,Test Ring,test_ring,
+2,50,sample_park,Sampleland,XSP,-10.0,Sampleton,-20.0,"Sample Park, ""East""",sample_park,

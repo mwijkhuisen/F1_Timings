@@ -174,11 +174,12 @@ describe('web build', () => {
     expect(mapChunks).toHaveLength(ids.length);
   });
 
-  it('serves the third-party licences file (ADR-0008)', () => {
+  it('serves the third-party licences file (ADR-0008, ADR-0009)', () => {
     const text = page('third-party-licences.txt');
     expect(text).toContain('Copyright (c) 2019-2025 Tomislav Bacinger');
     expect(text).toContain('Open Database License (ODbL) 1.0');
     expect(text).toContain('Weather data by Open-Meteo.com');
+    expect(text).toContain('Data: Jolpica-F1 (Ergast), CC BY-NC-SA 4.0');
   });
 });
 

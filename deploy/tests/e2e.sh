@@ -6,7 +6,8 @@
 # without ingest the session table is empty, so it idles and calls nothing (asserted here). It needs
 # the images f1-server:ci and f1-web:ci (built by the job) and nft, curl, flock and systemd-analyze.
 #   1. f1-install twice: the second run makes 0 changes; systemd-analyze verify on the units;
-#      /srv/f1/live, /srv/f1/archive and /srv/f1/state/live are 62532:62532 0700 and /srv/f1/state stays root 0700.
+#      /srv/f1/live, /srv/f1/archive and /srv/f1/state/live are 62532:62532 0700, /srv/f1/jolpica is root:62532 0750
+#      and /srv/f1/state stays root 0700.
 #   2. Dummy cf_tunnel_token, hc_ping_key, f1tv_username and f1tv_password (f1-update says "not
 #      configured" while one is empty), and f1.env with CF_ACCESS_TEAM=ci and a 64-hex AUD.
 #   3. f1-update --server f1-server:ci --web f1-web:ci: exit 0, current.env, /healthz 200 on
@@ -16,6 +17,7 @@
 #  3b. The archive job (profile jobs) without a token file: exit 1 with token_file, after its f1_ingest
 #      login and before any request (it never reaches the Index: invariant 4).
 #  3c. The fill job (profile jobs) on the migrated, empty database: exit 0 with fill_done.
+#  3d. The jolpica job (profile jobs) on the empty /srv/f1/jolpica: exit 1 with jolpica_done error bad_dump.
 #   4. Egress from api to a non-Cloudflare host is blocked.
 #  4b. f1-measure 60s 2 in the background; after 8 s `docker restart f1-live-1`, then SIGTERM: exit 0
 #      and the summary (the signal path), stats rows for db, api, caddy and live, the disk rows
@@ -109,6 +111,7 @@ for d in /srv/f1/live /srv/f1/state/live; do
   [[ $(stat -c '%a %u:%g' "$d") == '700 62532:62532' ]] || fail "$d is not 62532:62532 0700: $(stat -c '%a %u:%g' "$d")"
 done
 [[ $(stat -c '%a %u:%g' /srv/f1/archive) == '700 62532:62532' ]] || fail "/srv/f1/archive is not 62532:62532 0700: $(stat -c '%a %u:%g' /srv/f1/archive)"
+[[ $(stat -c '%a %u:%g' /srv/f1/jolpica) == '750 0:62532' ]] || fail "/srv/f1/jolpica is not root:62532 0750: $(stat -c '%a %u:%g' /srv/f1/jolpica)"
 [[ $(stat -c '%a %u:%g' /srv/f1/state) == '700 0:0' ]] || fail "/srv/f1/state is not root 0700: $(stat -c '%a %u:%g' /srv/f1/state)"
 proof "f1-install ran twice, the second: '$(tail -n 1 "$tmp/install2")'; f1-firewall.service active, table inet f1 loaded (resolvers4 $(nft list set inet f1 resolvers4 | grep -o 'elements = {[^}]*}' || echo empty)); systemd-analyze verify passes: $(echo /etc/systemd/system/f1-*); /srv/f1/live, /srv/f1/archive and /srv/f1/state/live are 62532:62532 0700, /srv/f1/state is still root 0700"
 
@@ -160,6 +163,15 @@ run "$tmp/fill" docker compose -p f1 -f /etc/f1/compose.yaml -f "$F1_COMPOSE_OVE
 ((rc == 0)) || fail "the fill job exited $rc, not 0"
 grep -q '"msg":"fill_done"' "$tmp/fill" || fail "the fill job did not finish: no fill_done line"
 proof "compose --profile jobs run --rm fill fill --all: exit 0, fill_done (as f1_ingest on f1-db only, /srv/f1/archive and /srv/f1/live read-only; no session yet)"
+
+# ------------------------------------------------------------------ 3d
+step "3d. The jolpica job (profile jobs) on the empty /srv/f1/jolpica exits 1 with bad_dump"
+run "$tmp/jolpica" docker compose -p f1 -f /etc/f1/compose.yaml -f "$F1_COMPOSE_OVERRIDE" --env-file "$STATE/current.env" \
+  --profile jobs run --rm -T jolpica jolpica
+((rc == 1)) || fail "the jolpica job exited $rc, not 1"
+done_line=$(grep '"msg":"jolpica_done"' "$tmp/jolpica" || true)
+[[ $done_line == *'"error":"bad_dump"'* ]] || fail "the jolpica job did not stop on bad_dump: $done_line"
+proof "compose --profile jobs run --rm jolpica jolpica on the empty /srv/f1/jolpica (root 0750, group 62532): exit 1, jolpica_done error bad_dump (as f1_ingest on f1-db only, the directory read-only)"
 
 # ------------------------------------------------------------------ 4
 step "4. Egress from api to a non-Cloudflare host is blocked"

@@ -206,7 +206,15 @@ describe('archive (fixtures through msw, f1_ingest login)', { timeout: 120_000 }
     const imported = logged('archive').filter((l) => l.error === undefined);
     expect(imported.map((l) => l.session_key).sort()).toEqual([9101, 9102, 9121]);
     for (const l of imported)
-      expect(l.merge).toEqual({ rows: l.laps, added: {}, filled: {}, diffs: {}, conflicts: {}, rules: l.rules });
+      expect(l.merge).toEqual({
+        rows: l.laps,
+        added: {},
+        dup: {},
+        filled: {},
+        diffs: {},
+        conflicts: {},
+        rules: l.rules,
+      });
   });
 
   it('a second run asks for the Index and the missing SessionInfo only, and gives identical rows', async () => {

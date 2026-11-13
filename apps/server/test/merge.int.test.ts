@@ -96,6 +96,7 @@ const MERGED = [
 const ARCHIVE_COUNTS = {
   rows: 63,
   added: { 'f1-archive': 1 },
+  dup: {},
   filled: { 'f1-archive': { s1_ms: 1 } },
   diffs: { 'f1-archive': { lap_ms: 1 } },
   conflicts: { 'f1-archive': 1 },
@@ -153,7 +154,15 @@ describe('the lap merge (11388 through msw, f1_ingest login)', { timeout: 120_00
     expect(await syncSchedule(deps, [2026])).toBe(true);
     expect((await processSession(deps, KEY)).ok).toBe(true);
     const line = lastSession();
-    expect(line.merge).toEqual({ rows: 62, added: {}, filled: {}, diffs: {}, conflicts: {}, rules: line.rules });
+    expect(line.merge).toEqual({
+      rows: 62,
+      added: {},
+      dup: {},
+      filled: {},
+      diffs: {},
+      conflicts: {},
+      rules: line.rules,
+    });
     expect(line.merge.rules.unmatched).toBeGreaterThan(0);
     expect(await perSource()).toEqual({ openf1: 62 });
     expect((await merged()).map((r) => [r.lap_number, r.source, r.filled])).toEqual([

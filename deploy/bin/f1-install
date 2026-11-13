@@ -9,7 +9,7 @@
 # of the checkout) into /usr/local/bin and the units into /etc/systemd/system. It creates the
 # secret files (the four db_* filled with random hex, cf_tunnel_token, hc_ping_key, f1tv_username
 # and f1tv_password left empty for the owner), the f1.env template and the recorder's directories
-# /srv/f1/live, /srv/f1/archive and /srv/f1/state/live (62532, 0700); it enables and (re)starts f1-firewall.service.
+# /srv/f1/live, /srv/f1/archive and /srv/f1/state/live (62532, 0700) and /srv/f1/jolpica (root:62532, 0750); it enables and (re)starts f1-firewall.service.
 # It never enables the timers: the owner does that after filling the secrets and f1.env (install
 # runbook). When compose.yaml changed under a running deploy, it recreates the stack with the
 # current images and smoke-tests it. It has no deploy hold: never run it during a recording.
@@ -144,6 +144,9 @@ ensure_dir "$F1_STATE" 0700
 # root-only, because current.env there picks what root deploys; live gets only its subdirectory.
 ensure_dir /srv/f1/live 0700 62532:62532
 ensure_dir /srv/f1/archive 0700 62532:62532
+# The Jolpica dump (P3c): root unpacks it here and the job (62532) only reads it, so the owner is root and
+# the group 62532 gets r-x: 0750 root:62532. The container user can read but never write or replace a file.
+ensure_dir /srv/f1/jolpica 0750 0:62532
 ensure_dir "$F1_STATE/live" 0700 62532:62532
 
 # ------------------------------------------------------------------ secrets
