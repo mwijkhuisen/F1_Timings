@@ -167,7 +167,7 @@ export const schemas = {
   race_control: z.array(RaceControl),
   session_result: z.array(SessionResult),
   weather: z.array(Weather),
-  starting_grid: z.array(StartingGrid),
+  starting_grid: z.array(StartingGrid).max(100), // an over-long answer is a grid schema failure on its own (O1)
 };
 
 export type Endpoint = keyof typeof schemas;

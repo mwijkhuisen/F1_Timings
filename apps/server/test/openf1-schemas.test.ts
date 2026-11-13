@@ -182,6 +182,17 @@ describe('[U] the starting_grid fixtures', () => {
 
   it.each(['racekey', 'empty'])('%s is empty (404 "No results found.")', (name) => {
     expect(grid(name)).toEqual([]);
+    expect((read(`starting_grid-${name}.meta.json`) as { status: number }).status).toBe(404);
+  });
+
+  it('more than 100 rows is a schema failure (O1: the grid fails on its own)', () => {
+    const rows = grid('normal');
+    const many = Array.from({ length: 101 }, (_, i) => rows[i % rows.length]);
+    expect(parse('starting_grid', many.slice(0, 100)).ok).toBe(true);
+    expect(parse('starting_grid', many)).toEqual({
+      ok: false,
+      error: { code: 'shape', issues: [{ path: '', code: 'too_big' }] },
+    });
   });
 
   it.each([

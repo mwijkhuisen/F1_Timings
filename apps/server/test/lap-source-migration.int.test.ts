@@ -18,6 +18,13 @@ let admin: Kysely<DB>;
 let env: { PATH: string | undefined; DATABASE_URL: string };
 const dbmate = async (...args: string[]) =>
   (await exec('dbmate', ['--no-dump-schema', '--migrations-dir', MIGRATIONS, ...args], { env })).stdout;
+// Rolls back the newest migrations until `version` is gone, whichever newer ones exist; dbmate's last output.
+const rollbackPast = async (version: string) => {
+  for (;;) {
+    const out = await dbmate('rollback');
+    if (out.includes(`Rolled back: ${version}.sql`) || !/Rolled back:/.test(out)) return out;
+  }
+};
 const code = (p: Promise<unknown>) =>
   p.then(
     () => 'ok',
@@ -33,9 +40,7 @@ beforeAll(async () => {
   testDb = await createTestDb();
   env = { PATH: process.env.PATH, DATABASE_URL: testDb.urls.f1_migrator };
   expect(await run(['migrate'], env, () => {})).toBe(0);
-  expect(await dbmate('rollback')).toMatch(/Rolled back: 20261114000001_starting_grid\.sql/); // the newer ones first
-  expect(await dbmate('rollback')).toMatch(/Rolled back: 20261113000001_jolpica\.sql/);
-  expect(await dbmate('rollback')).toMatch(/Rolled back: 20261112000001_lap_source\.sql/);
+  expect(await rollbackPast('20261112000001_lap_source')).toMatch(/Rolled back: 20261112000001_lap_source\.sql/);
   admin = createDb(testDb.urls.admin);
   await admin.insertInto('meeting').values({ meeting_key: 1, source: 'openf1', year: 2026 }).execute();
   await admin
@@ -106,9 +111,7 @@ it('refuses a filled that is not an object, and a source the lap table does not 
 });
 
 it('rolls back (lap_source and filled gone) and applies again, with the copy repeated', async () => {
-  await dbmate('rollback'); // starting_grid and jolpica, the newer ones
-  await dbmate('rollback');
-  expect(await dbmate('rollback')).toMatch(/Rolled back: 20261112000001_lap_source\.sql/);
+  expect(await rollbackPast('20261112000001_lap_source')).toMatch(/Rolled back: 20261112000001_lap_source\.sql/);
   expect(await code(sql`SELECT 1 FROM lap_source`.execute(admin))).toBe('42P01');
   expect(await code(sql`SELECT filled FROM lap`.execute(admin))).toBe('42703');
   expect(await run(['migrate'], env, () => {})).toBe(0);

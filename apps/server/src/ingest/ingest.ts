@@ -24,8 +24,9 @@ import {
 
 const FIRST_YEAR = 2023;
 const SESSION_ENDPOINTS = ['drivers', 'laps', 'stints', 'pit', 'race_control', 'session_result', 'weather'] as const;
-// Laps are not among them: writeLaps replaces OpenF1's candidates only and rebuilds `lap` (P3b).
-const REPLACED = ['raw_response', 'driver', 'stint', 'pit', 'race_control', 'result', 'weather'] as const;
+// Laps are not among them: writeLaps replaces OpenF1's candidates only and rebuilds `lap` (P3b). raw_response
+// goes on its own, for the grid (O1).
+const REPLACED = ['driver', 'stint', 'pit', 'race_control', 'result', 'weather'] as const;
 
 export type Deps = {
   db: Kysely<DB>;
@@ -45,7 +46,10 @@ export type Outcome = Result<IngestState, ErrorCode | 'unknown_session' | 'live_
 /** Log-ready: the code, the endpoint and, for a schema failure, zod's paths and codes (never a value). */
 type FetchError = { last_error: ErrorCode; endpoint: Endpoint; issues?: ShapeError['issues'] };
 /** The session line's `grid` (#115): counts or a fixed code, never a value. */
-type GridLog = { rows: number; skipped: number } | { error: ErrorCode; kept: number } | 'no_quali';
+type GridLog =
+  | { rows: number; skipped: number }
+  | { error: ErrorCode | 'no_quali'; kept: number; issues?: ShapeError['issues'] }
+  | 'no_quali';
 
 /** One OpenF1 call, parsed. The heartbeat follows each call, so slow but progressing work never goes stale. */
 async function fetchRows<E extends Endpoint>(
@@ -292,51 +296,78 @@ export async function processSession(deps: Deps, key: number, refetch = false): 
         if (!refetch) await setProgress(trx, key, next);
         return { next, empty: true };
       }
-      // O1: a failed grid fetch, or [] where the stored grid had rows (`empty`), keeps the stored raw row and its grid.
-      let gridRaw: Insertable<DB['raw_response']> | undefined;
-      let gridLog: GridLog | undefined = quali === null ? 'no_quali' : undefined;
+      // O1 (A§8): the grid fails on its own. A keep leaves the stored grid raw row untouched and carries the old
+      // grids over by driver (never its body, never a re-parse); only a fresh grid replaces both.
       const { lap, ...children } = rows;
-      if (typeof quali === 'number' && grid) {
-        const stored = await trx
+      let gridLog: GridLog | undefined;
+      let keep: { error: ErrorCode | 'no_quali'; issues?: ShapeError['issues'] } | undefined;
+      let fresh: { graded: ReturnType<typeof withGrid>; raw: Insertable<DB['raw_response']> } | undefined;
+      let old = new Map<number, number | null>();
+      if (quali !== undefined) {
+        const results = await trx
+          .selectFrom('result')
+          .select(['driver_number', 'grid'])
+          .where('session_key', '=', key)
+          .execute();
+        old = new Map(results.map((r) => [r.driver_number, r.grid]));
+        const storedRaw = await trx
           .selectFrom('raw_response')
-          .select(['body', 'fetched_at', 'http_status'])
+          .select(sql<number>`jsonb_array_length(body)`.as('n'))
           .where('session_key', '=', key)
           .where('endpoint', '=', 'starting_grid')
           .executeTakeFirst();
-        const hadRows = Array.isArray(stored?.body) && stored.body.length > 0;
-        const fresh = grid.ok && (grid.value.rows.length > 0 || !hadRows) ? grid.value : undefined;
-        const error = fresh ? undefined : grid.ok ? 'empty' : grid.error.last_error;
-        let gridRows: Rows<'starting_grid'> = [];
-        if (fresh) {
-          gridRows = fresh.rows;
-          gridRaw = {
-            session_key: key,
-            source: 'openf1',
-            endpoint: 'starting_grid',
-            fetched_at: now(),
-            http_status: fresh.status,
-            body: JSON.stringify(fresh.body),
-          };
-        } else if (stored) {
-          const parsed = parse('starting_grid', stored.body); // a body that no longer parses keeps no grid
-          gridRows = parsed.ok ? parsed.value : [];
-          gridRaw = {
-            ...stored,
-            session_key: key,
-            source: 'openf1',
-            endpoint: 'starting_grid',
-            body: JSON.stringify(stored.body),
-          };
+        const stored = results.some((r) => r.grid !== null) || (storedRaw?.n ?? 0) > 0;
+        if (quali === null || !grid) {
+          if (stored) keep = { error: 'no_quali' };
+          else gridLog = 'no_quali';
+        } else if (!grid.ok) {
+          keep = { error: grid.error.last_error, ...(grid.error.issues && { issues: grid.error.issues }) };
+        } else {
+          const graded = withGrid(children.result, grid.value.rows, quali);
+          if (graded.usable === 0 && stored) keep = { error: 'empty' };
+          else
+            fresh = {
+              graded,
+              raw: {
+                session_key: key,
+                source: 'openf1',
+                endpoint: 'starting_grid',
+                fetched_at: now(),
+                http_status: grid.value.status,
+                body: JSON.stringify(grid.value.body),
+              },
+            };
         }
-        const graded = withGrid(children.result, gridRows, quali);
-        children.result = graded.results;
-        gridLog = error === undefined ? { rows: graded.rows, skipped: graded.skipped } : { error, kept: graded.rows };
       }
       for (const table of REPLACED) await trx.deleteFrom(table).where('session_key', '=', key).execute();
+      // The grid raw row goes with the rest only when there is none to keep or replace.
       await trx
-        .insertInto('raw_response')
-        .values(gridRaw ? [...raw, gridRaw] : raw)
+        .deleteFrom('raw_response')
+        .where('session_key', '=', key)
+        .$if(keep !== undefined || fresh !== undefined, (q) => q.where('endpoint', '<>', 'starting_grid'))
         .execute();
+      await trx.insertInto('raw_response').values(raw).execute();
+      if (fresh) {
+        // A body jsonb refuses (a NUL, a lone surrogate in a field the schema strips) is a grid schema failure only.
+        await sql`SAVEPOINT grid`.execute(trx);
+        try {
+          await trx
+            .deleteFrom('raw_response')
+            .where('session_key', '=', key)
+            .where('endpoint', '=', 'starting_grid')
+            .execute();
+          await trx.insertInto('raw_response').values(fresh.raw).execute();
+          children.result = fresh.graded.results;
+          gridLog = { rows: fresh.graded.rows, skipped: fresh.graded.skipped };
+        } catch {
+          await sql`ROLLBACK TO SAVEPOINT grid`.execute(trx);
+          keep = { error: 'schema' };
+        }
+      }
+      if (keep) {
+        children.result = children.result.map((r) => ({ ...r, grid: old.get(r.driver_number) ?? null }));
+        gridLog = { ...keep, kept: children.result.filter((r) => r.grid !== null).length };
+      }
       // The cast: Kysely cannot relate a table name from a loop to its row type.
       for (const [table, list] of Object.entries(children) as [keyof SessionRows, object[]][]) {
         for (const chunk of chunks(list))

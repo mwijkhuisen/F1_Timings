@@ -184,7 +184,7 @@ describe('withGrid', () => {
   });
   const result = (driver_number: number) => ({ session_key: 11388, source: 'openf1', driver_number });
 
-  it('sets grid by driver; another session, a duplicate (the last wins) or a driver without a result is skipped', () => {
+  it('sets grid by driver; another session, a duplicate (the last wins) or a driver without a result is skipped; counts the usable rows', () => {
     const grid = [g(1, 5), g(1, 2), g(4, 1), g(16, 3, 11379), g(99, 4), g(44, null)];
     const out = withGrid([result(1), result(4), result(16), result(44)], grid, 11384);
     expect(out.results.map((r) => [r.driver_number, r.grid])).toEqual([
@@ -193,8 +193,14 @@ describe('withGrid', () => {
       [16, null],
       [44, null],
     ]);
-    expect(out).toMatchObject({ rows: 2, skipped: 4 });
-    expect(withGrid([result(1)], [], 11384)).toEqual({ results: [{ ...result(1), grid: null }], rows: 0, skipped: 0 });
+    expect(out).toMatchObject({ rows: 2, skipped: 4, usable: 3 }); // usable: 1, 4 and 99; not 16 (another session), not 44 (null)
+    expect(withGrid([result(1)], [], 11384)).toEqual({
+      results: [{ ...result(1), grid: null }],
+      rows: 0,
+      skipped: 0,
+      usable: 0,
+    });
+    expect(withGrid([result(1)], [g(1, null), g(2, 1, 11379)], 11384)).toMatchObject({ usable: 0 });
   });
 });
 
