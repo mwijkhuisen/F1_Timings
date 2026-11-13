@@ -374,6 +374,41 @@ describe('playback routes (f1_api login, Access JWT, real socket)', { timeout: 6
     expect([...stints.values()].sort(byStint)).toEqual(all.stints);
   });
 
+  it('one open log line per stream: the mode, scan ms, lines and snapshot bytes, and nothing else (#101)', async () => {
+    const cases = [
+      { query: 'at=live&delay=5', mode: 'live', applied: LINES }, // a finished recording: every line
+      { query: `at=${DONE_AT + 100}&speed=4`, mode: 'replay', applied: 2 },
+      { query: `at=${DONE_AT + 200}&still=1`, mode: 'still', applied: 3 },
+    ];
+    for (const { query, mode, applied } of cases) {
+      lines.length = 0;
+      const { res, abort } = await call(stream(ids.done, query));
+      expect(res.status, query).toBe(200);
+      const text = await readUntil(res, /event: snapshot\ndata: .*\n\n/);
+      abort.abort();
+      const data = /^event: snapshot\ndata: (.*)$/m.exec(text)?.[1] ?? '';
+      expect(lines, query).toHaveLength(1);
+      const raw = lines[0] ?? '';
+      const line = JSON.parse(raw) as Record<string, unknown>;
+      // pino's own three, then the four fixed fields: no URL, id, path, time on the feed's axis or feed text.
+      expect(Object.keys(line).sort(), query).toEqual(
+        ['level', 'lines', 'mode', 'msg', 'scan_ms', 'snapshot_bytes', 'time'].sort(),
+      );
+      expect(line, query).toMatchObject({ level: 30, msg: 'playback open', mode, lines: applied });
+      expect(Number.isSafeInteger(line.scan_ms) && (line.scan_ms as number) >= 0, query).toBe(true);
+      expect(line.snapshot_bytes, query).toBe(Buffer.byteLength(data));
+      for (const secret of [donePath, String(DONE_AT), 'TimingData', 'Lines', query]) expect(raw).not.toContain(secret);
+    }
+    // A HEAD opens nothing, so it logs nothing.
+    lines.length = 0;
+    const head = await fetch(`${base}${stream(ids.done, 'at=live')}`, {
+      method: 'HEAD',
+      headers: { ...headers, 'cf-access-jwt-assertion': token },
+    });
+    expect(head.status).toBe(200);
+    expect(lines).toEqual([]);
+  });
+
   it('/recordings: every recording with its session and meeting, newest first, no-store', async () => {
     const res = await get('/api/v1/recordings');
     expect(res.status).toBe(200);
@@ -422,14 +457,20 @@ describe('playback routes (f1_api login, Access JWT, real socket)', { timeout: 6
       `${ids.done}/stream?at=${DONE_AT - 1}`, // before started_at
       `${ids.done}/stream?at=${DONE_AT + MIN + 1}`, // after ended_at
       `${ids.open}/stream?at=${NOW + 10 * MIN}`, // after now
+      `${ids.done}/stream?at=${DONE_AT}&still=0`, // a still frame is still=1 or nothing (#101)
+      `${ids.done}/stream?at=${DONE_AT}&still=true`,
+      `${ids.done}/stream?at=${DONE_AT}&still=`,
+      `${ids.done}/stream?at=${DONE_AT}&still=1&still=1`,
+      `${ids.done}/stream?at=live&still=1`, // a still frame is a replay at T
     ];
+    lines.length = 0;
     for (const path of bad) {
       const res = await get(`/api/v1/playback/${path}`);
       expect(res.status, path).toBe(400);
       expect(res.headers.get('cache-control')).toBe('no-store');
       expect(await res.text(), path).toBe('{"error":"bad request"}');
     }
-    lines.length = 0;
+    expect(lines).toEqual([]); // a 400 logs nothing, and opens nothing to log
     for (const path of [`999999/stream?at=live`, `${ids.missing}/stream?at=live`]) {
       const res = await get(`/api/v1/playback/${path}`);
       expect(res.status, path).toBe(404);

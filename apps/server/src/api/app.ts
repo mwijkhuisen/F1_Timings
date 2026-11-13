@@ -40,7 +40,8 @@ export function createApp({
 }: {
   db: Kysely<DB>;
   access: MiddlewareHandler;
-  log: Pick<Logger, 'error'>;
+  /** `info` is the playback open line only (#101): fixed fields, never input or feed text. */
+  log: Pick<Logger, 'error' | 'info'>;
   /** The recordings' root (A§11.2), read-only here. */
   liveDir: string;
   /** The release's git commit or `dev` (A§10): the `F1-Revision` header and the check of a request's `v`. */
@@ -571,7 +572,7 @@ export function createApp({
       const all = c.req.queries(name);
       return all && all.length > 1 ? null : all?.[0]; // a repeated parameter is ambiguous
     };
-    const [at, delay, speed] = [param('at'), param('delay'), param('speed')];
+    const [at, delay, speed, still] = [param('at'), param('delay'), param('speed'), param('still')];
     const live = at === 'live';
     const num = (v: string | null | undefined, re: RegExp, dflt: number) =>
       v === undefined ? dflt : v !== null && re.test(v) ? Number(v) : Number.NaN;
@@ -583,9 +584,12 @@ export function createApp({
       (delay !== undefined && !live) ||
       !(delayS <= 120) ||
       !SPEEDS.includes(speedX) ||
-      (live && speedX !== 1)
+      (live && speedX !== 1) ||
+      // A paused seek's still frame (A§13): for the open log only, so a replay at T, never live.
+      (still !== undefined && (still !== '1' || live))
     )
       return badRequest(c);
+    const mode = live ? 'live' : still === '1' ? 'still' : 'replay';
     const row = await db
       .selectFrom('recording')
       .select(['path', 'session_key', 'started_at', 'ended_at'])
@@ -646,6 +650,7 @@ export function createApp({
           clearTimeout(timer);
         }
       };
+      let seek: { ms: number; lines: number } | undefined; // set by the seek, logged with the first snapshot
       try {
         const events = playback({
           dir,
@@ -657,10 +662,23 @@ export function createApp({
           sleep: (ms, signal) => sleep(ms, undefined, { signal }),
           ended,
           signal: abort.signal,
+          onOpen: (s) => {
+            seek = s;
+          },
         });
         for await (const ev of events) {
           // The snapshot's state is the stream's own: serialized before the generator moves on.
-          await within(stream.writeSSE({ event: ev.event, data: JSON.stringify(ev.data) }));
+          const data = JSON.stringify(ev.data);
+          if (seek) {
+            // What an open costs (#101, A§11.3): fixed fields only, never the URL, an id, a time or feed text.
+            const { ms, lines } = seek;
+            seek = undefined;
+            log.info(
+              { mode, scan_ms: Math.round(ms), lines, snapshot_bytes: Buffer.byteLength(data) },
+              'playback open',
+            );
+          }
+          await within(stream.writeSSE({ event: ev.event, data }));
         }
       } catch (err) {
         if (!abort.signal.aborted) log.error({ cause: codeOf(err) }, 'playback'); // never the message to the client

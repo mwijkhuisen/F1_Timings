@@ -151,12 +151,21 @@ const slide = (label: string, v: number) =>
 const delayShown = () => Number($<HTMLInputElement>('input[aria-label="Delay"]').value);
 const last = () => FakeES.all.at(-1) as FakeES;
 const atOf = (es: FakeES) => new URL(es.url, 'http://x').searchParams.get('at');
+/** `still=1` marks a still frame's open for the server's open log (#101); a playing stream has none. */
+const stillOf = (es: FakeES) => new URL(es.url, 'http://x').searchParams.get('still');
 const openCount = () => FakeES.all.filter((e) => !e.closed).length;
 
 describe('streamUrl', () => {
   it('builds live and replay URLs', () => {
     expect(streamUrl({ recording: 7, at: 'live', delay: 12 })).toBe('/api/v1/playback/7/stream?at=live&delay=12');
     expect(streamUrl({ recording: 7, at: 1234, delay: 12 })).toBe('/api/v1/playback/7/stream?at=1234');
+    expect(streamUrl({ recording: 7, at: 1234, delay: 12, still: true })).toBe(
+      '/api/v1/playback/7/stream?at=1234&still=1',
+    );
+    // A still frame is a replay at T: live never carries it.
+    expect(streamUrl({ recording: 7, at: 'live', delay: 12, still: true })).toBe(
+      '/api/v1/playback/7/stream?at=live&delay=12',
+    );
   });
 });
 
@@ -1239,6 +1248,7 @@ describe('the player bar', () => {
 
   it('a seek while paused opens one still frame, closed by its snapshot; a new seek closes a pending one first', () => {
     render({ recording: ended, start: T });
+    expect(stillOf(last())).toBeNull(); // playing
     last().emit('snapshot', { t: T, state: {}, laps: [], stints: [] });
     button('Pause');
     expect(openCount()).toBe(0);
@@ -1248,6 +1258,7 @@ describe('the player bar', () => {
     advance(1);
     expect(FakeES.all).toHaveLength(2);
     expect(atOf(last())).toBe(String(T - 30_000));
+    expect(stillOf(last())).toBe('1');
     expect(openCount()).toBe(1);
     expect(pill()).toBe('Paused'); // a still frame does not play
     last().emit('snapshot', { t: T - 30_000, state: {}, laps: [], stints: [] });
@@ -1275,6 +1286,7 @@ describe('the player bar', () => {
     advance(1_000);
     expect(FakeES.all).toHaveLength(5);
     expect(atOf(last())).toBe(String(T - 40_000));
+    expect(stillOf(last())).toBe('1');
     expect(openCount()).toBe(1);
     last().emit('snapshot', { t: T - 40_000, state: {}, laps: [], stints: [] });
     expect(openCount()).toBe(0);
@@ -1282,6 +1294,7 @@ describe('the player bar', () => {
 
     button('Play');
     expect(atOf(last())).toBe(String(T - 40_000));
+    expect(stillOf(last())).toBeNull();
     expect(pill()).toBe('Replay');
     expect(openCount()).toBe(1);
   });

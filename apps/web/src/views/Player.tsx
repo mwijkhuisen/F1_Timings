@@ -530,86 +530,82 @@ export function Player({
     const { at: from, still } = open;
     if (from === null) return;
     let retry: ReturnType<typeof setTimeout> | undefined;
-    const close = openStream(
-      { recording: recording.id, at: from, delay: liveDelay },
-      {
-        onData(feed, kind) {
-          clock.current = { t: feed.t, wall: Date.now() };
-          stood.current = feed.t;
-          store.update(feed, kind);
-          lastFeed.current = feed;
-          if (kind !== 'snapshot') return;
-          backoff.current = 1000;
-          failCount.current = 0;
-          setFails(0);
-          setProbe(null);
+    const params = { recording: recording.id, at: from, delay: liveDelay, still: still === true };
+    const close = openStream(params, {
+      onData(feed, kind) {
+        clock.current = { t: feed.t, wall: Date.now() };
+        stood.current = feed.t;
+        store.update(feed, kind);
+        lastFeed.current = feed;
+        if (kind !== 'snapshot') return;
+        backoff.current = 1000;
+        failCount.current = 0;
+        setFails(0);
+        setProbe(null);
+        probing.current?.abort();
+        const j = jump.current;
+        if (j) {
+          jump.current = undefined;
+          const s = j.from && skipped(j.from, feed);
+          const text = s ? skippedText(s) : '';
+          setSince(text || null);
+          voice.say(`At ${fmtClock(feed.t)}.${text ? ` Before this point: ${text}.` : ''}`);
+        }
+        // A still frame has what it came for: it closes itself (the cleanup's second close is a no-op).
+        if (still) {
+          close();
+          setOpen({ at: null });
+        }
+      },
+      onError() {
+        failCount.current += 1;
+        setFails(failCount.current);
+        // EventSource cannot see the status: one HEAD tells an expired login from missing files (#100, D3).
+        if (failCount.current === PROBE_AT) {
           probing.current?.abort();
-          const j = jump.current;
-          if (j) {
-            jump.current = undefined;
-            const s = j.from && skipped(j.from, feed);
-            const text = s ? skippedText(s) : '';
-            setSince(text || null);
-            voice.say(`At ${fmtClock(feed.t)}.${text ? ` Before this point: ${text}.` : ''}`);
-          }
-          // A still frame has what it came for: it closes itself (the cleanup's second close is a no-op).
-          if (still) {
-            close();
-            setOpen({ at: null });
-          }
-        },
-        onError() {
-          failCount.current += 1;
-          setFails(failCount.current);
-          // EventSource cannot see the status: one HEAD tells an expired login from missing files (#100, D3).
-          if (failCount.current === PROBE_AT) {
-            probing.current?.abort();
-            const ctl = new AbortController();
-            probing.current = ctl;
-            void probeStream(streamUrl({ recording: recording.id, at: from, delay: liveDelay }), ctl.signal).then(
-              (p) => {
-                if (ctl.signal.aborted) return;
-                setProbe(p);
-                if (p !== 'missing') return;
-                // Stop at T, clamped as the retry does.
-                backoff.current = 1000;
-                const { started_at, ended_at } = rec.current;
-                const end = ended_at === null ? Date.now() : Date.parse(ended_at);
-                const now = still ? clock.current.t : clock.current.t + Math.max(0, Date.now() - clock.current.wall);
-                const t = Math.round(clamp(now, Date.parse(started_at), end));
-                clock.current = { t, wall: Date.now() };
-                stood.current = t;
-                failCount.current = 0;
-                setFails(0);
-                setOpen({ at: null });
-              },
-            );
-          }
-          const wait = backoff.current;
-          backoff.current = Math.min(wait * 2, 30_000);
-          retry = setTimeout(() => {
-            const t = clock.current.t + Math.max(0, Date.now() - clock.current.wall);
+          const ctl = new AbortController();
+          probing.current = ctl;
+          void probeStream(streamUrl(params), ctl.signal).then((p) => {
+            if (ctl.signal.aborted) return;
+            setProbe(p);
+            if (p !== 'missing') return;
+            // Stop at T, clamped as the retry does.
+            backoff.current = 1000;
             const { started_at, ended_at } = rec.current;
             const end = ended_at === null ? Date.now() : Date.parse(ended_at);
-            // A still frame retries as a still at its own T, which does not run.
-            setOpen(
-              still
-                ? { at: from, still }
-                : { at: from === 'live' ? 'live' : Math.round(clamp(t, Date.parse(started_at), end)) },
-            );
-          }, wait);
-        },
-        onStale() {
-          markStale();
-          setStale(true);
-        },
-        onEnd(t) {
-          clock.current = { t, wall: Date.now() };
-          stood.current = t;
-          setOpen({ at: null });
-        },
+            const now = still ? clock.current.t : clock.current.t + Math.max(0, Date.now() - clock.current.wall);
+            const t = Math.round(clamp(now, Date.parse(started_at), end));
+            clock.current = { t, wall: Date.now() };
+            stood.current = t;
+            failCount.current = 0;
+            setFails(0);
+            setOpen({ at: null });
+          });
+        }
+        const wait = backoff.current;
+        backoff.current = Math.min(wait * 2, 30_000);
+        retry = setTimeout(() => {
+          const t = clock.current.t + Math.max(0, Date.now() - clock.current.wall);
+          const { started_at, ended_at } = rec.current;
+          const end = ended_at === null ? Date.now() : Date.parse(ended_at);
+          // A still frame retries as a still at its own T, which does not run.
+          setOpen(
+            still
+              ? { at: from, still }
+              : { at: from === 'live' ? 'live' : Math.round(clamp(t, Date.parse(started_at), end)) },
+          );
+        }, wait);
       },
-    );
+      onStale() {
+        markStale();
+        setStale(true);
+      },
+      onEnd(t) {
+        clock.current = { t, wall: Date.now() };
+        stood.current = t;
+        setOpen({ at: null });
+      },
+    });
     return () => {
       close();
       clearTimeout(retry);
