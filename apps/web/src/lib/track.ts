@@ -1,4 +1,4 @@
-import type { RaceControl } from '@f1/contracts';
+import { formOf, isUnmatched, type RaceControl } from '@f1/contracts';
 
 // Safety-car, VSC and red-flag periods from the race-control rows (A§6.1), as
 // lap ranges for the lap table's header bands. The forms are the ones
@@ -6,16 +6,14 @@ import type { RaceControl } from '@f1/contracts';
 // regexes: SAFETY CAR DEPLOYED / IN THIS LAP; VIRTUAL SAFETY CAR or (2026) VSC
 // DEPLOYED / ENDING; Flag RED or a message starting RED FLAG (2026 sends
 // "RED FLAG - RACE SUSPENDED" as Other without a flag); RACE WILL RESUME;
-// Flag CHEQUERED. A period's end is often implicit (SC → RED, VSC → SC, CHQ).
+// Flag CHEQUERED. A period's end is often implicit (SC → RED, VSC → SC, CHQ). The forms live in
+// @f1/contracts (race-control.ts); `unmatched` counts the rows that look like a period but match none (#105).
 
 export type Kind = 'sc' | 'vsc' | 'red';
 /** Lap numbers, inclusive. */
 export type Period = { kind: Kind; from: number; to: number };
 /** `unplaced`: rows in a period form without a lap number, listed instead of banded. */
-export type Track = { periods: Period[]; unplaced: RaceControl };
-
-type Row = RaceControl[number];
-type Form = 'sc+' | 'sc-' | 'vsc+' | 'vsc-' | 'red' | 'resume' | 'end';
+export type Track = { periods: Period[]; unplaced: RaceControl; unmatched: number };
 
 /** Most severe first. */
 const KINDS: readonly Kind[] = ['red', 'sc', 'vsc'];
@@ -23,24 +21,12 @@ const KINDS: readonly Kind[] = ['red', 'sc', 'vsc'];
 export const KIND_NAME: Record<Kind, string> = { sc: 'Safety car', vsc: 'Virtual safety car', red: 'Red flag' };
 export const KIND_LABEL: Record<Kind, string> = { sc: 'SC', vsc: 'VSC', red: 'RED' };
 
-/** The S0 classification, in its order. */
-function formOf(row: Row): Form | null {
-  const m = row.message ?? '';
-  if (/^(VIRTUAL SAFETY CAR|VSC) DEPLOYED/.test(m)) return 'vsc+';
-  if (/^(VIRTUAL SAFETY CAR|VSC) ENDING/.test(m)) return 'vsc-';
-  if (/^SAFETY CAR DEPLOYED/.test(m)) return 'sc+';
-  if (/^SAFETY CAR IN THIS LAP/.test(m)) return 'sc-';
-  if (row.flag === 'RED' || /^RED FLAG/.test(m)) return 'red';
-  if (/^RACE WILL RESUME/.test(m)) return 'resume';
-  if (row.flag === 'CHEQUERED') return 'end';
-  return null;
-}
-
 /** Reads the rows in the given order (the API's: by date). */
 export function trackPeriods(rows: RaceControl): Track {
   const periods: Period[] = [];
   const unplaced: RaceControl = [];
   const open = new Map<Kind, number>();
+  let unmatched = 0;
   const close = (kind: Kind, at: number) => {
     const from = open.get(kind);
     if (from === undefined) return;
@@ -54,6 +40,7 @@ export function trackPeriods(rows: RaceControl): Track {
   let last = 0;
   for (const row of rows) {
     const form = formOf(row);
+    if (isUnmatched(row)) unmatched++;
     const n = row.lap_number;
     if (n !== null) last = Math.max(last, n);
     if (form === null) continue;
@@ -93,6 +80,7 @@ export function trackPeriods(rows: RaceControl): Track {
   return {
     periods: periods.sort((a, b) => a.from - b.from || KINDS.indexOf(a.kind) - KINDS.indexOf(b.kind)),
     unplaced,
+    unmatched,
   };
 }
 

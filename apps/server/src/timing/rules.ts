@@ -79,19 +79,28 @@ const byDate = (rows: readonly RuleMessage[]) => rows.toSorted((a, b) => at(a) -
  * clears it, only among the laps deleted at that moment. A lap's qualifying phase is that of
  * the last race-control row with a phase dated at or before its `date_start`; in a qualifying
  * session whose first phase row is Q2 (OpenF1 left Q1's rows without one), Q1 before that row.
+ * `onRuling` (scripts/rules-facts.ts) sees each DELETED/REINSTATED message with the lap it resolved,
+ * just before the lap is changed; it changes no result.
  */
-export function markLaps(laps: RuleLap[], raceControl: readonly RuleMessage[], type: string | null): RuleCounts {
+export function markLaps(
+  laps: RuleLap[],
+  raceControl: readonly RuleMessage[],
+  type: string | null,
+  onRuling?: (ruling: Ruling | 'unparsed', lap: RuleLap | undefined) => void,
+): RuleCounts {
   const counts: RuleCounts = { deleted: 0, reinstated: 0, unmatched: 0, unparsed: 0 };
   const sorted = byDate(raceControl);
   for (const { message } of sorted) {
     const ruling = message === null ? undefined : parseRuling(message);
     if (ruling === undefined) continue;
     if (ruling === 'unparsed') {
+      onRuling?.(ruling, undefined);
       counts.unparsed++;
       continue;
     }
     const reinstate = ruling.kind === 'reinstated';
     const lap = resolve(reinstate ? laps.filter((l) => l.deleted) : laps, ruling, type);
+    onRuling?.(ruling, lap);
     if (!lap) counts.unmatched++;
     else if (reinstate) {
       lap.deleted = false;

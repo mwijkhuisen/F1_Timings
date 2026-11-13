@@ -216,7 +216,7 @@ describe('the status panel', () => {
     stale: false,
     updated_at: '2026-10-11T11:00:00.000Z',
   };
-  const render = (r: Record<string, unknown> | null) =>
+  const render = (r: Record<string, unknown> | null, over: Record<string, unknown> = {}) =>
     renderToStaticMarkup(
       <StatusPanel
         status={Status.parse({
@@ -235,6 +235,10 @@ describe('the status panel', () => {
             },
           ],
           recorder: r && { ...recorder, ...r },
+          ingest: null,
+          rain: { states: { live: 0, final: 0, failed: 0 }, failed: [] },
+          rc_unmatched: [],
+          ...over,
         })}
       />,
     );
@@ -251,6 +255,96 @@ describe('the status panel', () => {
       '<div class="scroll" tabindex="0" role="region" aria-label="Last fetch failed"><table class="list" aria-label="Last fetch failed">',
     );
     expect(html).toContain('<td>&lt;b&gt;http_500&lt;/b&gt;</td><td>Sun 11 Oct 2026, 14:00</td>');
+  });
+
+  it('links a failed session to its laps', () => {
+    expect(html).toContain('<td><a href="/2026/0/9965/laps">Race</a></td><td>3</td>');
+  });
+
+  const daemon = {
+    last_sync_at: '2026-10-11T03:00:00.000Z',
+    live_wait: false,
+    last_tick_at: '2026-10-11T11:00:00.000Z',
+  };
+
+  it('the ingest daemon: nothing yet', () => {
+    expect(html).toContain('<h2>Ingest</h2><p>The ingest daemon has not reported yet.</p>');
+    expect(html).not.toContain('role="alert"');
+  });
+
+  it('the ingest daemon: last sync, live window and last report', () => {
+    const r = render(null, { ingest: { ...daemon, stale: false } });
+    expect(r).toContain('<dt>last sync</dt><dd>Sun 11 Oct 2026, 05:00</dd>');
+    expect(r).toContain('<dt>live window</dt><dd>no</dd>');
+    expect(r).toContain('<dt>last report</dt><dd>Sun 11 Oct 2026, 13:00</dd>');
+    expect(r).not.toContain('role="alert"');
+    expect(render(null, { ingest: { ...daemon, live_wait: true, last_sync_at: null, stale: false } })).toContain(
+      '<dt>last sync</dt><dd>—</dd></div><div><dt>live window</dt><dd>yes</dd>',
+    );
+  });
+
+  it('the ingest daemon: stale is an alert', () => {
+    expect(render(null, { ingest: { ...daemon, stale: true } })).toContain(
+      '<p role="alert">The ingest daemon has not reported for over 5 minutes.</p>',
+    );
+  });
+
+  it('the rain grids: counts per state, and a failed grid links to its weather', () => {
+    const r = render(null, {
+      rain: {
+        states: { live: 1, final: 7, failed: 1 },
+        failed: [
+          {
+            session_key: 9966,
+            year: 2026,
+            meeting_name: 'Singapore Grand Prix',
+            session_name: 'Qualifying',
+            fail_count: 3,
+            last_error: 'http_429',
+            next_fetch_at: null,
+          },
+        ],
+      },
+    });
+    expect(r).toContain(
+      '<h2>Rain</h2><dl class="counts"><div><dt>live</dt><dd>1</dd></div><div><dt>final</dt><dd>7</dd>',
+    );
+    expect(r).toContain('aria-label="Rain grids, last fetch failed"');
+    expect(r).toContain('<td><a href="/2026/0/9966/weather">Qualifying</a></td><td>3</td><td>http_429</td><td>—</td>');
+    expect(html).toContain('<h2>Rain</h2><dl class="counts">');
+    expect(html).toContain('<h3>Last fetch failed</h3><p>None.</p><h2>Race control in an unknown form</h2>');
+  });
+
+  it('race control in an unknown form: none, or each race with a link to its laps and the row count', () => {
+    expect(html).toContain('<h2>Race control in an unknown form</h2><p>None.</p>');
+    const r = render(null, {
+      rc_unmatched: [
+        { session_key: 9965, year: 2027, meeting_name: 'Singapore Grand Prix', session_name: 'Race', rows: 4 },
+      ],
+    });
+    expect(r).toContain('<th scope="col">Rows</th>');
+    expect(r).toContain(
+      '<td>2027</td><td>Singapore Grand Prix</td><td><a href="/2027/0/9965/laps">Race</a></td><td>4</td>',
+    );
+  });
+
+  it('a session without a name still gives its link the text "Session <key>", in every table', () => {
+    const failed = {
+      session_key: 9967,
+      year: 2026,
+      meeting_name: null,
+      session_name: null,
+      fail_count: 3,
+      last_error: 'http_500',
+      next_fetch_at: null,
+    };
+    const r = render(null, {
+      failed: [failed],
+      rain: { states: { live: 0, final: 0, failed: 1 }, failed: [failed] },
+      rc_unmatched: [{ session_key: 9967, year: 2026, meeting_name: null, session_name: null, rows: 2 }],
+    });
+    for (const view of ['laps', 'weather']) expect(r).toContain(`<a href="/2026/0/9967/${view}">Session 9967</a>`);
+    expect(r.match(/>Session 9967<\/a>/g)).toHaveLength(3);
   });
 
   it('the recorder: nothing yet', () => {
@@ -311,6 +405,9 @@ describe('the recorder warnings on /live', () => {
       cancelled: 0,
       failed: [],
       recorder: r,
+      ingest: null,
+      rain: { states: { live: 0, final: 0, failed: 0 }, failed: [] },
+      rc_unmatched: [],
     }).recorder;
   const base = {
     state: 'idle',

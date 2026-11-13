@@ -24,6 +24,7 @@ const TABLES = [
   'rain_frame',
   'recording',
   'recorder_status',
+  'ingest_status',
 ];
 
 let db: TestDb;

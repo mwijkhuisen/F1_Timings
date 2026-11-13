@@ -3,7 +3,7 @@ import { createServer } from 'node:net';
 import { join } from 'node:path';
 import { Laps, Pits, RaceControl, Rain, Season, Seasons, SessionDetail, Status, Stints, Weather } from '@f1/contracts';
 import type { Hono } from 'hono';
-import type { Kysely } from 'kysely';
+import { type Kysely, sql } from 'kysely';
 import { HttpResponse, http, passthrough } from 'msw';
 import pino from 'pino';
 import { Agent, setGlobalDispatcher } from 'undici';
@@ -461,7 +461,123 @@ describe('api (f1_api login, Access JWT)', { timeout: 120_000 }, () => {
         },
       ],
       recorder: null,
+      ingest: null,
+      rain: { states: { live: 1, final: 2, failed: 0 }, failed: [] },
+      // The sprint is a Race-type session: its real FORMATION LAP(S) BEHIND SAFETY CAR and SAFETY CAR LIGHTS OFF are ignored (D4).
+      rc_unmatched: [],
     });
+  });
+
+  it('the status carries the ingest row (stale after 5 minutes), the rain counts and failed grids, and the races with unmatched wording', async () => {
+    const status = async () => body('/api/v1/status', Status);
+    const rc = (session_key: number, message: string, flag: string | null = null) => ({
+      session_key,
+      source: 'openf1',
+      date: new Date('2026-10-11T13:00:00Z'),
+      category: 'Other',
+      flag,
+      message,
+    });
+    try {
+      await admin
+        .insertInto('ingest_status')
+        .values({ last_sync_at: new Date('2026-10-26T03:00:00Z'), live_wait: false, last_tick_at: new Date() })
+        .execute();
+      expect((await status()).ingest).toEqual({
+        last_sync_at: '2026-10-26T03:00:00.000Z',
+        live_wait: false,
+        last_tick_at: expect.any(String),
+        stale: false,
+      });
+      await admin
+        .updateTable('ingest_status')
+        .set({ last_tick_at: new Date(Date.now() - 6 * 60_000), live_wait: true })
+        .execute();
+      expect((await status()).ingest).toMatchObject({ live_wait: true, stale: true });
+      await admin
+        .updateTable('ingest_status')
+        .set({ last_tick_at: new Date(Date.now() + 2 * 60_000) })
+        .execute();
+      expect((await status()).ingest).toMatchObject({ stale: true }); // a tick from the future is stale too
+
+      // The failed grid is FAILING's: the other three states are the seeded grids.
+      await admin
+        .insertInto('rain_grid')
+        .values({
+          session_key: FAILING,
+          source: 'open-meteo',
+          map_id: 'test-circuit',
+          centre_lat: 25.49,
+          centre_lon: -80.12,
+          size: 7,
+          step_m: 1000,
+          state: 'failed',
+          fail_count: 3,
+          last_error: 'http_429',
+          next_fetch_at: new Date('2026-10-30T20:25:00Z'),
+          updated_at: new Date('2026-10-26T00:00:00Z'),
+        })
+        .execute();
+      // RACE is a Race, FAILING a practice. Only the race's period-like row with no form and no note is listed.
+      await admin
+        .insertInto('race_control')
+        .values([
+          rc(RACE, 'SAFETY CAR IN'),
+          rc(RACE, 'STEWARDS: UNDER SAFETY CAR INCIDENT NOTED'),
+          rc(RACE, 'SAFETY CAR DEPLOYED'),
+          rc(RACE, 'RED FLAG - SESSION SUSPENDED'),
+          rc(FAILING, 'SAFETY CAR IN'),
+        ])
+        .execute();
+      const got = await status();
+      expect(got.rain).toEqual({
+        states: { live: 1, final: 2, failed: 1 },
+        failed: [
+          {
+            session_key: FAILING,
+            year: 2026,
+            meeting_name: expect.any(String),
+            session_name: 'Practice 1',
+            fail_count: 3,
+            last_error: 'http_429',
+            next_fetch_at: '2026-10-30T20:25:00.000Z',
+          },
+        ],
+      });
+      // Our one row of the race; the sprint's real rows are ignored procedure (D4).
+      expect(got.rc_unmatched).toEqual([
+        { session_key: RACE, year: 2026, meeting_name: expect.any(String), session_name: 'Race', rows: 1 },
+      ]);
+    } finally {
+      await admin.deleteFrom('ingest_status').execute();
+      await admin.deleteFrom('rain_grid').where('session_key', '=', FAILING).execute();
+      await admin
+        .deleteFrom('race_control')
+        .where('source', '=', 'openf1')
+        .where('date', '=', new Date('2026-10-11T13:00:00Z'))
+        .execute();
+    }
+  });
+
+  it('the api role reads ingest_status and cannot write it; f1_ingest cannot delete it', async () => {
+    const code = (p: Promise<unknown>) =>
+      p.then(
+        () => 'ok',
+        (e: { code?: string }) => e.code,
+      );
+    const ingestDb = createDb(testDb.urls.f1_ingest);
+    try {
+      expect(await code(sql`SELECT * FROM ingest_status`.execute(apiDb))).toBe('ok');
+      for (const stmt of [
+        sql`INSERT INTO ingest_status (live_wait, last_tick_at) VALUES (false, now())`,
+        sql`UPDATE ingest_status SET live_wait = true`,
+        sql`DELETE FROM ingest_status`,
+      ])
+        expect(await code(stmt.execute(apiDb))).toBe('42501');
+      expect(await code(sql`DELETE FROM ingest_status`.execute(ingestDb))).toBe('42501');
+    } finally {
+      await ingestDb.destroy();
+    }
   });
 
   it('a session says why data is missing (#99): source, fetch and fail counts, the error code and the next try', async () => {

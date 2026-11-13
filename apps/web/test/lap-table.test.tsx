@@ -508,7 +508,9 @@ describe('the legend and the unplaced rows', () => {
 
   it('lists race-control rows without a lap number as text', () => {
     const unplaced = [rc(null, 'SAFETY CAR DEPLOYED <b>', { date: '2026-10-11T12:34:56.000Z' })];
-    const html = renderToStaticMarkup(<LapTable detail={detail} laps={laps} track={{ periods: [], unplaced }} />);
+    const html = renderToStaticMarkup(
+      <LapTable detail={detail} laps={laps} track={{ periods: [], unplaced, unmatched: 0 }} />,
+    );
     expect(html).toContain(
       '<div class="muted"><p>No lap number in the data, not banded:</p><ul><li>14:34:56 SAFETY CAR DEPLOYED &lt;b&gt;</li></ul></div>',
     );
