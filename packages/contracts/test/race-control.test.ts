@@ -44,6 +44,7 @@ test.each([
   'RACE WILL START BEHIND THE SAFETY CAR',
   'THE SAFETY CAR WILL STAY OUT FOR 3 LAPS',
   'COVERS ON TIME 1 HOURS AFTER CHEQUERED FLAG = 15:00',
+  'STARTING PROCEDURE SUSPENDED',
 ])('isUnmatched: ignores the procedural wording %s', (m) => {
   expect(IGNORED.test(m), m).toBe(true);
   expect(isUnmatched(row(m)), m).toBe(false);
