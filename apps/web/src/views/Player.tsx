@@ -74,6 +74,7 @@ function streamDetail(detail: SessionDetail, state: Obj): SessionDetail {
             driver_number: Number(n),
             position: /^\d{1,2}$/.test(l.Position ?? '') ? Number(l.Position) : null,
             laps: null,
+            grid: null,
             dnf: null,
             dns: null,
             dsq: null,

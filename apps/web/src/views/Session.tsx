@@ -21,6 +21,10 @@ const pathOf = (d: SessionDetail, view: View) =>
     view,
   );
 
+// The Grid row's positions (#115): results[].grid, integers from 1 only (Jolpica's 0 is a pit-lane start, no place).
+const gridOf = (d: SessionDetail) =>
+  new Map(d.results.flatMap((r) => (r.grid !== null && r.grid >= 1 ? [[r.driver_number, r.grid] as const] : [])));
+
 // One session: its header, the tabs Laps | Order (races and sprints) | Compare | Mini-sectors | Stints | Weather, and the view (D1, D11).
 export function Session({ session, view }: { session: number; view: View }) {
   const detail = useSession(session);
@@ -84,7 +88,7 @@ export function Session({ session, view }: { session: number; view: View }) {
         <LapsTab session={session} detail={d} laps={laps.data} />
       ) : view === 'order' ? (
         race ? (
-          <Order drivers={order} laps={laps.data} grid={null} noGrid="Grid not in the OpenF1 data" />
+          <Order drivers={order} laps={laps.data} grid={gridOf(d)} noGrid="Grid not in the OpenF1 data" />
         ) : (
           <p className="muted">The running order is for races and sprints.</p>
         )

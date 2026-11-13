@@ -6,7 +6,7 @@ import type { MergeCounts } from '../merge/merge.ts';
 import { chunks, writeLaps } from '../merge/write.ts';
 import type { createClient, Query } from '../openf1/client.ts';
 import { type Endpoint, parse, type Result, type Rows, type ShapeError } from '../openf1/schemas.ts';
-import { meetingRow, normaliseSession, type SessionData, type SessionRows, sessionRow } from './normalise.ts';
+import { meetingRow, normaliseSession, type SessionData, type SessionRows, sessionRow, withGrid } from './normalise.ts';
 import {
   afterFailure,
   afterSuccess,
@@ -44,6 +44,8 @@ export type Outcome = Result<IngestState, ErrorCode | 'unknown_session' | 'live_
 
 /** Log-ready: the code, the endpoint and, for a schema failure, zod's paths and codes (never a value). */
 type FetchError = { last_error: ErrorCode; endpoint: Endpoint; issues?: ShapeError['issues'] };
+/** The session line's `grid` (#115): counts or a fixed code, never a value. */
+type GridLog = { rows: number; skipped: number } | { error: ErrorCode; kept: number } | 'no_quali';
 
 /** One OpenF1 call, parsed. The heartbeat follows each call, so slow but progressing work never goes stale. */
 async function fetchRows<E extends Endpoint>(
@@ -167,6 +169,8 @@ const setProgress = (trx: Transaction<DB>, key: number, p: Progress) =>
  * session row, decide from the locked row, replace raw responses and child rows (the laps
  * through the merge, after race_control), set the state. A failure is its own short locked
  * write. `refetch` never changes state on failure.
+ * A race also fetches its qualifying's starting grid, which fails on its own (O1, A§8): the
+ * stored grid and its raw row stay, and the session goes on.
  * Never throws; logs one line per session.
  */
 export async function processSession(deps: Deps, key: number, refetch = false): Promise<Outcome> {
@@ -197,10 +201,12 @@ export async function processSession(deps: Deps, key: number, refetch = false): 
   };
 
   let type: string | null;
+  // The grid's qualifying session (#115): undefined for a session that is not a race, null without exactly one.
+  let quali: number | null | undefined;
   try {
     const found = await db
       .selectFrom('session')
-      .select(['type', 'source'])
+      .select(['type', 'source', 'name', 'meeting_key'])
       .where('session_key', '=', key)
       .executeTakeFirst();
     if (!found) {
@@ -217,6 +223,26 @@ export async function processSession(deps: Deps, key: number, refetch = false): 
     if (refetch && (await live(deps))) {
       log.error(line({ state: 'unchanged', error: 'live_session' }), 'session');
       return { ok: false, error: 'live_session' };
+    }
+    if (type === 'Race') {
+      // OpenF1 links the grid to the qualifying session (br-g/openf1#356); 'Sprint Shootout' is 2023's name.
+      const names =
+        found.name === 'Race'
+          ? ['Qualifying']
+          : found.name === 'Sprint'
+            ? ['Sprint Qualifying', 'Sprint Shootout']
+            : [];
+      const q =
+        names.length === 0
+          ? []
+          : await db
+              .selectFrom('session')
+              .select('session_key')
+              .where('meeting_key', '=', found.meeting_key)
+              .where('name', 'in', names)
+              .where('is_cancelled', '=', false)
+              .execute();
+      quali = q.length === 1 ? (q[0]?.session_key ?? null) : null;
     }
   } catch (err) {
     log.error(line({ state: 'unchanged', last_error: 'db', cause: codeOf(err) }), 'session');
@@ -240,6 +266,8 @@ export async function processSession(deps: Deps, key: number, refetch = false): 
       body: JSON.stringify(body),
     });
   }
+  // O1: after the seven, and never a failure of the session.
+  const grid = typeof quali === 'number' ? await fetchRows(deps, 'starting_grid', { session_key: quali }) : undefined;
   let normalised: ReturnType<typeof normaliseSession>;
   try {
     normalised = normaliseSession(key, data as SessionData, type);
@@ -248,7 +276,7 @@ export async function processSession(deps: Deps, key: number, refetch = false): 
   }
   const { rows, skipped, rules } = normalised;
 
-  let done: { next: Progress; empty: boolean; merge?: MergeCounts };
+  let done: { next: Progress; empty: boolean; merge?: MergeCounts; grid?: GridLog | undefined };
   try {
     done = await db.transaction().execute(async (trx) => {
       const row = await lockSession(trx, key);
@@ -264,9 +292,51 @@ export async function processSession(deps: Deps, key: number, refetch = false): 
         if (!refetch) await setProgress(trx, key, next);
         return { next, empty: true };
       }
-      for (const table of REPLACED) await trx.deleteFrom(table).where('session_key', '=', key).execute();
-      await trx.insertInto('raw_response').values(raw).execute();
+      // O1: a failed grid fetch, or [] where the stored grid had rows (`empty`), keeps the stored raw row and its grid.
+      let gridRaw: Insertable<DB['raw_response']> | undefined;
+      let gridLog: GridLog | undefined = quali === null ? 'no_quali' : undefined;
       const { lap, ...children } = rows;
+      if (typeof quali === 'number' && grid) {
+        const stored = await trx
+          .selectFrom('raw_response')
+          .select(['body', 'fetched_at', 'http_status'])
+          .where('session_key', '=', key)
+          .where('endpoint', '=', 'starting_grid')
+          .executeTakeFirst();
+        const hadRows = Array.isArray(stored?.body) && stored.body.length > 0;
+        const fresh = grid.ok && (grid.value.rows.length > 0 || !hadRows) ? grid.value : undefined;
+        const error = fresh ? undefined : grid.ok ? 'empty' : grid.error.last_error;
+        let gridRows: Rows<'starting_grid'> = [];
+        if (fresh) {
+          gridRows = fresh.rows;
+          gridRaw = {
+            session_key: key,
+            source: 'openf1',
+            endpoint: 'starting_grid',
+            fetched_at: now(),
+            http_status: fresh.status,
+            body: JSON.stringify(fresh.body),
+          };
+        } else if (stored) {
+          const parsed = parse('starting_grid', stored.body); // a body that no longer parses keeps no grid
+          gridRows = parsed.ok ? parsed.value : [];
+          gridRaw = {
+            ...stored,
+            session_key: key,
+            source: 'openf1',
+            endpoint: 'starting_grid',
+            body: JSON.stringify(stored.body),
+          };
+        }
+        const graded = withGrid(children.result, gridRows, quali);
+        children.result = graded.results;
+        gridLog = error === undefined ? { rows: graded.rows, skipped: graded.skipped } : { error, kept: graded.rows };
+      }
+      for (const table of REPLACED) await trx.deleteFrom(table).where('session_key', '=', key).execute();
+      await trx
+        .insertInto('raw_response')
+        .values(gridRaw ? [...raw, gridRaw] : raw)
+        .execute();
       // The cast: Kysely cannot relate a table name from a loop to its row type.
       for (const [table, list] of Object.entries(children) as [keyof SessionRows, object[]][]) {
         for (const chunk of chunks(list))
@@ -278,7 +348,7 @@ export async function processSession(deps: Deps, key: number, refetch = false): 
       const merge = await writeLaps(trx, key, 'openf1', lap);
       const next = afterSuccess(row, now());
       await setProgress(trx, key, next);
-      return { next, empty: false, merge };
+      return { next, empty: false, merge, grid: gridLog };
     });
   } catch (err) {
     return fail('db', { cause: codeOf(err) });
@@ -288,7 +358,10 @@ export async function processSession(deps: Deps, key: number, refetch = false): 
     return { ok: false, error: 'empty' };
   }
   const counts = Object.fromEntries(Object.entries(rows).map(([table, list]) => [table, list.length]));
-  log.info(line({ state: done.next.ingest_state, rows: counts, skipped, rules, merge: done.merge }), 'session');
+  log.info(
+    line({ state: done.next.ingest_state, rows: counts, skipped, rules, merge: done.merge, grid: done.grid }),
+    'session',
+  );
   return { ok: true, value: done.next.ingest_state };
 }
 

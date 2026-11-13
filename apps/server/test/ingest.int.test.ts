@@ -27,6 +27,8 @@ import { createTestDb, type TestDb } from './db.ts';
 
 const FIXTURES = join(import.meta.dirname, '../src/openf1/fixtures');
 const CASES: Record<number, string> = { 11388: 'normal', 11392: 'quali', 11383: 'sprint' };
+// #115: the grid is served by the qualifying's key (race 11388 → 11384, sprint 11383 → 11379); every other key is empty.
+const GRID: Record<number, string> = { 11384: 'normal', 11379: 'sprint' };
 const EMPTY = 11465; // 2026 testing, day 1: served the *-empty fixtures (OpenF1's 404 "No results found.")
 // The 10 sessions sessions-year marks is_cancelled (Bahrain and Saudi Arabia, April 2026).
 const CANCELLED = [11254, 11255, 11256, 11257, 11261, 11262, 11263, 11264, 11265, 11269];
@@ -66,6 +68,7 @@ const openf1 = (override: (endpoint: string, key: number) => Response | undefine
       const answer = override(endpoint, key);
       if (answer) return answer;
       if (query.has('year')) return fixture(`${endpoint}-${query.get('year') === '2026' ? 'year' : 'empty'}`);
+      if (endpoint === 'starting_grid') return fixture(`starting_grid-${GRID[key] ?? 'empty'}`);
       return fixture(`${endpoint}-${CASES[key] ?? 'empty'}`);
     }),
   );
@@ -186,7 +189,8 @@ describe('ingest (fixtures through msw, f1_ingest login)', { timeout: 120_000 },
     const before = beats;
     at = new Date('2026-10-25T12:00:00Z');
     expect(await tick(deps)).toBe(95);
-    expect(beats - before).toBe(94 * 7 + 2 + 95 + 1); // after each OpenF1 call (11388 fails at its 2nd), each session, the tick
+    // After each OpenF1 call (11388 fails at its 2nd; the 22 other past races and sprints add their grid), each session, the tick.
+    expect(beats - before).toBe(94 * 7 + 22 + 2 + 95 + 1);
     expect(logged('live session: over')).toBe(1);
     expect(await states()).toEqual({ final: 92, fetched: 2, due: 1, scheduled: 36 });
     expect(await session(11388)).toMatchObject({
@@ -261,7 +265,7 @@ describe('ingest (fixtures through msw, f1_ingest login)', { timeout: 120_000 },
       race_control: 155,
       result: 22,
       weather: 160,
-      raw_response: 7,
+      raw_response: 8,
     });
     expect(await rowCounts(11392)).toEqual({
       driver: 4,
@@ -283,7 +287,7 @@ describe('ingest (fixtures through msw, f1_ingest login)', { timeout: 120_000 },
       race_control: 159,
       result: 22,
       weather: 127,
-      raw_response: 7,
+      raw_response: 8,
     });
     expect(await rowCounts(EMPTY)).toEqual({
       driver: 0,
@@ -319,6 +323,27 @@ describe('ingest (fixtures through msw, f1_ingest login)', { timeout: 120_000 },
     expect(await per('result', "gaps_ms = '{NULL}'")).toEqual([8, 0, 0]);
     expect(await per('result', 'gaps_ms IS NULL')).toEqual([4, 0, 9]);
     expect(await per('result', 'cardinality(durations_ms) = 3')).toEqual([0, 22, 0]);
+    // #115: the race and the sprint take their qualifying's grid (22 cars each); the qualifying itself has none.
+    expect(await per('result', 'grid IS NOT NULL')).toEqual([22, 0, 22]);
+    expect(await per('raw_response', "endpoint = 'starting_grid' AND http_status = 200")).toEqual([1, 0, 1]);
+    const grid = (key: number) =>
+      db
+        .selectFrom('result')
+        .select(['driver_number', 'grid'])
+        .where('session_key', '=', key)
+        .where('grid', '<=', 3)
+        .orderBy('grid')
+        .execute();
+    expect(await grid(11388)).toEqual([
+      { driver_number: 3, grid: 1 },
+      { driver_number: 16, grid: 2 },
+      { driver_number: 44, grid: 3 },
+    ]);
+    expect(await grid(11383)).toEqual([
+      { driver_number: 3, grid: 1 },
+      { driver_number: 63, grid: 2 },
+      { driver_number: 16, grid: 3 },
+    ]);
     // P5a weather: the sprint was wet for 20 samples; the race and the qualifying were dry.
     expect(await per('weather', 'rainfall = 1')).toEqual([0, 0, 20]);
     expect(await per('weather', 'rainfall = 0')).toEqual([160, 77, 107]);
@@ -345,6 +370,9 @@ describe('ingest (fixtures through msw, f1_ingest login)', { timeout: 120_000 },
     // The per-session log line counts the weather rows, never a value.
     const line = lines.map((l) => JSON.parse(l)).findLast((l) => l.session_key === 11388 && l.msg === 'session');
     expect(line?.rows).toMatchObject({ weather: 160 });
+    expect(line?.grid).toEqual({ rows: 22, skipped: 0 });
+    const quali = lines.map((l) => JSON.parse(l)).findLast((l) => l.session_key === 11392 && l.msg === 'session');
+    expect(quali).not.toHaveProperty('grid'); // not a race
 
     expect(
       await db
@@ -395,7 +423,7 @@ describe('ingest (fixtures through msw, f1_ingest login)', { timeout: 120_000 },
     const changed = [{ ...laps[0], lap_duration: 99.999 }, ...laps.slice(1, -2)];
     openf1((endpoint, key) => (endpoint === 'laps' && key === 11388 ? HttpResponse.json(changed) : undefined));
     expect(await processSession(deps, 11388, true)).toEqual({ ok: true, value: 'final' });
-    expect(await rowCounts(11388)).toMatchObject({ lap: 60, raw_response: 7 });
+    expect(await rowCounts(11388)).toMatchObject({ lap: 60, raw_response: 8 });
     const lap = (driver: number, n: number) =>
       db
         .selectFrom('lap')
@@ -428,7 +456,7 @@ describe('ingest (fixtures through msw, f1_ingest login)', { timeout: 120_000 },
     const twice = [...weather, { ...first, date: '2026-10-11T11:07:56.727+00:00', air_temperature: 99.5, rainfall: 1 }];
     openf1((endpoint, key) => (endpoint === 'weather' && key === 11388 ? HttpResponse.json(twice) : undefined));
     expect(await processSession(deps, 11388, true)).toEqual({ ok: true, value: 'final' });
-    expect(await rowCounts(11388)).toMatchObject({ weather: 160, raw_response: 7 });
+    expect(await rowCounts(11388)).toMatchObject({ weather: 160, raw_response: 8 });
     expect(await firstRow()).toEqual([{ air_temperature: 99.5, rainfall: 1 }]);
     expect(JSON.parse(lines.at(-1) ?? '{}')).toMatchObject({ session_key: 11388, rows: { weather: 160 }, skipped: 1 });
 
@@ -437,10 +465,10 @@ describe('ingest (fixtures through msw, f1_ingest login)', { timeout: 120_000 },
       endpoint === 'weather' && key === 11388 ? fixture('weather-empty') : undefined;
     openf1(empty);
     expect(await processSession(deps, 11388, true)).toEqual({ ok: false, error: 'empty' });
-    expect(await rowCounts(11388)).toMatchObject({ weather: 160, raw_response: 7 });
+    expect(await rowCounts(11388)).toMatchObject({ weather: 160, raw_response: 8 });
     expect(await processSession(deps, 11388)).toEqual({ ok: false, error: 'empty' });
     expect(await session(11388)).toMatchObject({ ingest_state: 'due', fail_count: 1, last_error: 'empty' });
-    expect(await rowCounts(11388)).toMatchObject({ weather: 160, raw_response: 7 });
+    expect(await rowCounts(11388)).toMatchObject({ weather: 160, raw_response: 8 });
     expect(await firstRow()).toEqual([{ air_temperature: 99.5, rainfall: 1 }]);
 
     // A weather schema failure fails the session's fetch like any endpoint: the path and code, never the value.
@@ -458,6 +486,111 @@ describe('ingest (fixtures through msw, f1_ingest login)', { timeout: 120_000 },
     expect(await processSession(deps, 11388, true)).toEqual({ ok: true, value: 'final' });
     expect(await firstRow()).toEqual([{ air_temperature: 30, rainfall: 0 }]);
     expect(await session(11388)).toMatchObject({ ingest_state: 'final', fail_count: 0, last_error: null });
+  });
+
+  // #115, O1 (owner, 2026-11-13): the grid fails on its own. The session still succeeds and its other tables are
+  // replaced; the stored grid and its raw row stay; the log line says why, as a fixed code.
+  describe('the starting grid (O1)', () => {
+    const gridRaw = () =>
+      db
+        .selectFrom('raw_response')
+        .selectAll()
+        .where('session_key', '=', 11388)
+        .where('endpoint', '=', 'starting_grid')
+        .executeTakeFirst();
+    const grids = () =>
+      db
+        .selectFrom('result')
+        .select(['driver_number', 'grid'])
+        .where('session_key', '=', 11388)
+        .orderBy('driver_number')
+        .execute();
+    const lastLine = () => JSON.parse(lines.at(-1) ?? '{}');
+    const gridRequests = () => requests.filter((r) => r.startsWith('starting_grid?')).length;
+    const laps = raw('laps-normal') as Lap[];
+    const fewer = () => HttpResponse.json(laps.slice(0, -2));
+    const grid = raw('starting_grid-normal') as Record<string, unknown>[];
+
+    it.each([
+      ['http_500', () => new HttpResponse(null, { status: 500 })],
+      ['schema', () => HttpResponse.json([{ ...grid[0], position: 'P1' }, ...grid.slice(1)])],
+      ['empty', () => fixture('starting_grid-empty')],
+    ])('a grid %s keeps the stored grid and its raw row; the session succeeds', async (code, answer) => {
+      const before = { raw: await gridRaw(), grids: await grids() };
+      expect(before.raw).toMatchObject({ http_status: 200 });
+      expect(before.grids.filter((r) => r.grid !== null)).toHaveLength(22);
+      await db
+        .updateTable('session')
+        .set({ ingest_state: 'due', fail_count: 1, last_error: 'timeout' })
+        .where('session_key', '=', 11388)
+        .execute();
+      openf1((endpoint, key) =>
+        endpoint === 'starting_grid' ? answer() : endpoint === 'laps' && key === 11388 ? fewer() : undefined,
+      );
+      expect(await processSession(deps, 11388)).toEqual({ ok: true, value: 'final' });
+      expect(await session(11388)).toMatchObject({ ingest_state: 'final', fail_count: 0, last_error: null });
+      expect(await rowCounts(11388)).toMatchObject({ lap: 60, result: 22, raw_response: 8 }); // the laps replaced
+      expect(await gridRaw()).toEqual(before.raw);
+      expect(await grids()).toEqual(before.grids);
+      expect(lastLine()).toMatchObject({ session_key: 11388, state: 'final', grid: { error: code, kept: 22 } });
+      expect(lastLine().grid).toEqual({ error: code, kept: 22 }); // a code and a count, never a value or a path
+    });
+
+    it('without a stored grid, a failed grid fetch keeps none', async () => {
+      await db
+        .deleteFrom('raw_response')
+        .where('session_key', '=', 11388)
+        .where('endpoint', '=', 'starting_grid')
+        .execute();
+      openf1((endpoint) => (endpoint === 'starting_grid' ? new HttpResponse(null, { status: 500 }) : undefined));
+      expect(await processSession(deps, 11388, true)).toEqual({ ok: true, value: 'final' });
+      expect(await rowCounts(11388)).toMatchObject({ lap: 62, raw_response: 7 });
+      expect((await grids()).filter((r) => r.grid !== null)).toEqual([]);
+      expect(lastLine().grid).toEqual({ error: 'http_500', kept: 0 });
+    });
+
+    it('a refetch replaces the grid and its raw row', async () => {
+      const swapped = [{ ...grid[0], position: 2 }, { ...grid[1], position: 1 }, ...grid.slice(2)];
+      openf1((endpoint) => (endpoint === 'starting_grid' ? HttpResponse.json(swapped) : undefined));
+      expect(await processSession(deps, 11388, true)).toEqual({ ok: true, value: 'final' });
+      expect((await grids()).filter((r) => r.grid !== null && r.grid <= 2)).toEqual([
+        { driver_number: 3, grid: 2 },
+        { driver_number: 16, grid: 1 },
+      ]);
+      expect((await gridRaw())?.body).toEqual(swapped);
+      openf1();
+      expect(await processSession(deps, 11388, true)).toEqual({ ok: true, value: 'final' });
+      expect((await gridRaw())?.body).toEqual(grid);
+      expect((await grids()).find((r) => r.driver_number === 3)).toEqual({ driver_number: 3, grid: 1 });
+      expect(lastLine().grid).toEqual({ rows: 22, skipped: 0 });
+    });
+
+    // Exactly one non-cancelled qualifying of the right name, else no request, no grid and no grid raw row.
+    it('no_quali: a race whose qualifying is missing, doubled or cancelled', async () => {
+      const rename = (key: number, name: string, is_cancelled = false) =>
+        db.updateTable('session').set({ name, is_cancelled }).where('session_key', '=', key).execute();
+      const expectNoGrid = async (key: number) => {
+        const sent = gridRequests();
+        openf1();
+        expect(await processSession(deps, key, true)).toEqual({ ok: true, value: 'final' });
+        expect(gridRequests()).toBe(sent);
+        expect(await countWhere('raw_response', key)).toBe(7); // the old grid raw row is gone with the rest
+        expect(await countWhere('result', key, 'grid IS NOT NULL')).toBe(0);
+        expect(lastLine()).toMatchObject({ session_key: key, grid: 'no_quali' });
+      };
+      // 11384 renamed: the race has no Qualifying, and the sprint has two (Sprint Qualifying and Sprint Shootout).
+      await rename(11384, 'Sprint Shootout');
+      await expectNoGrid(11388);
+      await expectNoGrid(11383);
+      await rename(11384, 'Qualifying', true); // cancelled
+      await expectNoGrid(11388);
+      await rename(11384, 'Qualifying');
+      for (const key of [11388, 11383]) {
+        expect(await processSession(deps, key, true)).toEqual({ ok: true, value: 'final' });
+        expect(await countWhere('result', key, 'grid IS NOT NULL')).toBe(22);
+        expect(await countWhere('raw_response', key)).toBe(8);
+      }
+    });
   });
 
   it('a sync moves next_fetch_at only while scheduled, and a cancelled session never gets one', async () => {

@@ -173,7 +173,7 @@ export function createApp({
       .execute();
     const results = await db
       .selectFrom('result')
-      .select(['driver_number', 'position', 'laps', 'dnf', 'dns', 'dsq', 'durations_ms', 'gaps_ms'])
+      .select(['driver_number', 'position', 'laps', 'grid', 'dnf', 'dns', 'dsq', 'durations_ms', 'gaps_ms'])
       .where('session_key', '=', key)
       .orderBy(sql`position nulls last`)
       .orderBy('driver_number')
