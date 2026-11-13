@@ -2,10 +2,10 @@ import { DummyDriver, Kysely, PostgresAdapter, PostgresIntrospector, PostgresQue
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { DB } from '../src/db/db.ts';
 import { minuteWork, SYNC_RETRY_MS, scheduleSync } from '../src/ingest/ingest.ts';
-import { ms, normaliseSession } from '../src/ingest/normalise.ts';
+import { ms, normaliseSession, withGrid } from '../src/ingest/normalise.ts';
 import { afterFailure, afterSuccess, busyGuard, errorCode, firstFetchAt, type Progress } from '../src/ingest/state.ts';
 import type { createClient } from '../src/openf1/client.ts';
-import type { Lap, Weather } from '../src/openf1/schemas.ts';
+import type { Lap, StartingGrid, Weather } from '../src/openf1/schemas.ts';
 
 const MIN = 60_000;
 const end = new Date('2026-10-11T14:00:00Z');
@@ -170,6 +170,37 @@ describe('normaliseSession', () => {
       expect.objectContaining({ date: '2026-10-11T12:01:57.018000+00:00', air_temperature: 30.2 }),
     ]);
     expect(skipped).toBe(2);
+  });
+});
+
+// #115: the grid comes from the qualifying session's rows, by driver number.
+describe('withGrid', () => {
+  const g = (driver_number: number, position: number | null, session_key = 11384): StartingGrid => ({
+    session_key,
+    driver_number,
+    position,
+    lap_duration: null,
+    meeting_key: null,
+  });
+  const result = (driver_number: number) => ({ session_key: 11388, source: 'openf1', driver_number });
+
+  it('sets grid by driver; another session, a duplicate (the last wins) or a driver without a result is skipped; counts the usable rows', () => {
+    const grid = [g(1, 5), g(1, 2), g(4, 1), g(16, 3, 11379), g(99, 4), g(44, null)];
+    const out = withGrid([result(1), result(4), result(16), result(44)], grid, 11384);
+    expect(out.results.map((r) => [r.driver_number, r.grid])).toEqual([
+      [1, 2],
+      [4, 1],
+      [16, null],
+      [44, null],
+    ]);
+    expect(out).toMatchObject({ rows: 2, skipped: 4, usable: 3 }); // usable: 1, 4 and 99; not 16 (another session), not 44 (null)
+    expect(withGrid([result(1)], [], 11384)).toEqual({
+      results: [{ ...result(1), grid: null }],
+      rows: 0,
+      skipped: 0,
+      usable: 0,
+    });
+    expect(withGrid([result(1)], [g(1, null), g(2, 1, 11379)], 11384)).toMatchObject({ usable: 0 });
   });
 });
 

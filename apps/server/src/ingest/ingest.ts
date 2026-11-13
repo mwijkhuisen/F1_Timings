@@ -7,7 +7,7 @@ import type { MergeCounts } from '../merge/merge.ts';
 import { chunks, writeLaps } from '../merge/write.ts';
 import type { createClient, Query } from '../openf1/client.ts';
 import { type Endpoint, parse, type Result, type Rows, type ShapeError } from '../openf1/schemas.ts';
-import { meetingRow, normaliseSession, type SessionData, type SessionRows, sessionRow } from './normalise.ts';
+import { meetingRow, normaliseSession, type SessionData, type SessionRows, sessionRow, withGrid } from './normalise.ts';
 import {
   afterFailure,
   afterSuccess,
@@ -25,8 +25,9 @@ import {
 
 const FIRST_YEAR = 2023;
 const SESSION_ENDPOINTS = ['drivers', 'laps', 'stints', 'pit', 'race_control', 'session_result', 'weather'] as const;
-// Laps are not among them: writeLaps replaces OpenF1's candidates only and rebuilds `lap` (P3b).
-const REPLACED = ['raw_response', 'driver', 'stint', 'pit', 'race_control', 'result', 'weather'] as const;
+// Laps are not among them: writeLaps replaces OpenF1's candidates only and rebuilds `lap` (P3b). raw_response
+// goes on its own, for the grid (O1).
+const REPLACED = ['driver', 'stint', 'pit', 'race_control', 'result', 'weather'] as const;
 
 export type Deps = {
   db: Kysely<DB>;
@@ -51,6 +52,11 @@ export type Outcome = Result<IngestState, ErrorCode | 'unknown_session' | 'live_
 
 /** Log-ready: the code, the endpoint and, for a schema failure, zod's paths and codes (never a value). */
 type FetchError = { last_error: ErrorCode; endpoint: Endpoint; issues?: ShapeError['issues'] };
+/** The session line's `grid` (#115): counts or a fixed code, never a value. */
+type GridLog =
+  | { rows: number; skipped: number }
+  | { error: ErrorCode | 'no_quali'; kept: number; issues?: ShapeError['issues'] }
+  | 'no_quali';
 
 /** One OpenF1 call, parsed. The heartbeat follows each call, so slow but progressing work never goes stale. */
 async function fetchRows<E extends Endpoint>(
@@ -174,6 +180,8 @@ const setProgress = (trx: Transaction<DB>, key: number, p: Progress) =>
  * session row, decide from the locked row, replace raw responses and child rows (the laps
  * through the merge, after race_control), set the state. A failure is its own short locked
  * write. `refetch` never changes state on failure.
+ * A race also fetches its qualifying's starting grid, which fails on its own (O1, A§8): the
+ * stored grid and its raw row stay, and the session goes on.
  * Never throws; logs one line per session.
  */
 export async function processSession(deps: Deps, key: number, refetch = false): Promise<Outcome> {
@@ -205,10 +213,12 @@ export async function processSession(deps: Deps, key: number, refetch = false): 
   };
 
   let type: string | null;
+  // The grid's qualifying session (#115): undefined for a session that is not a race, null without exactly one.
+  let quali: number | null | undefined;
   try {
     const found = await db
       .selectFrom('session')
-      .select(['type', 'source'])
+      .select(['type', 'source', 'name', 'meeting_key'])
       .where('session_key', '=', key)
       .executeTakeFirst();
     if (!found) {
@@ -225,6 +235,26 @@ export async function processSession(deps: Deps, key: number, refetch = false): 
     if (refetch && (await live(deps))) {
       log.error(line({ state: 'unchanged', error: 'live_session' }), 'session');
       return { ok: false, error: 'live_session' };
+    }
+    if (type === 'Race') {
+      // OpenF1 links the grid to the qualifying session (br-g/openf1#356); 'Sprint Shootout' is 2023's name.
+      const names =
+        found.name === 'Race'
+          ? ['Qualifying']
+          : found.name === 'Sprint'
+            ? ['Sprint Qualifying', 'Sprint Shootout']
+            : [];
+      const q =
+        names.length === 0
+          ? []
+          : await db
+              .selectFrom('session')
+              .select('session_key')
+              .where('meeting_key', '=', found.meeting_key)
+              .where('name', 'in', names)
+              .where('is_cancelled', '=', false)
+              .execute();
+      quali = q.length === 1 ? (q[0]?.session_key ?? null) : null;
     }
   } catch (err) {
     log.error(line({ state: 'unchanged', last_error: 'db', cause: codeOf(err) }), 'session');
@@ -248,6 +278,8 @@ export async function processSession(deps: Deps, key: number, refetch = false): 
       body: JSON.stringify(body),
     });
   }
+  // O1: after the seven, and never a failure of the session.
+  const grid = typeof quali === 'number' ? await fetchRows(deps, 'starting_grid', { session_key: quali }) : undefined;
   let normalised: ReturnType<typeof normaliseSession>;
   try {
     normalised = normaliseSession(key, data as SessionData, type);
@@ -256,7 +288,7 @@ export async function processSession(deps: Deps, key: number, refetch = false): 
   }
   const { rows, skipped, rules } = normalised;
 
-  let done: { next: Progress; empty: boolean; merge?: MergeCounts };
+  let done: { next: Progress; empty: boolean; merge?: MergeCounts; grid?: GridLog | undefined };
   try {
     done = await db.transaction().execute(async (trx) => {
       const row = await lockSession(trx, key);
@@ -272,9 +304,78 @@ export async function processSession(deps: Deps, key: number, refetch = false): 
         if (!refetch) await setProgress(trx, key, next);
         return { next, empty: true };
       }
-      for (const table of REPLACED) await trx.deleteFrom(table).where('session_key', '=', key).execute();
-      await trx.insertInto('raw_response').values(raw).execute();
+      // O1 (A§8): the grid fails on its own. A keep leaves the stored grid raw row untouched and carries the old
+      // grids over by driver (never its body, never a re-parse); only a fresh grid replaces both.
       const { lap, ...children } = rows;
+      let gridLog: GridLog | undefined;
+      let keep: { error: ErrorCode | 'no_quali'; issues?: ShapeError['issues'] } | undefined;
+      let fresh: { graded: ReturnType<typeof withGrid>; raw: Insertable<DB['raw_response']> } | undefined;
+      let old = new Map<number, number | null>();
+      if (quali !== undefined) {
+        const results = await trx
+          .selectFrom('result')
+          .select(['driver_number', 'grid'])
+          .where('session_key', '=', key)
+          .execute();
+        old = new Map(results.map((r) => [r.driver_number, r.grid]));
+        const storedRaw = await trx
+          .selectFrom('raw_response')
+          .select(sql<number>`jsonb_array_length(body)`.as('n'))
+          .where('session_key', '=', key)
+          .where('endpoint', '=', 'starting_grid')
+          .executeTakeFirst();
+        const stored = results.some((r) => r.grid !== null) || (storedRaw?.n ?? 0) > 0;
+        if (quali === null || !grid) {
+          if (stored) keep = { error: 'no_quali' };
+          else gridLog = 'no_quali';
+        } else if (!grid.ok) {
+          keep = { error: grid.error.last_error, ...(grid.error.issues && { issues: grid.error.issues }) };
+        } else {
+          const graded = withGrid(children.result, grid.value.rows, quali);
+          if (graded.usable === 0 && stored) keep = { error: 'empty' };
+          else
+            fresh = {
+              graded,
+              raw: {
+                session_key: key,
+                source: 'openf1',
+                endpoint: 'starting_grid',
+                fetched_at: now(),
+                http_status: grid.value.status,
+                body: JSON.stringify(grid.value.body),
+              },
+            };
+        }
+      }
+      for (const table of REPLACED) await trx.deleteFrom(table).where('session_key', '=', key).execute();
+      // The grid raw row goes with the rest only when there is none to keep or replace.
+      await trx
+        .deleteFrom('raw_response')
+        .where('session_key', '=', key)
+        .$if(keep !== undefined || fresh !== undefined, (q) => q.where('endpoint', '<>', 'starting_grid'))
+        .execute();
+      await trx.insertInto('raw_response').values(raw).execute();
+      if (fresh) {
+        // A body jsonb refuses (a NUL, a lone surrogate in a field the schema strips) is a grid schema failure only.
+        await sql`SAVEPOINT grid`.execute(trx);
+        try {
+          await trx
+            .deleteFrom('raw_response')
+            .where('session_key', '=', key)
+            .where('endpoint', '=', 'starting_grid')
+            .execute();
+          await trx.insertInto('raw_response').values(fresh.raw).execute();
+          children.result = fresh.graded.results;
+          gridLog = { rows: fresh.graded.rows, skipped: fresh.graded.skipped };
+        } catch {
+          await sql`ROLLBACK TO SAVEPOINT grid`.execute(trx);
+          keep = { error: 'schema' };
+        }
+      }
+      if (keep) {
+        children.result = children.result.map((r) => ({ ...r, grid: old.get(r.driver_number) ?? null }));
+        gridLog = { ...keep, kept: children.result.filter((r) => r.grid !== null).length };
+      }
       // The cast: Kysely cannot relate a table name from a loop to its row type.
       for (const [table, list] of Object.entries(children) as [keyof SessionRows, object[]][]) {
         for (const chunk of chunks(list))
@@ -286,7 +387,7 @@ export async function processSession(deps: Deps, key: number, refetch = false): 
       const merge = await writeLaps(trx, key, 'openf1', lap);
       const next = afterSuccess(row, now());
       await setProgress(trx, key, next);
-      return { next, empty: false, merge };
+      return { next, empty: false, merge, grid: gridLog };
     });
   } catch (err) {
     return fail('db', { cause: codeOf(err) });
@@ -300,7 +401,15 @@ export async function processSession(deps: Deps, key: number, refetch = false): 
   // Only a race gets bands: the period-like rows that match no form (#105), so a rewording shows in the log.
   const rc_unmatched = type === 'Race' ? { rc_unmatched: rows.race_control.filter(isUnmatched).length } : {};
   log.info(
-    line({ state: done.next.ingest_state, rows: counts, skipped, rules, merge: done.merge, ...rc_unmatched }),
+    line({
+      state: done.next.ingest_state,
+      rows: counts,
+      skipped,
+      rules,
+      merge: done.merge,
+      grid: done.grid,
+      ...rc_unmatched,
+    }),
     'session',
   );
   return { ok: true, value: done.next.ingest_state };

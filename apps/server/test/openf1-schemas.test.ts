@@ -173,6 +173,44 @@ describe('[U] the weather fixtures', () => {
   });
 });
 
+// [U] facts of the starting_grid endpoint (#115, A§6.1), pinned on the fixtures recorded 2026-11-13: the grid is linked
+// to the qualifying session (the race's own key has none, br-g/openf1#356), positions 1…22 without a gap, and a car
+// without a qualifying time still has a position.
+describe('[U] the starting_grid fixtures', () => {
+  type G = { session_key: number; position: number | null; lap_duration: number | null };
+  const grid = (name: string) => read(`starting_grid-${name}.raw`) as G[];
+
+  it.each(['racekey', 'empty'])('%s is empty (404 "No results found.")', (name) => {
+    expect(grid(name)).toEqual([]);
+    expect((read(`starting_grid-${name}.meta.json`) as { status: number }).status).toBe(404);
+  });
+
+  it('more than 100 rows is a schema failure (O1: the grid fails on its own)', () => {
+    const rows = grid('normal');
+    const many = Array.from({ length: 101 }, (_, i) => rows[i % rows.length]);
+    expect(parse('starting_grid', many.slice(0, 100)).ok).toBe(true);
+    expect(parse('starting_grid', many)).toEqual({
+      ok: false,
+      error: { code: 'shape', issues: [{ path: '', code: 'too_big' }] },
+    });
+  });
+
+  it.each([
+    // [fixture, its qualifying's session_key, null lap_duration rows]
+    ['normal', 11384, 1],
+    ['sprint', 11379, 2],
+    ['edge', 11400, 1],
+  ] as const)('%s: 22 rows of session %i, positions 1…22, %i without a lap time', (name, key, untimed) => {
+    const rows = grid(name);
+    expect(rows).toHaveLength(22);
+    expect(new Set(rows.map((r) => r.session_key))).toEqual(new Set([key]));
+    expect(rows.map((r) => r.position).toSorted((a, b) => (a ?? 0) - (b ?? 0))).toEqual(
+      Array.from({ length: 22 }, (_, i) => i + 1),
+    );
+    expect(rows.filter((r) => r.lap_duration === null)).toHaveLength(untimed);
+  });
+});
+
 // [U] pit.lap_number = in-lap (A§6.1, A§9). Proven per session type over the fixture rows:
 // in a race or sprint the out-lap is pit.lap_number + 1, in qualifying it is pit.lap_number itself.
 describe('[U] pit.lap_number against the out-laps', () => {

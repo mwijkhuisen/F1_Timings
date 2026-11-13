@@ -93,6 +93,7 @@ const cases = [
           driver_number: 1,
           position: null,
           laps: null,
+          grid: 3,
           dnf: null,
           dns: null,
           dsq: null,

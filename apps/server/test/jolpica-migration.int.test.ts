@@ -19,6 +19,13 @@ let ingest: Kysely<DB>;
 let env: { PATH: string | undefined; DATABASE_URL: string };
 const dbmate = async (...args: string[]) =>
   (await exec('dbmate', ['--no-dump-schema', '--migrations-dir', MIGRATIONS, ...args], { env })).stdout;
+// Rolls back the newest migrations until `version` is gone, whichever newer ones exist; dbmate's last output.
+const rollbackPast = async (version: string) => {
+  for (;;) {
+    const out = await dbmate('rollback');
+    if (out.includes(`Rolled back: ${version}.sql`) || !/Rolled back:/.test(out)) return out;
+  }
+};
 const code = (p: Promise<unknown>) =>
   p.then(
     () => 'ok',
@@ -117,8 +124,7 @@ it('rolls back: jolpica rows gone (also a candidate on another session), grid go
   await sql`INSERT INTO lap_source (session_key, source, driver_number, lap_number) VALUES (10, 'openf1', 1, 1)`.execute(
     ingest,
   );
-  expect(await dbmate('rollback')).toMatch(/Rolled back: 20261113000002_ingest_status\.sql/); // the newer one first
-  expect(await dbmate('rollback')).toMatch(/Rolled back: 20261113000001_jolpica\.sql/);
+  expect(await rollbackPast('20261113000001_jolpica')).toMatch(/Rolled back: 20261113000001_jolpica\.sql/);
   for (const t of ['meeting', 'session', 'driver', 'lap', 'pit', 'result']) {
     const own = t === 'meeting' || t === 'session' ? 1 : 0;
     expect(await count(t)).toBe(own);

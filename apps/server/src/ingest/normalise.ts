@@ -8,6 +8,7 @@ import type {
   RaceControl,
   Session,
   SessionResult,
+  StartingGrid,
   Stint,
   Weather,
 } from '../openf1/schemas.ts';
@@ -235,4 +236,21 @@ export function normaliseSession(
   const fetched = Object.values(data).reduce((n, list) => n + list.length, 0);
   const kept = Object.values(rows).reduce((n, list) => n + list.length, 0);
   return { rows, skipped: fetched - kept, rules };
+}
+
+/**
+ * #115: each result row's `grid` from the qualifying's starting grid, by driver number (null without one). A grid row
+ * of another session, a duplicate (the last wins) or a driver without a result row is `skipped`; `rows` counts the
+ * result rows given a grid position; `usable` the grid rows of the qualifying with a position, after the duplicate rule.
+ */
+export function withGrid(
+  results: Insertable<DB['result']>[],
+  grid: readonly StartingGrid[],
+  qualiKey: number,
+): { results: Insertable<DB['result']>[]; rows: number; skipped: number; usable: number } {
+  const position = new Map(grid.filter((g) => g.session_key === qualiKey).map((g) => [g.driver_number, g.position]));
+  const out = results.map((r) => ({ ...r, grid: position.get(r.driver_number) ?? null }));
+  const rows = out.filter((r) => r.grid !== null).length;
+  const usable = [...position.values()].filter((p) => p !== null).length;
+  return { results: out, rows, skipped: grid.length - rows, usable };
 }

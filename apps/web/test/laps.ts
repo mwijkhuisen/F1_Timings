@@ -44,10 +44,11 @@ export const rc = (
 });
 
 type Result = SessionDetail['results'][number];
-export const result = (driver_number: number, position: number | null = null): Result => ({
+export const result = (driver_number: number, position: number | null = null, grid: number | null = null): Result => ({
   driver_number,
   position,
   laps: null,
+  grid,
   dnf: null,
   dns: null,
   dsq: null,

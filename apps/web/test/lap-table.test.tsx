@@ -111,6 +111,7 @@ const result = (driver_number: number, position: number | null) => ({
   driver_number,
   position,
   laps: null,
+  grid: null,
   dnf: null,
   dns: null,
   dsq: null,

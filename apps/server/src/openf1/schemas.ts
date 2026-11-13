@@ -148,6 +148,15 @@ const Weather = z.object({
   wind_speed: opt(real),
 });
 
+// A§6.1 (#115, owner 2026-11-09): rows are linked to the qualifying session, so session_key is that session's key (br-g/openf1#356).
+const StartingGrid = z.object({
+  session_key: int32,
+  driver_number: int16,
+  position: opt(int16),
+  lap_duration: opt(seconds), // the qualifying lap, not stored
+  meeting_key: opt(int32), // not stored
+});
+
 export const schemas = {
   meetings: z.array(Meeting),
   sessions: z.array(Session),
@@ -158,6 +167,7 @@ export const schemas = {
   race_control: z.array(RaceControl),
   session_result: z.array(SessionResult),
   weather: z.array(Weather),
+  starting_grid: z.array(StartingGrid).max(100), // an over-long answer is a grid schema failure on its own (O1)
 };
 
 export type Endpoint = keyof typeof schemas;
@@ -172,6 +182,7 @@ export type Pit = z.infer<typeof Pit>;
 export type RaceControl = z.infer<typeof RaceControl>;
 export type SessionResult = z.infer<typeof SessionResult>;
 export type Weather = z.infer<typeof Weather>;
+export type StartingGrid = z.infer<typeof StartingGrid>;
 
 /** Paths and codes only, never a value from the body. */
 export type ShapeError = { code: 'shape'; issues: { path: string; code: string }[] };

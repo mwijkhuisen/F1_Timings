@@ -25,6 +25,8 @@ import { AUD, jwt, rsaKey, serveCerts, TEAM } from './jwt.ts';
 const FIXTURES = join(import.meta.dirname, '../src/openf1/fixtures');
 const read = (name: string): unknown[] => JSON.parse(readFileSync(join(FIXTURES, `${name}.raw`), 'utf8'));
 const CASES: Record<number, string> = { 11388: 'normal', 11392: 'quali', 11383: 'sprint' };
+// #115: the starting grid by the qualifying's key (race 11388 → 11384, sprint 11383 → 11379).
+const GRID: Record<number, string> = { 11384: 'normal', 11379: 'sprint' };
 const RACE = 11388; // left non-final
 const QUALI = 11392; // final
 const SPRINT = 11383; // final
@@ -52,7 +54,9 @@ const openf1 = () =>
       const endpoint = String(params.endpoint);
       if (query.has('year')) return HttpResponse.json(read(`${endpoint}-year`));
       const key = Number(query.get('session_key'));
-      const rows = read(`${endpoint}-${CASES[key]}`);
+      const rows = read(
+        endpoint === 'starting_grid' ? `starting_grid-${GRID[key] ?? 'empty'}` : `${endpoint}-${CASES[key]}`,
+      );
       // The quali session also gets the cars whose laps race_control-quali deletes.
       if (endpoint === 'laps' && key === QUALI) rows.push(...read('laps-deleted'));
       if (endpoint === 'race_control' && key === RACE) rows.push(SYNTHETIC);
@@ -444,6 +448,11 @@ describe('api (f1_api login, Access JWT)', { timeout: 120_000 }, () => {
     );
     expect(detail.results).toHaveLength(22);
     expect(detail.results[0]).toMatchObject({ position: 1 });
+    expect(detail.results.every((r) => r.grid === null)).toBe(true); // a qualifying has no grid
+    // #115: a race's results carry its starting grid (pole: car 3).
+    const race = await body(`/api/v1/sessions/${RACE}`, SessionDetail);
+    expect(race.results.filter((r) => r.grid !== null)).toHaveLength(22);
+    expect(race.results.find((r) => r.driver_number === 3)).toMatchObject({ position: 1, grid: 1 });
 
     expect(await body('/api/v1/status', Status)).toEqual({
       revision: SHA,

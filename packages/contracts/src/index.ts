@@ -78,6 +78,7 @@ export const SessionDetail = z.strictObject({
       driver_number: int,
       position: int.nullable(),
       laps: int.nullable(),
+      grid: int.nullable(), // #115: OpenF1's starting_grid, or Jolpica's (0 = a pit-lane start)
       dnf: z.boolean().nullable(),
       dns: z.boolean().nullable(),
       dsq: z.boolean().nullable(),
