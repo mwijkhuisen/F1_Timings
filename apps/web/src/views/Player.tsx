@@ -641,25 +641,6 @@ export function Player({
       )
     );
   }, [snap, sessionKey, focus, trend]);
-  // The running order (races only) from the stream's lap rows up to T, built only on its tab. Its drivers are the whole
-  // DriverList: the Grid row names a car that never set a lap.
-  const order = useMemo(() => {
-    const s = snap.feed?.state;
-    return (
-      tab === 'order' &&
-      detail &&
-      s && (
-        <Order
-          drivers={Object.keys(view(s, 'DriverList') ?? {})
-            .filter((n) => /^\d{1,3}$/.test(n))
-            .map((n) => driverOf(view(s, 'DriverList') ?? {}, n))}
-          laps={snap.laps}
-          grid={gridOf(s)}
-          noGrid="No grid position in the feed"
-        />
-      )
-    );
-  }, [tab, detail, snap]);
   // The pit wall, once the feed shows this session (as the tower waits): the previous session's chequered flag would
   // otherwise light up.
   const wall = useMemo(() => {
@@ -676,6 +657,29 @@ export function Player({
       fastest: fastestSoFar(s),
     };
   }, [snap, sessionKey]);
+  // The tab shown: Order falls back to the Tower when the session is not (or no longer) a race.
+  const shown = tab === 'order' && !wall?.race ? 'tower' : tab;
+  // The running order (races only) from the stream's lap rows up to T, built only on its tab and, as the lap table, only
+  // when the lap rows change (the DriverList and the grid it reads are set before the first lap). Its drivers are the
+  // whole DriverList: the Grid row names a car that never set a lap.
+  const onOrder = shown === 'order';
+  const order = useMemo(() => {
+    const s = feed?.state;
+    return (
+      onOrder &&
+      detail &&
+      s && (
+        <Order
+          drivers={Object.keys(view(s, 'DriverList') ?? {})
+            .filter((n) => /^\d{1,3}$/.test(n))
+            .map((n) => driverOf(view(s, 'DriverList') ?? {}, n))}
+          laps={snap.laps}
+          grid={gridOf(s)}
+          noGrid="No grid position in the feed"
+        />
+      )
+    );
+  }, [onOrder, detail, feed, snap.laps]);
   const focused = useMemo(() => {
     const s = snap.feed?.state;
     return s === undefined || focus === null
@@ -763,29 +767,29 @@ export function Player({
       )}
       {detail && (
         <fieldset className="segmented" aria-label="View">
-          <button type="button" aria-pressed={tab === 'tower'} onClick={() => setTab('tower')}>
+          <button type="button" aria-pressed={shown === 'tower'} onClick={() => setTab('tower')}>
             Tower
           </button>
-          <button type="button" aria-pressed={tab === 'laps'} onClick={() => setTab('laps')}>
+          <button type="button" aria-pressed={shown === 'laps'} onClick={() => setTab('laps')}>
             Laps
           </button>
           {wall?.race && (
-            <button type="button" aria-pressed={tab === 'order'} onClick={() => setTab('order')}>
+            <button type="button" aria-pressed={shown === 'order'} onClick={() => setTab('order')}>
               Order
             </button>
           )}
-          <button type="button" aria-pressed={tab === 'weather'} onClick={() => setTab('weather')}>
+          <button type="button" aria-pressed={shown === 'weather'} onClick={() => setTab('weather')}>
             Weather
           </button>
         </fieldset>
       )}
       {!state ? (
         <p className="muted">Connecting…</p>
-      ) : tab === 'laps' && lapTable ? (
+      ) : shown === 'laps' && lapTable ? (
         lapTable
-      ) : tab === 'order' && wall?.race && order ? (
+      ) : order ? (
         order
-      ) : tab === 'weather' ? (
+      ) : shown === 'weather' ? (
         // Gated as the strip is, so the two agree: nothing from the previous session.
         <>
           {wall && snap.weather.rows.length > 0 ? (

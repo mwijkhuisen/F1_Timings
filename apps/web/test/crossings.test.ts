@@ -115,7 +115,8 @@ describe('runningOrder', () => {
   });
 
   it('on the newest lap of a live replay, ranks a car still on it behind those that crossed', () => {
-    // 11 leads after lap 2, then is still on lap 3 (no time yet) when 1 and 4 have started lap 4.
+    // 11 leads after lap 2, then is still on lap 3 (no time yet) when 1 and 4 have started lap 4. Nobody has completed
+    // lap 4: no row for it (it would repeat lap 3's).
     const laps = [
       ...drive(11, 0, [89, 89, 89]).map((l) => (l.lap_number === 3 ? { ...l, lap_ms: null } : l)),
       ...drive(1, 1, [90, 90, 90, 90]).map((l) => (l.lap_number === 4 ? { ...l, lap_ms: null } : l)),
@@ -125,8 +126,15 @@ describe('runningOrder', () => {
       [11, 1, 4],
       [11, 1, 4],
       [1, 4, 11],
-      [1, 4, 11],
     ]);
+  });
+
+  it("drops OpenF1's cool-down rows: a start and no time past the last lap", () => {
+    const laps = [...drive(1, 0, [90, 90, 90]), ...drive(4, 1, [90, 90, 90])].concat(
+      lap(1, 4, { date_start: at(270) }),
+      lap(4, 4, { date_start: at(271) }),
+    );
+    expect(runningOrder(laps).map((r) => r.lap)).toEqual([1, 2, 3]);
   });
 
   it('lists a car that never crossed the line in neither list', () => {
@@ -218,14 +226,27 @@ describe('pitCycles', () => {
     expect(same.map((c) => [c.first, c.second, c.firstIn, c.secondIn])).toEqual([[4, 1, 4, 4]]);
   });
 
-  it('is not comparable with an SC, VSC or red flag in laps firstIn … secondIn + 1', () => {
+  it('is not comparable with an SC, VSC or red flag in the leader laps firstIn − 1 … secondIn + 2', () => {
+    // In-laps 4 and 6: the before line is after lap 3, the after line after lap 7 (the leader's lap 7 or 8).
     const reason = (kind: 'sc' | 'vsc' | 'red', from: number, to: number) =>
       pitCycles(1, 4, laps, stintsFor(), [{ kind, from, to }], [])[0]?.reason;
     expect(reason('sc', 7, 9)).toEqual({ kind: 'period', period: 'sc' });
     expect(reason('vsc', 2, 4)).toEqual({ kind: 'period', period: 'vsc' });
     expect(reason('red', 5, 5)).toEqual({ kind: 'period', period: 'red' });
-    expect(reason('sc', 8, 9)).toBeUndefined();
-    expect(reason('sc', 1, 3)).toBeUndefined();
+    expect(reason('sc', 1, 3)).toEqual({ kind: 'period', period: 'sc' }); // ends at firstIn − 1
+    expect(reason('sc', 1, 2)).toBeUndefined(); // ends at firstIn − 2
+    expect(reason('sc', 8, 9)).toEqual({ kind: 'period', period: 'sc' }); // starts at secondIn + 2
+    expect(reason('sc', 9, 10)).toBeUndefined(); // starts at secondIn + 3
+  });
+
+  it('counts an SC on the laps just before the first in-lap', () => {
+    // SC on laps 20–22, VER in on lap 23, NOR on 24: the before line (after lap 22) is under the SC.
+    const late = [...drive(1, 1.2, times(30, 23), pit(23)), ...drive(4, 0, times(30, 24), pit(24))];
+    const st = [stint(1, 1, 1), stint(1, 2, 24), stint(4, 1, 1), stint(4, 2, 25)];
+    expect(pitCycles(1, 4, late, st, [{ kind: 'sc', from: 20, to: 22 }], [])[0]?.reason).toEqual({
+      kind: 'period',
+      period: 'sc',
+    });
   });
 
   it('is not comparable without a crossing', () => {
@@ -352,6 +373,15 @@ describe('closingAt', () => {
     ]);
     // NOR's last lap has no time: VER's lap 8 has no car ahead to compare with.
     expect(trends(field({}, { 8: { lap_ms: null } }), END)[1]).toEqual([{ missing: 8 }, { missing: 8 }]);
+  });
+
+  it('takes n as the last lap completed by T, so a car whose crossing after it is unknown is missing there', () => {
+    // At 500 s VER has rows 1–6 (lap 6's start unknown, so in by T) and no lap-5 time: lap 5 is completed, its
+    // crossing unknown. Not a delta from lap 4.
+    expect(trends(field({ 5: { lap_ms: null }, 6: { date_start: null } }), ms(500))[1]).toEqual([
+      { missing: 5 },
+      { missing: 5 },
+    ]);
   });
 
   it('is blank across an in- or out-lap of either car', () => {

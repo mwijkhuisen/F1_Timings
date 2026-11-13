@@ -1,3 +1,5 @@
+import { readFileSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
 import type { Lap } from '@f1/contracts';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, expect, it } from 'vitest';
@@ -183,5 +185,35 @@ describe('Order', () => {
       expect(two).toContain('2 drivers without a crossing: order incomplete');
       expect(two).toContain('P3');
     });
+  });
+});
+
+describe('the Order table at phone width (styles.css)', () => {
+  const css = readFileSync(fileURLToPath(new URL('../src/styles.css', import.meta.url)), 'utf8');
+  /** The declarations of the rule whose selector list is exactly `selector`, from `from`. */
+  const rule = (selector: string, from = 0) => {
+    const at = css.indexOf(`\n${selector} {`, from);
+    expect(at, selector).toBeGreaterThanOrEqual(0);
+    return css.slice(at, css.indexOf('}', at));
+  };
+
+  it('keeps the lap column and the head row sticky, and no cell wraps', () => {
+    // The lap numbers are tbody th, the head row thead th, its Lap cell the first.
+    expect(rule('tbody th')).toMatch(/position: sticky;[\s\S]*left: 0;/);
+    expect(rule('thead th')).toMatch(/position: sticky;[\s\S]*top: 0;/);
+    expect(rule('thead th:first-child')).toContain('left: 0;');
+    expect(rule('td')).toContain('white-space: nowrap;');
+    expect(rule('.scroll:has(.order)')).toContain('scroll-padding-left: 56px;');
+  });
+
+  it('has compact cells, and tighter ones under 600 px', () => {
+    expect(rule('.order td.drv')).toContain('min-width: 50px;');
+    expect(rule('.order .ln')).toContain('width: 48px;');
+    const phone = css.indexOf('@media (max-width: 600px) {\n  .order {');
+    expect(phone).toBeGreaterThanOrEqual(0);
+    expect(rule('  .order', phone)).toContain('font-size: 13px;');
+    expect(rule('  .order .ln', phone)).toContain('width: 40px;');
+    expect(rule('  .order td.drv', phone)).toContain('min-width: 44px;');
+    expect(rule('  .scroll:has(.order)', phone)).toContain('scroll-padding-left: 48px;');
   });
 });

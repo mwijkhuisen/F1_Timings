@@ -42,7 +42,12 @@ export function HeaderView({
   const current = meeting?.sessions.find((s) => s.session_key === at?.session);
   const near = at && season ? neighbours(season, at.session) : { prev: null, next: null };
   const path = ({ meeting: m, session: s }: Slot) =>
-    sessionPath(year ?? 0, { key: m.meeting_key, name: m.name }, { key: s.session_key, name: s.name }, view);
+    sessionPath(
+      year ?? 0,
+      { key: m.meeting_key, name: m.name },
+      { key: s.session_key, name: s.name, type: s.type },
+      view,
+    );
   const step = (slot: Slot | null, label: string, glyph: string) =>
     slot && (
       <Link className="step" to={path(slot)} aria-label={label} title={`${slot.meeting.name} · ${slot.session.name}`}>

@@ -537,6 +537,25 @@ describe('the closing trend at the line (race, with a trend)', () => {
     expect(row('AAA')).toContain('<td class="tr"></td><td class="tr"></td>');
   });
 
+  it('leaves a retired or stopped car blank, whatever its trend', () => {
+    const own = { one: { delta: -400 }, three: { delta: 200 } };
+    const out = renderToStaticMarkup(
+      <Tower
+        state={state}
+        trend={
+          new Map([
+            [2, own],
+            [3, own],
+          ])
+        }
+      />,
+    );
+    const rowOf = (tla: string) => out.split('<tr').find((r) => r.includes(`>${tla}</th>`)) ?? '';
+    // 2 is stopped, 3 retired.
+    expect(rowOf('BBB')).toContain('<td class="tr"></td><td class="tr"></td>');
+    expect(rowOf('CCC')).toContain('<td class="tr"></td><td class="tr"></td>');
+  });
+
   it('adds one item to the legend', () => {
     expect(html).toContain(
       'At the line: <span aria-hidden="true">▼</span> closing on the car ahead, <span aria-hidden="true">▲</span> car ahead pulling away, over 1 and 3 laps',

@@ -380,7 +380,10 @@ export function Tower({
               const n = String(r.driver.number);
               const last = flag(line.LastLapTime);
               const focused = focus === n;
-              const cls = [line.Retired || line.Stopped ? 'out' : '', focused ? 'focus' : ''].filter(Boolean).join(' ');
+              const out = line.Retired || line.Stopped;
+              // A retired or stopped car has no trend: its cells stay blank.
+              const own = out ? undefined : trend?.get(r.driver.number);
+              const cls = [out ? 'out' : '', focused ? 'focus' : ''].filter(Boolean).join(' ');
               return (
                 <tr key={n} className={cls || undefined}>
                   <td>{r.position}</td>
@@ -405,8 +408,8 @@ export function Tower({
                   )}
                   {trends && (
                     <>
-                      <TrendCell trend={trend.get(r.driver.number)?.one} id={`tower-t1-${n}`} />
-                      <TrendCell trend={trend.get(r.driver.number)?.three} id={`tower-t3-${n}`} />
+                      <TrendCell trend={own?.one} id={`tower-t1-${n}`} />
+                      <TrendCell trend={own?.three} id={`tower-t3-${n}`} />
                     </>
                   )}
                   <td className={last?.className}>

@@ -8,7 +8,7 @@ import { headLine, summarise } from '../lib/weather.ts';
 import { Cancelled } from '../ui/Cancelled.tsx';
 
 // A session's head (A§13): "2026 · Round 19 · Mexico City", the meeting with the session boxed beside it, the start
-// and circuit, the weekend's other sessions as pills (the view kept), and a Replay link when there is a recording.
+// and circuit, the weekend's other sessions as pills (the view kept, Order only to a race), and a Replay link when there is a recording.
 // P5a: a weather line under the meta line on every tab, "Air 24–27 °C · Track 38–45 °C · Dry", once there are rows.
 
 export function SessionHead({
@@ -60,7 +60,7 @@ export function SessionHead({
                 to={sessionPath(
                   d.meeting.year,
                   { key, name: d.meeting.name },
-                  { key: s.session_key, name: s.name },
+                  { key: s.session_key, name: s.name, type: s.type },
                   view,
                 )}
                 aria-current={s.session_key === d.session.session_key ? 'page' : undefined}

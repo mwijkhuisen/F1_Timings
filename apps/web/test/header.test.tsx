@@ -51,6 +51,12 @@ describe('the session switcher', () => {
     expect(html).not.toMatch(/href="[^"]*1315/);
   });
 
+  it('steps and lists with Order only to a race or sprint', () => {
+    const order = header({ id: 'session', year: 2026, meeting: 1320, session: 9105, view: 'order' });
+    expect(tag(order, 'aria-label="Previous session"')).toContain(`href="${SP}/9104-practice-3/laps"`);
+    expect(order).toContain(`<a href="${SP}/9107-race/order">Race</a>`);
+  });
+
   it("lists the meeting's sessions, keeping the view, a cancelled one struck", () => {
     expect(html).toContain(`<a aria-current="page" href="${SP}/9104-practice-3/compare">Practice 3</a>`);
     expect(html).toContain(`<a href="${SP}/9107-race/compare">Race</a>`);
@@ -170,6 +176,14 @@ describe('the session head', () => {
     expect(html).toContain(`<a href="${SP}/9101-practice-1/stints">FP1</a>`);
     expect(html).toContain('<s>FP2<span class="vh"> (cancelled)</span></s>');
     expect(html).not.toMatch(/href="[^"]*9102/);
+  });
+
+  it('keeps Order only on the pills to a race or sprint, Laps on the others', () => {
+    const order = head({ view: 'order' });
+    expect(order).toContain(`<a href="${SP}/9105-sprint/order">Sprint</a>`);
+    expect(order).toContain(`<a href="${SP}/9107-race/order">Race</a>`);
+    expect(order).toContain(`<a href="${SP}/9101-practice-1/laps">FP1</a>`);
+    expect(order).toContain(`<a aria-current="page" href="${SP}/9103-sprint-qualifying/laps">SQ</a>`);
   });
 
   it('links the replay only when the session has a recording', () => {

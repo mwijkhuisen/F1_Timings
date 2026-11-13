@@ -143,9 +143,19 @@ type Named = { key: number; name: string | null };
 
 const segment = (key: number, name: string) => (name === '' ? `${key}` : `${key}-${name}`);
 
-/** The canonical URL of a session view. Meetings drop a trailing " Grand Prix". */
-export const sessionPath = (year: number, meeting: Named, session: Named, view: View): string =>
-  `/${year}/${segment(meeting.key, slug(meeting.name?.replace(/ Grand Prix$/i, '') ?? null))}/${segment(session.key, slug(session.name))}/${view}`;
+/**
+ * The canonical URL of a session view. Meetings drop a trailing " Grand Prix". A session whose type is known and not a
+ * race (races and sprints are type Race) has no Order tab: `order` there is `laps`.
+ */
+export function sessionPath(
+  year: number,
+  meeting: Named,
+  session: Named & { type?: string | null },
+  view: View,
+): string {
+  const v = view === 'order' && session.type != null && session.type !== 'Race' ? 'laps' : view;
+  return `/${year}/${segment(meeting.key, slug(meeting.name?.replace(/ Grand Prix$/i, '') ?? null))}/${segment(session.key, slug(session.name))}/${v}`;
+}
 
 const D_PARAM = /^\d+(,\d+)*$/;
 

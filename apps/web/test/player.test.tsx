@@ -747,6 +747,22 @@ describe('the Weather tab in the player', () => {
     expect(host.textContent).not.toContain('Interval change');
   });
 
+  it('falls back to the Tower, pressed, when the session on the Order tab is no longer a race', () => {
+    render({ recording: ended, start: T, detail });
+    last().emit('snapshot', { t: T, state: raceState(), laps: [lap(1, 1)], stints: [], weather: [] });
+    advance(250);
+    button('Order');
+    last().emit('snapshot', { t: T, state: practiceState(), laps: [lap(1, 1)], stints: [], weather: [] });
+    advance(250);
+    const views = [...host.querySelectorAll('fieldset[aria-label="View"] button')];
+    expect(views.map((b) => [b.textContent, b.getAttribute('aria-pressed')])).toEqual([
+      ['Tower', 'true'],
+      ['Laps', 'false'],
+      ['Weather', 'false'],
+    ]);
+    expect(host.querySelector('table[aria-label="Timing tower"]')).not.toBeNull();
+  });
+
   describe('in a race, from the stream laps', () => {
     const started = (d: number, n: number, at: number) => ({
       ...lap(d, n),

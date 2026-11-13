@@ -59,11 +59,13 @@ function byDriver<L extends CrossLap>(laps: readonly L[]): Map<number, L[]> {
 export type OrderRow = { lap: number; order: number[]; missing: number[] };
 
 /**
- * The order after each lap (index n − 1 for lap n, up to the highest lap of any driver): by laps completed, then by
- * the time the car crossed the line after them, so a lapped or retired car falls behind by laps, and on the newest
+ * The order after each lap (index n − 1 for lap n, up to the last lap some driver completed): by laps completed, then
+ * by the time the car crossed the line after them, so a lapped or retired car falls behind by laps, and on the newest
  * lap of a live replay a car still on it ranks behind those that crossed. A lap counts as completed once its crossing
  * is known or the next lap has a row; a car whose latest completed lap has no crossing is `missing`, never ranked
- * into a gap, and a car that never crossed the line is in neither list.
+ * into a gap, and a car that never crossed the line is in neither list. Trailing rows nobody completed are dropped:
+ * the lap a live replay is on (it would repeat the row before), and OpenF1's cool-down rows (dev DB, 2026-11-13: 21 of
+ * 113 races have lap rows past the most laps any result lists, 50 rows, each with a `date_start` and no `lap_ms`).
  */
 export function runningOrder(laps: readonly CrossLap[]): OrderRow[] {
   const drivers = [...byDriver(laps)].map(([number, own]) => {
@@ -73,12 +75,14 @@ export function runningOrder(laps: readonly CrossLap[]): OrderRow[] {
   const last = laps.reduce((n, l) => Math.max(n, l.lap_number), 0);
   const done = new Map<number, number>(); // completed(d, n − 1), carried from row to row
   const rows: OrderRow[] = [];
+  let completed = 0; // the last lap some driver completed
   for (let n = 1; n <= last; n++) {
     const ranked: { number: number; c: number; t: number }[] = [];
     const missing: number[] = [];
     for (const d of drivers) {
       const c = d.cross[n - 1] != null || d.rows.has(n + 1) ? n : (done.get(d.number) ?? 0);
       done.set(d.number, c);
+      if (c === n) completed = n;
       if (c === 0) continue;
       const t = d.cross[c - 1];
       if (t == null) missing.push(d.number);
@@ -87,7 +91,7 @@ export function runningOrder(laps: readonly CrossLap[]): OrderRow[] {
     ranked.sort((x, y) => y.c - x.c || x.t - y.t || x.number - y.number);
     rows.push({ lap: n, order: ranked.map((r) => r.number), missing: missing.sort((x, y) => x - y) });
   }
-  return rows;
+  return rows.slice(0, completed);
 }
 
 /** Places won on lap 1 (grid − position after lap 1; positive: gained). Empty when lap 1's order is incomplete. */
@@ -139,7 +143,7 @@ const CAR = /(\d{1,2}) \([A-Z]{3}\)/g;
 /**
  * Every stop of a paired with every stop of b at most `PIT_WINDOW` in-laps apart, by first in-lap. `before` is the
  * gap after the lap before the first in-lap, `after` the gap after the second car's out-lap. Not comparable: an SC,
- * VSC or red flag in the laps of the cycle, a missing crossing, or a penalty naming either car between those lines.
+ * VSC or red flag in laps firstIn − 1 … secondIn + 1 (the leader's laps, one more at the top), a missing crossing, or a penalty naming either car between those lines.
  */
 export function pitCycles(
   a: number,
@@ -172,7 +176,9 @@ export function pitCycles(
       const before = f0 === null || s0 === null ? null : f0 - s0;
       const after = f1 === null || s1 === null ? null : f1 - s1;
       const cycle: Cycle = { first, second, firstIn, secondIn, before, after };
-      const period = periods.find((p) => p.from <= secondIn + 1 && p.to >= firstIn);
+      // Lap firstIn − 1 holds the before line; +1 at the top because a lead-lap car's lap m ends in the leader's lap m
+      // or m + 1 (periods are the leader's laps, the window the cars' own).
+      const period = periods.find((p) => p.from <= secondIn + 2 && p.to >= firstIn - 1);
       if (period) cycle.reason = { kind: 'period', period: period.kind };
       else if (f0 === null || s0 === null || f1 === null || s1 === null) cycle.reason = { kind: 'crossing' };
       else {
@@ -225,7 +231,8 @@ export type Trend = { delta: number } | { missing: number } | null;
 
 /**
  * The live tower's trend per car behind the leader (the leader has no entry): the change of its interval to the car
- * ahead in `order` over its last 1 and 3 laps, from crossings at or before T only. Blank across an in- or out-lap of
+ * ahead in `order` over its last 1 and 3 laps (to n, its last lap completed by T: a lap without a crossing is
+ * `missing`, as in runningOrder), from crossings at or before T only. Blank across an in- or out-lap of
  * either car and across an SC, VSC or red band (open bands run to T).
  */
 export function closingAt(
@@ -240,7 +247,11 @@ export function closingAt(
       const own = seen.get(d) ?? [];
       const cross = crossings(own).map((c) => (c !== null && c <= T ? c : null));
       const pits = new Set(own.filter((l) => l.is_pit_in || l.is_pit_out).map((l) => l.lap_number));
-      return [d, { cross, pits }];
+      // The last lap completed by T, by runningOrder's rule: its crossing is known, or the next lap has a row by T.
+      const rows = new Set(own.map((l) => l.lap_number));
+      let n = cross.length;
+      while (n > 0 && cross[n - 1] == null && !rows.has(n + 1)) n--;
+      return [d, { cross, pits, n }];
     }),
   );
   const out = new Map<number, { one: Trend; three: Trend }>();
@@ -248,7 +259,7 @@ export function closingAt(
     const ahead = i > 0 ? cars.get(order[i - 1] as number) : undefined;
     const me = cars.get(d);
     if (!ahead || !me) return;
-    const n = me.cross.findLastIndex((c) => c !== null) + 1;
+    const n = me.n;
     const trend = (k: number): Trend => {
       if (n - k < 1) return null;
       const mTo = me.cross[n - 1];
