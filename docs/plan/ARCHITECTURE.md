@@ -578,7 +578,7 @@ Roles (owner, 2026-10-25; built in P1b): `deploy/postgres/roles.sql`, a PostgreS
   - `PitLaneTimeCollection` is in both (race 110 messages, qualifying 161). Its paths are `PitTimes.#.{Duration, Lap, RacingNumber}`, and a later `PitTimes._deleted` removes the entry.
   - `PitStopSeries` is race only (33 messages; qualifying 403). Its paths are `PitTimes.#.#.{Timestamp, PitStop.{Lap, PitLaneTime, PitStopTime, RacingNumber}}`. `PitStopTime` is the stationary time that OpenF1 lacks (A§6.1).
   - `PitStop` is race only, listed by the session `Index.json`. It sends one stop per message with the same fields at the top level (33 messages).
-  - The recorder subscribes to all three since #96, and `fetch-archive.ts` downloads them. Playback skips them like the `.z` topics (`UNPARSED`, A§11.3) until a pit-stop view parses them. Whether the live feed sends them is **[U]**, for the Las Vegas recordings.
+  - The recorder subscribes to all three since #96, and `fetch-archive.ts` downloads them. Playback skips them like the `.z` topics (`UNPARSED`, A§11.3) until a pit-stop view parses them. A real Subscribe with the 23 names on 2026-11-13, outside any session, succeeded, and its result held `PitLaneTimeCollection` but neither `PitStopSeries` nor `PitStop`. So whether the live feed sends those two is **[U]**, for the Las Vegas recordings.
 - **Archive topics not subscribed** (#96, the same check; a later decision):
   - `TyreStintSeries`, `LapSeries` and `CurrentTyres` are in both sessions. `DriverRaceInfo`, `OvertakeSeries` and `ChampionshipPrediction` are race only.
   - The session `Index.json` also lists `ArchiveStatus`, `DriverTracker`, `TimingDataF1`, `TlaRcm` and `WeatherDataSeries`, which were not fetched.
