@@ -55,6 +55,10 @@ describe('getJson', () => {
     // The worker (#121) only passes the page's own requests on and fetches its shell: it builds no API URL. The
     // player's failure probe (#100) is a HEAD that reads no body.
     expect(fetching).toEqual(['lib/api.ts', 'lib/stream.ts', 'sw/handlers.ts', 'sw/main.ts']);
+    const stream = readFileSync(join(src, 'lib/stream.ts'), 'utf8');
+    expect(stream.match(/\bfetch\(/g)).toHaveLength(1);
+    expect(stream).toContain("method: 'HEAD'");
+    expect(stream).toContain("redirect: 'error'");
   });
 
   // The stale flag is module state that never resets: each of these gets a fresh copy of the modules.

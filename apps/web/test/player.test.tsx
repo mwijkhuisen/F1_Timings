@@ -1966,7 +1966,8 @@ describe('the failure probe (#100, D3)', () => {
   const start = S + 3_600_000;
   const MISSING = "The recording's files are missing on the server: playback stopped. Press Play to try again.";
   const EXPIRED = 'The stream keeps failing: your Access session has expired. Reload the page to sign in.';
-  const UP = 'The stream keeps failing, but the server answers: still retrying.';
+  const UP = 'The stream keeps failing, but the server has the recording: still retrying.';
+  const ERROR = 'The stream keeps failing: the server answered with an error. Still retrying.';
   const settle = () => act(async () => {});
   /** Plays, then fails `n` times, each time waiting out the backoff but the last. */
   const failing = (n: number) => {
@@ -1998,14 +1999,15 @@ describe('the failure probe (#100, D3)', () => {
   it.each([
     ['a 401', () => Promise.resolve({ status: 401 } as Response), EXPIRED],
     ['a TypeError', () => Promise.reject(new TypeError('Failed to fetch')), EXPIRED],
-    ['a 200', () => Promise.resolve({ status: 200 } as Response), UP],
-    ['a 503', () => Promise.resolve({ status: 503 } as Response), UP],
+    ['a 200', () => Promise.resolve({ status: 200, ok: true } as Response), UP],
+    ['a 503', () => Promise.resolve({ status: 503, ok: false } as Response), ERROR],
   ])('%s says its own text and keeps retrying', async (_name, answer, text) => {
     fetchStub.mockImplementation(answer);
     failing(3);
     await settle();
     expect($('p[role="status"]').textContent).toBe(text);
-    for (const other of [EXPIRED, UP, MISSING].filter((x) => x !== text)) expect(host.textContent).not.toContain(other);
+    for (const other of [EXPIRED, UP, ERROR, MISSING].filter((x) => x !== text))
+      expect(host.textContent).not.toContain(other);
     const opened = FakeES.all.length;
     advance(4_000);
     expect(FakeES.all).toHaveLength(opened + 1);

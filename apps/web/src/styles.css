@@ -1012,10 +1012,6 @@ header .links {
   color: var(--fg);
 }
 
-.links a .pill.warn {
-  margin-left: 6px;
-}
-
 /* The bar's head (#77): the clock line, then Play/Pause (minimized only) and the Controls toggle at the right end. The
    rest of the bar is a `display: contents` wrapper, so its controls stay items of the bar's grid; minimized it is empty
    and hidden. */
@@ -1612,7 +1608,7 @@ header .theme[aria-pressed="true"] {
 }
 
 /* The underline does not reach into an inline-flex pill (the Live link on its own page, #100). */
-.links a[aria-current="page"] .pill {
+.links a[aria-current="page"] .pill.live {
   text-decoration: underline 2px;
   text-underline-offset: 6px;
 }

@@ -206,7 +206,8 @@ const PROBE_TEXT: Record<Probe, string> = {
   missing: "The recording's files are missing on the server: playback stopped. Press Play to try again.",
   expired: 'The stream keeps failing: your Access session has expired. Reload the page to sign in.',
   offline: OFFLINE,
-  up: 'The stream keeps failing, but the server answers: still retrying.',
+  up: 'The stream keeps failing, but the server has the recording: still retrying.',
+  error: 'The stream keeps failing: the server answered with an error. Still retrying.',
 };
 
 const MARK_NAME: Record<MarkKind, string> = { start: 'Start', ...KIND_NAME, chequered: 'Chequered flag' };
@@ -570,8 +571,7 @@ export function Player({
                 if (ctl.signal.aborted) return;
                 setProbe(p);
                 if (p !== 'missing') return;
-                // Stop at T, clamped as the retry does; a retry timer still pending would reopen the stream.
-                clearTimeout(retry);
+                // Stop at T, clamped as the retry does.
                 backoff.current = 1000;
                 const { started_at, ended_at } = rec.current;
                 const end = ended_at === null ? Date.now() : Date.parse(ended_at);
@@ -666,6 +666,7 @@ export function Player({
   const rearm = () => {
     probing.current?.abort();
     failCount.current = 0;
+    backoff.current = 1000;
     setFails(0);
     setProbe(null);
   };

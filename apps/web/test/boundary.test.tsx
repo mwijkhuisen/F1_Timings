@@ -141,6 +141,9 @@ it('/live naming a recording that /recordings lacks refetches /recordings, so th
     await act(async () => vi.advanceTimersByTimeAsync(30_000));
     await vi.waitFor(() => expect(host.querySelector('[popovertarget="menu-meeting"]')).not.toBeNull());
     expect(recordingsRequests).toBe(2);
+    // The list has 42 now: later polls ask no more.
+    await act(async () => vi.advanceTimersByTimeAsync(60_000));
+    expect(recordingsRequests).toBe(2);
   } finally {
     vi.useRealTimers();
   }
