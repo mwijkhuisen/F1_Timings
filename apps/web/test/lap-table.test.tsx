@@ -6,7 +6,7 @@ import { describe, expect, it } from 'vitest';
 import { teamColour } from '../src/lib/session.ts';
 import type { Period } from '../src/lib/track.ts';
 import { LapGrid, LapTable, Legend, type Metric, missingReason, type Show } from '../src/views/LapTable.tsx';
-import { rc } from './laps.ts';
+import { fetched, rc } from './laps.ts';
 
 // D10's cell rules on a hand-built race: 2 drivers × 3 laps, rendered statically (D4).
 
@@ -127,6 +127,7 @@ const detail = SessionDetail.parse({
     ingest_state: 'final',
     is_cancelled: false,
     meeting_key: 1290,
+    ...fetched,
   },
   meeting: {
     meeting_key: 1290,

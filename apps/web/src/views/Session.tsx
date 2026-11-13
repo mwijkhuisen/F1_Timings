@@ -1,9 +1,10 @@
 import type { SessionDetail } from '@f1/contracts';
 import { useEffect, useMemo, useState } from 'react';
-import { useLaps, useSession } from '../lib/api.ts';
+import { useLaps, useLive, useSession } from '../lib/api.ts';
 import { formatD, Link, parseD, replace, sessionPath, VIEW_LABEL, type View } from '../lib/routes.ts';
-import { orderDrivers } from '../lib/session.ts';
+import { orderDrivers, pollMs } from '../lib/session.ts';
 import { Pending } from '../ui/ErrorView.tsx';
+import { NoData } from '../ui/NoData.tsx';
 import { Compare } from './Compare.tsx';
 import { DriverPicker } from './DriverPicker.tsx';
 import { LapsTab } from './LapsTab.tsx';
@@ -23,8 +24,11 @@ const pathOf = (d: SessionDetail, view: View) =>
 // One session: its header, the tabs Laps | Compare | Mini-sectors | Stints | Weather, and the view (D1, D11).
 export function Session({ session, view }: { session: number; view: View }) {
   const detail = useSession(session);
-  const laps = useLaps(session);
   const d = detail.data;
+  // Laps, stints and weather refresh on the session's rule until its data is final (#99).
+  const poll = d ? pollMs(d.session, Date.now()) : false;
+  const laps = useLaps(session, poll);
+  const live = useLive().data ?? null;
   // A wrong or missing name, year or meeting key becomes the canonical URL (D3).
   const canonical = d && pathOf(d, view);
   useEffect(() => {
@@ -56,7 +60,7 @@ export function Session({ session, view }: { session: number; view: View }) {
   if (!d) return <Pending error={detail.error} />;
   return (
     <>
-      <SessionHeadLoader detail={d} view={view} />
+      <SessionHeadLoader detail={d} view={view} live={live} poll={poll} />
       <nav className="tabs">
         {(Object.keys(VIEW_LABEL) as View[]).map((v) => (
           <Link
@@ -68,22 +72,25 @@ export function Session({ session, view }: { session: number; view: View }) {
           </Link>
         ))}
       </nav>
-      {picks && laps.data && (
+      {/* No laps, no picker: the reason below instead of an empty pick (#99). */}
+      {picks && laps.data && laps.data.length > 0 && (
         <DriverPicker drivers={order} selected={numbers} onToggle={toggle} showReference={view === 'compare'} />
       )}
       {view === 'weather' ? (
         // The weather needs no laps; a race's laps add the leader's lap once they arrive.
-        <WeatherTab session={session} detail={d} laps={laps.data ?? null} />
+        <WeatherTab session={session} detail={d} laps={laps.data ?? null} live={live} />
       ) : !laps.data ? (
         <Pending error={laps.error} />
+      ) : laps.data.length === 0 ? (
+        <NoData session={d.session} live={live} what={view === 'stints' ? 'stints' : 'laps'} />
       ) : view === 'laps' ? (
         <LapsTab session={session} detail={d} laps={laps.data} />
       ) : view === 'compare' ? (
         <Compare session={session} detail={d} drivers={selected} laps={laps.data} onReference={setReference} />
       ) : view === 'minisectors' ? (
-        <MiniSectors sessionType={d.session.type} laps={laps.data} drivers={selected} />
+        <MiniSectors sessionType={d.session.type} source={d.session.source} laps={laps.data} drivers={selected} />
       ) : (
-        <StintsTab session={session} detail={d} laps={laps.data} />
+        <StintsTab session={session} detail={d} laps={laps.data} live={live} poll={poll} />
       )}
     </>
   );

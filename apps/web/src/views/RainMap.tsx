@@ -215,23 +215,35 @@ function RainLoader({
   const onIndex = useCallback((i: number) => setPick(capped && i >= last ? null : i), [capped, last]);
 
   if (!rain.data) return <Pending error={rain.error} />;
+  // A failed grid is never retried (A§8): say so rather than "not fetched yet" (#99).
+  if (grid?.state === 'failed' && frames.length === 0) return <p>Rain map fetch failed: no rain data.</p>;
   if (grid === null || frames.length === 0) return <p>{NOT_FETCHED}</p>;
   if (last < 0) return <p>No rain frame up to this time yet.</p>;
   if (!map.data) return <Pending error={map.error} />;
+  const lastFrame = frames.at(-1)?.date;
+  const note =
+    grid.state === 'failed' && lastFrame
+      ? `Rain data incomplete: the fetch failed after ${fmtHm(Date.parse(lastFrame))}.`
+      : grid.state === 'live' && !capped
+        ? 'Frames still arriving (every 15 min).'
+        : null;
   const index = capped
     ? pick !== null && pick < last
       ? pick
       : last
     : (pick ?? firstFrameAt(frames, session.date_start));
   return (
-    <RainMap
-      grid={grid}
-      frames={visible}
-      outline={map.data.outline}
-      osm={map.data.osm}
-      coarse={coarse}
-      index={index}
-      onIndex={onIndex}
-    />
+    <>
+      {note && <p>{note}</p>}
+      <RainMap
+        grid={grid}
+        frames={visible}
+        outline={map.data.outline}
+        osm={map.data.osm}
+        coarse={coarse}
+        index={index}
+        onIndex={onIndex}
+      />
+    </>
   );
 }

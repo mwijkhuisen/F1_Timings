@@ -1,8 +1,82 @@
-import type { SessionDetail } from '@f1/contracts';
+import type { Live, SessionDetail } from '@f1/contracts';
 import type { CSSProperties } from 'react';
 import { linear } from './colour.ts';
+import { isOpen } from './season.ts';
+import { fmtHm } from './time.ts';
 
-// Helpers shared by the lap table and the stints view.
+// Helpers shared by the session's tabs: why data is missing and when to refresh (#99), the lap table and the stints.
+
+type Session = SessionDetail['session'];
+
+/** After its first fetch a session is `fetched` or `due` only until date_end + 24 h (A§8). */
+const DAY_MS = 24 * 3_600_000;
+
+/** Whether `/live` names an open recording of this session. */
+export const isLiveNow = (key: number, live: Live | null): boolean =>
+  isOpen(live) && live?.session?.session_key === key;
+
+const ERROR_WORDS: Record<string, string> = {
+  rate_limited: 'rate limited',
+  timeout: 'timed out',
+  network: 'network error',
+  schema: 'unexpected data',
+  empty: 'empty answer',
+  db: 'database error',
+};
+
+/** A `last_error` code in fixed words: "HTTP 503" for `http_503`, "unknown error" for `unknown`, null or anything else. */
+export function errorWords(code: string | null): string {
+  const http = /^http_(\d{3})$/.exec(code ?? '');
+  if (http) return `HTTP ${http[1]}`;
+  return (code !== null && Object.hasOwn(ERROR_WORDS, code) && ERROR_WORDS[code]) || 'unknown error';
+}
+
+const SOURCE_WORDS: Record<Session['source'], string> = {
+  openf1: 'the OpenF1 data',
+  'f1-archive': 'the F1 archive',
+  'f1-live': 'the F1 live feed',
+  jolpica: 'the Jolpica data',
+};
+
+/** Where a session's rows come from, for the reasons: "the OpenF1 data", "the F1 archive", … */
+export const sourceWords = (source: Session['source']): string => SOURCE_WORDS[source];
+
+const ARRIVE = { laps: 'Laps arrive', stints: 'Stints arrive', weather: 'Weather arrives' } as const;
+
+/** `noDataText` for a session live right now; `ui/NoData.tsx` links "follow it" to `/live`. */
+export const LIVE_TEXT = 'Live now: follow it.';
+
+/**
+ * Why a tab has no laps, stints or weather (A§13), the first rule that holds: cancelled; live now; in back-off (with
+ * the next try in Amsterdam time); failed; `fetched` or `due` past date_end + 24 h, which only a new fetch puts there
+ * (a re-queue, a retry, A§8); not started; still to come (`scheduled`, `due`); else none in the session's source.
+ */
+export function noDataText(s: Session, live: Live | null, now: number, what: 'laps' | 'stints' | 'weather'): string {
+  if (s.is_cancelled) return `No ${what}: the session was cancelled.`;
+  if (isLiveNow(s.session_key, live)) return LIVE_TEXT;
+  const error = errorWords(s.last_error);
+  if (s.ingest_state === 'due' && s.fail_count > 0) {
+    const next = s.next_fetch_at === null ? '' : `; next try at ${fmtHm(Date.parse(s.next_fetch_at))}`;
+    return `The fetch failed (${error})${next}.`;
+  }
+  if (s.ingest_state === 'failed') return `The fetch failed ${s.fail_count} times (${error}) and is not retried.`;
+  const queued = s.ingest_state === 'fetched' || s.ingest_state === 'due';
+  if (queued && now > Date.parse(s.date_end) + DAY_MS) return 'Queued for a new fetch; check back later.';
+  const arrive = `${ARRIVE[what]} about 35 min after the end.`;
+  if (now < Date.parse(s.date_start)) return `Not started yet. ${arrive}`;
+  if (s.ingest_state === 'scheduled' || s.ingest_state === 'due') return arrive;
+  return `No ${what} in ${sourceWords(s.source)}.`;
+}
+
+/**
+ * The session's refetch interval (A§13): every 60 s while its data can still change, that is while it is not
+ * cancelled and `scheduled`, `due`, or `fetched` until date_end + 24 h; else false.
+ */
+export function pollMs(s: Pick<Session, 'is_cancelled' | 'ingest_state' | 'date_end'>, now: number): 60_000 | false {
+  if (s.is_cancelled) return false;
+  if (s.ingest_state === 'scheduled' || s.ingest_state === 'due') return 60_000;
+  return s.ingest_state === 'fetched' && now <= Date.parse(s.date_end) + DAY_MS ? 60_000 : false;
+}
 
 const COMPOUNDS = ['SOFT', 'MEDIUM', 'HARD', 'INTERMEDIATE', 'WET'];
 

@@ -1,16 +1,10 @@
-import type { Laps, SessionDetail, Weather as WeatherRows } from '@f1/contracts';
+import type { Laps, Live, SessionDetail, Weather as WeatherRows } from '@f1/contracts';
 import { useCallback, useMemo } from 'react';
 import { useWeather } from '../lib/api.ts';
-import {
-  fmtRange,
-  noWeatherText,
-  periodText,
-  type RainPeriod,
-  rainPeriods,
-  type Summary,
-  summarise,
-} from '../lib/weather.ts';
+import { sourceWords } from '../lib/session.ts';
+import { fmtRange, periodText, type RainPeriod, rainPeriods, type Summary, summarise } from '../lib/weather.ts';
 import { Pending } from '../ui/ErrorView.tsx';
+import { NoData } from '../ui/NoData.tsx';
 import { Note } from '../ui/Note.tsx';
 import { Chart } from './Chart.tsx';
 import type { ChartTokens } from './lap-chart-option.ts';
@@ -22,9 +16,10 @@ import { weatherChartOption } from './weather-chart-option.ts';
 // the session. The tiles and the rain periods are the chart's text alternative. The player's Weather tab (P5b) shows
 // the same panels from the feed's rows up to T. Both put the rain map (P5c, views/RainMap.tsx) under them.
 
-type Data = { detail: SessionDetail; laps: Laps | null };
+type Data = { detail: SessionDetail; laps: Laps | null; live: Live | null };
 
 export function WeatherTab({ session, ...data }: Data & { session: number }) {
+  // The session head's observer of this query polls (#99).
   const weather = useWeather(session);
   return (
     <>
@@ -158,8 +153,16 @@ export function WeatherPanels({
   );
 }
 
-/** `now` (epoch ms) tells a session queued for a new fetch from one OpenF1 has no weather for (`noWeatherText`). */
-export function WeatherView({ rows, detail, laps, now = Date.now() }: Data & { rows: WeatherRows; now?: number }) {
-  if (rows.length === 0) return <p>{noWeatherText(detail.session, now)}</p>;
-  return <WeatherPanels rows={rows} laps={laps} type={detail.session.type} source="the OpenF1 data" />;
+/** Without rows it says why (`noDataText`); `now` is epoch ms. */
+export function WeatherView({
+  rows,
+  detail,
+  laps,
+  live,
+  now = Date.now(),
+}: Data & { rows: WeatherRows; now?: number }) {
+  if (rows.length === 0) return <NoData session={detail.session} live={live} what="weather" now={now} />;
+  return (
+    <WeatherPanels rows={rows} laps={laps} type={detail.session.type} source={sourceWords(detail.session.source)} />
+  );
 }

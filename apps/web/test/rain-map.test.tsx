@@ -208,13 +208,18 @@ describe('the rain map card', () => {
       meeting: { ...d.meeting, circuit_short_name: 'Monza' },
     };
   };
-  const card = (detail: SessionDetail, rain?: Rain, files?: { outline: string | null; osm: OsmLayers | null }) => {
+  const card = (
+    detail: SessionDetail,
+    rain?: Rain,
+    files?: { outline: string | null; osm: OsmLayers | null },
+    cap?: number,
+  ) => {
     const client = new QueryClient({ defaultOptions: { queries: { enabled: false } } });
     if (rain) client.setQueryData(['rain', detail.session.session_key], rain);
     if (files) client.setQueryData(['map', rain?.grid?.map_id ?? null], files);
     return renderToStaticMarkup(
       <QueryClientProvider client={client}>
-        <RainMapCard detail={detail} />
+        <RainMapCard detail={detail} cap={cap} />
       </QueryClientProvider>,
     );
   };
@@ -238,6 +243,30 @@ describe('the rain map card', () => {
   it('says "Rain map not fetched yet." without a grid or without frames', () => {
     expect(card(monza(), { grid: null, frames: [] })).toContain('<p>Rain map not fetched yet.</p>');
     expect(card(monza(), { grid, frames: [] })).toContain('<p>Rain map not fetched yet.</p>');
+  });
+
+  it('says a failed grid failed: no rain data without frames, incomplete after its last frame with them (#99)', () => {
+    const failed = { ...grid, state: 'failed' } as const;
+    const files = { outline: OUTLINE, osm: null };
+    expect(card(monza(), { grid: failed, frames: [] }, files)).toContain('<p>Rain map fetch failed: no rain data.</p>');
+    const html = card(monza(), { grid: failed, frames }, files);
+    // The last frame is 14:15 UTC, 15:15 in Amsterdam; the note sits above the map.
+    expect(html).toMatch(
+      /<p>Rain data incomplete: the fetch failed after 15:15.<\/p><div class="rainbody"><svg class="rainfield"/,
+    );
+  });
+
+  it('says frames are still arriving for a live grid on the session page, not in the player', () => {
+    const live = { ...grid, state: 'live' } as const;
+    const files = { outline: OUTLINE, osm: null };
+    expect(card(monza(), { grid: live, frames }, files)).toMatch(
+      /<p>Frames still arriving \(every 15 min\).<\/p><div class="rainbody"><svg class="rainfield"/,
+    );
+    expect(card(monza(), { grid: live, frames }, files, Date.parse('2026-11-09T15:00:00Z'))).not.toContain(
+      'Frames still arriving',
+    );
+    expect(card(monza(), { grid, frames }, files)).not.toContain('Frames still arriving');
+    expect(card(monza(), { grid: live, frames: [] }, files)).toContain('<p>Rain map not fetched yet.</p>');
   });
 
   it('opens at the first frame at or after the start, with the outline and a native model', () => {

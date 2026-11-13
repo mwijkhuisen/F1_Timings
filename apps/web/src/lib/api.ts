@@ -13,6 +13,7 @@ import {
 } from '@f1/contracts';
 import { QueryClient, queryOptions, useQuery } from '@tanstack/react-query';
 import { ZodError } from 'zod';
+import { pollMs } from './session.ts';
 
 // The P1c API, read through relative paths only. Every answer is parsed with
 // its contract before the UI sees it; anything else is an error state. There
@@ -64,25 +65,32 @@ export const seasonQuery = (year: number) =>
 export const useSeason = (year: number, poll?: (data: Season | undefined) => number | false) =>
   useQuery({ ...seasonQuery(year), refetchInterval: poll ? (q) => poll(q.state.data) : false });
 
-export const useSession = (key: number) =>
-  useQuery({
+/** Polled while its data can still change (`pollMs`), so a page left open shows the laps once they arrive (#99). */
+export const sessionQuery = (key: number) =>
+  queryOptions({
     queryKey: ['session', key],
     queryFn: ({ signal }) => getJson(`/api/v1/sessions/${key}`, SessionDetail, signal),
     staleTime: STALE_MS,
+    refetchInterval: (q) => (q.state.data ? pollMs(q.state.data.session, Date.now()) : false),
   });
 
-export const useLaps = (key: number) =>
+export const useSession = (key: number) => useQuery(sessionQuery(key));
+
+/** `poll`: the session's `pollMs`, from the session page (#99). */
+export const useLaps = (key: number, poll: number | false = false) =>
   useQuery({
     queryKey: ['laps', key],
     queryFn: ({ signal }) => getJson(`/api/v1/sessions/${key}/laps`, Laps, signal),
     staleTime: STALE_MS,
+    refetchInterval: poll,
   });
 
-export const useStints = (key: number) =>
+export const useStints = (key: number, poll: number | false = false) =>
   useQuery({
     queryKey: ['stints', key],
     queryFn: ({ signal }) => getJson(`/api/v1/sessions/${key}/stints`, Stints, signal),
     staleTime: STALE_MS,
+    refetchInterval: poll,
   });
 
 /** Races only (`enabled`): the SC, VSC and red-flag bands (lib/track.ts). */
@@ -94,12 +102,13 @@ export const useRaceControl = (key: number, enabled: boolean) =>
     enabled,
   });
 
-/** The weather samples (P5a): the Weather tab and the session head's line. */
-export const useWeather = (key: number) =>
+/** The weather samples (P5a): the Weather tab and the session head's line; the head passes the session's `poll`. */
+export const useWeather = (key: number, poll: number | false = false) =>
   useQuery({
     queryKey: ['weather', key],
     queryFn: ({ signal }) => getJson(`/api/v1/sessions/${key}/weather`, Weather, signal),
     staleTime: STALE_MS,
+    refetchInterval: poll,
   });
 
 /** The rain map's grid and frames (P5c); `live` polls every 60 s, as the server adds a frame every 15 min. */

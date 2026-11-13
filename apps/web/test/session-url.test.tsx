@@ -1,8 +1,10 @@
 // @vitest-environment happy-dom
+import type { Laps, Live, SessionDetail, Stints } from '@f1/contracts';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import type { View } from '../src/lib/routes.ts';
 import { Session } from '../src/views/Session.tsx';
 import { lap, sessionDetail } from './laps.ts';
 
@@ -44,6 +46,7 @@ const render = (url: string) => {
   client.setQueryData(['season', 2026], null);
   client.setQueryData(['recordings'], null);
   client.setQueryData(['weather', KEY], []);
+  client.setQueryData(['live'], null);
   act(() =>
     root.render(
       <QueryClientProvider client={client}>
@@ -91,5 +94,65 @@ describe('Session: the picks in ?d=', () => {
     click(host.querySelector('[aria-label="Remove RUS"]'));
     expect(location.search).toBe('?d=3');
     expect(location.hash).toBe('#top');
+  });
+});
+
+describe('Session without laps: the reason, no dead end (#99)', () => {
+  const live: Live = {
+    session: { session_key: KEY, meeting_name: null, session_name: null, date_start: '', date_end: '' },
+    recording: { id: 5, started_at: '2026-10-31T19:00:00.000Z', ended_at: null, complete: false },
+  };
+  const show = (
+    view: View,
+    session: Partial<SessionDetail['session']> = {},
+    { laps = [] as Laps, stints = [] as Stints, now = null as Live | null } = {},
+  ) => {
+    // A fresh tree per call: a query observer keeps the client it was made with.
+    act(() => root.unmount());
+    root = createRoot(host);
+    history.replaceState(null, '', `${PATH}/${view}`);
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false, staleTime: Infinity } } });
+    client.setQueryData(['race-control', KEY], []);
+    const d = sessionDetail('Race', 'Race', [[1, 'VER']]);
+    client.setQueryData(['session', KEY], { ...d, session: { ...d.session, ...session } });
+    client.setQueryData(['laps', KEY], laps);
+    client.setQueryData(['stints', KEY], stints);
+    client.setQueryData(['season', 2026], null);
+    client.setQueryData(['recordings'], null);
+    client.setQueryData(['weather', KEY], []);
+    client.setQueryData(['live'], now);
+    act(() =>
+      root.render(
+        <QueryClientProvider client={client}>
+          <Session session={KEY} view={view} />
+        </QueryClientProvider>,
+      ),
+    );
+    // The tab's own content, after the head and the tabs.
+    return host.innerHTML.slice(host.innerHTML.indexOf('</nav>', host.innerHTML.indexOf('class="tabs"')) + 6);
+  };
+
+  it('Compare and Mini-sectors show the reason instead of an empty picker', () => {
+    for (const view of ['compare', 'minisectors'] as const) {
+      expect(show(view)).toBe('<p>No laps in the OpenF1 data.</p>');
+      expect(host.querySelector('.picked')).toBeNull();
+    }
+  });
+
+  it('Laps, Stints and Weather each say why', () => {
+    expect(show('laps', { ingest_state: 'failed', fail_count: 9, last_error: 'schema' })).toBe(
+      '<p>The fetch failed 9 times (unexpected data) and is not retried.</p>',
+    );
+    expect(show('stints', { is_cancelled: true })).toBe('<p>No stints: the session was cancelled.</p>');
+    expect(show('stints', {}, { laps: [lap(1, 1)] })).toBe('<p>No stints in the OpenF1 data.</p>');
+    expect(show('weather', { source: 'f1-archive' })).toMatch(/^<p>No weather in the F1 archive.<\/p>/);
+    expect(show('laps', {}, { now: live })).toBe('<p>Live now: <a href="/live">follow it</a>.</p>');
+  });
+
+  it('the head says "data final", and "Live now · Follow" while live', () => {
+    show('laps', {}, { now: live });
+    const meta = host.querySelector('.head p.muted')?.textContent;
+    expect(meta).toContain(' · data final · Live now · Follow');
+    expect(host.querySelector('.head a[href="/live"]')?.textContent).toBe('Follow');
   });
 });
