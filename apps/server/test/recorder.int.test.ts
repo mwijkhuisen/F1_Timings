@@ -366,8 +366,12 @@ describe('recorder (real PostgreSQL as f1_ingest, fake SignalR)', { timeout: 30_
       await until(() => logged('"last_error":"feed_unauthorized"'));
       expect(fake.seen[before + 1]).toMatchObject({ step: 'negotiate', authorization: `Bearer ${TOKEN_1}` });
       delete fake.behaviour.negotiateStatus;
-      await recording();
-      await until(async () => (await status())?.last_error === 'feed_unauthorized');
+      // One read: the row may still say `recording` from before the drop, and `feed_unauthorized` shows while the
+      // reconnect waits out its backoff; both together are only written once the anonymous connection subscribed.
+      await until(async () => {
+        const s = await status();
+        return s?.state === 'recording' && s.last_error === 'feed_unauthorized';
+      });
       expect(carried('upgrade').at(-1)).toBeUndefined();
       expect(await status()).toMatchObject({ token_expires_at: null, login_failures: 1, warning: 'login_failed' });
 
