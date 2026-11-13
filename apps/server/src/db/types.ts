@@ -35,6 +35,13 @@ export interface Driver {
   team_name: string | null;
 }
 
+export interface IngestStatus {
+  id: Generated<boolean>;
+  last_sync_at: Timestamp | null;
+  last_tick_at: Timestamp;
+  live_wait: boolean;
+}
+
 export interface Lap {
   date_start: Timestamp | null;
   deleted: Generated<boolean>;
@@ -231,6 +238,7 @@ export interface Weather {
 
 export interface DB {
   driver: Driver;
+  ingest_status: IngestStatus;
   lap: Lap;
   lap_source: LapSource;
   meeting: Meeting;

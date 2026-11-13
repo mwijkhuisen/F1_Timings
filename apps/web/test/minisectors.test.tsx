@@ -1,4 +1,4 @@
-import type { Lap } from '@f1/contracts';
+import type { Lap, SessionDetail } from '@f1/contracts';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, expect, it } from 'vitest';
 import type { Driver } from '../src/lib/session.ts';
@@ -47,8 +47,15 @@ const laps = [
   lap(4, 1, { seg1: [2068, 1, 2048, 2048], seg2: [2048, 2048], seg3: [2048], st_kph: null }),
 ];
 
-const render = (drivers: Driver[], type: string | null = 'Qualifying') =>
-  renderToStaticMarkup(<MiniSectors sessionType={type} laps={laps} drivers={drivers} />);
+const render = (
+  drivers: Driver[],
+  type: string | null = 'Qualifying',
+  source: SessionDetail['session']['source'] = 'openf1',
+) => renderToStaticMarkup(<MiniSectors sessionType={type} source={source} laps={laps} drivers={drivers} />);
+
+/** A Note (ui/Note.tsx) as its visible text. */
+const unNote = (html: string) =>
+  html.replace(/<button type="button" class="note"[^>]*>([^<]*)<\/button><div popover="auto"[^>]*>[^<]*<\/div>/g, '$1');
 
 /** Per lap row: the lap cell, per sector the [class, title] of each box and the cell's label, then the speeds. */
 const lapRows = (html: string) =>
@@ -66,7 +73,7 @@ const lapRows = (html: string) =>
       head,
       sectors: sectors.map(boxes),
       labels: sectors.map(({ attrs }) => /aria-label="([^"]*)"/.exec(attrs)?.[1]),
-      speeds: tds.slice(3).map(({ body }) => body),
+      speeds: tds.slice(3).map(({ body }) => unNote(body)),
     };
   });
 
@@ -143,6 +150,16 @@ describe('the mini-sector grid', () => {
     expect(html).toContain(
       '<div class="scroll" tabindex="0" role="region" aria-label="Mini-sectors and speed traps (km/h)"><table',
     );
+  });
+
+  it('gives a null speed its reason behind a tap, in the session’s source, with unique ids', () => {
+    expect(html).toContain(
+      '<td><button type="button" class="note" popoverTarget="trap-1-1-i1_kph" aria-describedby="trap-1-1-i1_kph" ' +
+        'title="No speed-trap reading in the OpenF1 data">—</button><div popover="auto" id="trap-1-1-i1_kph" ' +
+        'class="pop">No speed-trap reading in the OpenF1 data</div></td>',
+    );
+    expect([...html.matchAll(/ id="([^"]+)"/g)].map(([, id]) => id)).toEqual(['trap-1-1-i1_kph', 'trap-4-1-st_kph']);
+    expect(render([VER, NOR], 'Race', 'f1-archive')).toContain('title="No speed-trap reading in the F1 archive"');
   });
 
   it('strikes a deleted lap and badges in- and out-laps, laps in order', () => {

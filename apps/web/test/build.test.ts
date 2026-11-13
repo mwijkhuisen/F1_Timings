@@ -75,6 +75,8 @@ describe('the CSP', () => {
   });
 });
 
+const SHA = 'c'.repeat(40);
+
 describe('web build', () => {
   const out = join(tmp, 'dist');
   const page = (p: string) => readFileSync(join(out, p), 'utf8');
@@ -85,6 +87,7 @@ describe('web build', () => {
   beforeAll(async () => {
     // Vitest sets NODE_ENV=test, which makes Vite bundle React's development build: build as the CLI does.
     vi.stubEnv('NODE_ENV', 'production');
+    vi.stubEnv('F1_REVISION', SHA);
     try {
       const result = await build({ root: webDir, logLevel: 'silent', build: { outDir: out, emptyOutDir: true } });
       if (!('output' in result)) throw new Error('expected a single bundle output');
@@ -95,6 +98,18 @@ describe('web build', () => {
       vi.unstubAllEnvs();
     }
   }, 60_000);
+
+  it('embeds F1_REVISION in an output chunk, and a malformed one fails the build', async () => {
+    expect(chunks.some((c) => c.code.includes(SHA))).toBe(true);
+    vi.stubEnv('F1_REVISION', 'bad');
+    try {
+      await expect(
+        build({ root: webDir, logLevel: 'silent', build: { outDir: join(tmp, 'bad'), write: false } }),
+      ).rejects.toThrow('F1_REVISION is malformed');
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
 
   it('index.html has no inline script, style or handler', () => {
     const html = page('index.html');

@@ -80,6 +80,15 @@ export function field(sizes: number[]): Lap[] {
 
 const iso = '2026-10-31T21:00:00.000Z';
 
+/** A `SessionDetail.session`'s fetch fields (#99): an OpenF1 session fetched once without a failure. */
+export const fetched = {
+  source: 'openf1',
+  fetch_count: 1,
+  fail_count: 0,
+  last_error: null,
+  next_fetch_at: null,
+} as const;
+
 /** A session of `type` and `name` with `drivers` as [number, acronym] and those results. */
 export const sessionDetail = (
   type: string,
@@ -97,6 +106,7 @@ export const sessionDetail = (
       ingest_state: 'final',
       is_cancelled: false,
       meeting_key: 1300,
+      ...fetched,
     },
     meeting: {
       meeting_key: 1300,

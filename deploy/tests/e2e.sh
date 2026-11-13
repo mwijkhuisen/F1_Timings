@@ -21,6 +21,8 @@
 #      login and before any request (it never reaches the Index: invariant 4).
 #  3c. The fill job (profile jobs) on the migrated, empty database: exit 0 with fill_done.
 #  3d. The jolpica job (profile jobs) on the empty /srv/f1/jolpica: exit 1 with jolpica_done error bad_dump.
+#  3e. F1_REVISION (#98): the f1-server:ci image's ENV equals its revision label, and the f1-web:ci build
+#      embeds it under /srv/www/assets.
 #   4. Egress from api to a non-Cloudflare host is blocked.
 #  4b. f1-measure 60s 2 in the background; after 8 s `docker restart f1-live-1`, then SIGTERM: exit 0
 #      and the summary (the signal path), stats rows for db, api, caddy and live, the disk rows
@@ -189,6 +191,18 @@ run "$tmp/jolpica" docker compose -p f1 -f /etc/f1/compose.yaml -f "$F1_COMPOSE_
 done_line=$(grep '"msg":"jolpica_done"' "$tmp/jolpica" || true)
 [[ $done_line == *'"error":"bad_dump"'* ]] || fail "the jolpica job did not stop on bad_dump: $done_line"
 proof "compose --profile jobs run --rm jolpica jolpica on the empty /srv/f1/jolpica (root 0750, group 62532): exit 1, jolpica_done error bad_dump (as f1_ingest on f1-db only, the directory read-only)"
+
+# ------------------------------------------------------------------ 3e
+step "3e. F1_REVISION reaches both builds (the api's ENV and the web's bundle)"
+# Read from the label: sudo drops the job's environment.
+rev=$(docker image inspect -f '{{index .Config.Labels "org.opencontainers.image.revision"}}' f1-server:ci)
+[[ $rev =~ ^[0-9a-f]{40}$ ]] || fail "f1-server:ci has no 40-hex revision label (a dev build proves nothing): $rev"
+env_lines=$(docker image inspect -f '{{range .Config.Env}}{{println .}}{{end}}' f1-server:ci)
+grep -qx "F1_REVISION=$rev" <<<"$env_lines" || fail "f1-server:ci has no ENV F1_REVISION=$rev"
+# BusyBox grep (the caddy image) has no --include: the assets directory holds the bundle only.
+docker run --rm --entrypoint grep f1-web:ci -rlF "$rev" /srv/www/assets >/dev/null \
+  || fail "f1-web:ci embeds no $rev under /srv/www/assets"
+proof "F1_REVISION=$rev is the f1-server:ci ENV and sits in the f1-web:ci bundle (/srv/www/assets)"
 
 # ------------------------------------------------------------------ 4
 step "4. Egress from api to a non-Cloudflare host is blocked"

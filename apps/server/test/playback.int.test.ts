@@ -283,6 +283,7 @@ describe('playback routes (f1_api login, Access JWT, real socket)', { timeout: 6
       expect(res.status).toBe(200);
       expect(res.headers.get('content-type')).toBe('text/event-stream');
       expect(res.headers.get('cache-control')).toBe('no-store, no-transform');
+      expect(res.headers.get('f1-revision')).toBe('dev');
       expect(await res.text()).toBe('');
     }
     await backTo(baseline);

@@ -11,9 +11,11 @@ import {
   Stints,
   Weather,
 } from '@f1/contracts';
-import { QueryClient, queryOptions, useQuery } from '@tanstack/react-query';
+import { QueryClient, queryOptions, useQuery, useQueryClient } from '@tanstack/react-query';
+import { useEffect, useRef, useSyncExternalStore } from 'react';
 import { ZodError } from 'zod';
 import { savedSessions } from './saved.ts';
+import { pollMs } from './session.ts';
 
 // The P1c API, read through relative paths only. Every answer is parsed with
 // its contract before the UI sees it; anything else is an error state. There
@@ -29,14 +31,43 @@ export class HttpError extends Error {
   }
 }
 
+/** This build's git commit or `dev` (vite.config.ts, A§10). */
+export const REVISION: string = import.meta.env.F1_REVISION ?? 'dev';
+
+// One app-wide flag: the api answered for another revision, or an answer failed its contract. A reload is the fix,
+// so the banner (ui/ErrorView.tsx) stays up; it is never cleared (A§13).
+let stale = false;
+const listeners = new Set<() => void>();
+export const isStale = () => stale;
+export function markStale() {
+  if (stale) return;
+  stale = true;
+  for (const l of listeners) l();
+}
+const subscribe = (l: () => void) => {
+  listeners.add(l);
+  return () => void listeners.delete(l);
+};
+export const useStale = () => useSyncExternalStore(subscribe, isStale, isStale);
+
 export async function getJson<T>(path: string, contract: { parse(data: unknown): T }, signal: AbortSignal): Promise<T> {
+  // A per-session answer may sit in the browser cache for 24 h: `v` makes the cache key per build (A§10).
+  const url = path.includes('/api/v1/sessions/') ? `${path}?v=${REVISION}` : path;
   // redirect: 'error' turns Access's login redirect into a TypeError instead of an HTML page.
-  const res = await fetch(path, { signal, redirect: 'error', headers: { accept: 'application/json' } });
+  const res = await fetch(url, { signal, redirect: 'error', headers: { accept: 'application/json' } });
   if (!res.ok) throw new HttpError(res.status);
-  return contract.parse(await res.json());
+  const rev = res.headers.get('f1-revision');
+  // Another revision's answer is still data: keep it, and ask for a reload.
+  if (rev !== null && rev !== REVISION) markStale();
+  try {
+    return contract.parse(await res.json());
+  } catch (err) {
+    if (err instanceof ZodError) markStale();
+    throw err;
+  }
 }
 
-/** One retry, but never for an answer that will not change: a 4xx or data that fails its contract. */
+/** One retry, but never for an answer that will not change: a 4xx, or data that fails its contract. */
 export const retry = (failures: number, error: unknown): boolean =>
   failures < 1 && !(error instanceof HttpError && error.status < 500) && !(error instanceof ZodError);
 
@@ -67,12 +98,31 @@ export const seasonQuery = (year: number) =>
 export const useSeason = (year: number, poll?: (data: Season | undefined) => number | false) =>
   useQuery({ ...seasonQuery(year), refetchInterval: poll ? (q) => poll(q.state.data) : false });
 
-export const useSession = (key: number) =>
-  useQuery({
+/** Polled while its data can still change (`pollMs`), so a page left open sees each new fetch (#99). */
+export const sessionQuery = (key: number) =>
+  queryOptions({
     queryKey: ['session', key],
     queryFn: ({ signal }) => getJson(`/api/v1/sessions/${key}`, SessionDetail, signal),
     staleTime: STALE_MS,
+    refetchInterval: (q) => (q.state.data ? pollMs(q.state.data.session) : false),
   });
+
+export const useSession = (key: number) => useQuery(sessionQuery(key));
+
+/**
+ * A new fetch of the session (its `fetch_count` changed, not the first value seen) refetches its laps, stints and
+ * weather once (#99); only the session query polls.
+ */
+export function useRefetchOnFetch(key: number, fetchCount: number | undefined) {
+  const client = useQueryClient();
+  const seen = useRef(fetchCount);
+  useEffect(() => {
+    if (fetchCount === undefined) return;
+    if (seen.current !== undefined && seen.current !== fetchCount)
+      for (const what of ['laps', 'stints', 'weather']) void client.invalidateQueries({ queryKey: [what, key] });
+    seen.current = fetchCount;
+  }, [client, key, fetchCount]);
+}
 
 export const useLaps = (key: number) =>
   useQuery({
@@ -105,14 +155,19 @@ export const useWeather = (key: number) =>
     staleTime: STALE_MS,
   });
 
-/** The rain map's grid and frames (P5c); `live` polls every 60 s, as the server adds a frame every 15 min. */
-export const useRain = (key: number, live = false) =>
-  useQuery({
+/**
+ * The rain map's grid and frames (P5c): polled every 60 s while `live` (the player) or while the grid is `live`
+ * (#99), as the server adds a frame every 15 min.
+ */
+export const rainQuery = (key: number, live = false) =>
+  queryOptions({
     queryKey: ['rain', key],
     queryFn: ({ signal }) => getJson(`/api/v1/sessions/${key}/rain`, Rain, signal),
     staleTime: STALE_MS,
-    refetchInterval: live ? 60_000 : false,
+    refetchInterval: (q) => (live || q.state.data?.grid?.state === 'live' ? 60_000 : false),
   });
+
+export const useRain = (key: number, live = false) => useQuery(rainQuery(key, live));
 
 /** A circuit's OpenStreetMap layers (ODbL, ADR-0008): SVG path data in km, any of them possibly empty. */
 export type OsmLayers = { water: string; coast: string; roads: string };
@@ -148,12 +203,16 @@ export const useStatus = (refetchMs: number | false = false) =>
     refetchInterval: refetchMs,
   });
 
-/** Polled every 30 s, so `/live` picks up a session that starts and the player an `ended_at` that is set. */
-export const useLive = () =>
+/**
+ * Polled every 30 s while `enabled`, so `/live` picks up a session that starts and the player an `ended_at` that is
+ * set; the session page enables it only while its session can be live.
+ */
+export const useLive = (enabled = true) =>
   useQuery({
     queryKey: ['live'],
     queryFn: ({ signal }) => getJson('/api/v1/live', Live, signal),
     refetchInterval: 30_000,
+    enabled,
   });
 
 /** The sessions the service worker keeps (#121, D4); `/` asks only once /seasons has failed. */

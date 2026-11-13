@@ -2,6 +2,7 @@ import { type Lap, type SectorDelta, sectorDeltas } from '@f1/contracts';
 import type { CSSProperties } from 'react';
 import { type Driver, teamStyle } from '../lib/session.ts';
 import { fmtDelta, fmtLap } from '../lib/time.ts';
+import { Note } from '../ui/Note.tsx';
 import { Scroll } from '../ui/Scroll.tsx';
 
 // The sector-delta table (D5): the first selected driver is the reference (E4); every other
@@ -14,6 +15,27 @@ type DeltaLap = Pick<
 >;
 
 const SECTORS = ['s1', 's2', 's3'] as const;
+type Sector = (typeof SECTORS)[number];
+
+/**
+ * Why a delta is `—` (#99): a lap missing ("No lap 12 for NOR"; `lap` null is the Best-lap row, "No best lap for NOR"),
+ * a deleted lap, or a sector time missing ("No S2 time for NOR", "for NOR and VER" when both are).
+ */
+export function deltaReason(
+  sector: Sector,
+  pair: readonly (readonly [Driver, DeltaLap | undefined])[],
+  lap: number | null,
+): string {
+  const who = (missing: (l: DeltaLap | undefined) => boolean) =>
+    pair
+      .filter(([, l]) => missing(l))
+      .map(([d]) => d.acronym)
+      .join(' and ');
+  const noLap = who((l) => l === undefined);
+  if (noLap) return lap === null ? `No best lap for ${noLap}` : `No lap ${lap} for ${noLap}`;
+  if (pair.some(([, l]) => l?.deleted)) return 'Deleted lap';
+  return `No ${sector.toUpperCase()} time for ${who((l) => l?.[`${sector}_ms` as const] === null)}`;
+}
 
 /** The driver's own best lap: the server colours exactly that lap purple or green (A§9). */
 const bestOf = (laps: readonly DeltaLap[]) => laps.find((l) => l.colour.lap === 'purple' || l.colour.lap === 'green');
@@ -26,11 +48,27 @@ const bestDeltas = (ref: DeltaLap | undefined, other: DeltaLap | undefined) =>
 const barWidth = (ms: number, full: number) =>
   ({ '--w': `${Math.min(50, (Math.abs(ms) / full) * 50).toFixed(1)}%` }) as CSSProperties;
 
-const Cells = ({ delta }: { delta: SectorDelta | undefined }) => (
+/** `id`: unique on the page, per row and driver; `reason` says why a sector is `—`. */
+const Cells = ({
+  delta,
+  id,
+  reason,
+}: {
+  delta: SectorDelta | undefined;
+  id: string;
+  reason: (s: Sector) => string;
+}) => (
   <>
     {SECTORS.map((s) => {
       const v = delta?.[s] ?? null;
-      if (v === null) return <td key={s}>—</td>;
+      if (v === null)
+        return (
+          <td key={s}>
+            <Note id={`${id}-${s}`} text={reason(s)}>
+              —
+            </Note>
+          </td>
+        );
       // A bar from the centre hairline: left when faster than the reference, 500 ms fills the half. None for 0.
       return (
         <td key={s} className="dc">
@@ -90,7 +128,25 @@ export function Duel({ drivers, laps }: { drivers: readonly Driver[]; laps: read
                         />
                       )}
                     </dd>
-                    <dd className="val">{v === null ? '—' : fmtDelta(v)}</dd>
+                    <dd className="val">
+                      {v === null ? (
+                        <Note
+                          id={`duel-${d.number}-${s}`}
+                          text={deltaReason(
+                            s,
+                            [
+                              [d, best],
+                              [ref, refBest],
+                            ],
+                            null,
+                          )}
+                        >
+                          —
+                        </Note>
+                      ) : (
+                        fmtDelta(v)
+                      )}
+                    </dd>
                   </div>
                 );
               })}
@@ -113,16 +169,29 @@ export function DeltaTable({ drivers, laps }: { drivers: readonly Driver[]; laps
   const [ref, ...others] = drivers;
   if (!ref) return null;
   const lapsOf = (d: Driver) => laps.filter((l) => l.driver_number === d.number);
+  const byNumber = (ls: readonly DeltaLap[]) => new Map(ls.map((l) => [l.lap_number, l]));
   const refLaps = lapsOf(ref);
   const refBest = bestOf(refLaps);
+  const refByLap = byNumber(refLaps);
   const groups = others.map((d) => {
     const mine = lapsOf(d);
     const best = bestOf(mine);
+    const own = byNumber(mine);
     return {
       driver: d,
       best,
       bestDelta: bestDeltas(refBest, best),
       byLap: new Map(sectorDeltas(refLaps, mine).map((x) => [x.lap_number, x])),
+      /** Why a sector of lap `n` (null: the best laps) is `—`, the other driver first. */
+      reason: (n: number | null) => (s: Sector) =>
+        deltaReason(
+          s,
+          [
+            [d, n === null ? best : own.get(n)],
+            [ref, n === null ? refBest : refByLap.get(n)],
+          ],
+          n,
+        ),
     };
   });
   const lapNumbers = [...new Set(groups.flatMap((g) => [...g.byLap.keys()]))].sort((a, b) => a - b);
@@ -163,14 +232,24 @@ export function DeltaTable({ drivers, laps }: { drivers: readonly Driver[]; laps
                 {num(refBest)} vs {groups.map((g) => num(g.best)).join(', ')}
               </th>
               {groups.map((g) => (
-                <Cells key={g.driver.number} delta={g.bestDelta} />
+                <Cells
+                  key={g.driver.number}
+                  delta={g.bestDelta}
+                  id={`dt-best-${g.driver.number}`}
+                  reason={g.reason(null)}
+                />
               ))}
             </tr>
             {lapNumbers.map((n) => (
               <tr key={n}>
                 <th scope="row">{n}</th>
                 {groups.map((g) => (
-                  <Cells key={g.driver.number} delta={g.byLap.get(n)} />
+                  <Cells
+                    key={g.driver.number}
+                    delta={g.byLap.get(n)}
+                    id={`dt-${n}-${g.driver.number}`}
+                    reason={g.reason(n)}
+                  />
                 ))}
               </tr>
             ))}

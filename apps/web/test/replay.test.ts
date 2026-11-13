@@ -244,7 +244,7 @@ describe('skipped', () => {
       let feed: Feed | undefined;
       const close = openStream(
         { recording: 1, at: 0, delay: 0 },
-        { onData: (f) => (feed = f), onError: () => {}, onEnd: () => {} },
+        { onData: (f) => (feed = f), onError: () => {}, onStale: () => {}, onEnd: () => {} },
         ES as unknown as typeof EventSource,
       );
       for (const [name, data] of events)

@@ -13,7 +13,8 @@ const here = (path: string) => fileURLToPath(new URL(path, import.meta.url));
 
 /**
  * The service worker's placeholders (src/sw/main.ts) and the app icon (#121). The build id hashes every emitted
- * file, so a deploy that changes no web file keeps the offline data; the shell is `/` and every .js and .css file.
+ * file, F1_REVISION included, so each release drops the offline data, whose keys carry the old `?v=` (A§13); the
+ * shell is `/` and every .js and .css file.
  */
 const worker = (): Plugin => ({
   name: 'f1-sw',
@@ -39,8 +40,14 @@ const worker = (): Plugin => ({
   },
 });
 
+// The release's git commit or `dev` (A§10), the `?v=` cache key. Same format as REVISION in packages/contracts (the
+// config must not import zod).
+const revision = process.env.F1_REVISION ?? 'dev';
+if (!/^(?:[0-9a-f]{40}|dev)$/.test(revision)) throw new Error('F1_REVISION is malformed');
+
 export default defineConfig({
   plugins: [react(), worker()],
+  define: { 'import.meta.env.F1_REVISION': JSON.stringify(revision) },
   server: { proxy: api },
   preview: { proxy: api },
   build: {
