@@ -18,13 +18,20 @@ export function formOf(row: Row): Form | null {
   return null;
 }
 
-/** Messages that look like a period. Plain alternation, so the server also uses `.source` as a PostgreSQL `~` pattern. */
-export const PERIOD_LIKE = /SAFETY CAR|VSC|RED FLAG|RESUME/;
-/** Stewards' notes, which mention a period without being one. */
-export const NOTES = /INCIDENT|STEWARDS|INFRINGEMENT/;
+/**
+ * Messages that look like a period. A plain alternation of PostgreSQL-safe pieces (no `\b`, which is a backspace
+ * there), so the server and race-control-forms.sql use `.source` as a `~` pattern. `SC` counts as a word.
+ */
+export const PERIOD_LIKE = /SAFETY CAR|VSC|RED FLAG|RESUME|SUSPENDED|(^|[^A-Z])SC([^A-Z]|$)/;
+/**
+ * Rows that mention a period without being one, in two halves: stewards' notes (INCIDENT to INFRINGEMENT), then the
+ * known procedural wording of a safety-car start or restart (D4 of #105).
+ */
+export const IGNORED =
+  /INCIDENT|STEWARDS|INFRINGEMENT|LIGHTS (ON|OFF)|OVERTAKE THE SAFETY CAR|THROUGH THE PIT LANE|FORMATION LAP|START\/FINISH STRAIGHT|WILL ENTER PITS|START BEHIND THE SAFETY CAR|WILL STAY OUT|COVERS ON/;
 
-/** A period-like row that matches no form and is not a stewards' note: a wording the bands would miss. */
+/** A period-like row that matches no form and is ignored (a note or procedure): a wording the bands would miss. */
 export const isUnmatched = (row: Row): boolean => {
   const m = row.message ?? '';
-  return formOf(row) === null && PERIOD_LIKE.test(m) && !NOTES.test(m);
+  return formOf(row) === null && PERIOD_LIKE.test(m) && !IGNORED.test(m);
 };

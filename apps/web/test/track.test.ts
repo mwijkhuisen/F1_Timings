@@ -110,7 +110,7 @@ describe('trackPeriods', () => {
         rc(6, SC_IN), // nothing open
         resume(7),
       ]),
-    ).toEqual({ periods: [], unplaced: [], unmatched: 1 }); // THROUGH THE PIT LANE looks like a period, no form
+    ).toEqual({ periods: [], unplaced: [], unmatched: 0 }); // THROUGH THE PIT LANE looks like a period, no form, and is ignored (D4)
   });
 
   it('counts the period-like rows that match no form, 2027-style wording, and leaves the periods alone', () => {
@@ -122,10 +122,11 @@ describe('trackPeriods', () => {
       rc(14, 'VSC ENDED'),
       rc(15, 'CAR 4 (NOR) UNDER SAFETY CAR INCIDENT NOTED - NO FURTHER INVESTIGATION'), // a note
       rc(16, 'GREEN LIGHT - PIT EXIT OPEN'),
+      rc(17, 'SC DEPLOYED'), // SC is a word now
     ];
     const mixed = [...known.slice(0, 2), ...drift, ...known.slice(2)];
     const t = trackPeriods(mixed);
-    expect(t.unmatched).toBe(3);
+    expect(t.unmatched).toBe(4);
     expect(t.periods).toEqual(trackPeriods(known).periods);
   });
 });

@@ -5,7 +5,9 @@
 -- Read-only: it runs as f1_api (SELECT only) inside a READ ONLY transaction that is rolled back, and it
 -- prints counts, and in query 2 each distinct message of the period-class rows (safety car, VSC, red flag,
 -- restart, chequered flag) with only its digits masked. Stewards' notes are left out. Query 6 lists the
--- period-like rows that no form of queries 3 to 5 accepts (class NULL), digits masked, with counts.
+-- period-like rows that no form of queries 3 to 5 accepts (class NULL), digits masked, with counts. Its two
+-- patterns are PERIOD_LIKE and IGNORED of packages/contracts/src/race-control.ts, verbatim (what /status
+-- lists as races with unknown wording; test/race-control-forms.test.ts pins it). The CASE below is its own copy.
 --
 -- On the VM (add -v from=2018 -v to=2022 for the archive years):
 --   sudo docker compose -p f1 -f /etc/f1/compose.yaml --env-file /srv/f1/state/current.env exec -T db \
@@ -123,7 +125,7 @@ classed AS (
       WHEN rc.flag = 'CHEQUERED' THEN 'END'
     END AS class
   FROM race_control rc JOIN races USING (session_key)
-  WHERE rc.message ~ 'SAFETY CAR|VSC|RED FLAG|RESUME' AND rc.message !~ '(INCIDENT|STEWARDS|INFRINGEMENT)')
+  WHERE rc.message ~ 'SAFETY CAR|VSC|RED FLAG|RESUME|SUSPENDED|(^|[^A-Z])SC([^A-Z]|$)' AND rc.message !~ 'INCIDENT|STEWARDS|INFRINGEMENT|LIGHTS (ON|OFF)|OVERTAKE THE SAFETY CAR|THROUGH THE PIT LANE|FORMATION LAP|START\/FINISH STRAIGHT|WILL ENTER PITS|START BEHIND THE SAFETY CAR|WILL STAY OUT|COVERS ON')
 SELECT regexp_replace(message, '[0-9]+', '#', 'g') AS form, count(*) AS n, count(DISTINCT session_key) AS races
 FROM classed WHERE class IS NULL GROUP BY 1 ORDER BY n DESC, form;
 

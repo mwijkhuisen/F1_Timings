@@ -463,10 +463,8 @@ describe('api (f1_api login, Access JWT)', { timeout: 120_000 }, () => {
       recorder: null,
       ingest: null,
       rain: { states: { live: 1, final: 2, failed: 0 }, failed: [] },
-      // The sprint is a Race-type session: its real FORMATION LAP(S) BEHIND SAFETY CAR and SAFETY CAR LIGHTS OFF match no form.
-      rc_unmatched: [
-        { session_key: SPRINT, year: 2026, meeting_name: expect.any(String), session_name: 'Sprint', rows: 2 },
-      ],
+      // The sprint is a Race-type session: its real FORMATION LAP(S) BEHIND SAFETY CAR and SAFETY CAR LIGHTS OFF are ignored (D4).
+      rc_unmatched: [],
     });
   });
 
@@ -541,10 +539,9 @@ describe('api (f1_api login, Access JWT)', { timeout: 120_000 }, () => {
           },
         ],
       });
-      // The race (newest first) with our one row, then the sprint's two real ones.
+      // Our one row of the race; the sprint's real rows are ignored procedure (D4).
       expect(got.rc_unmatched).toEqual([
         { session_key: RACE, year: 2026, meeting_name: expect.any(String), session_name: 'Race', rows: 1 },
-        { session_key: SPRINT, year: 2026, meeting_name: expect.any(String), session_name: 'Sprint', rows: 2 },
       ]);
     } finally {
       await admin.deleteFrom('ingest_status').execute();
