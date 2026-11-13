@@ -4,10 +4,11 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from 'vitest';
-import { isStale, markStale } from '../src/lib/api.ts';
+import { HttpError, isStale, markStale } from '../src/lib/api.ts';
 import { useTitle } from '../src/lib/routes.ts';
 import { streamUrl } from '../src/lib/stream.ts';
 import { fmtClock } from '../src/lib/time.ts';
+import { OFFLINE } from '../src/ui/ErrorView.tsx';
 import { Live, Replay } from '../src/views/Live.tsx';
 import { Player, type PlayerRecording } from '../src/views/Player.tsx';
 import { practiceState, raceState } from './feed-state.ts';
@@ -36,7 +37,21 @@ vi.mock('../src/lib/echarts.ts', () => ({
   }),
 }));
 
-// The player (A§13, A§15): a real React tree in happy-dom, a fake EventSource, fake timers, no fetch.
+// The tower throws while `towerMock.fail` is on (#100: the per-tab error boundary); else it is the real one.
+const towerMock = vi.hoisted(() => ({ fail: false }));
+vi.mock('../src/views/Tower.tsx', async (load) => {
+  const m = await load<typeof import('../src/views/Tower.tsx')>();
+  const { createElement } = await import('react');
+  return {
+    ...m,
+    Tower: (props: Parameters<typeof m.Tower>[0]) => {
+      if (towerMock.fail) throw new Error('tower');
+      return createElement(m.Tower, props);
+    },
+  };
+});
+
+// The player (A§13, A§15): a real React tree in happy-dom, a fake EventSource, fake timers, a stubbed fetch.
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -75,10 +90,19 @@ const open: PlayerRecording = { ...ended, ended_at: null };
 let root: Root;
 let host: HTMLElement;
 
+/** The failure probe's fetch (#100): by default it never answers, and rejects on abort, so no probe text shows. */
+const pending = (_url: string, init?: RequestInit) =>
+  new Promise<Response>((_resolve, reject) =>
+    init?.signal?.addEventListener('abort', () => reject(new DOMException('aborted', 'AbortError'))),
+  );
+let fetchStub = vi.fn(pending);
+
 beforeEach(() => {
   vi.useFakeTimers({ now: NOW });
   FakeES.all = [];
   vi.stubGlobal('EventSource', FakeES);
+  fetchStub = vi.fn(pending);
+  vi.stubGlobal('fetch', fetchStub);
   localStorage.clear();
   host = document.createElement('div');
   document.body.append(host);
@@ -1935,5 +1959,253 @@ describe('wake lock', () => {
     render({});
     await flush();
     expect(openCount()).toBe(1);
+  });
+});
+
+describe('the failure probe (#100, D3)', () => {
+  const start = S + 3_600_000;
+  const MISSING = "The recording's files are missing on the server: playback stopped. Press Play to try again.";
+  const EXPIRED = 'The stream keeps failing: your Access session has expired. Reload the page to sign in.';
+  const UP = 'The stream keeps failing, but the server has the recording: still retrying.';
+  const ERROR = 'The stream keeps failing: the server answered with an error. Still retrying.';
+  const settle = () => act(async () => {});
+  /** Plays, then fails `n` times, each time waiting out the backoff but the last. */
+  const failing = (n: number) => {
+    render({ recording: ended, start });
+    last().emit('snapshot', { t: start, state: {}, laps: [], stints: [] });
+    for (let i = 0; i < n; i++) {
+      if (i > 0) advance(1_000 * 2 ** (i - 1));
+      last().emit('error');
+    }
+  };
+
+  it("sends no fetch after 2 errors, one HEAD on the stream's URL after the 3rd, and none after the 4th or 5th", () => {
+    failing(2);
+    expect(fetchStub).not.toHaveBeenCalled();
+    advance(2_000);
+    const url = last().url;
+    last().emit('error');
+    expect(fetchStub).toHaveBeenCalledTimes(1);
+    expect(url).toBe(streamUrl({ recording: 7, at: start + 3_000, delay: 0 }));
+    expect(fetchStub.mock.calls[0]?.[0]).toBe(url);
+    expect(fetchStub.mock.calls[0]?.[1]).toMatchObject({ method: 'HEAD', redirect: 'error' });
+    advance(4_000);
+    last().emit('error');
+    advance(8_000);
+    last().emit('error');
+    expect(fetchStub).toHaveBeenCalledTimes(1);
+  });
+
+  it.each([
+    ['a 401', () => Promise.resolve({ status: 401 } as Response), EXPIRED],
+    ['a TypeError', () => Promise.reject(new TypeError('Failed to fetch')), EXPIRED],
+    ['a 200', () => Promise.resolve({ status: 200, ok: true } as Response), UP],
+    ['a 503', () => Promise.resolve({ status: 503, ok: false } as Response), ERROR],
+  ])('%s says its own text and keeps retrying', async (_name, answer, text) => {
+    fetchStub.mockImplementation(answer);
+    failing(3);
+    await settle();
+    expect($('p[role="status"]').textContent).toBe(text);
+    for (const other of [EXPIRED, UP, ERROR, MISSING].filter((x) => x !== text))
+      expect(host.textContent).not.toContain(other);
+    const opened = FakeES.all.length;
+    advance(4_000);
+    expect(FakeES.all).toHaveLength(opened + 1);
+    expect(openCount()).toBe(1);
+    // A snapshot clears it.
+    last().emit('snapshot', { t: start, state: {}, laps: [], stints: [] });
+    expect(host.textContent).not.toContain(text);
+  });
+
+  it('offline, a TypeError says the page needs the network', async () => {
+    const onLine = vi.spyOn(navigator, 'onLine', 'get').mockReturnValue(false);
+    onTestFinished(() => onLine.mockRestore());
+    fetchStub.mockImplementation(() => Promise.reject(new TypeError('Failed to fetch')));
+    failing(3);
+    await settle();
+    expect($('p[role="status"]').textContent).toBe('You are offline: this page needs the network.');
+  });
+
+  it.each([
+    ['a 200', () => Promise.resolve({ status: 200 } as Response)],
+    ['a 401', () => Promise.resolve({ status: 401 } as Response)],
+  ])('offline wins over the probe answer (%s)', async (_name, answer) => {
+    const onLine = vi.spyOn(navigator, 'onLine', 'get').mockReturnValue(false);
+    onTestFinished(() => onLine.mockRestore());
+    fetchStub.mockImplementation(answer);
+    failing(3);
+    await settle();
+    expect($('p[role="status"]').textContent).toBe(OFFLINE);
+  });
+
+  /** A probe answer that the test resolves itself, and the signal the player passed. */
+  const deferred = () => {
+    let resolve: (status: number) => void = () => {};
+    fetchStub.mockImplementation(() => new Promise<Response>((r) => (resolve = (status) => r({ status } as Response))));
+    return { answer: (status: number) => act(async () => resolve(status)) };
+  };
+  const signalOf = (call: number) => {
+    const signal = (fetchStub.mock.calls[call]?.[1] as RequestInit | undefined)?.signal;
+    if (!signal) throw new Error(`no probe ${call}`);
+    return signal;
+  };
+
+  it('a snapshot while the probe is pending, then a 404: the player is not stopped and says nothing is missing', async () => {
+    const probe = deferred();
+    failing(3);
+    expect(fetchStub).toHaveBeenCalledTimes(1);
+    advance(4_000); // the retry opens a stream
+    last().emit('snapshot', { t: start + 5_000, state: {}, laps: [], stints: [] });
+    expect(signalOf(0).aborted).toBe(true);
+    await probe.answer(404);
+    expect(host.textContent).not.toContain(MISSING);
+    expect(openCount()).toBe(1);
+    expect(host.querySelector('button.play')?.textContent).toBe('Pause');
+  });
+
+  it('Pause while the probe is pending, then a 404: no missing line; after Play the 3rd error of the new streak probes again', async () => {
+    const probe = deferred();
+    failing(3);
+    button('Pause');
+    expect(signalOf(0).aborted).toBe(true);
+    await probe.answer(404);
+    expect(host.textContent).not.toContain(MISSING);
+    button('Play');
+    for (let i = 0; i < 3; i++) {
+      if (i > 0) advance(30_000); // the backoff has grown: wait out any of it
+      last().emit('error');
+    }
+    expect(fetchStub).toHaveBeenCalledTimes(2);
+  });
+
+  it('unmounting while the probe is pending aborts it', () => {
+    deferred();
+    failing(3);
+    expect(signalOf(0).aborted).toBe(false);
+    act(() => root.unmount());
+    expect(signalOf(0).aborted).toBe(true);
+    root = createRoot(host); // the afterEach unmounts it
+  });
+
+  it('a 404 stops at T: no new stream after the backoff, the line stays while paused, and Play tries again', async () => {
+    fetchStub.mockImplementation(() => Promise.resolve({ status: 404 } as Response));
+    failing(3);
+    await settle();
+    expect(host.textContent).toContain(MISSING);
+    const opened = FakeES.all.length;
+    advance(60_000);
+    expect(FakeES.all).toHaveLength(opened);
+    expect(openCount()).toBe(0);
+    expect(host.textContent).toContain(MISSING);
+    button('Play');
+    expect(FakeES.all).toHaveLength(opened + 1);
+    expect(atOf(last())).toBe(String(start + 3_000)); // where it stopped
+    expect(host.textContent).not.toContain(MISSING);
+  });
+});
+
+describe('the session query failed (#100)', () => {
+  const T = S + 3_600_000;
+  it.each([
+    [500, 'API error'],
+    [401, 'Your Access session may have expired: reload to sign in.'],
+  ])('a %s shows its error under the tower, and no tabs', (status, text) => {
+    render({ recording: ended, start: T, detailError: new HttpError(status) });
+    last().emit('snapshot', { t: T, state: raceState(), laps: [], stints: [] });
+    advance(250);
+    expect(host.querySelector('fieldset[aria-label="View"]')).toBeNull();
+    const alert = $('section.player').previousElementSibling;
+    expect(alert?.getAttribute('role')).toBe('alert');
+    expect(alert?.textContent).toBe(text);
+    expect(alert?.previousElementSibling?.querySelector('table[aria-label="Timing tower"]')).not.toBeNull();
+  });
+
+  it('with the session loaded there is no error line', () => {
+    render({ recording: ended, start: T, detail, detailError: new HttpError(500) });
+    last().emit('snapshot', { t: T, state: raceState(), laps: [], stints: [] });
+    advance(250);
+    expect(host.textContent).not.toContain('API error');
+    expect(host.querySelector('fieldset[aria-label="View"]')).not.toBeNull();
+  });
+});
+
+describe('a tab that throws (#100)', () => {
+  const T = S + 3_600_000;
+  const BROKEN = 'Something went wrong: reload the page.';
+
+  it('shows the boundary on its tab only: the bar and the stream stay, Laps renders, and a switch back resets it', () => {
+    const error = vi.spyOn(console, 'error').mockImplementation(() => {});
+    onTestFinished(() => {
+      error.mockRestore();
+      towerMock.fail = false;
+    });
+    towerMock.fail = true;
+    render({ recording: ended, start: T, detail });
+    const es = last();
+    es.emit('snapshot', { t: T, state: raceState(), laps: [lap(1, 1)], stints: [] });
+    advance(250);
+    expect(host.textContent).toContain(BROKEN);
+    expect(host.querySelector('section.player')).not.toBeNull();
+    expect(host.querySelector('.strip')).not.toBeNull();
+    expect(es.closed).toBe(false);
+    // The stream lives on: a later event still moves the clock.
+    es.emit('delta', { t: T + 600_000, topic: 'LapCount', data: { CurrentLap: 13 } });
+    advance(250);
+    expect($('.clockline time').textContent).toBe(fmtClock(T + 600_000));
+    button('Laps');
+    expect(host.querySelector('table.laps')).not.toBeNull();
+    expect(host.textContent).not.toContain(BROKEN);
+    towerMock.fail = false;
+    button('Tower');
+    expect(host.querySelector('table[aria-label="Timing tower"]')).not.toBeNull();
+    expect(host.textContent).not.toContain(BROKEN);
+    expect(FakeES.all).toHaveLength(1);
+  });
+});
+
+describe('the tab in the URL (#100)', () => {
+  const T = S + 3_600_000;
+  const pressed = () =>
+    [...host.querySelectorAll('fieldset[aria-label="View"] button[aria-pressed="true"]')].map((b) => b.textContent);
+  afterEach(() => history.replaceState(null, '', '/'));
+  const play = (props: Partial<Parameters<typeof Player>[0]>) => {
+    render({ recording: ended, start: T, detail, ...props });
+    last().emit('snapshot', { t: T, state: raceState(), laps: [lap(1, 1)], stints: [] });
+    advance(250);
+  };
+
+  it('?tab=weather opens the replay on Weather; a bad value is the tower', () => {
+    history.replaceState(null, '', '/replay/7?tab=weather');
+    play({ keepT: true });
+    expect(pressed()).toEqual(['Weather']);
+    act(() => root.unmount());
+    root = createRoot(host);
+    history.replaceState(null, '', '/replay/7?tab=LAPS');
+    play({ keepT: true });
+    expect(pressed()).toEqual(['Tower']);
+  });
+
+  it('a tab click writes &tab= next to t, a T write keeps it, and the tower drops it', () => {
+    history.replaceState(null, '', '/replay/7');
+    play({ keepT: true });
+    button('Pause');
+    expect(location.search).toBe('?t=21:00:00');
+    button('Laps');
+    expect(location.search).toBe('?t=21:00:00&tab=laps');
+    button('Play');
+    advance(15_000);
+    expect(location.search).toBe('?t=21:00:15&tab=laps');
+    button('Tower');
+    expect(location.search).toBe('?t=21:00:15');
+    expect(location.pathname).toBe('/replay/7');
+  });
+
+  it('/live neither reads nor writes the tab', () => {
+    history.replaceState(null, '', '/live?tab=weather');
+    play({ recording: open, start: 'live' });
+    expect(pressed()).toEqual(['Tower']);
+    button('Laps');
+    expect(pressed()).toEqual(['Laps']);
+    expect(location.pathname + location.search).toBe('/live?tab=weather');
   });
 });

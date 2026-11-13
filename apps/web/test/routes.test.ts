@@ -1,5 +1,16 @@
 import { describe, expect, it } from 'vitest';
-import { formatD, parseD, type Route, routeOf, sessionPath, slug, titleOf, withWord } from '../src/lib/routes.ts';
+import {
+  formatD,
+  parseD,
+  parseTab,
+  type Route,
+  replayQuery,
+  routeOf,
+  sessionPath,
+  slug,
+  titleOf,
+  withWord,
+} from '../src/lib/routes.ts';
 
 describe('routeOf', () => {
   it.each([
@@ -184,5 +195,35 @@ describe('parseD and formatD: the picks in ?d= (C4)', () => {
     expect(formatD([63, 3])).toBe('63,3');
     expect(formatD([])).toBe('');
     expect(parseD(formatD([44, 1]), drivers)).toEqual([44, 1]);
+  });
+});
+
+describe('the player tab in the URL (#100)', () => {
+  it.each(['laps', 'order', 'weather'] as const)('parseTab reads %s', (tab) => {
+    expect(parseTab(tab)).toBe(tab);
+  });
+
+  it.each([null, '', 'tower', 'LAPS', 'laps ', 'compare', '<x>'])('parseTab gives the tower for %j', (param) => {
+    expect(parseTab(param)).toBe('tower');
+  });
+
+  it('replayQuery sets t and keeps the tab, and sets the tab and keeps t', () => {
+    expect(replayQuery('?tab=laps', { t: '21:00:15' })).toBe('?t=21:00:15&tab=laps');
+    expect(replayQuery('?t=21:00:15', { tab: 'weather' })).toBe('?t=21:00:15&tab=weather');
+    expect(replayQuery('?tab=weather&t=21:00:15', { tab: 'order' })).toBe('?t=21:00:15&tab=order');
+    expect(replayQuery('', { t: '21:00:15' })).toBe('?t=21:00:15');
+    expect(replayQuery('', { tab: 'laps' })).toBe('?tab=laps');
+  });
+
+  it('replayQuery drops the tower, a bad t, a bad tab and any other param', () => {
+    expect(replayQuery('?t=21:00:15&tab=laps', { tab: 'tower' })).toBe('?t=21:00:15');
+    expect(replayQuery('?tab=laps', { tab: 'tower' })).toBe('');
+    expect(replayQuery('?t=abc&tab=laps', { tab: 'weather' })).toBe('?tab=weather');
+    expect(replayQuery('?t=21:00', {})).toBe('');
+    expect(replayQuery('?t=21:00:15&tab=junk&d=1,44', {})).toBe('?t=21:00:15');
+  });
+
+  it("replayQuery leaves ':' unescaped", () => {
+    expect(replayQuery('?t=21%3A00%3A15', { tab: 'laps' })).toBe('?t=21:00:15&tab=laps');
   });
 });

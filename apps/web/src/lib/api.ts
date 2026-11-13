@@ -218,10 +218,12 @@ export const useLive = (enabled = true) =>
 /** The sessions the service worker keeps (#121, D4); `/` asks only once /seasons has failed. */
 export const useSaved = (enabled: boolean) => useQuery({ queryKey: ['saved'], queryFn: savedSessions, enabled });
 
-export const useRecordings = (refetchMs: number | false = false) =>
+/** `enabled`: the header asks only on the player routes (#100). */
+export const useRecordings = (refetchMs: number | false = false, enabled = true) =>
   useQuery({
     queryKey: ['recordings'],
     queryFn: ({ signal }) => getJson('/api/v1/recordings', Recordings, signal),
     staleTime: STALE_MS,
     refetchInterval: refetchMs,
+    enabled,
   });

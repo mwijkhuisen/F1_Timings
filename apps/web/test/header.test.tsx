@@ -5,17 +5,25 @@ import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, expect, it } from 'vitest';
 import type { Route } from '../src/lib/routes.ts';
 import type { Theme } from '../src/lib/theme.ts';
-import { HeaderView } from '../src/views/Header.tsx';
+import { HeaderView, playerSession } from '../src/views/Header.tsx';
 import { SessionHead } from '../src/views/SessionHead.tsx';
+import { recorderWarning } from '../src/views/Status.tsx';
 import { fetched } from './laps.ts';
 import { live, recordings, season, seasons } from './season-data.ts';
 
 // The header's switcher and links, and the session head (A§13, P4c), on the hand-built 2026.
 
 const SP = '/2026/1320-sao-paulo';
-const header = (route: Route | null, theme: Theme = 'dark') =>
+const header = (route: Route | null, theme: Theme = 'dark', more: Partial<Parameters<typeof HeaderView>[0]> = {}) =>
   renderToStaticMarkup(
-    <HeaderView route={route} seasons={seasons} season={route ? season : undefined} theme={theme} onTheme={() => {}} />,
+    <HeaderView
+      route={route}
+      seasons={seasons}
+      season={route ? season : undefined}
+      theme={theme}
+      onTheme={() => {}}
+      {...more}
+    />,
   );
 /** The opening tag of the first element with this attribute. */
 const tag = (html: string, attr: string) => html.match(new RegExp(`<[^>]*${attr}[^>]*>`))?.[0];
@@ -129,6 +137,100 @@ describe('the page links', () => {
           `Status</a></nav><button type="button" class="theme" aria-pressed="${pressed}" aria-label="Dark theme"`,
         ),
       );
+  });
+});
+
+describe("the player's session in the switcher (#100)", () => {
+  const ended = {
+    ...live,
+    recording: live.recording && { ...live.recording, id: 41, ended_at: '2026-11-06T19:40:00Z' },
+  };
+
+  it("playerSession is the replay's recording, or the one /live names (open, or the next session's latest)", () => {
+    expect(playerSession({ id: 'replay', recording: 41 }, undefined, recordings)).toEqual({
+      year: 2026,
+      session: 9103,
+    });
+    expect(playerSession({ id: 'live' }, live, recordings)).toEqual({ year: 2026, session: 9105 });
+    expect(playerSession({ id: 'live' }, ended, recordings)).toEqual({ year: 2026, session: 9103 });
+  });
+
+  it('playerSession is null elsewhere, for an unknown id, and before the data', () => {
+    expect(playerSession({ id: 'replay', recording: 99 }, live, recordings)).toBeNull();
+    expect(playerSession({ id: 'live' }, { ...live, recording: null }, recordings)).toBeNull();
+    expect(playerSession({ id: 'live' }, undefined, recordings)).toBeNull();
+    expect(playerSession({ id: 'replay', recording: 41 }, live, undefined)).toBeNull();
+    for (const route of [{ id: 'status' }, { id: 'replays' }, { id: 'year', year: 2026 }, null] as const)
+      expect(playerSession(route, live, recordings)).toBeNull();
+  });
+
+  it.each([
+    [
+      '/replay/41',
+      { id: 'replay', recording: 41 } as Route,
+      9103,
+      'Sprint Qualifying',
+      '9101-practice-1',
+      '9104-practice-3',
+    ],
+    ['/live', { id: 'live' } as Route, 9105, 'Sprint', '9104-practice-3', '9106-qualifying'],
+  ])('%s shows the meeting and session menus, and ‹ › to the neighbours’ laps', (_n, route, key, name, prev, next) => {
+    const html = header(route, 'dark', { player: { year: 2026, session: key } });
+    expect(html).toContain('<a aria-current="page" href="/2026">2026</a>');
+    expect(html).toContain('aria-label="Meeting São Paulo">São Paulo <span class="caret"');
+    expect(html).toContain(`aria-label="Session ${name}">${name} <span class="caret"`);
+    expect(tag(html, 'aria-label="Previous session"')).toContain(`href="${SP}/${prev}/laps"`);
+    expect(tag(html, 'aria-label="Next session"')).toContain(`href="${SP}/${next}/laps"`);
+  });
+
+  it('without the player session a player route shows only "Season"', () => {
+    const html = header({ id: 'replay', recording: 41 });
+    expect(html).toContain('popoverTarget="menu-season">Season <span class="caret"');
+    expect(html).not.toContain('menu-meeting');
+  });
+});
+
+describe('the Live and Status words (#100, D1)', () => {
+  const links = (more: Partial<Parameters<typeof HeaderView>[0]>) => {
+    const html = header({ id: 'latest' }, 'dark', more);
+    return html.slice(html.indexOf('aria-label="Pages"'));
+  };
+
+  it('Live is the red pill while /live names an open recording, else plain', () => {
+    expect(links({ live: true })).toContain(
+      '<a href="/live"><span class="pill live"><span class="dot" aria-hidden="true"></span>Live<span class="vh">, recording now</span></span></a>',
+    );
+    expect(links({ live: false })).toContain('<a href="/live">Live</a>');
+  });
+
+  it('Status gets the amber pill with the warning in its title, else plain', () => {
+    const warning = 'Less than 5 GB free for recordings.';
+    expect(links({ warning })).toContain(
+      `<a title="${warning}" href="/status">Status <span class="pill warn">warning</span></a>`,
+    );
+    expect(links({ warning: null })).toContain('<a href="/status">Status</a>');
+  });
+
+  it('recorderWarning: each warning, the stale notice, and null', () => {
+    const recorder = (warning: 'token_expiring' | 'login_failed' | 'disk_low' | null, stale = false) => ({
+      state: 'idle' as const,
+      session_key: null,
+      meeting_name: null,
+      session_name: null,
+      token_expires_at: null,
+      last_error: null,
+      warning,
+      stale,
+      updated_at: '2026-11-07T14:00:00.000Z',
+    });
+    expect(recorderWarning(recorder('token_expiring'))).toBe(
+      'The F1 TV token expires within 24 h and a session is due.',
+    );
+    expect(recorderWarning(recorder('login_failed'))).toMatch(/^The F1 TV login failed\./);
+    expect(recorderWarning(recorder('disk_low', true))).toBe('Less than 5 GB free for recordings.');
+    expect(recorderWarning(recorder(null, true))).toBe('The recorder has not reported for over 5 minutes.');
+    expect(recorderWarning(recorder(null))).toBeNull();
+    expect(recorderWarning(null)).toBeNull();
   });
 });
 

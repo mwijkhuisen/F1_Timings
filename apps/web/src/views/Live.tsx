@@ -1,46 +1,74 @@
-import type { Live as LiveData, Recordings } from '@f1/contracts';
+import type { Live as LiveData, Recordings, SessionDetail } from '@f1/contracts';
 import { useState } from 'react';
 import { useLive, useRecordings, useSession, useStatus } from '../lib/api.ts';
-import { Link } from '../lib/routes.ts';
+import { Link, sessionPath } from '../lib/routes.ts';
 import { fmtInstant } from '../lib/time.ts';
 import { NotFound, Pending } from '../ui/ErrorView.tsx';
 import { Player, type PlayerRecording } from './Player.tsx';
 import { RecorderWarnings } from './Status.tsx';
 
-// `/live`, `/replay` and `/replay/:recording` (A§13): the player on a recording, with the session from the API for the lap table.
+// `/live`, `/replay` and `/replay/:recording` (A§13): the player on a recording, with the session from the API for the
+// lap table, under a head with the meeting, the session and, once the session has loaded, a link to its pages (#100).
+
+type Names = { meeting_name: string | null; session_name: string | null };
+
+/** The player's head (#100, D2): the h1 as the session head's, and one link to the session's results. */
+export function PlayerHead({ names, detail: d }: { names: Names; detail: SessionDetail | undefined }) {
+  return (
+    <div className="head">
+      <h1 tabIndex={-1}>
+        {names.meeting_name ?? '—'} <span className="kind">{names.session_name ?? '—'}</span>
+      </h1>
+      {d && (
+        <p className="muted">
+          <Link
+            to={sessionPath(
+              d.meeting.year,
+              { key: d.session.meeting_key, name: d.meeting.name },
+              { key: d.session.session_key, name: d.session.name, type: d.session.type },
+              'laps',
+            )}
+          >
+            Results: laps, compare, stints
+          </Link>
+        </p>
+      )}
+    </div>
+  );
+}
 
 function Watch({
-  title,
+  names,
   recording,
   sessionKey,
   start,
   keepT = false,
 }: {
-  title: string;
+  names: Names;
   recording: PlayerRecording;
   sessionKey: number;
   start: number | 'live';
-  /** Replay only: T lives in the URL (`?t=`). */
+  /** Replay only: T and the tab live in the URL (`?t=`, `?tab=`). */
   keepT?: boolean;
 }) {
   const session = useSession(sessionKey);
   return (
     <>
-      <h1 tabIndex={-1}>{title}</h1>
+      <PlayerHead names={names} detail={session.data} />
       <Player
         key={recording.id}
         recording={recording}
         sessionKey={sessionKey}
         start={start}
         detail={session.data}
+        detailError={session.error}
         keepT={keepT}
       />
     </>
   );
 }
 
-const titleOf = (r: { meeting_name: string | null; session_name: string | null }) =>
-  `${r.meeting_name ?? '—'} · ${r.session_name ?? '—'}`;
+const titleOf = (r: Names) => `${r.meeting_name ?? '—'} · ${r.session_name ?? '—'}`;
 
 /** The session /live offers when nothing is open: the next one, with its latest recording to replay. */
 export function Next({ live }: { live: LiveData }) {
@@ -88,7 +116,7 @@ export function Live() {
     <>
       {status.data && <RecorderWarnings recorder={status.data.recorder} />}
       {session && recording && (recording.ended_at === null || recording.id === watched) ? (
-        <Watch title={titleOf(session)} recording={recording} sessionKey={session.session_key} start="live" />
+        <Watch names={session} recording={recording} sessionKey={session.session_key} start="live" />
       ) : (
         <>
           <h1 tabIndex={-1}>Live</h1>
@@ -121,5 +149,5 @@ export function Replay({ recording: id }: { recording: number }) {
   // The session's scheduled start, clamped into what was recorded.
   const end = r.ended_at === null ? Date.now() : Date.parse(r.ended_at);
   const start = Math.min(end, Math.max(Date.parse(r.started_at), Date.parse(r.date_start)));
-  return <Watch title={titleOf(r)} recording={r} sessionKey={r.session_key} start={start} keepT />;
+  return <Watch names={r} recording={r} sessionKey={r.session_key} start={start} keepT />;
 }

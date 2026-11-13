@@ -34,11 +34,11 @@ import {
   skippedText,
   statusSeries,
 } from '../lib/replay.ts';
-import { setTitleWord } from '../lib/routes.ts';
-import { createStore, type Feed, openStream, type Snap } from '../lib/stream.ts';
+import { type PlayerTab, parseTab, replayQuery, setTitleWord } from '../lib/routes.ts';
+import { createStore, type Feed, openStream, type Probe, probeStream, type Snap, streamUrl } from '../lib/stream.ts';
 import { fmtClock, parseT } from '../lib/time.ts';
 import { KIND_LABEL, KIND_NAME, type Kind } from '../lib/track.ts';
-import { OFFLINE } from '../ui/ErrorView.tsx';
+import { ErrorBoundary, ErrorView, OFFLINE } from '../ui/ErrorView.tsx';
 import { LapTable } from './LapTable.tsx';
 import { Order } from './Order.tsx';
 import { Panel, Strip, useTick } from './PitWall.tsx';
@@ -53,7 +53,8 @@ import { WeatherPanels } from './Weather.tsx';
 // paused T and closes on its snapshot. Only the clock line, the seek bar, the Back to chips and the strip's LEFT cell
 // (and, on the Weather tab, the rain map) tick each second, from values derived per flush (no state parsing per tick);
 // the tower, the pit wall and everything else derived from the state render on a store flush. The tabs are Tower ·
-// Laps · Order (races) · Weather; the Weather tab shows the feed's weather rows up to T (P5b), redrawn only when a row arrives, and the
+// Laps · Order (races) · Weather, each in its own error boundary, the replay's in the URL (`?tab=`, #100); the
+// Weather tab shows the feed's weather rows up to T (P5b), redrawn only when a row arrives, and the
 // rain map's frames up to T (P5c).
 
 /** A SessionDetail whose drivers and results come from the stream: OpenF1 has no drivers during a live session. */
@@ -152,14 +153,16 @@ function writeMinimized(on: boolean) {
   }
 }
 
-/** T in the replay's URL (`?t=HH:mm:ss`): replaceState only, so the route stays and nothing is dispatched. */
-function writeT(t: number) {
+/** T or the tab in the replay's URL (`?t=HH:mm:ss&tab=…`): replaceState only, so the route stays and nothing is dispatched. */
+function writeQuery(set: { t?: string; tab?: PlayerTab }) {
   try {
-    history.replaceState(history.state, '', `${location.pathname}?t=${fmtClock(t)}`);
+    history.replaceState(history.state, '', `${location.pathname}${replayQuery(location.search, set)}`);
   } catch {
     // A browser that rate-limits replaceState throws (SecurityError): the URL just lags behind T.
   }
 }
+
+const writeT = (t: number) => writeQuery({ t: fmtClock(t) });
 
 /** At most one line per `SAY_GAP_MS`: a line that comes sooner replaces the waiting one, said when the gap is over. */
 function createVoice(show: (line: string) => void) {
@@ -195,6 +198,17 @@ const nudgeLabel = (s: number) =>
   `${Math.abs(s)} ${Math.abs(s) === 1 ? 'second' : 'seconds'} ${s < 0 ? 'earlier' : 'later'}`;
 const hhmm = (t: number) => fmtClock(t).slice(0, 5);
 const FAILING = 5; // consecutive errors without a snapshot before the reload hint
+const PROBE_AT = 3; // the error that sends the one HEAD probe (#100)
+const RELOAD = 'The stream keeps failing. Reload the page (your Access session may have expired).';
+const RECONNECTING = 'Reconnecting…';
+/** What the probe's answer says (#100, D3); `missing` stops the player. */
+const PROBE_TEXT: Record<Probe, string> = {
+  missing: "The recording's files are missing on the server: playback stopped. Press Play to try again.",
+  expired: 'The stream keeps failing: your Access session has expired. Reload the page to sign in.',
+  offline: OFFLINE,
+  up: 'The stream keeps failing, but the server has the recording: still retrying.',
+  error: 'The stream keeps failing: the server answered with an error. Still retrying.',
+};
 
 const MARK_NAME: Record<MarkKind, string> = { start: 'Start', ...KIND_NAME, chequered: 'Chequered flag' };
 /** The chips, in this order: one per kind, for its latest mark at or before T. */
@@ -366,6 +380,41 @@ function PlayerRain({
   return <RainMapCard detail={detail} live={live} cap={now()} />;
 }
 
+/**
+ * The tower with its closing trend (A§13), in a race: the interval's change at the line over 1 and 3 laps, from the
+ * crossings up to the state's T and the SC, VSC and red bands up to it. Its own component, so the tab's error boundary
+ * covers the trend and it runs only while the tower is shown (#100).
+ */
+function TowerTab({
+  snap,
+  series,
+  lo,
+  sessionKey,
+  focus,
+  onFocus,
+}: {
+  snap: Snap;
+  series: Status[];
+  lo: number;
+  sessionKey: number | undefined;
+  focus: string | null;
+  onFocus(n: string): void;
+}) {
+  const state = snap.feed?.state;
+  const trend = useMemo(() => {
+    const feed = snap.feed;
+    if (!feed || view(feed.state, 'SessionInfo')?.Type !== 'Race') return undefined;
+    const bands = markersUpTo(series, feed.t, [lo, Number.POSITIVE_INFINITY]);
+    return closingAt(
+      snap.laps,
+      towerRows(feed.state).map((r) => r.driver.number),
+      feed.t,
+      bands,
+    );
+  }, [snap, series, lo]);
+  return state && <Tower state={state} sessionKey={sessionKey} focus={focus} onFocus={onFocus} trend={trend} />;
+}
+
 type Open = { at: number | 'live' | null; still?: true };
 
 export type PlayerRecording = { id: number; started_at: string; ended_at: string | null };
@@ -402,6 +451,7 @@ export function Player({
   sessionKey,
   start,
   detail,
+  detailError = null,
   keepT = false,
 }: {
   recording: PlayerRecording;
@@ -411,7 +461,9 @@ export function Player({
   start: number | 'live';
   /** The session from the API; without it there is only the tower. */
   detail: SessionDetail | undefined;
-  /** The replay keeps T in the URL (`?t=`) and resumes from it on load; `/live` never does. */
+  /** The session query's error: shown under the tower while there is no detail (#100). */
+  detailError?: unknown;
+  /** The replay keeps T and the tab in the URL (`?t=`, `?tab=`) and resumes from them on load; `/live` never does. */
   keepT?: boolean;
 }) {
   // A valid ?t, read once on mount: the player resumes paused there (a still frame) until Play.
@@ -425,11 +477,16 @@ export function Player({
   const at = open.at;
   const playing = at !== null && !open.still;
   const [seek, setSeek] = useState<number | null>(null); // a pending seek, shown on the bar
-  const [tab, setTab] = useState<'tower' | 'laps' | 'order' | 'weather'>('tower');
+  const [tab, setTab] = useState<PlayerTab>(() =>
+    keepT ? parseTab(new URLSearchParams(location.search).get('tab')) : 'tower',
+  );
   // The focused driver's number (a tap on the tower's driver cell); page state that the player bar reads.
   const [focus, setFocus] = useState<string | null>(null);
   const [stale, setStale] = useState(false); // an event failed its contract: reload, no retry
   const [fails, setFails] = useState(0); // errors since the last snapshot
+  const failCount = useRef(0); // the same, for the stream's handlers
+  const [probe, setProbe] = useState<Probe | null>(null); // the HEAD probe's answer since the last snapshot
+  const probing = useRef<AbortController | undefined>(undefined);
   // The reload hint lets the screen lock (owner, 2026-11-13): an expired Access session never comes back by itself.
   useWakeLock(playing && fails < FAILING && !stale);
   const [since, setSince] = useState<string | null>(null); // what the last forward seek skipped
@@ -483,7 +540,10 @@ export function Player({
           lastFeed.current = feed;
           if (kind !== 'snapshot') return;
           backoff.current = 1000;
+          failCount.current = 0;
           setFails(0);
+          setProbe(null);
+          probing.current?.abort();
           const j = jump.current;
           if (j) {
             jump.current = undefined;
@@ -499,7 +559,32 @@ export function Player({
           }
         },
         onError() {
-          setFails((n) => n + 1);
+          failCount.current += 1;
+          setFails(failCount.current);
+          // EventSource cannot see the status: one HEAD tells an expired login from missing files (#100, D3).
+          if (failCount.current === PROBE_AT) {
+            probing.current?.abort();
+            const ctl = new AbortController();
+            probing.current = ctl;
+            void probeStream(streamUrl({ recording: recording.id, at: from, delay: liveDelay }), ctl.signal).then(
+              (p) => {
+                if (ctl.signal.aborted) return;
+                setProbe(p);
+                if (p !== 'missing') return;
+                // Stop at T, clamped as the retry does.
+                backoff.current = 1000;
+                const { started_at, ended_at } = rec.current;
+                const end = ended_at === null ? Date.now() : Date.parse(ended_at);
+                const now = still ? clock.current.t : clock.current.t + Math.max(0, Date.now() - clock.current.wall);
+                const t = Math.round(clamp(now, Date.parse(started_at), end));
+                clock.current = { t, wall: Date.now() };
+                stood.current = t;
+                failCount.current = 0;
+                setFails(0);
+                setOpen({ at: null });
+              },
+            );
+          }
           const wait = backoff.current;
           backoff.current = Math.min(wait * 2, 30_000);
           retry = setTimeout(() => {
@@ -535,6 +620,7 @@ export function Player({
     () => () => {
       clearTimeout(timers.current.delay);
       clearTimeout(timers.current.seek);
+      probing.current?.abort();
     },
     [],
   );
@@ -576,7 +662,16 @@ export function Player({
     }, DEBOUNCE_MS);
   };
 
+  // A new stream starts a new streak of errors: the 3rd one probes again. A late 404 would stop at a T that ran on.
+  const rearm = () => {
+    probing.current?.abort();
+    failCount.current = 0;
+    backoff.current = 1000;
+    setFails(0);
+    setProbe(null);
+  };
   const pause = () => {
+    rearm();
     const t = nowT();
     freeze(t);
     stood.current = t;
@@ -585,18 +680,25 @@ export function Player({
   };
   // A reopen starts T where the stream opens, so it does not jump by the pause before the first event.
   const play = () => {
+    rearm();
     const t = Math.round(clamp(nowT(), lo, hi()));
     freeze(t);
     setResumed(null);
     setOpen({ at: t });
   };
   const goLive = () => {
+    rearm();
     freeze(Date.now() - delay * 1000);
     setResumed(null);
     setOpen({ at: 'live' });
   };
   // Live, a nudge moves the delay: earlier is more delay. In replay it moves T.
   const nudge = (s: number) => (at === 'live' ? changeDelay(delay - s) : seekTo(now() + s * 1000));
+  // The replay keeps the tab in the URL (`?tab=`, #100); `/live` never writes.
+  const pick = (t: PlayerTab) => {
+    setTab(t);
+    if (keepT) writeQuery({ tab: t });
+  };
   const toggleAnnounce = (on: boolean) => {
     setAnnounce(on);
     writeAnnounce(on);
@@ -621,34 +723,21 @@ export function Player({
   );
   // The series is parsed once per flush; the ticking bar only filters it at T.
   const series = useMemo(() => (snap.feed ? statusSeries(snap.feed.state) : []), [snap]);
-  // The tower's closing trend (A§13), in a race: the interval's change at the line over 1 and 3 laps, from the crossings
-  // up to the state's T and the SC, VSC and red bands up to it.
-  const trend = useMemo(() => {
-    const feed = snap.feed;
-    if (!feed || view(feed.state, 'SessionInfo')?.Type !== 'Race') return undefined;
-    const bands = markersUpTo(series, feed.t, [lo, Number.POSITIVE_INFINITY]);
-    return closingAt(
-      snap.laps,
-      towerRows(feed.state).map((r) => r.driver.number),
-      feed.t,
-      bands,
-    );
-  }, [snap, series, lo]);
   // The state is mutated in place: what is derived from it is keyed on the snapshot, a new object per store flush.
-  const tower = useMemo(() => {
-    const s = snap.feed?.state;
-    return (
-      s && (
-        <Tower
-          state={s}
+  const tower = useMemo(
+    () =>
+      snap.feed && (
+        <TowerTab
+          snap={snap}
+          series={series}
+          lo={lo}
           sessionKey={sessionKey}
           focus={focus}
           onFocus={(n) => setFocus((f) => (f === n ? null : n))}
-          trend={trend}
         />
-      )
-    );
-  }, [snap, sessionKey, focus, trend]);
+      ),
+    [snap, series, lo, sessionKey, focus],
+  );
   // The pit wall, once the feed shows this session (as the tower waits): the previous session's chequered flag would
   // otherwise light up.
   const wall = useMemo(() => {
@@ -743,21 +832,30 @@ export function Player({
     </button>
   );
 
+  // The reconnect line (A§13): a 404 stops the player and says so until Play; then the probe's answer, the reload
+  // hint after FAILING errors, or "Reconnecting…".
+  const line = stale
+    ? null
+    : probe === 'missing' && at === null
+      ? PROBE_TEXT.missing
+      : at === null || fails === 0
+        ? null
+        : probe !== null && probe !== 'missing'
+          ? navigator.onLine === false
+            ? OFFLINE // offline wins over the probe's answer
+            : PROBE_TEXT[probe]
+          : fails >= FAILING
+            ? navigator.onLine === false
+              ? OFFLINE
+              : RELOAD
+            : RECONNECTING;
+
   return (
     <>
-      {stale ? null : at !== null && fails >= FAILING ? (
-        <p role="status">
-          {navigator.onLine === false
-            ? OFFLINE
-            : 'The stream keeps failing. Reload the page (your Access session may have expired).'}
+      {line !== null && (
+        <p role="status" className={line === RECONNECTING ? 'muted' : undefined}>
+          {line}
         </p>
-      ) : (
-        at !== null &&
-        fails > 0 && (
-          <p role="status" className="muted">
-            Reconnecting…
-          </p>
-        )
       )}
       {resumed !== null && <p className="muted">Resumed at {fmtClock(resumed)}: press Play when the video is there.</p>}
       {wall && <Strip strip={wall.strip} now={stateNow} playing={playing} />}
@@ -779,46 +877,50 @@ export function Player({
       )}
       {detail && (
         <fieldset className="segmented" aria-label="View">
-          <button type="button" aria-pressed={shown === 'tower'} onClick={() => setTab('tower')}>
+          <button type="button" aria-pressed={shown === 'tower'} onClick={() => pick('tower')}>
             Tower
           </button>
-          <button type="button" aria-pressed={shown === 'laps'} onClick={() => setTab('laps')}>
+          <button type="button" aria-pressed={shown === 'laps'} onClick={() => pick('laps')}>
             Laps
           </button>
           {wall?.race && (
-            <button type="button" aria-pressed={shown === 'order'} onClick={() => setTab('order')}>
+            <button type="button" aria-pressed={shown === 'order'} onClick={() => pick('order')}>
               Order
             </button>
           )}
-          <button type="button" aria-pressed={shown === 'weather'} onClick={() => setTab('weather')}>
+          <button type="button" aria-pressed={shown === 'weather'} onClick={() => pick('weather')}>
             Weather
           </button>
         </fieldset>
       )}
-      {!state ? (
-        <p className="muted">Connecting…</p>
-      ) : shown === 'laps' && lapTable ? (
-        lapTable
-      ) : order ? (
-        order
-      ) : shown === 'weather' ? (
-        // Gated as the strip is, so the two agree: nothing from the previous session.
-        <>
-          {wall && snap.weather.rows.length > 0 ? (
-            <WeatherPanels rows={snap.weather.rows} laps={snap.weather.laps} type={wall.type} source="the feed" />
-          ) : (
-            <p className="muted">No weather in the feed yet.</p>
-          )}
-          {detail && <PlayerRain detail={detail} live={live} now={now} playing={playing} />}
-        </>
-      ) : wall ? (
-        <div className="pitwall">
-          <div>{tower}</div>
-          <Panel rc={wall.rc} pairs={wall.pairs} fastest={wall.fastest} race={wall.race} />
-        </div>
-      ) : (
-        tower
-      )}
+      {/* A boundary per tab (#100): a crash in one leaves the strip, the bar, the stream and the other tabs; a switch resets it. */}
+      <ErrorBoundary key={shown}>
+        {!state ? (
+          <p className="muted">Connecting…</p>
+        ) : shown === 'laps' && lapTable ? (
+          lapTable
+        ) : order ? (
+          order
+        ) : shown === 'weather' ? (
+          // Gated as the strip is, so the two agree: nothing from the previous session.
+          <>
+            {wall && snap.weather.rows.length > 0 ? (
+              <WeatherPanels rows={snap.weather.rows} laps={snap.weather.laps} type={wall.type} source="the feed" />
+            ) : (
+              <p className="muted">No weather in the feed yet.</p>
+            )}
+            {detail && <PlayerRain detail={detail} live={live} now={now} playing={playing} />}
+          </>
+        ) : wall ? (
+          <div className="pitwall">
+            <div>{tower}</div>
+            <Panel rc={wall.rc} pairs={wall.pairs} fastest={wall.fastest} race={wall.race} />
+          </div>
+        ) : (
+          tower
+        )}
+      </ErrorBoundary>
+      {!detail && detailError != null && <ErrorView error={detailError} />}
       <section className={minimized ? 'player min' : 'player'} aria-label="Playback controls">
         {/* The head stays when minimized: the clock line, Play/Pause (from the transport) and the toggle. */}
         <div className="barhead">

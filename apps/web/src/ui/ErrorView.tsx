@@ -31,13 +31,21 @@ export const NotFound = () => <p>Page not found.</p>;
 
 /**
  * A render exception shows a line instead of a blank page. Not errorText: a render bug is
- * usually a TypeError, which errorText would call an expired Access session.
+ * usually a TypeError, which errorText would call an expired Access session. A new `reset`
+ * value (App's pathname, #100) clears the failure without remounting the children.
  */
-export class ErrorBoundary extends Component<{ children: ReactNode }, { failed: boolean }> {
-  override state = { failed: false };
+export class ErrorBoundary extends Component<
+  { children: ReactNode; reset?: unknown },
+  { failed: boolean; reset: unknown }
+> {
+  override state = { failed: false, reset: this.props.reset };
 
   static getDerivedStateFromError() {
     return { failed: true };
+  }
+
+  static getDerivedStateFromProps(props: { reset?: unknown }, state: { reset: unknown }) {
+    return props.reset === state.reset ? null : { failed: false, reset: props.reset };
   }
 
   override render() {

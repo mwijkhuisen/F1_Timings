@@ -1006,6 +1006,12 @@ header .links {
   background: var(--live);
 }
 
+/* The header's Status warning (#100, D1): the border carries the colour, the word the meaning. */
+.pill.warn {
+  border-color: var(--amber);
+  color: var(--fg);
+}
+
 /* The bar's head (#77): the clock line, then Play/Pause (minimized only) and the Controls toggle at the right end. The
    rest of the bar is a `display: contents` wrapper, so its controls stay items of the bar's grid; minimized it is empty
    and hidden. */
@@ -1597,6 +1603,12 @@ header .theme[aria-pressed="true"] {
 .links a[aria-current="page"],
 .menu a[aria-current="page"] {
   font-weight: 700;
+  text-decoration: underline 2px;
+  text-underline-offset: 6px;
+}
+
+/* The underline does not reach into an inline-flex pill (the Live link on its own page, #100). */
+.links a[aria-current="page"] .pill.live {
   text-decoration: underline 2px;
   text-underline-offset: 6px;
 }

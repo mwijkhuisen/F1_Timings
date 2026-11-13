@@ -35,6 +35,24 @@ export type Handlers = {
 export const streamUrl = ({ recording, at, delay }: StreamParams): string =>
   `/api/v1/playback/${recording}/stream?${at === 'live' ? `at=live&delay=${delay}` : `at=${at}`}`;
 
+export type Probe = 'expired' | 'offline' | 'missing' | 'up' | 'error';
+
+/**
+ * One HEAD on a failed stream's URL (#100): the route answers it after its checks, before the cap, with no body (A§10).
+ * 401 is an expired Access session, 404 a recording whose files are gone, a 2xx a server that has it (the route's checks
+ * passed), any other status a server error. A throw
+ * is no network, or Access's login redirect under `redirect: 'error'`; an abort lands there too, and the caller drops
+ * it. It never reads a body.
+ */
+export async function probeStream(url: string, signal: AbortSignal): Promise<Probe> {
+  try {
+    const res = await fetch(url, { method: 'HEAD', redirect: 'error', signal });
+    return res.status === 401 ? 'expired' : res.status === 404 ? 'missing' : res.ok ? 'up' : 'error';
+  } catch {
+    return navigator.onLine === false ? 'offline' : 'expired';
+  }
+}
+
 const lapKey = (l: Lap) => `${l.driver_number}:${l.lap_number}`;
 const stintKey = (s: Stint) => `${s.driver_number}:${s.stint_number}`;
 
