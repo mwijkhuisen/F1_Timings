@@ -67,6 +67,15 @@ const meeting = {
   is_cancelled: false,
 };
 const { year: _year, ...seasonMeeting } = meeting;
+// SessionDetail's session also says why data is missing (#99).
+const detailSession = {
+  ...session,
+  source: 'openf1',
+  fetch_count: 1,
+  fail_count: 2,
+  last_error: 'http_503',
+  next_fetch_at: iso,
+};
 
 // [schema, valid sample, key whose value must not be null (a NOT NULL column)]
 const cases = [
@@ -76,7 +85,7 @@ const cases = [
     'SessionDetail',
     SessionDetail,
     {
-      session,
+      session: detailSession,
       meeting,
       drivers: [{ driver_number: 1, acronym: null, full_name: null, team_name: null, team_colour: null }],
       results: [
@@ -183,6 +192,23 @@ describe.each(cases)('%s', (_name, schema, sample, notNull) => {
     const bad = valid();
     target(bad)[notNull as string] = null;
     expect(schema.safeParse(bad).success).toBe(false);
+  });
+});
+
+describe('SessionDetail', () => {
+  const parse = (over: Record<string, unknown>) =>
+    SessionDetail.safeParse({ session: { ...detailSession, ...over }, meeting, drivers: [], results: [] }).success;
+
+  it('takes only a last_error of the CHECK list, never other text', () => {
+    for (const code of ['http_429', 'rate_limited', 'timeout', 'network', 'schema', 'empty', 'db', 'unknown', null])
+      expect(parse({ last_error: code }), String(code)).toBe(true);
+    for (const text of ['http_5031', 'HTTP_503', 'boom', 'timeout ', 'schema\n', '<b>db</b>', ''])
+      expect(parse({ last_error: text }), text).toBe(false);
+  });
+
+  it('takes a known source only', () => {
+    for (const source of ['openf1', 'f1-archive', 'f1-live', 'jolpica']) expect(parse({ source })).toBe(true);
+    expect(parse({ source: 'open-meteo' })).toBe(false);
   });
 });
 

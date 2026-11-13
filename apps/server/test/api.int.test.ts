@@ -404,6 +404,45 @@ describe('api (f1_api login, Access JWT)', { timeout: 120_000 }, () => {
     });
   });
 
+  it('a session says why data is missing (#99): source, fetch and fail counts, the error code and the next try', async () => {
+    const session = async (key: number) => (await body(`/api/v1/sessions/${key}`, SessionDetail)).session;
+    // Final: fetched once by the seeding, no failure.
+    expect(await session(QUALI)).toMatchObject({
+      ingest_state: 'final',
+      source: 'openf1',
+      fetch_count: 1,
+      fail_count: 0,
+      last_error: null,
+      next_fetch_at: null,
+    });
+    // Due in back-off: the code and the next try.
+    expect(await session(FAILING)).toMatchObject({
+      ingest_state: 'due',
+      source: 'openf1',
+      fetch_count: 0,
+      fail_count: 2,
+      last_error: 'timeout',
+      next_fetch_at: '2026-10-30T20:25:00.000Z',
+    });
+    // Failed: the 9th failure, never retried.
+    const failed = { ingest_state: 'failed', fail_count: 9, last_error: 'http_503', next_fetch_at: null };
+    try {
+      await admin.updateTable('session').set(failed).where('session_key', '=', FAILING).execute();
+      expect(await session(FAILING)).toMatchObject({ ...failed, source: 'openf1', fetch_count: 0 });
+    } finally {
+      await admin
+        .updateTable('session')
+        .set({
+          ingest_state: 'due',
+          fail_count: 2,
+          last_error: 'timeout',
+          next_fetch_at: new Date('2026-10-30T20:25:00Z'),
+        })
+        .where('session_key', '=', FAILING)
+        .execute();
+    }
+  });
+
   it('the status carries the recorder row: names, and stale after 5 minutes', async () => {
     const row = {
       state: 'recording',
