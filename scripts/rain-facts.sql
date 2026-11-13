@@ -10,12 +10,14 @@
 --     psql -U postgres -d f1 -X -v ON_ERROR_STOP=1 -f - < rain-facts.sql
 --
 -- What each result should show:
---   1. 0 rows: every circuit_short_name in `meeting` has an outline (CIRCUITS in packages/contracts). A row is a
---      venue that gets no grid ("No circuit outline for this venue.", A§13); add it to scripts/map-extract.ts.
+--   1. 0 rows: every circuit_short_name of a meeting with an OpenF1 session has an outline (CIRCUITS in
+--      packages/contracts). A row is a venue that gets no grid ("No circuit outline for this venue.", A§13); add it
+--      to scripts/map-extract.ts. Archive-only meetings (2018-2022, source f1-archive) are left out: their sessions
+--      get no grid at all (the job takes OpenF1 sessions only, as Open-Meteo's history starts in 2022).
 --      The names below are pinned to CIRCUITS by test/rain-facts.test.ts.
 --   2. Grids per state and last_error: `live` while a session is in its window or waits for end + 24 h, `final`
 --      for the rest. `failed` (the 9th failure in a row) has no automatic retry: reset it by hand.
---   3. Mapped sessions past end + 24 h without a grid: 0 once the backfill has drained.
+--   3. Mapped OpenF1 sessions past end + 24 h without a grid: 0 once the backfill has drained.
 --   4. The location-calls spent (an upper bound, as the budget's restart seed: A§8) and the grids touched per UTC
 --      day: no day above 8,000, which is the budget's cap (D3).
 --   5. Frames per grid: a final grid has about 4 * (session length + 1.5 h) + 1 frames (a race of 2 h: about 15);
@@ -57,20 +59,22 @@ SELECT string_agg(quote_literal(name), ', ') AS mapped FROM (VALUES
   ('Zandvoort')
 ) AS m(name) \gset
 
-\echo '1. Circuit names in meeting without a mapping (expected 0 rows)'
-SELECT circuit_short_name, count(*) AS meetings
-FROM meeting
-WHERE circuit_short_name IS NULL OR circuit_short_name NOT IN (:mapped)
+\echo '1. Circuit names of meetings with an OpenF1 session, without a mapping (expected 0 rows)'
+SELECT m.circuit_short_name, count(*) AS meetings
+FROM meeting m
+WHERE (m.circuit_short_name IS NULL OR m.circuit_short_name NOT IN (:mapped))
+  AND EXISTS (SELECT 1 FROM session s WHERE s.meeting_key = m.meeting_key AND s.source = 'openf1')
 GROUP BY 1 ORDER BY 1;
 
 \echo '2. Grids per state and last_error'
 SELECT state, last_error, count(*) AS grids, max(fail_count) AS max_fail_count, max(updated_at) AS last_update
 FROM rain_grid GROUP BY 1, 2 ORDER BY 1, 2 NULLS FIRST;
 
-\echo '3. Mapped sessions past date_end + 24 h without a grid (the backfill left; not cancelled, at most 12 h long)'
+\echo '3. Mapped OpenF1 sessions past date_end + 24 h without a grid (the backfill left; not cancelled, at most 12 h long)'
 SELECT count(*) AS sessions, min(s.date_end) AS oldest_end, max(s.date_end) AS newest_end
 FROM session s JOIN meeting m USING (meeting_key)
-WHERE NOT s.is_cancelled
+WHERE s.source = 'openf1'
+  AND NOT s.is_cancelled
   AND s.date_end - s.date_start <= interval '12 hours'
   AND s.date_end <= now() - interval '24 hours'
   AND m.circuit_short_name IN (:mapped)
