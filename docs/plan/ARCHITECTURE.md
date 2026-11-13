@@ -28,7 +28,7 @@ Same versions as Waterheight at P0 time. Re-check each pin against the 7-day rel
 | Package manager | pnpm 12.5.1 workspace | `minimumReleaseAge: 10080`, `strictDepBuilds`, `blockExoticSubdeps`, `--frozen-lockfile` |
 | Lint/format | Biome 2.5.15 | `"preset": "recommended"` (not `"none"`; see the Waterheight gotcha) |
 | Tests | Vitest 5.0.4 (`unit` + `integration` projects), msw 3.0.3, fast-check 4.10.2 | Integration tests run on real PostgreSQL 18, not testcontainers |
-| Server | Hono 4.13.13 + @hono/node-server 2.1.5, undici 8.12.2, pino 10.4.0, croner 10.0.1, zod 4.6.7 | One image with roles (A§4) |
+| Server | Hono 4.13.16 + @hono/node-server 2.1.6, undici 8.12.3, pino 10.4.0, croner 11.0.0, zod 4.6.7 | One image with roles (A§4) |
 | Database | PostgreSQL 18.6 (own container), Kysely 0.29.6 + pg 8.23.1, kysely-codegen 0.20.0, dbmate 2.36.0 | Immutable migrations |
 | Web | React 19.3.0, Vite 8.3.4 + @vitejs/plugin-react 6.1.2, TanStack Query 5.104.2, ECharts 6.1.0 (lazy chunk) | English only, no i18n library. Times through `Intl.DateTimeFormat` in Europe/Amsterdam, no Temporal polyfill (owner, 2026-10-28) |
 | Live feed (P2) | SignalR Core client: a hand-rolled ~200-line client on Node's global WebSocket (undici), no dependency | Owner, 2026-10-30 (A§11.1) |
