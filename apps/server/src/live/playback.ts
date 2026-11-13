@@ -14,7 +14,7 @@ import { isObj, parseFeedLine, utc } from './read.ts';
 // State at T over one recording's files (A§11.3, ADR-0007): a replay from the first line up to T, then a delta per
 // change, paced by the live clock (T = now − delay) or the replay clock (T = at + elapsed × speed). The time axis is
 // each line's receivedAt, the number before its first comma. An async generator: while the consumer writes, it does not
-// advance, which is the back-pressure. `.z` topics are never applied, kept or sent (O1). Nothing here logs.
+// advance, which is the back-pressure. `.z` topics are never applied, kept or sent (O1), nor are the UNPARSED ones (#96). Nothing here logs.
 //
 // The lap and stint rows come from createLaps over the same events: a snapshot carries all of them, a `laps` event the
 // rows that changed since the last send. The weather rows are one per applied WeatherData delta since the last session

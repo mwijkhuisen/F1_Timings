@@ -40,7 +40,8 @@ export const TOPICS = [
   'RcmSeries',
   'AudioStreams',
   'ContentStreams',
-  // The pit-lane and stop times OpenF1 lacks (#96, A§11.1): recorded raw, not parsed or streamed yet (playback.ts).
+  // The pit-lane and stop times OpenF1 lacks (#96, A§11.1): recorded raw, not parsed or streamed yet. A topic added
+  // here that the web does not parse goes into playback.ts's UNPARSED too, or it reaches every browser.
   'PitLaneTimeCollection',
   'PitStopSeries',
   'PitStop',
