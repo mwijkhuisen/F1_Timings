@@ -1,5 +1,5 @@
 import { expect, test } from 'vitest';
-import { IGNORED, isUnmatched, PERIOD_LIKE } from '../src/race-control.ts';
+import { formOf, IGNORED, isUnmatched, PERIOD_LIKE } from '../src/race-control.ts';
 
 const row = (message: string | null, flag: string | null = null) => ({ message, flag });
 
@@ -27,7 +27,7 @@ test('isUnmatched: a known form, an unrelated message and a null are not counted
   expect(isUnmatched(row(null))).toBe(false);
 });
 
-// One real wording per ignored term (D4); all but the covers line are period-like with no form, so only IGNORED keeps them out.
+// A synthetic wording per ignored term (D4; made-up cars, times and reasons); all but the covers line are period-like with no form, so only IGNORED keeps them out.
 test.each([
   'INCIDENT INVOLVING CAR 4 (SAFETY CAR) NOTED',
   'TURN 4 INCIDENT INVOLVING CARS 4, 81 UNDER SAFETY CAR NOTED',
@@ -49,9 +49,20 @@ test.each([
   'THE SAFETY CAR WILL STAY OUT FOR 3 LAPS',
   'COVERS ON TIME 1 HOURS AFTER CHEQUERED FLAG = 15:00',
   'STARTING PROCEDURE SUSPENDED',
+  'START PROCEDURE SUSPENDED',
+  'LAPPED CARS 4 (ABC) - 12 - 15 TO OVERTAKE SAFETY CAR',
+  '1 SECOND TIME PENALTY FOR CAR 4 (ABC) - CAUSING A COLLISION UNDER THE SAFETY CAR',
+  'RACE WILL NOT RESUME',
 ])('isUnmatched: ignores the procedural wording %s', (m) => {
   expect(IGNORED.test(m), m).toBe(true);
   expect(isUnmatched(row(m)), m).toBe(false);
+});
+
+test('RACE WILL BE RESUMED AT is the resume form and not unmatched; RACE WILL NOT RESUME is no form', () => {
+  expect(formOf(row('RACE WILL BE RESUMED AT 15:10'))).toBe('resume');
+  expect(formOf(row('RACE WILL RESUME AT 15:10'))).toBe('resume');
+  expect(isUnmatched(row('RACE WILL BE RESUMED AT 15:10'))).toBe(false);
+  expect(formOf(row('RACE WILL NOT RESUME'))).toBeNull();
 });
 
 test('a period line that mentions an incident is not a stewards note', () => {

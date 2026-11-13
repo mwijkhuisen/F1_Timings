@@ -13,7 +13,7 @@ export function formOf(row: Row): Form | null {
   if (/^SAFETY CAR DEPLOYED/.test(m)) return 'sc+';
   if (/^SAFETY CAR IN THIS LAP/.test(m)) return 'sc-';
   if (row.flag === 'RED' || /^RED FLAG/.test(m)) return 'red';
-  if (/^RACE WILL RESUME/.test(m)) return 'resume';
+  if (/^RACE WILL (BE )?RESUME/.test(m)) return 'resume';
   if (row.flag === 'CHEQUERED') return 'end';
   return null;
 }
@@ -25,11 +25,13 @@ export function formOf(row: Row): Form | null {
 export const PERIOD_LIKE = /SAFETY CAR|VSC|RED FLAG|RESUME|SUSPENDED|(^|[^A-Z])SC([^A-Z]|$)/;
 /**
  * Rows that mention a period without being one, in two halves: stewards' notes ("INCIDENT INVOLVING CAR(S) …",
- * "FIA STEWARDS: …"; a period line that merely mentions an incident still counts), then the known procedural wording
- * of a safety-car start or restart (D4 of #105).
+ * "FIA STEWARDS: …", the F1 archive's "# SECOND TIME PENALTY FOR CAR …" without the prefix; a period line that merely
+ * mentions an incident still counts), then the known procedural wording of a safety-car start or restart (D4 of #105):
+ * the archive's older "OVERTAKE SAFETY CAR" and "START PROCEDURE SUSPENDED", and "RACE WILL NOT RESUME" (a red flag
+ * that ends the race: the open red period closes at the last lap seen, and it is not a resume form).
  */
 export const IGNORED =
-  /INCIDENT INVOLVING|STEWARDS|LIGHTS (ON|OFF)|OVERTAKE THE SAFETY CAR|THROUGH THE PIT LANE|FORMATION LAP|START\/FINISH STRAIGHT|WILL ENTER PITS|START BEHIND THE SAFETY CAR|WILL STAY OUT|COVERS ON|STARTING PROCEDURE SUSPENDED/;
+  /INCIDENT INVOLVING|STEWARDS|PENALTY FOR CAR|LIGHTS (ON|OFF)|OVERTAKE (THE )?SAFETY CAR|THROUGH THE PIT LANE|FORMATION LAP|START\/FINISH STRAIGHT|WILL ENTER PITS|START BEHIND THE SAFETY CAR|WILL STAY OUT|COVERS ON|START(ING)? PROCEDURE SUSPENDED|WILL NOT RESUME/;
 
 /** A period-like row that matches no form and is ignored (a note or procedure): a wording the bands would miss. */
 export const isUnmatched = (row: Row): boolean => {
