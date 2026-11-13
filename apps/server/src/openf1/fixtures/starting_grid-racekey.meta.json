@@ -1,0 +1,13 @@
+{
+  "url": "https://api.openf1.org/v1/starting_grid?session_key=11388",
+  "fetchedAt": "2026-11-13T13:02:16.570Z",
+  "status": 404,
+  "trim": {
+    "drivers": null,
+    "laps": null
+  },
+  "rows": {
+    "fetched": 0,
+    "kept": 0
+  }
+}
