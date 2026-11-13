@@ -135,7 +135,32 @@ describe('feed client against the fake server', () => {
     fake.behaviour.fullState = { SessionInfo: { Name: 'Practice 1' }, TimingData: { Seq: 0 } };
     const loop = runLoop(fake, rec);
     await until(() => fake.subscribes.length === 1 && rec.bytes > 0);
-    expect(fake.subscribes[0]).toEqual(TOPICS);
+    // Pinned (#96): the fake accepts the Subscribe with the pit topics, and the recording goes on below.
+    expect(fake.subscribes[0]).toEqual([
+      'Heartbeat',
+      'DriverList',
+      'ExtrapolatedClock',
+      'RaceControlMessages',
+      'SessionInfo',
+      'SessionStatus',
+      'SessionData',
+      'TimingAppData',
+      'TimingStats',
+      'TimingData',
+      'TrackStatus',
+      'WeatherData',
+      'TopThree',
+      'LapCount',
+      'TeamRadio',
+      'RcmSeries',
+      'AudioStreams',
+      'ContentStreams',
+      'PitLaneTimeCollection',
+      'PitStopSeries',
+      'PitStop',
+      'CarData.z',
+      'Position.z',
+    ]);
 
     expect(fake.seen.map((s) => s.step)).toEqual(['options', 'negotiate', 'upgrade']);
     expect(fake.seen[0]).toEqual({ step: 'options' });

@@ -23,9 +23,15 @@ export { indexSessions, isArchivePath, ORIGIN, outDir };
 
 const BASE = `${ORIGIN}/static/`;
 export const PRIVATE = join(import.meta.dirname, '../fixtures-private');
-const USAGE = 'usage: fetch-archive.ts <year> <session_key> --token-file <path> [--path <year/meeting/session/>]';
+const USAGE =
+  'usage: fetch-archive.ts <year> <session_key> --token-file <path> [--path <year/meeting/session/>] [--topic <name>]…';
+/** A topic name is a URL path segment and a file name: never `/`, `.`, `%` or `?`, except a final `.z`. */
+const TOPIC = /^[A-Za-z][A-Za-z0-9]*(\.z)?$/;
 
-/** The 11 topics the views need, plus SessionData and Heartbeat (the archive's t0). */
+/**
+ * The 11 topics the views need, SessionData and Heartbeat (the archive's t0), and the recorder's pit topics (#96). Each
+ * `--topic` adds one.
+ */
 export const TOPICS = [
   'DriverList',
   'TimingData',
@@ -40,6 +46,9 @@ export const TOPICS = [
   'WeatherData',
   'SessionData',
   'Heartbeat',
+  'PitLaneTimeCollection',
+  'PitStopSeries',
+  'PitStop',
 ];
 
 const describe = (error: Failure) => (error.code === 'http' ? `http ${error.status}` : error.code);
@@ -64,8 +73,15 @@ export async function fetchArchive(
   }
   const [year = '', sessionKey = ''] = args.positionals;
   const tokenFile = args.values['token-file'];
+  const extra = args.values.topic ?? [];
   const dir = outDir(root, sessionKey);
-  if (args.positionals.length !== 2 || !/^\d{4}$/.test(year) || dir === undefined || tokenFile === undefined) {
+  if (
+    args.positionals.length !== 2 ||
+    !/^\d{4}$/.test(year) ||
+    dir === undefined ||
+    tokenFile === undefined ||
+    !extra.every((t) => TOPIC.test(t))
+  ) {
     log(USAGE);
     return EXIT_USAGE;
   }
@@ -109,7 +125,7 @@ export async function fetchArchive(
 
   mkdirSync(dir, { recursive: true });
   let failed = false;
-  for (const topic of TOPICS) {
+  for (const topic of new Set([...TOPICS, ...extra])) {
     for (const name of [`${topic}.jsonStream`, `${topic}.json`]) {
       const got = await download(`${BASE}${path}${name}`, token);
       if (got.ok) {
@@ -133,7 +149,7 @@ const parseOptions = (argv: readonly string[]) =>
   parseArgs({
     args: [...argv],
     allowPositionals: true,
-    options: { 'token-file': { type: 'string' }, path: { type: 'string' } },
+    options: { 'token-file': { type: 'string' }, path: { type: 'string' }, topic: { type: 'string', multiple: true } },
   });
 
 if (import.meta.main) {

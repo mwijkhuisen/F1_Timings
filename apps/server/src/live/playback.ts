@@ -14,7 +14,7 @@ import { isObj, parseFeedLine, utc } from './read.ts';
 // State at T over one recording's files (A§11.3, ADR-0007): a replay from the first line up to T, then a delta per
 // change, paced by the live clock (T = now − delay) or the replay clock (T = at + elapsed × speed). The time axis is
 // each line's receivedAt, the number before its first comma. An async generator: while the consumer writes, it does not
-// advance, which is the back-pressure. `.z` topics are never applied, kept or sent (O1). Nothing here logs.
+// advance, which is the back-pressure. `.z` topics are never applied, kept or sent (O1), nor are the UNPARSED ones (#96). Nothing here logs.
 //
 // The lap and stint rows come from createLaps over the same events: a snapshot carries all of them, a `laps` event the
 // rows that changed since the last send. The weather rows are one per applied WeatherData delta since the last session
@@ -49,6 +49,8 @@ const tooLarge = () => Object.assign(new Error('playback_too_large'), { code: 'p
 const keyOf = (info: unknown) => (isObj(info) && typeof info.Key === 'number' ? info.Key : undefined);
 // The topics the lap rows read: the engine's two, and A§9's race control and qualifying parts (lapRows).
 const LAP_TOPICS = new Set(['TimingData', 'TimingAppData', 'RaceControlMessages', 'SessionData']);
+/** Recorded, not parsed yet (#96): kept out of the state and the stream, as the `.z` topics. */
+const UNPARSED = new Set(['PitLaneTimeCollection', 'PitStopSeries', 'PitStop']);
 
 /**
  * The engine's rows in the shapes of the Lap and Stints contracts, with A§9's deleted laps and qualifying phases from
@@ -245,7 +247,7 @@ export async function* playback(o: {
     let switched = false;
     applied = line.r;
     for (const ev of parseFeedLine(line.text)) {
-      if (ev.topic.endsWith('.z')) continue;
+      if (ev.topic.endsWith('.z') || UNPARSED.has(ev.topic)) continue;
       // A new session's SessionInfo: no topic of the previous session stays (no ghost driver, line or message). The
       // laps engine keeps going: it holds the recording's session only.
       if (ev.topic === 'SessionInfo') {

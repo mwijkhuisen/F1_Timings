@@ -92,6 +92,8 @@ describe('fetchArchive', () => {
     expect(await fetchArchive(['2026', '11397'], { CI: 'true' }, (l) => lines.push(l), tmp())).toBe(1);
     expect(await fetchArchive(['2026'], {}, (l) => lines.push(l), tmp())).toBe(64);
     expect(await fetchArchive(['2026', '../x', '--token-file', 't'], {}, (l) => lines.push(l), tmp())).toBe(64);
+    for (const bad of ['../x', 'A/B', 'A.json', 'A?x', 'A%2F', '', 'CarData.zz'])
+      expect(await fetchArchive(['2026', '11397', '--token-file', 't', '--topic', bad], {}, () => {}, tmp())).toBe(64);
     expect(lines[0]).toBe('fetch-archive refuses to run under CI (A§12.1 invariant 4)');
   });
 
@@ -146,6 +148,66 @@ describe('fetchArchive', () => {
     expect(lines.join('\n')).not.toContain('secret body');
     expect(readFileSync(join(root, 'archive/11397/TimingData.jsonStream'), 'utf8')).toBe('data');
     expect(existsSync(join(root, 'archive/11397/DriverList.jsonStream'))).toBe(false);
+  });
+
+  it('downloads the 13 topics and the pit topics of the recorder (#96)', () => {
+    expect(TOPICS).toEqual([
+      'DriverList',
+      'TimingData',
+      'TimingAppData',
+      'TimingStats',
+      'SessionInfo',
+      'SessionStatus',
+      'TrackStatus',
+      'LapCount',
+      'RaceControlMessages',
+      'ExtrapolatedClock',
+      'WeatherData',
+      'SessionData',
+      'Heartbeat',
+      'PitLaneTimeCollection',
+      'PitStopSeries',
+      'PitStop',
+    ]);
+  });
+
+  it('--topic adds a topic once, after the list, and refuses under CI like the rest', async () => {
+    const files: string[] = [];
+    server.use(
+      http.get(`${ORIGIN}/static/2026/Index.json`, () => index(11397)),
+      http.get(`${ORIGIN}/static/${PATH}:file`, ({ params }) => {
+        files.push(String(params.file));
+        return new HttpResponse('data');
+      }),
+    );
+    const argv = ['2026', '11397', '--token-file', tokenFile(FRESH), '--topic', 'TyreStintSeries'];
+    expect(
+      await fetchArchive(
+        [...argv, '--topic', 'PitStop', '--topic', 'CarData.z'],
+        {},
+        () => {},
+        tmp(),
+        () => NOW,
+      ),
+    ).toBe(0);
+    expect(files).toHaveLength((TOPICS.length + 2) * 2);
+    expect(files.slice(-4)).toEqual([
+      'TyreStintSeries.jsonStream',
+      'TyreStintSeries.json',
+      'CarData.z.jsonStream',
+      'CarData.z.json',
+    ]);
+    files.length = 0;
+    expect(
+      await fetchArchive(
+        argv,
+        { CI: 'true' },
+        () => {},
+        tmp(),
+        () => NOW,
+      ),
+    ).toBe(1);
+    expect(files).toEqual([]);
   });
 
   it('does not guess when no Key matches: it lists the sessions and downloads nothing', async () => {
