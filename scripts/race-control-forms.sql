@@ -11,7 +11,7 @@
 --
 -- On the VM (add -v from=2018 -v to=2022 for the archive years):
 --   sudo docker compose -p f1 -f /etc/f1/compose.yaml --env-file /srv/f1/state/current.env exec -T db \
---     psql -U postgres -d f1 -X -v ON_ERROR_STOP=1 -v from=2018 -v to=2022 -f - < race-control-forms.sql
+--     psql -U postgres -d f1 -X -v ON_ERROR_STOP=1 -f - < race-control-forms.sql
 --
 -- The classes in queries 3 to 5 use the same patterns as track.ts:
 --   VSC+  ^(VIRTUAL SAFETY CAR|VSC) DEPLOYED     VSC-  ^(VIRTUAL SAFETY CAR|VSC) ENDING
