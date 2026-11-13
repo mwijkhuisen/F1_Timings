@@ -4,6 +4,7 @@ import { describe, expect, it } from 'vitest';
 import { Next, RecordingsList } from '../src/views/Live.tsx';
 import { RecorderWarnings, StatusPanel } from '../src/views/Status.tsx';
 import { StintBars, stintLayout } from '../src/views/Stints.tsx';
+import { fetched } from './laps.ts';
 
 // The stints bars (D11) and the status panel (D12), on hand-built data.
 
@@ -53,7 +54,7 @@ describe('the stints bars', () => {
     }));
   const iso = '2026-10-11T12:00:00.000Z';
   const detail = SessionDetail.parse({
-    session: { ...session(9965, 'Race', iso), meeting_key: 1290 },
+    session: { ...session(9965, 'Race', iso), meeting_key: 1290, ...fetched },
     meeting: { ...meeting, meeting_key: 1290, name: 'Singapore Grand Prix', year: 2026 },
     drivers: [{ driver_number: 4, acronym: 'NOR', full_name: null, team_name: null, team_colour: 'F47600' }],
     results: [],

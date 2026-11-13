@@ -14,15 +14,14 @@ import { QualiTiles, SessionTiles } from './Tiles.tsx';
 export function LapsTab({ session, detail, laps }: { session: number; detail: SessionDetail; laps: Laps }) {
   const race = detail.session.type === 'Race';
   const qualifying = detail.session.type === 'Qualifying';
-  // No laps, no table to band.
-  const rc = useRaceControl(session, race && laps.length > 0);
+  // The session page shows its reason instead of this tab when there are no laps (#99).
+  const rc = useRaceControl(session, race);
   const track = useMemo(() => (rc.data ? trackPeriods(rc.data) : null), [rc.data]);
   const quali = useMemo(
     () => (qualifying ? qualiPhases(laps, detail.results) : null),
     [qualifying, laps, detail.results],
   );
   const [byPhase, setByPhase] = useState(true);
-  if (laps.length === 0) return <p>No laps yet.</p>;
   return (
     <>
       {quali && <QualiTiles detail={detail} quali={quali} />}

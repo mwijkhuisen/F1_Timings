@@ -1,4 +1,4 @@
-import type { SessionDetail } from '@f1/contracts';
+import type { Live, SessionDetail } from '@f1/contracts';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, expect, it } from 'vitest';
 import type { WeatherRow } from '../src/lib/weather.ts';
@@ -28,14 +28,10 @@ const laps = [
   lap(1, 1, { date_start: new Date(T0 + 2 * MIN).toISOString() }),
   lap(1, 2, { date_start: new Date(T0 + 5 * MIN).toISOString() }),
 ];
-const withState = (d: SessionDetail, ingest_state: SessionDetail['session']['ingest_state']): SessionDetail => ({
-  ...d,
-  session: { ...d.session, ingest_state },
-});
 const race = sessionDetail('Race', 'Race');
 const practice = sessionDetail('Practice', 'Practice 1');
 const view = (rows: WeatherRow[], detail = race, l: typeof laps | null = laps) =>
-  renderToStaticMarkup(<WeatherView rows={rows} detail={detail} laps={l} />);
+  renderToStaticMarkup(<WeatherView rows={rows} detail={detail} laps={l} live={null} />);
 
 describe('the Weather tab', () => {
   it('shows the tiles: air and track min–max, humidity, pressure in hPa, and wind in m/s with its point', () => {
@@ -81,14 +77,55 @@ describe('the Weather tab', () => {
     expect(view(dry)).not.toContain('rainkey');
   });
 
-  it('says without rows whether the weather is still to come, queued for a new fetch, or not in the data', () => {
+  it('says without rows why (noDataText): still to come, queued, failed, live now or not in the source', () => {
     // The test session ends 2026-10-31T21:00Z: an hour later its first fetch is pending, a week later it is re-queued.
     const at = (h: number) => Date.parse('2026-10-31T21:00:00Z') + h * 3_600_000;
-    const empty = (state: SessionDetail['session']['ingest_state'], h: number) =>
-      renderToStaticMarkup(<WeatherView rows={[]} detail={withState(race, state)} laps={laps} now={at(h)} />);
-    expect(empty('due', 1)).toBe('<p>Weather arrives with the laps, about 35 min after the session ends.</p>');
-    expect(empty('fetched', 168)).toBe('<p>Weather is queued for a new fetch; check back later.</p>');
-    expect(empty('final', 168)).toBe('<p>No weather in the OpenF1 data.</p>');
+    const empty = (session: Partial<SessionDetail['session']>, h: number, live: Live | null = null) =>
+      renderToStaticMarkup(
+        <WeatherView
+          rows={[]}
+          detail={{ ...race, session: { ...race.session, ...session } }}
+          laps={laps}
+          live={live}
+          now={at(h)}
+        />,
+      );
+    expect(empty({ ingest_state: 'due', fail_count: 0, fetch_count: 0 }, 1)).toBe(
+      '<p>Weather arrives about 35 min after the end.</p>',
+    );
+    expect(empty({ ingest_state: 'due', fetch_count: 0 }, 168)).toBe(
+      '<p>Queued for a new fetch; check back later.</p>',
+    );
+    // Re-queued after a fetch that succeeded (the P5a re-queue): the source has none; the head says "data provisional".
+    expect(empty({ ingest_state: 'fetched' }, 168)).toBe('<p>No weather in the OpenF1 data.</p>');
+    expect(empty({ ingest_state: 'final' }, 168)).toBe('<p>No weather in the OpenF1 data.</p>');
+    expect(empty({ ingest_state: 'final', source: 'f1-archive' }, 168)).toBe('<p>No weather in the F1 archive.</p>');
+    expect(empty({ ingest_state: 'failed', fail_count: 9, last_error: 'http_500', fetch_count: 0 }, 168)).toBe(
+      '<p>The fetch failed 9 times (HTTP 500) and is not retried.</p>',
+    );
+    const live: Live = {
+      session: {
+        session_key: race.session.session_key,
+        meeting_name: null,
+        session_name: null,
+        date_start: race.session.date_start,
+        date_end: race.session.date_end,
+      },
+      recording: { id: 1, started_at: race.session.date_start, ended_at: null, complete: false },
+    };
+    expect(empty({ ingest_state: 'scheduled' }, 0, live)).toBe('<p>Live now: <a href="/live">follow it</a>.</p>');
+  });
+
+  it('names its source in the tile reasons', () => {
+    const html = renderToStaticMarkup(
+      <WeatherView
+        rows={dry.map((r) => ({ ...r, humidity: null }))}
+        detail={{ ...race, session: { ...race.session, source: 'f1-archive' } }}
+        laps={laps}
+        live={null}
+      />,
+    );
+    expect(html).toContain('title="No humidity in the F1 archive"');
   });
 });
 
