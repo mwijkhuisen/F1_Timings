@@ -2,7 +2,7 @@ import { formOf, isUnmatched, type RaceControl } from '@f1/contracts';
 
 // Safety-car, VSC and red-flag periods from the race-control rows (A§6.1), as
 // lap ranges for the lap table's header bands. The forms are the ones
-// `scripts/race-control-forms.sql` found in 2023–2026 races, with its exact
+// `scripts/race-control-forms.sql` found in 2023–2026 races (and the F1 archive's 2018–2022), with its exact
 // regexes: SAFETY CAR DEPLOYED / IN THIS LAP; VIRTUAL SAFETY CAR or (2026) VSC
 // DEPLOYED / ENDING; Flag RED or a message starting RED FLAG (2026 sends
 // "RED FLAG - RACE SUSPENDED" as Other without a flag); RACE WILL RESUME or (older) RACE WILL BE RESUMED;

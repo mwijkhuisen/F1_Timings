@@ -10,7 +10,8 @@
 -- lists as races with unknown wording; test/race-control-forms.test.ts pins it). The CASE below is its own copy.
 --
 -- For 2018-2022, queries 2 and 6 print F1-archive text: it stays on the VM and is never pasted into the
--- repository, a PR or an issue (A§12.1 invariant 3); only counts are quoted.
+-- repository, a PR or an issue (A§12.1 invariant 3); only counts and digit-masked form descriptions are
+-- quoted, with driver codes and free text redacted.
 --
 -- On the VM (add -v from=2018 -v to=2022 for the archive years):
 --   sudo docker compose -p f1 -f /etc/f1/compose.yaml --env-file /srv/f1/state/current.env exec -T db \

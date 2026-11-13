@@ -27,7 +27,7 @@ test('isUnmatched: a known form, an unrelated message and a null are not counted
   expect(isUnmatched(row(null))).toBe(false);
 });
 
-// One real wording per ignored term (D4); all but the covers line are period-like with no form, so only IGNORED keeps them out.
+// A synthetic wording per ignored term (D4; made-up cars, times and reasons); all but the covers line are period-like with no form, so only IGNORED keeps them out.
 test.each([
   'INCIDENT INVOLVING CAR 4 (SAFETY CAR) NOTED',
   'TURN 4 INCIDENT INVOLVING CARS 4, 81 UNDER SAFETY CAR NOTED',
