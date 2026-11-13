@@ -1,7 +1,7 @@
 import { Seasons } from '@f1/contracts';
 import { HttpResponse, http } from 'msw';
 import { renderToStaticMarkup } from 'react-dom/server';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, onTestFinished, vi } from 'vitest';
 import { ZodError } from 'zod';
 import { server } from '../../../test/msw.setup.ts';
 import { getJson, HttpError, retry } from '../src/lib/api.ts';
@@ -45,6 +45,20 @@ describe('errorText', () => {
     ['anything else', new Error('secret detail'), 'API error'],
   ])('%s', (_name, error, text) => {
     expect(errorText(error)).toBe(text);
+  });
+
+  // D5 (#121). Node's navigator has no onLine, which leaves every text above as it is.
+  it('says offline for a TypeError while the browser is offline, and only then', () => {
+    onTestFinished(() => {
+      vi.unstubAllGlobals();
+    });
+    vi.stubGlobal('navigator', { onLine: false });
+    expect(errorText(new TypeError('Failed to fetch'))).toBe('You are offline: this page needs the network.');
+    expect(errorText(new HttpError(401))).toBe('Your Access session may have expired: reload to sign in.');
+    vi.stubGlobal('navigator', { onLine: true });
+    expect(errorText(new TypeError('Failed to fetch'))).toBe(
+      'Your Access session may have expired: reload to sign in.',
+    );
   });
 
   it('renders as an alert without the error message', () => {

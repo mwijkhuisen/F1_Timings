@@ -2,8 +2,10 @@ import { mkdtempSync, readdirSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { runInNewContext } from 'node:vm';
 import { build, type Rolldown } from 'vite';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
+import { FakeCaches, ORIGIN } from './caches.ts';
 
 type Chunk = Rolldown.OutputChunk;
 
@@ -63,10 +65,22 @@ describe('the ECharts importer', () => {
   });
 });
 
+describe('the CSP', () => {
+  // Pinned whole: #121 added worker-src 'self' and nothing else.
+  it('is exactly this in deploy/web/Caddyfile', () => {
+    const caddyfile = readFileSync(join(webDir, '../../deploy/web/Caddyfile'), 'utf8');
+    expect([...caddyfile.matchAll(/Content-Security-Policy "([^"]*)"/g)].map(([, csp]) => csp)).toEqual([
+      "default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self' data:; font-src 'self'; connect-src 'self'; manifest-src 'self'; worker-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'; object-src 'none'",
+    ]);
+  });
+});
+
 describe('web build', () => {
   const out = join(tmp, 'dist');
   const page = (p: string) => readFileSync(join(out, p), 'utf8');
+  /** The app's chunks; the service worker's is `sw`. */
   let chunks: Chunk[] = [];
+  let sw: Chunk | undefined;
 
   beforeAll(async () => {
     // Vitest sets NODE_ENV=test, which makes Vite bundle React's development build: build as the CLI does.
@@ -74,7 +88,9 @@ describe('web build', () => {
     try {
       const result = await build({ root: webDir, logLevel: 'silent', build: { outDir: out, emptyOutDir: true } });
       if (!('output' in result)) throw new Error('expected a single bundle output');
-      chunks = result.output.filter((o): o is Chunk => o.type === 'chunk');
+      const all = result.output.filter((o): o is Chunk => o.type === 'chunk');
+      sw = all.find((c) => c.fileName === 'sw.js');
+      chunks = all.filter((c) => c !== sw);
     } finally {
       vi.unstubAllEnvs();
     }
@@ -101,9 +117,13 @@ describe('web build', () => {
   });
 
   it('no output file has a data: or blob: URL or createObjectURL', () => {
-    const files = readdirSync(out, { recursive: true, withFileTypes: true }).filter((e) => e.isFile());
+    // Text files only: the icon's bytes could match by chance.
+    const files = readdirSync(out, { recursive: true, withFileTypes: true }).filter(
+      (e) => e.isFile() && !e.name.endsWith('.png'),
+    );
     expect(files.some((e) => e.name.endsWith('.js'))).toBe(true);
     expect(files.some((e) => e.name.endsWith('.css'))).toBe(true);
+    expect(files.map((e) => e.name)).toEqual(expect.arrayContaining(['sw.js', 'manifest.webmanifest']));
     for (const e of files) {
       const path = join(e.parentPath, e.name);
       const text = readFileSync(path, 'utf8');
@@ -172,6 +192,109 @@ describe('web build', () => {
       expect(dynamic.has(c.fileName), c.fileName).toBe(true);
     }
     expect(mapChunks).toHaveLength(ids.length);
+  });
+
+  // #121: the service worker, a classic script at the root; vite.config.ts fills in its two placeholders.
+  /** `/` and every emitted .js and .css file but sw.js. */
+  const shell = () => [
+    '/',
+    ...readdirSync(out, { recursive: true, encoding: 'utf8' })
+      .map((f) => f.replaceAll('\\', '/'))
+      .filter((f) => f !== 'sw.js' && /\.(js|css)$/.test(f))
+      .map((f) => `/${f}`)
+      .sort(),
+  ];
+
+  it('sw.js is one chunk at the root that imports and exports nothing, its placeholders filled in', () => {
+    expect(sw).toMatchObject({ isEntry: true, imports: [], dynamicImports: [], exports: [] });
+    const code = page('sw.js');
+    // No import or export statement (nor import()), which a classic worker script cannot run.
+    expect(code).not.toMatch(/\b(import|export)\b/);
+    expect(code).not.toContain('__F1_');
+  });
+
+  it('sw.js runs as a classic script: install keeps the shell, and a final session is answered', async () => {
+    const caches = new FakeCaches();
+    const fetch = vi.fn(async (input: Request | string) => {
+      const path = typeof input === 'string' ? input : new URL(input.url).pathname;
+      const type =
+        path === '/'
+          ? 'text/html'
+          : path.endsWith('.css')
+            ? 'text/css'
+            : path.endsWith('.js')
+              ? 'text/javascript'
+              : 'application/json';
+      return new Response('x', { headers: { 'content-type': type, 'cache-control': 'private, max-age=86400' } });
+    });
+    const on = new Map<string, (e: object) => void>();
+    const self = {
+      addEventListener: (type: string, f: (e: object) => void) => on.set(type, f),
+      skipWaiting: vi.fn(async () => undefined),
+      clients: { claim: vi.fn(async () => undefined) },
+    };
+    // A script, not a module: an import or export statement would be a SyntaxError here.
+    runInNewContext(page('sw.js'), {
+      self,
+      caches: caches.storage,
+      fetch,
+      location: new URL(`${ORIGIN}/sw.js`),
+      URL,
+      Request,
+      Response,
+      Headers,
+    });
+    expect([...on.keys()].sort()).toEqual(['activate', 'fetch', 'install']);
+
+    const waited: Promise<unknown>[] = [];
+    const waitUntil = (p: Promise<unknown>) => waited.push(p);
+    on.get('install')?.({ waitUntil });
+    await Promise.all(waited);
+    const names = await caches.keys();
+    expect(names).toHaveLength(1);
+    expect(names[0]).toMatch(/^f1-[0-9a-f]{12}$/);
+    const cache = await caches.open(names[0] ?? '');
+    expect([...cache.entries.keys()].sort()).toEqual(
+      shell()
+        .map((p) => `${ORIGIN}${p}`)
+        .sort(),
+    );
+    expect(self.skipWaiting).toHaveBeenCalledOnce();
+    on.get('activate')?.({ waitUntil });
+    await Promise.all(waited);
+    expect(self.clients.claim).toHaveBeenCalledOnce();
+
+    const respondWith = vi.fn();
+    const url = `${ORIGIN}/api/v1/sessions/9158/laps?v=1`;
+    on.get('fetch')?.({ request: { url, method: 'GET', mode: 'cors' }, respondWith });
+    expect(respondWith).toHaveBeenCalledOnce();
+    expect(await (await respondWith.mock.calls[0]?.[0])?.text()).toBe('x');
+    expect(cache.entries.has(url)).toBe(true);
+    // And a request it leaves to the browser.
+    on.get('fetch')?.({ request: { url: `${ORIGIN}/api/v1/live`, method: 'GET', mode: 'cors' }, respondWith });
+    expect(respondWith).toHaveBeenCalledOnce();
+  });
+
+  it('the manifest is valid JSON in the theme colour, with a 512×512 PNG icon', () => {
+    const manifest = JSON.parse(page('manifest.webmanifest'));
+    const bg = /--bg:\s*(#[0-9a-f]{6});/.exec(readFileSync(join(webDir, 'src/styles.css'), 'utf8'))?.[1];
+    expect(bg).toBe('#15151e');
+    expect(manifest).toMatchObject({ id: '/', start_url: '/', scope: '/', display: 'standalone' });
+    expect(manifest.background_color).toBe(bg);
+    expect(manifest.theme_color).toBe(bg);
+    expect(manifest.icons).toEqual([
+      { src: '/icon-512.png', sizes: '512x512', type: 'image/png', purpose: 'any maskable' },
+    ]);
+    const png = readFileSync(join(out, 'icon-512.png'));
+    expect(png.subarray(0, 8)).toEqual(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]));
+    expect(png.toString('latin1', 12, 16)).toBe('IHDR');
+    expect([png.readUInt32BE(16), png.readUInt32BE(20)]).toEqual([512, 512]);
+  });
+
+  it('index.html links the manifest and the icon', () => {
+    const html = page('index.html');
+    expect(html).toContain('<link rel="manifest" href="/manifest.webmanifest" />');
+    expect(html).toContain('<link rel="apple-touch-icon" href="/icon-512.png" />');
   });
 
   it('serves the third-party licences file (ADR-0008, ADR-0009)', () => {
