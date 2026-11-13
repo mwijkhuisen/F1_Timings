@@ -1,6 +1,8 @@
 import { Component, type ReactNode } from 'react';
 import { ZodError } from 'zod';
-import { HttpError } from '../lib/api.ts';
+import { HttpError, VersionError } from '../lib/api.ts';
+
+export const NEW_VERSION = 'A new version is out: reload the page.';
 
 /** What the error view says. Never a response body or a ZodError message (A§12.1). */
 export function errorText(error: unknown): string {
@@ -8,7 +10,7 @@ export function errorText(error: unknown): string {
   if ((error instanceof HttpError && error.status === 401) || error instanceof TypeError)
     return 'Your Access session may have expired: reload to sign in.';
   if (error instanceof HttpError && error.status === 404) return 'Not found.';
-  if (error instanceof ZodError) return 'Unexpected data from the API.';
+  if (error instanceof ZodError || error instanceof VersionError) return NEW_VERSION;
   return 'API error';
 }
 

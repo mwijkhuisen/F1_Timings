@@ -317,10 +317,23 @@ describe('Player', () => {
     expect(openCount()).toBe(1);
     last().emit('snapshot', { t: start, state: {}, laps: [], stints: [] });
     expect(host.textContent).not.toContain(reload);
+  });
 
-    // Data that fails its contract is an error too.
-    last().emit('delta', { t: 'x' });
+  it.each([
+    ['a snapshot', 'snapshot'],
+    ['a delta', 'delta'],
+  ])('%s that fails its contract shows the reload message, closes and never reopens', (_name, event) => {
+    const start = S + 3_600_000;
+    render({ recording: ended, start });
+    if (event === 'delta') last().emit('snapshot', { t: start, state: {}, laps: [], stints: [] });
+    last().emit(event, { t: 'x' });
     expect(last().closed).toBe(true);
+    expect(host.textContent).toContain('A new version is out: reload the page.');
+    expect(host.textContent).not.toContain('Reconnecting…');
+    const opened = FakeES.all.length;
+    advance(60_000);
+    expect(FakeES.all).toHaveLength(opened);
+    expect(openCount()).toBe(0);
   });
 
   it('a silent stream is reopened after 40 s without events; pings keep it open', () => {

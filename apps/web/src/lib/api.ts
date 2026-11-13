@@ -28,16 +28,34 @@ export class HttpError extends Error {
   }
 }
 
+/** This build's git commit or `dev` (vite.config.ts, A§10). */
+export const REVISION: string = import.meta.env.F1_REVISION ?? 'dev';
+
+/** The api answers for another revision than this build's: a deploy happened, reload the page (A§10). */
+export class VersionError extends Error {
+  constructor() {
+    super('version');
+    this.name = 'VersionError';
+  }
+}
+
 export async function getJson<T>(path: string, contract: { parse(data: unknown): T }, signal: AbortSignal): Promise<T> {
+  // A per-session answer may sit in the browser cache for 24 h: `v` makes the cache key per build (A§10).
+  const url = path.includes('/api/v1/sessions/') ? `${path}?v=${REVISION}` : path;
   // redirect: 'error' turns Access's login redirect into a TypeError instead of an HTML page.
-  const res = await fetch(path, { signal, redirect: 'error', headers: { accept: 'application/json' } });
+  const res = await fetch(url, { signal, redirect: 'error', headers: { accept: 'application/json' } });
   if (!res.ok) throw new HttpError(res.status);
+  const rev = res.headers.get('f1-revision');
+  if (rev !== null && rev !== REVISION) throw new VersionError();
   return contract.parse(await res.json());
 }
 
-/** One retry, but never for an answer that will not change: a 4xx or data that fails its contract. */
+/** One retry, but never for an answer that will not change: a 4xx, data that fails its contract or another revision. */
 export const retry = (failures: number, error: unknown): boolean =>
-  failures < 1 && !(error instanceof HttpError && error.status < 500) && !(error instanceof ZodError);
+  failures < 1 &&
+  !(error instanceof HttpError && error.status < 500) &&
+  !(error instanceof ZodError) &&
+  !(error instanceof VersionError);
 
 export const queryClient = new QueryClient({
   defaultOptions: { queries: { retry, refetchOnWindowFocus: false } },

@@ -11,6 +11,8 @@ COPY . .
 # pnpm 12 is a native binary: the sha512-pinned script, never corepack.
 RUN scripts/install-pnpm.sh /opt/pnpm
 ENV PATH=/opt/pnpm/bin:$PATH
+# The build embeds it as the `?v=` cache key of the per-session requests (vite.config.ts, A§10).
+ARG F1_REVISION=dev
 RUN pnpm install --frozen-lockfile && pnpm --filter @f1/web build
 
 FROM caddy:2.11.7-alpine@sha256:e70b164da81ef698b3ad19af799ea6086ce6d9e48ed4079eb9fe26f6fbf14ee5

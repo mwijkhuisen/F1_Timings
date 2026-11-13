@@ -219,6 +219,7 @@ describe('the status panel', () => {
     renderToStaticMarkup(
       <StatusPanel
         status={Status.parse({
+          revision: 'dev',
           states: { scheduled: 25, due: 0, fetched: 1, final: 454, failed: 1 },
           cancelled: 15,
           failed: [
@@ -304,6 +305,7 @@ describe('the status panel', () => {
 describe('the recorder warnings on /live', () => {
   const recorder = (r: Record<string, unknown>) =>
     Status.parse({
+      revision: 'dev',
       states: { scheduled: 0, due: 0, fetched: 0, final: 0, failed: 0 },
       cancelled: 0,
       failed: [],

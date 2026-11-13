@@ -36,6 +36,7 @@ import { setTitleWord } from '../lib/routes.ts';
 import { createStore, type Feed, openStream, type Snap } from '../lib/stream.ts';
 import { fmtClock, parseT } from '../lib/time.ts';
 import { KIND_LABEL, KIND_NAME, type Kind } from '../lib/track.ts';
+import { NEW_VERSION } from '../ui/ErrorView.tsx';
 import { LapTable } from './LapTable.tsx';
 import { Panel, Strip, useTick } from './PitWall.tsx';
 import { RainMapCard } from './RainMap.tsx';
@@ -423,6 +424,7 @@ export function Player({
   const [tab, setTab] = useState<'tower' | 'laps' | 'weather'>('tower');
   // The focused driver's number (a tap on the tower's driver cell); page state that the player bar reads.
   const [focus, setFocus] = useState<string | null>(null);
+  const [stale, setStale] = useState(false); // an event failed its contract: reload, no retry
   const [fails, setFails] = useState(0); // errors since the last snapshot
   // The reload hint lets the screen lock (owner, 2026-11-13): an expired Access session never comes back by itself.
   useWakeLock(playing && fails < FAILING);
@@ -507,6 +509,9 @@ export function Player({
                 : { at: from === 'live' ? 'live' : Math.round(clamp(t, Date.parse(started_at), end)) },
             );
           }, wait);
+        },
+        onStale() {
+          setStale(true);
         },
         onEnd(t) {
           clock.current = { t, wall: Date.now() };
@@ -693,7 +698,9 @@ export function Player({
 
   return (
     <>
-      {at !== null && fails >= FAILING ? (
+      {stale ? (
+        <p role="alert">{NEW_VERSION}</p>
+      ) : at !== null && fails >= FAILING ? (
         <p role="status">The stream keeps failing. Reload the page (your Access session may have expired).</p>
       ) : (
         at !== null &&

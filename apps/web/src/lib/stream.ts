@@ -27,6 +27,8 @@ export type Feed = { t: number; state: Obj; laps: Map<string, Lap>; stints: Map<
 export type Handlers = {
   onData(feed: Feed, kind: 'snapshot' | 'delta' | 'laps'): void;
   onError(): void;
+  /** An event failed its contract: the build and the server differ, and a reconnect cannot fix that (A§13). */
+  onStale(): void;
   onEnd(t: number): void;
 };
 
@@ -65,6 +67,11 @@ export function openStream(params: StreamParams, h: Handlers, ES: typeof EventSo
     close();
     h.onError();
   };
+  const stale = () => {
+    if (!open) return;
+    close();
+    h.onStale();
+  };
   const on = <T>(name: string, contract: { parse(v: unknown): T }, apply: (d: T) => void) =>
     es.addEventListener(name, (e) => {
       if (!open) return;
@@ -73,7 +80,7 @@ export function openStream(params: StreamParams, h: Handlers, ES: typeof EventSo
       try {
         d = contract.parse(JSON.parse((e as MessageEvent<string>).data));
       } catch {
-        fail();
+        stale();
         return;
       }
       apply(d);
