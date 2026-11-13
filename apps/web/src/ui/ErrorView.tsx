@@ -1,6 +1,6 @@
 import { Component, type ReactNode } from 'react';
 import { ZodError } from 'zod';
-import { HttpError, VersionError } from '../lib/api.ts';
+import { HttpError, useStale } from '../lib/api.ts';
 
 export const NEW_VERSION = 'A new version is out: reload the page.';
 
@@ -10,9 +10,12 @@ export function errorText(error: unknown): string {
   if ((error instanceof HttpError && error.status === 401) || error instanceof TypeError)
     return 'Your Access session may have expired: reload to sign in.';
   if (error instanceof HttpError && error.status === 404) return 'Not found.';
-  if (error instanceof ZodError || error instanceof VersionError) return NEW_VERSION;
+  if (error instanceof ZodError) return NEW_VERSION;
   return 'API error';
 }
+
+/** The app-wide reload banner: another revision answered, or an answer failed its contract (A§13). */
+export const NewVersion = () => (useStale() ? <p role="alert">{NEW_VERSION}</p> : null);
 
 export const ErrorView = ({ error }: { error: unknown }) => <p role="alert">{errorText(error)}</p>;
 

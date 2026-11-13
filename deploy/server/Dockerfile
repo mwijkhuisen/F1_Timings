@@ -40,7 +40,7 @@ COPY --from=build --chmod=0755 /tmp/dbmate /usr/local/bin/dbmate
 ENV NODE_OPTIONS=--conditions=f1-dist
 # The git commit of the release (CI passes it); `dev` for any other build.
 ARG F1_REVISION=dev
-# Not a secret (it is also the public label above): the api reports it as `F1-Revision` and checks a request's `v` (A§10).
+# Not a secret (it is also the public label below): the api reports it as `F1-Revision` and checks a request's `v` (A§10).
 ENV F1_REVISION=${F1_REVISION}
 LABEL org.opencontainers.image.source=https://github.com/mwijkhuisen/F1_Timings \
   org.opencontainers.image.revision=${F1_REVISION}

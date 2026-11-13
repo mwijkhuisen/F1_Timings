@@ -6,6 +6,7 @@ import type { Hono } from 'hono';
 import type { Kysely } from 'kysely';
 import { HttpResponse, http, passthrough } from 'msw';
 import pino from 'pino';
+import { Agent, setGlobalDispatcher } from 'undici';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import type { z } from 'zod';
 import { server } from '../../../test/msw.setup.ts';
@@ -513,6 +514,9 @@ describe('api (f1_api login, Access JWT)', { timeout: 120_000 }, () => {
     server.use(http.all(`${base}/*`, () => passthrough())); // the real server, not msw
     const signals = process.listenerCount('SIGTERM');
     const interrupts = process.listenerCount('SIGINT');
+    // A connection pooled by an earlier test's msw-answered certs fetch makes the role's own fetch resolve the real
+    // host (a lookup, then 503): start from a fresh pool.
+    setGlobalDispatcher(new Agent());
     const exit = run(['api'], env, () => {}, port);
     let health: Response | undefined;
     for (let i = 0; i < 100 && !health; i++)
@@ -525,6 +529,10 @@ describe('api (f1_api login, Access JWT)', { timeout: 120_000 }, () => {
     expect(seasons.status).toBe(401);
     expect(await seasons.text()).toBe('{"error":"unauthorized"}');
     expect(seasons.headers.get('f1-revision')).toBeNull(); // a 401 carries no header
+    const status = await fetch(`${base}/api/v1/status`, { headers: { 'cf-access-jwt-assertion': token } });
+    expect(status.status).toBe(200);
+    expect(status.headers.get('f1-revision')).toBe(SHA2); // the role reads F1_REVISION
+    expect(((await status.json()) as { revision: string }).revision).toBe(SHA2);
     expect(process.listenerCount('SIGTERM')).toBe(signals + 1);
     process.emit('SIGTERM', 'SIGTERM'); // the listener only: no real signal reaches the worker
     expect(await exit).toBe(0);

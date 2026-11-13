@@ -524,7 +524,11 @@ export function createApp({
     // hono runs this handler for HEAD and drops the body without cancelling it: a generator would stay open for good.
     if (c.req.method === 'HEAD')
       return new Response(null, {
-        headers: { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-store, no-transform' },
+        headers: {
+          'Content-Type': 'text/event-stream',
+          'Cache-Control': 'no-store, no-transform',
+          'F1-Revision': revision,
+        },
       });
     if (streams >= MAX_STREAMS) return c.json({ error: 'unavailable' }, 503, NO_STORE);
 

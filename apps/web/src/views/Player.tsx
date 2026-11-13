@@ -11,6 +11,7 @@ import {
   useState,
   useSyncExternalStore,
 } from 'react';
+import { markStale } from '../lib/api.ts';
 import {
   fastestSoFar,
   fmtLeft,
@@ -36,7 +37,6 @@ import { setTitleWord } from '../lib/routes.ts';
 import { createStore, type Feed, openStream, type Snap } from '../lib/stream.ts';
 import { fmtClock, parseT } from '../lib/time.ts';
 import { KIND_LABEL, KIND_NAME, type Kind } from '../lib/track.ts';
-import { NEW_VERSION } from '../ui/ErrorView.tsx';
 import { LapTable } from './LapTable.tsx';
 import { Panel, Strip, useTick } from './PitWall.tsx';
 import { RainMapCard } from './RainMap.tsx';
@@ -427,7 +427,7 @@ export function Player({
   const [stale, setStale] = useState(false); // an event failed its contract: reload, no retry
   const [fails, setFails] = useState(0); // errors since the last snapshot
   // The reload hint lets the screen lock (owner, 2026-11-13): an expired Access session never comes back by itself.
-  useWakeLock(playing && fails < FAILING);
+  useWakeLock(playing && fails < FAILING && !stale);
   const [since, setSince] = useState<string | null>(null); // what the last forward seek skipped
   const [announce, setAnnounce] = useState(readAnnounce);
   // Minimized, the bar keeps only its head (the clock line, Play/Pause and the toggle); the stream is untouched.
@@ -511,6 +511,7 @@ export function Player({
           }, wait);
         },
         onStale() {
+          markStale();
           setStale(true);
         },
         onEnd(t) {
@@ -698,9 +699,7 @@ export function Player({
 
   return (
     <>
-      {stale ? (
-        <p role="alert">{NEW_VERSION}</p>
-      ) : at !== null && fails >= FAILING ? (
+      {stale ? null : at !== null && fails >= FAILING ? (
         <p role="status">The stream keeps failing. Reload the page (your Access session may have expired).</p>
       ) : (
         at !== null &&

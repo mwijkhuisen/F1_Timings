@@ -12,6 +12,7 @@ import {
   Weather,
 } from '@f1/contracts';
 import { QueryClient, queryOptions, useQuery } from '@tanstack/react-query';
+import { useSyncExternalStore } from 'react';
 import { ZodError } from 'zod';
 
 // The P1c API, read through relative paths only. Every answer is parsed with
@@ -31,13 +32,21 @@ export class HttpError extends Error {
 /** This build's git commit or `dev` (vite.config.ts, A§10). */
 export const REVISION: string = import.meta.env.F1_REVISION ?? 'dev';
 
-/** The api answers for another revision than this build's: a deploy happened, reload the page (A§10). */
-export class VersionError extends Error {
-  constructor() {
-    super('version');
-    this.name = 'VersionError';
-  }
+// One app-wide flag: the api answered for another revision, or an answer failed its contract. A reload is the fix,
+// so the banner (ui/ErrorView.tsx) stays up; it is never cleared (A§13).
+let stale = false;
+const listeners = new Set<() => void>();
+export const isStale = () => stale;
+export function markStale() {
+  if (stale) return;
+  stale = true;
+  for (const l of listeners) l();
 }
+const subscribe = (l: () => void) => {
+  listeners.add(l);
+  return () => void listeners.delete(l);
+};
+export const useStale = () => useSyncExternalStore(subscribe, isStale, isStale);
 
 export async function getJson<T>(path: string, contract: { parse(data: unknown): T }, signal: AbortSignal): Promise<T> {
   // A per-session answer may sit in the browser cache for 24 h: `v` makes the cache key per build (A§10).
@@ -46,16 +55,19 @@ export async function getJson<T>(path: string, contract: { parse(data: unknown):
   const res = await fetch(url, { signal, redirect: 'error', headers: { accept: 'application/json' } });
   if (!res.ok) throw new HttpError(res.status);
   const rev = res.headers.get('f1-revision');
-  if (rev !== null && rev !== REVISION) throw new VersionError();
-  return contract.parse(await res.json());
+  // Another revision's answer is still data: keep it, and ask for a reload.
+  if (rev !== null && rev !== REVISION) markStale();
+  try {
+    return contract.parse(await res.json());
+  } catch (err) {
+    if (err instanceof ZodError) markStale();
+    throw err;
+  }
 }
 
-/** One retry, but never for an answer that will not change: a 4xx, data that fails its contract or another revision. */
+/** One retry, but never for an answer that will not change: a 4xx, or data that fails its contract. */
 export const retry = (failures: number, error: unknown): boolean =>
-  failures < 1 &&
-  !(error instanceof HttpError && error.status < 500) &&
-  !(error instanceof ZodError) &&
-  !(error instanceof VersionError);
+  failures < 1 && !(error instanceof HttpError && error.status < 500) && !(error instanceof ZodError);
 
 export const queryClient = new QueryClient({
   defaultOptions: { queries: { retry, refetchOnWindowFocus: false } },
