@@ -18,7 +18,7 @@ afterEach(() => {
 });
 
 describe('savedSessions', () => {
-  it('lists each kept session once, newest first, linking to its laps; skips other bodies and paths', async () => {
+  it('lists each kept session once, newest first, linking to its laps; skips other bodies, paths and caches', async () => {
     const caches = new FakeCaches();
     const old = await caches.open('f1-old');
     const now = await caches.open('f1-new');
@@ -30,6 +30,11 @@ describe('savedSessions', () => {
     await now.put('/api/v1/sessions/11003', body({ session: { session_key: 11003 } }));
     await now.put('/api/v1/sessions/11004', new Response('<!doctype html>'));
     await now.put('/api/v1/sessions/11002/laps', body(detail(11005, 'Not a detail', '2026-10-27T20:00:00.000Z')));
+    // A cache that is not the worker's.
+    await (await caches.open('other')).put(
+      '/api/v1/sessions/11006',
+      body(detail(11006, 'Sprint', '2026-10-28T20:00:00.000Z')),
+    );
     vi.stubGlobal('caches', caches.storage);
 
     expect(await savedSessions()).toEqual([

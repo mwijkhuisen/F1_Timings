@@ -18,6 +18,7 @@ const BUILD = '__F1_BUILD__';
 const SHELL = '__F1_SHELL__'.split(',');
 const d = {
   caches,
+  // A wrapper, not `fetch` itself: called as `d.fetch(…)`, the bare global would throw "Illegal invocation".
   fetch: (input: Request | string, init?: RequestInit) => fetch(input, init),
   cacheName: `f1-${BUILD}`,
   shell: SHELL,

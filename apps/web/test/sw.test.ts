@@ -55,6 +55,9 @@ describe("a final session's answers", () => {
     ['no-store', () => json({ 'content-type': 'application/json', 'cache-control': 'no-store' })],
     ['no-store beside a max-age', () => json({ ...FINAL, 'cache-control': 'private, max-age=86400, no-store' })],
     ['no Cache-Control', () => json({ 'content-type': 'application/json' })],
+    ['max-age=0', () => json({ ...FINAL, 'cache-control': 'private, max-age=0' })],
+    ['no-cache beside a max-age', () => json({ ...FINAL, 'cache-control': 'no-cache, max-age=60' })],
+    ['NO-STORE in capitals', () => json({ ...FINAL, 'cache-control': 'NO-STORE, max-age=60' })],
     ['a 404', () => json({ ...FINAL }, 404)],
     ['a 500', () => json({ ...FINAL }, 500)],
     ['a redirected answer', () => redirected(json())],
@@ -123,12 +126,15 @@ describe('navigations', () => {
 });
 
 describe('assets', () => {
-  it('come from the cache first, else from the network', async () => {
-    const { caches, d, fetch } = setup(() => answer('net', { 'content-type': 'text/javascript' }));
-    await (await caches.open(NAME)).put('/assets/index-a.js', answer('kept', { 'content-type': 'text/javascript' }));
-    expect(await (await respond(req('/assets/index-a.js'), d))?.text()).toBe('kept');
-    expect(fetch).not.toHaveBeenCalled();
-    expect(await (await respond(req('/assets/other-b.js'), d))?.text()).toBe('net');
+  // Window script can write Cache Storage: a kept copy online would let one injection persist.
+  it('come from the network first, the kept copy only when the fetch rejects', async () => {
+    const online = setup(() => answer('net', { 'content-type': 'text/javascript' }));
+    const kept = answer('kept', { 'content-type': 'text/javascript' });
+    await (await online.caches.open(NAME)).put('/assets/index-a.js', kept);
+    expect(await (await respond(req('/assets/index-a.js'), online.d))?.text()).toBe('net');
+    const offline = { ...online.d, fetch: vi.fn(async () => Promise.reject(new TypeError('Failed to fetch'))) };
+    expect(await (await respond(req('/assets/index-a.js'), offline))?.text()).toBe('kept');
+    expect((await respond(req('/assets/other-b.js'), offline))?.type).toBe('error');
   });
 });
 
@@ -159,12 +165,13 @@ describe('install and activate', () => {
     await expect(install(d)).rejects.toThrow();
   });
 
-  it("activate drops every other build's cache", async () => {
+  it("activate drops every other build's cache, and only the worker's", async () => {
     const { caches, d } = setup();
     await caches.open('f1-old');
     await caches.open(NAME);
+    await caches.open('other');
     await caches.open('f1-older');
     await activate(d);
-    expect(await caches.keys()).toEqual([NAME]);
+    expect(await caches.keys()).toEqual([NAME, 'other']);
   });
 });

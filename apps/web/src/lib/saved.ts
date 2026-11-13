@@ -12,6 +12,7 @@ export async function savedSessions(): Promise<Saved[]> {
   if (typeof caches === 'undefined') return [];
   const byKey = new Map<number, Saved>();
   for (const name of await caches.keys()) {
+    if (!name.startsWith('f1-')) continue; // not the worker's
     const cache = await caches.open(name);
     for (const req of await cache.keys()) {
       if (!DETAIL.test(new URL(req.url).pathname)) continue;
