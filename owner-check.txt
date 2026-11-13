@@ -1,0 +1,12 @@
+Session 11404, drivers 22, laps 71, periods [{"kind":"vsc","from":7,"to":8},{"kind":"sc","from":44,"to":45},{"kind":"red","from":45,"to":45},{"kind":"sc","from":59,"to":62}]
+After lap 1: P1 LEC, P2 VER, P3 HAM, P4 ANT, P5 RUS, P6 LIN, P7 COL, P8 NOR, P9 PIA, P10 HUL, P11 BOR, P12 BEA, P13 GAS, P14 PER, P15 ALB, P16 SAI, P17 BOT, P18 HIR, P19 ALO, P20 STR, P21 LAW, P22 HAD
+After lap 42: P1 ANT, P2 VER, P3 LEC, P4 HAM, P5 NOR, P6 RUS, P7 PIA, P8 LIN, P9 COL, P10 GAS, P11 HUL, P12 LAW, P13 BEA, P14 BOR, P15 HAD, P16 SAI, P17 HIR, P18 PER, P19 ALB, P20 BOT, P21 STR, P22 ALO
+After lap 71: P1 VER, P2 HAM, P3 ANT, P4 LEC, P5 NOR, P6 RUS, P7 PIA, P8 COL, P9 LAW, P10 GAS, P11 BOR, P12 HAD, P13 HIR, P14 ALB, P15 SAI, P16 HUL, P17 PER, P18 LIN, P19 BEA, P20 BOT, P21 STR, P22 ALO
+--- VER / HAM
+VER pitted L27, HAM L28: VER 2.7 s ahead before, 5.0 s ahead after
+HAM pitted L44, VER L45: not comparable (safety car in the window)
+VER and HAM pitted L45: not comparable (safety car in the window)
+--- VER / BOT
+VER pitted L27, BOT L30: VER 78.0 s ahead before, 99.1 s ahead after
+--- PER / BOT
+PER and BOT pitted L30: PER 23.1 s ahead before, 23.6 s ahead after
