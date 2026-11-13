@@ -35,7 +35,16 @@ import {
   statusSeries,
 } from '../lib/replay.ts';
 import { type PlayerTab, parseTab, replayQuery, setTitleWord } from '../lib/routes.ts';
-import { createStore, type Feed, openStream, type Probe, probeStream, type Snap, streamUrl } from '../lib/stream.ts';
+import {
+  createStore,
+  type Feed,
+  openStream,
+  type Probe,
+  probeStream,
+  type Snap,
+  type Stream,
+  streamUrl,
+} from '../lib/stream.ts';
 import { fmtClock, parseT } from '../lib/time.ts';
 import { KIND_LABEL, KIND_NAME, type Kind } from '../lib/track.ts';
 import { ErrorBoundary, ErrorView, OFFLINE } from '../ui/ErrorView.tsx';
@@ -415,7 +424,12 @@ function TowerTab({
   return state && <Tower state={state} sessionKey={sessionKey} focus={focus} onFocus={onFocus} trend={trend} />;
 }
 
-type Open = { at: number | 'live' | null; still?: true };
+/** `delay` is the open live stream's own (s): the page shows more by holding its events (#101). */
+type Open = { at: number | 'live' | null; still?: true; delay?: number };
+
+/** T at `wall` is `t`, running with the wall clock from there; never below `floor` (#101). */
+type Clock = { t: number; wall: number; floor?: number };
+const clockT = (c: Clock) => Math.max(c.floor ?? Number.NEGATIVE_INFINITY, c.t + Math.max(0, Date.now() - c.wall));
 
 export type PlayerRecording = { id: number; started_at: string; ended_at: string | null };
 
@@ -470,10 +484,13 @@ export function Player({
   const [resumed, setResumed] = useState(() =>
     keepT ? parseT(new URLSearchParams(location.search).get('t'), recording) : null,
   );
-  const [delay, setDelay] = useState(readDelay); // shown at once
-  const [streamDelay, setStreamDelay] = useState(delay); // the open stream's, 400 ms later
-  // A new object (re)opens the stream, even at the same `at` (a reopen after an error).
-  const [open, setOpen] = useState<Open>(() => (resumed === null ? { at: start } : { at: resumed, still: true }));
+  const [delay, setDelay] = useState(readDelay); // shown at once, and the page's T while live
+  const delayNow = useRef(delay); // the same, for the stream's handlers
+  // A new object (re)opens the stream, even at the same `at` (a reopen after an error). A live one opens at the delay
+  // shown then; a later increase holds its events instead (#101), and only a decrease below it opens another.
+  const [open, setOpen] = useState<Open>(() =>
+    resumed !== null ? { at: resumed, still: true } : start === 'live' ? { at: 'live', delay } : { at: start },
+  );
   const at = open.at;
   const playing = at !== null && !open.still;
   const [seek, setSeek] = useState<number | null>(null); // a pending seek, shown on the bar
@@ -500,7 +517,12 @@ export function Player({
   const [store] = useState(() => createStore());
   const snap = useSyncExternalStore(store.subscribe, store.get);
   // T = clock.t + the wall time since clock.wall while playing; resynced to every event's t.
-  const clock = useRef({ t: resumed ?? (start === 'live' ? Date.now() - delay * 1000 : start), wall: Date.now() });
+  // A live delay increase moves `wall` on by the added hold, and `floor` keeps T from stepping back below what it showed
+  // (#101); any new `clock` drops the floor.
+  const clock = useRef<Clock>({
+    t: resumed ?? (start === 'live' ? Date.now() - delay * 1000 : start),
+    wall: Date.now(),
+  });
   // The T the state stands at while not playing: the pause, the end, or a still frame's snapshot.
   const stood = useRef(clock.current.t);
   const lastFeed = useRef<Feed | undefined>(undefined);
@@ -514,9 +536,11 @@ export function Player({
   useEffect(() => {
     rec.current = recording;
   }, [recording]);
-  const liveDelay = at === 'live' ? streamDelay : 0;
+  // The open stream and how long it holds each event (ms): the shown delay above the open stream's own.
+  const stream = useRef<Stream | undefined>(undefined);
+  const held = useRef(0);
 
-  const nowT = () => (playing ? clock.current.t + Math.max(0, Date.now() - clock.current.wall) : clock.current.t);
+  const nowT = () => (playing ? clockT(clock.current) : clock.current.t);
   const lo = Date.parse(recording.started_at);
   // A replay ignores the delay (A§13): an open recording's bar ends at now, or now − delay while live.
   const hi = () =>
@@ -530,8 +554,9 @@ export function Player({
     const { at: from, still } = open;
     if (from === null) return;
     let retry: ReturnType<typeof setTimeout> | undefined;
-    const params = { recording: recording.id, at: from, delay: liveDelay, still: still === true };
-    const close = openStream(params, {
+    const params = { recording: recording.id, at: from, delay: open.delay ?? 0, still: still === true };
+    held.current = from === 'live' ? Math.max(0, delayNow.current - params.delay) * 1000 : 0;
+    const opened = openStream(params, {
       onData(feed, kind) {
         clock.current = { t: feed.t, wall: Date.now() };
         stood.current = feed.t;
@@ -553,7 +578,7 @@ export function Player({
         }
         // A still frame has what it came for: it closes itself (the cleanup's second close is a no-op).
         if (still) {
-          close();
+          opened.close();
           setOpen({ at: null });
         }
       },
@@ -573,7 +598,7 @@ export function Player({
             backoff.current = 1000;
             const { started_at, ended_at } = rec.current;
             const end = ended_at === null ? Date.now() : Date.parse(ended_at);
-            const now = still ? clock.current.t : clock.current.t + Math.max(0, Date.now() - clock.current.wall);
+            const now = still ? clock.current.t : clockT(clock.current);
             const t = Math.round(clamp(now, Date.parse(started_at), end));
             clock.current = { t, wall: Date.now() };
             stood.current = t;
@@ -585,14 +610,17 @@ export function Player({
         const wait = backoff.current;
         backoff.current = Math.min(wait * 2, 30_000);
         retry = setTimeout(() => {
-          const t = clock.current.t + Math.max(0, Date.now() - clock.current.wall);
+          const t = clockT(clock.current);
           const { started_at, ended_at } = rec.current;
           const end = ended_at === null ? Date.now() : Date.parse(ended_at);
           // A still frame retries as a still at its own T, which does not run.
+          // Live reopens at the delay shown now, so the new stream holds nothing.
           setOpen(
             still
               ? { at: from, still }
-              : { at: from === 'live' ? 'live' : Math.round(clamp(t, Date.parse(started_at), end)) },
+              : from === 'live'
+                ? { at: 'live', delay: delayNow.current }
+                : { at: Math.round(clamp(t, Date.parse(started_at), end)) },
           );
         }, wait);
       },
@@ -606,11 +634,14 @@ export function Player({
         setOpen({ at: null });
       },
     });
+    opened.hold(held.current); // 0 unless the delay moved before this open
+    stream.current = opened;
     return () => {
-      close();
+      opened.close();
+      if (stream.current === opened) stream.current = undefined;
       clearTimeout(retry);
     };
-  }, [recording.id, open, liveDelay, store, voice]);
+  }, [recording.id, open, store, voice]);
 
   useEffect(
     () => () => {
@@ -628,16 +659,30 @@ export function Player({
   // While playing, the replay's URL follows T every 15 s (a reload then resumes near it).
   useEffect(() => {
     if (!keepT || !playing) return;
-    const id = setInterval(() => writeT(clock.current.t + Math.max(0, Date.now() - clock.current.wall)), WRITE_T_MS);
+    const id = setInterval(() => writeT(clockT(clock.current)), WRITE_T_MS);
     return () => clearInterval(id);
   }, [keepT, playing]);
 
+  // Live, the open stream keeps its own delay (#101): at or above it, its events are held for the difference at once,
+  // and T stands still for an increase (the clock's wall moves by the change in hold) until the held events come due;
+  // below it, the hold drops to 0 and one stream opens at the new delay 400 ms after the last change.
   const changeDelay = (s: number) => {
     const v = clamp(Math.round(s), 0, MAX_DELAY);
     setDelay(v);
     writeDelay(v);
+    delayNow.current = v;
     clearTimeout(timers.current.delay);
-    timers.current.delay = setTimeout(() => setStreamDelay(v), DEBOUNCE_MS);
+    if (open.at !== 'live') return;
+    const from = open.delay ?? 0;
+    const hold = Math.max(0, v - from) * 1000;
+    clock.current = { t: clock.current.t, wall: clock.current.wall + hold - held.current, floor: nowT() };
+    held.current = hold;
+    stream.current?.hold(hold);
+    if (v < from)
+      timers.current.delay = setTimeout(
+        () => setOpen((o) => (o.at === 'live' ? { at: 'live', delay: v } : o)), // not after a pause or a seek
+        DEBOUNCE_MS,
+      );
   };
 
   // A seek, a nudge or a chip: shown at once; 400 ms after the last one, T moves there and the stream reopens there,
@@ -686,7 +731,7 @@ export function Player({
     rearm();
     freeze(Date.now() - delay * 1000);
     setResumed(null);
-    setOpen({ at: 'live' });
+    setOpen({ at: 'live', delay });
   };
   // Live, a nudge moves the delay: earlier is more delay. In replay it moves T.
   const nudge = (s: number) => (at === 'live' ? changeDelay(delay - s) : seekTo(now() + s * 1000));

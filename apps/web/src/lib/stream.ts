@@ -18,6 +18,7 @@ import {
 // a delta merges into the state as the server's feed does. EventSource's own retry would reconnect to the same URL,
 // so the same stale `at`: on an error the stream closes itself and the caller reopens (views/Player.tsx). A half-open
 // connection raises no error, so a stream with no event at all (the server pings after 15 s) for 40 s fails too.
+// A live delay above the open stream's own holds each event inside the stream instead of reopening it (#101).
 // The weather rows (P5b): the snapshot's, then one per WeatherData delta, read from the merged view at the delta's t.
 
 export type Stint = Stints[number];
@@ -67,18 +68,34 @@ export const SILENT_MS = 40_000; // about 2.5 heartbeats
 // finds a dead stream within a second, and a healthy one, whose events kept arriving, is left alone.
 const WATCH_MS = 1_000;
 
-/** Opens one stream; the returned function closes it (idempotent). */
-export function openStream(params: StreamParams, h: Handlers, ES: typeof EventSource = globalThis.EventSource) {
+/**
+ * The open stream: `close` is idempotent; `hold` sets how long each event waits after it arrives before it is applied
+ * (#101, A§13: a live delay above the stream's own). The wait is from the arrival, never from `t` against this
+ * device's clock, so a phone whose clock is off adds no delay: the server already paces the events at its T.
+ */
+export type Stream = { close(): void; hold(ms: number): void };
+
+/** Held events past this fail the stream (a reopen at the current delay holds nothing); 120 s of a race is far fewer. */
+export const MAX_HELD = 20_000;
+
+/** Opens one stream, holding nothing until `hold` says so: each event is applied as it arrives. */
+export function openStream(params: StreamParams, h: Handlers, ES: typeof EventSource = globalThis.EventSource): Stream {
   const es = new ES(streamUrl(params));
   let feed: Feed | undefined;
   let open = true;
   let heard = Date.now();
+  let held = 0;
+  // In arrival order. Parsed on arrival, so a contract failure is stale at once; applied once due.
+  const queue: { arrived: number; apply: () => void }[] = [];
+  let due: ReturnType<typeof setTimeout> | undefined;
   const watch = setInterval(() => {
     if (Date.now() - heard >= SILENT_MS) fail();
   }, WATCH_MS);
   const close = () => {
     open = false;
     clearInterval(watch);
+    clearTimeout(due);
+    queue.length = 0;
     es.close();
   };
   const fail = () => {
@@ -91,7 +108,25 @@ export function openStream(params: StreamParams, h: Handlers, ES: typeof EventSo
     close();
     h.onStale();
   };
-  const on = <T>(name: string, contract: { parse(v: unknown): T }, apply: (d: T) => void) =>
+  /** Applies every due event in order, then waits for the next one. */
+  const drain = () => {
+    clearTimeout(due);
+    due = undefined;
+    for (let next = queue[0]; open && next && next.arrived + held <= Date.now(); next = queue[0]) {
+      queue.shift();
+      next.apply();
+    }
+    const next = queue[0];
+    if (open && next) due = setTimeout(drain, next.arrived + held - Date.now());
+  };
+  const later = (apply: () => void) => {
+    if (queue.length === 0 && held === 0) return apply(); // nothing held: as it arrives
+    if (queue.length >= MAX_HELD) return fail();
+    queue.push({ arrived: Date.now(), apply });
+    if (queue.length === 1) drain();
+  };
+  /** `hold: false` for the heartbeat: it is liveness only and changes nothing on the page. */
+  const on = <T>(name: string, contract: { parse(v: unknown): T }, apply: (d: T) => void, hold = true) =>
     es.addEventListener(name, (e) => {
       if (!open) return;
       heard = Date.now();
@@ -102,7 +137,8 @@ export function openStream(params: StreamParams, h: Handlers, ES: typeof EventSo
         stale();
         return;
       }
-      apply(d);
+      if (hold) later(() => apply(d));
+      else apply(d);
     });
 
   on('snapshot', PlaybackSnapshot, (d) => {
@@ -128,13 +164,19 @@ export function openStream(params: StreamParams, h: Handlers, ES: typeof EventSo
     putRows(feed, d);
     h.onData(feed, 'laps');
   });
-  on('ping', PlaybackPing, () => {}); // liveness only
+  on('ping', PlaybackPing, () => {}, false); // liveness only
   on('end', PlaybackEnd, (d) => {
     close();
     h.onEnd(d.t);
   });
   es.addEventListener('error', fail);
-  return close;
+  return {
+    close,
+    hold(ms) {
+      held = Math.max(0, ms);
+      if (open) drain();
+    },
+  };
 }
 
 /** A feed Utc in epoch ms, read as UTC with or without its Z; NaN when absent or unparsable. */
