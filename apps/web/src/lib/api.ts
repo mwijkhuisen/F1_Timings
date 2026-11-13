@@ -11,9 +11,10 @@ import {
   Stints,
   Weather,
 } from '@f1/contracts';
-import { QueryClient, queryOptions, useQuery } from '@tanstack/react-query';
-import { useSyncExternalStore } from 'react';
+import { QueryClient, queryOptions, useQuery, useQueryClient } from '@tanstack/react-query';
+import { useEffect, useRef, useSyncExternalStore } from 'react';
 import { ZodError } from 'zod';
+import { pollMs } from './session.ts';
 
 // The P1c API, read through relative paths only. Every answer is parsed with
 // its contract before the UI sees it; anything else is an error state. There
@@ -94,12 +95,31 @@ export const seasonQuery = (year: number) =>
 export const useSeason = (year: number, poll?: (data: Season | undefined) => number | false) =>
   useQuery({ ...seasonQuery(year), refetchInterval: poll ? (q) => poll(q.state.data) : false });
 
-export const useSession = (key: number) =>
-  useQuery({
+/** Polled while its data can still change (`pollMs`), so a page left open sees each new fetch (#99). */
+export const sessionQuery = (key: number) =>
+  queryOptions({
     queryKey: ['session', key],
     queryFn: ({ signal }) => getJson(`/api/v1/sessions/${key}`, SessionDetail, signal),
     staleTime: STALE_MS,
+    refetchInterval: (q) => (q.state.data ? pollMs(q.state.data.session) : false),
   });
+
+export const useSession = (key: number) => useQuery(sessionQuery(key));
+
+/**
+ * A new fetch of the session (its `fetch_count` changed, not the first value seen) refetches its laps, stints and
+ * weather once (#99); only the session query polls.
+ */
+export function useRefetchOnFetch(key: number, fetchCount: number | undefined) {
+  const client = useQueryClient();
+  const seen = useRef(fetchCount);
+  useEffect(() => {
+    if (fetchCount === undefined) return;
+    if (seen.current !== undefined && seen.current !== fetchCount)
+      for (const what of ['laps', 'stints', 'weather']) void client.invalidateQueries({ queryKey: [what, key] });
+    seen.current = fetchCount;
+  }, [client, key, fetchCount]);
+}
 
 export const useLaps = (key: number) =>
   useQuery({
@@ -132,14 +152,19 @@ export const useWeather = (key: number) =>
     staleTime: STALE_MS,
   });
 
-/** The rain map's grid and frames (P5c); `live` polls every 60 s, as the server adds a frame every 15 min. */
-export const useRain = (key: number, live = false) =>
-  useQuery({
+/**
+ * The rain map's grid and frames (P5c): polled every 60 s while `live` (the player) or while the grid is `live`
+ * (#99), as the server adds a frame every 15 min.
+ */
+export const rainQuery = (key: number, live = false) =>
+  queryOptions({
     queryKey: ['rain', key],
     queryFn: ({ signal }) => getJson(`/api/v1/sessions/${key}/rain`, Rain, signal),
     staleTime: STALE_MS,
-    refetchInterval: live ? 60_000 : false,
+    refetchInterval: (q) => (live || q.state.data?.grid?.state === 'live' ? 60_000 : false),
   });
+
+export const useRain = (key: number, live = false) => useQuery(rainQuery(key, live));
 
 /** A circuit's OpenStreetMap layers (ODbL, ADR-0008): SVG path data in km, any of them possibly empty. */
 export type OsmLayers = { water: string; coast: string; roads: string };
@@ -175,12 +200,16 @@ export const useStatus = (refetchMs: number | false = false) =>
     refetchInterval: refetchMs,
   });
 
-/** Polled every 30 s, so `/live` picks up a session that starts and the player an `ended_at` that is set. */
-export const useLive = () =>
+/**
+ * Polled every 30 s while `enabled`, so `/live` picks up a session that starts and the player an `ended_at` that is
+ * set; the session page enables it only while its session can be live.
+ */
+export const useLive = (enabled = true) =>
   useQuery({
     queryKey: ['live'],
     queryFn: ({ signal }) => getJson('/api/v1/live', Live, signal),
     refetchInterval: 30_000,
+    enabled,
   });
 
 export const useRecordings = (refetchMs: number | false = false) =>

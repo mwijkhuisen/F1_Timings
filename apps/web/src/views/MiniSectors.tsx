@@ -1,6 +1,7 @@
-import type { Lap } from '@f1/contracts';
+import type { Lap, SessionDetail } from '@f1/contracts';
 import type { ReactNode } from 'react';
-import { type Driver, teamStyle } from '../lib/session.ts';
+import { type Driver, sourceWords, teamStyle } from '../lib/session.ts';
+import { Note } from '../ui/Note.tsx';
 import { Scroll } from '../ui/Scroll.tsx';
 
 // The mini-sector grid with the speed traps (D6): per selected driver, one row per lap.
@@ -68,10 +69,13 @@ function Sector({ name, codes }: { name: string; codes: (number | null)[] }) {
 
 export function MiniSectors({
   sessionType,
+  source,
   laps,
   drivers,
 }: {
   sessionType: string | null;
+  /** The session's source, for the reason behind a missing speed (#99). */
+  source: SessionDetail['session']['source'];
   laps: readonly Lap[];
   drivers: readonly Driver[];
 }) {
@@ -125,7 +129,16 @@ export function MiniSectors({
                       />
                     ))}
                     {SPEEDS.map((s) => (
-                      <td key={s}>{l[s] ?? '—'}</td>
+                      <td key={s}>
+                        {l[s] ?? (
+                          <Note
+                            id={`trap-${d.number}-${l.lap_number}-${s}`}
+                            text={`No speed-trap reading in ${sourceWords(source)}`}
+                          >
+                            —
+                          </Note>
+                        )}
+                      </td>
                     ))}
                   </tr>
                 ))}

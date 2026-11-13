@@ -20,6 +20,8 @@ import { Pending } from '../ui/ErrorView.tsx';
 
 const NO_OUTLINE = 'No circuit outline for this venue.';
 const NOT_FETCHED = 'Rain map not fetched yet.';
+/** A live grid's frames still arrive until date_end + 30 min; after that it waits for the final fetch (A§8). */
+const ARRIVING_MS = 30 * 60_000;
 const RINGS = [1, 2, 3, 4, 5];
 const LEGEND = [
   [1, 'Light 0.1–2.5 mm/h'],
@@ -215,23 +217,39 @@ function RainLoader({
   const onIndex = useCallback((i: number) => setPick(capped && i >= last ? null : i), [capped, last]);
 
   if (!rain.data) return <Pending error={rain.error} />;
+  // A failed grid is never retried (A§8): say so rather than "not fetched yet" (#99).
+  if (grid?.state === 'failed' && frames.length === 0) return <p>Rain map fetch failed: no rain data.</p>;
   if (grid === null || frames.length === 0) return <p>{NOT_FETCHED}</p>;
   if (last < 0) return <p>No rain frame up to this time yet.</p>;
   if (!map.data) return <Pending error={map.error} />;
+  const lastFrame = frames.at(-1)?.date;
+  // The clock is the query's last answer, which a live grid refreshes every 60 s, so the note moves on with it.
+  const arriving = rain.dataUpdatedAt <= Date.parse(session.date_end) + ARRIVING_MS;
+  const note =
+    grid.state === 'failed' && lastFrame
+      ? `Rain data incomplete: the fetch failed after ${fmtHm(Date.parse(lastFrame))}.`
+      : grid.state === 'live' && !capped
+        ? arriving
+          ? 'Frames still arriving (every 15 min).'
+          : 'Rain data provisional: the final frames come 24 h after the end.'
+        : null;
   const index = capped
     ? pick !== null && pick < last
       ? pick
       : last
     : (pick ?? firstFrameAt(frames, session.date_start));
   return (
-    <RainMap
-      grid={grid}
-      frames={visible}
-      outline={map.data.outline}
-      osm={map.data.osm}
-      coarse={coarse}
-      index={index}
-      onIndex={onIndex}
-    />
+    <>
+      {note && <p>{note}</p>}
+      <RainMap
+        grid={grid}
+        frames={visible}
+        outline={map.data.outline}
+        osm={map.data.osm}
+        coarse={coarse}
+        index={index}
+        onIndex={onIndex}
+      />
+    </>
   );
 }

@@ -285,7 +285,14 @@ describe('the tower', () => {
 
   it('gives every note a unique id', () => {
     const ids = [...html.matchAll(/ id="([^"]+)"/g)].map(([, id]) => id);
-    expect(ids).toEqual(['tower-int-1', 'tower-gap-4', 'tower-int-4']);
+    expect(ids).toEqual(['tower-int-1', 'tower-tyre-3', 'tower-gap-4', 'tower-int-4']);
+  });
+
+  it('shows — with "No stint in the feed" behind a tap for a driver without a stint', () => {
+    expect(row('CCC')).toContain(
+      '<td><button type="button" class="note" popoverTarget="tower-tyre-3" aria-describedby="tower-tyre-3" ' +
+        'title="No stint in the feed">—</button><div popover="auto" id="tower-tyre-3" class="pop">No stint in the feed</div></td>',
+    );
   });
 
   it('shows the mini-sector legend above its scroll box', () => {

@@ -1,4 +1,4 @@
-import type { Lap, SessionDetail, Weather } from '@f1/contracts';
+import type { Lap, Weather } from '@f1/contracts';
 import { fmtHm } from './time.ts';
 
 // The Weather tab's numbers (P5a, A§13), pure. Rows are the station's samples (about one a minute), every row OpenF1
@@ -119,25 +119,6 @@ export function leaderLap(
     if (best === null || l.lap_number > best) best = l.lap_number;
   }
   return best;
-}
-
-const DAY_MS = 24 * 3_600_000;
-
-/**
- * What the Weather tab says without rows (A§13). After its first fetch a session is `fetched` or `due` only until
- * date_end + 24 h (A§8), so one past that is queued for a new fetch: the P5a re-queue, or a retry. `failed` and `final`
- * have been fetched (or given up on), so OpenF1 has none.
- */
-export function noWeatherText(
-  s: Pick<SessionDetail['session'], 'ingest_state' | 'is_cancelled' | 'date_end'>,
-  now: number,
-): string {
-  if (s.is_cancelled) return 'No weather: the session was cancelled.';
-  const queued = s.ingest_state === 'fetched' || s.ingest_state === 'due';
-  if (queued && now > Date.parse(s.date_end) + DAY_MS) return 'Weather is queued for a new fetch; check back later.';
-  if (s.ingest_state === 'scheduled' || s.ingest_state === 'due')
-    return 'Weather arrives with the laps, about 35 min after the session ends.';
-  return 'No weather in the OpenF1 data.';
 }
 
 /** "24.1–27.3", or one value when both ends read the same at that precision. */

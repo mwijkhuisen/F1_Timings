@@ -50,7 +50,19 @@ const MeetingFields = {
 export const Season = z.array(z.strictObject({ ...MeetingFields, sessions: z.array(SeasonSession) }));
 
 export const SessionDetail = z.strictObject({
-  session: z.strictObject({ ...SeasonSession.shape, meeting_key: int }),
+  // #99: why data is missing. `last_error` is the DDL's CHECK list (A§8), so no other text reaches the page.
+  session: z.strictObject({
+    ...SeasonSession.shape,
+    meeting_key: int,
+    source: z.enum(['openf1', 'f1-archive', 'f1-live', 'jolpica']),
+    fetch_count: int,
+    fail_count: int,
+    last_error: z
+      .string()
+      .regex(/^(http_\d{3}|rate_limited|timeout|network|schema|empty|db|unknown)$/)
+      .nullable(),
+    next_fetch_at: date.nullable(),
+  }),
   meeting: z.strictObject({ ...MeetingFields, year: int }),
   drivers: z.array(
     z.strictObject({

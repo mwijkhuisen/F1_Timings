@@ -11,6 +11,7 @@ import { fmtClock } from '../src/lib/time.ts';
 import { Live, Replay } from '../src/views/Live.tsx';
 import { Player, type PlayerRecording } from '../src/views/Player.tsx';
 import { raceState } from './feed-state.ts';
+import { fetched } from './laps.ts';
 
 // `view` (a zod parse of a topic) counts what the tower, the pit wall and the status series derive from the state.
 vi.mock('@f1/contracts', async (load) => {
@@ -593,6 +594,8 @@ const detail = SessionDetail.parse({
     date_end: '2026-10-25T22:00:00.000Z',
     ingest_state: 'scheduled',
     is_cancelled: false,
+    ...fetched,
+    fetch_count: 0,
   },
   meeting: {
     meeting_key: 1300,
