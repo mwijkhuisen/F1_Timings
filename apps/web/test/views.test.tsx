@@ -234,6 +234,9 @@ describe('the status panel', () => {
             },
           ],
           recorder: r && { ...recorder, ...r },
+          ingest: null,
+          rain: { states: { live: 0, final: 0, failed: 0 }, failed: [] },
+          rc_unmatched: [],
         })}
       />,
     );
@@ -310,6 +313,9 @@ describe('the recorder warnings on /live', () => {
       cancelled: 0,
       failed: [],
       recorder: r,
+      ingest: null,
+      rain: { states: { live: 0, final: 0, failed: 0 }, failed: [] },
+      rc_unmatched: [],
     }).recorder;
   const base = {
     state: 'idle',

@@ -1,3 +1,4 @@
+import { isUnmatched } from '@f1/contracts';
 import { Cron } from 'croner';
 import { type Insertable, type Kysely, sql, type Transaction } from 'kysely';
 import type { Logger } from 'pino';
@@ -296,7 +297,12 @@ export async function processSession(deps: Deps, key: number, refetch = false): 
     return { ok: false, error: 'empty' };
   }
   const counts = Object.fromEntries(Object.entries(rows).map(([table, list]) => [table, list.length]));
-  log.info(line({ state: done.next.ingest_state, rows: counts, skipped, rules, merge: done.merge }), 'session');
+  // Only a race gets bands: the period-like rows that match no form (#105), so a rewording shows in the log.
+  const rc_unmatched = type === 'Race' ? { rc_unmatched: rows.race_control.filter(isUnmatched).length } : {};
+  log.info(
+    line({ state: done.next.ingest_state, rows: counts, skipped, rules, merge: done.merge, ...rc_unmatched }),
+    'session',
+  );
   return { ok: true, value: done.next.ingest_state };
 }
 

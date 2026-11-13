@@ -1,7 +1,7 @@
 import { stat } from 'node:fs/promises';
 import { join } from 'node:path';
 import { setTimeout as sleep } from 'node:timers/promises';
-import { type Rain, REVISION, type Seasons, type Status, type Stints } from '@f1/contracts';
+import { isUnmatched, PERIOD_LIKE, type Rain, REVISION, type Seasons, type Status, type Stints } from '@f1/contracts';
 import { type Context, Hono, type MiddlewareHandler } from 'hono';
 import { streamSSE } from 'hono/streaming';
 import { type Kysely, sql } from 'kysely';
@@ -411,7 +411,75 @@ export function createApp({
       ])
       .executeTakeFirst();
     const recorder = row && { ...row, stale: Date.now() - row.updated_at.getTime() > STALE_MS };
-    const body = { revision, states, cancelled, failed, recorder: recorder ?? null };
+    const ingestRow = await db.selectFrom('ingest_status').selectAll().executeTakeFirst();
+    const ingest = ingestRow && {
+      last_sync_at: ingestRow.last_sync_at,
+      live_wait: ingestRow.live_wait,
+      last_tick_at: ingestRow.last_tick_at,
+      stale: Date.now() - ingestRow.last_tick_at.getTime() > STALE_MS,
+    };
+    const rainStates: Status['rain']['states'] = { live: 0, final: 0, failed: 0 };
+    const rainCounts = await db
+      .selectFrom('rain_grid')
+      .select(['state', sql<number>`count(*)::int`.as('n')])
+      .groupBy('state')
+      .execute();
+    for (const { state, n } of rainCounts) if (state in rainStates) rainStates[state as keyof typeof rainStates] = n;
+    const rainFailed = await db
+      .selectFrom('rain_grid as g')
+      .innerJoin('session as s', 's.session_key', 'g.session_key')
+      .innerJoin('meeting as m', 'm.meeting_key', 's.meeting_key')
+      .select([
+        's.session_key',
+        'm.year',
+        'm.name as meeting_name',
+        's.name as session_name',
+        'g.fail_count',
+        'g.last_error',
+        'g.next_fetch_at',
+      ])
+      .where('g.fail_count', '>', 0)
+      .orderBy('s.date_start', 'desc')
+      .orderBy('s.session_key')
+      .execute();
+    // Computed on read (A§6.1): the period-like rows of races, narrowed in SQL, then the forms in TS.
+    const period = await db
+      .selectFrom('race_control as r')
+      .innerJoin('session as s', 's.session_key', 'r.session_key')
+      .innerJoin('meeting as m', 'm.meeting_key', 's.meeting_key')
+      .select([
+        's.session_key',
+        'm.year',
+        'm.name as meeting_name',
+        's.name as session_name',
+        's.date_start',
+        'r.message',
+        'r.flag',
+      ])
+      .where('s.type', '=', 'Race')
+      .where('s.is_cancelled', '=', false)
+      .where('r.message', '~', PERIOD_LIKE.source)
+      .execute();
+    const unmatched = new Map<number, Status['rc_unmatched'][number] & { date_start: Date }>();
+    for (const { date_start, message, flag, ...session } of period) {
+      if (!isUnmatched({ message, flag })) continue;
+      const found = unmatched.get(session.session_key);
+      if (found) found.rows++;
+      else unmatched.set(session.session_key, { ...session, rows: 1, date_start });
+    }
+    const rc_unmatched = [...unmatched.values()]
+      .sort((a, b) => b.date_start.getTime() - a.date_start.getTime() || a.session_key - b.session_key)
+      .map(({ date_start, ...item }) => item);
+    const body = {
+      revision,
+      states,
+      cancelled,
+      failed,
+      recorder: recorder ?? null,
+      ingest: ingest ?? null,
+      rain: { states: rainStates, failed: rainFailed },
+      rc_unmatched,
+    };
     return c.json(body, 200, NO_STORE);
   });
 

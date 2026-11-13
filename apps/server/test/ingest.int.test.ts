@@ -599,6 +599,29 @@ describe('ingest (fixtures through msw, f1_ingest login)', { timeout: 120_000 },
     expect(await processSession(deps, 999_999, true)).toEqual({ ok: false, error: 'unknown_session' });
   });
 
+  it('a Race logs rc_unmatched: the period-like rows that match no form (a 2027 wording); another type logs none', async () => {
+    const drift = [
+      ...(raw('race_control-normal') as Record<string, unknown>[]),
+      // 2027-style: no form matches. A stewards' note and a known form are not counted.
+      ...['SAFETY CAR IN', 'UNDER SAFETY CAR INCIDENT NOTED', 'SAFETY CAR DEPLOYED'].map((message) => ({
+        ...(raw('race_control-normal') as Record<string, unknown>[])[0],
+        flag: null,
+        message,
+      })),
+    ];
+    const lastLine = () => JSON.parse(lines.at(-1) ?? '{}');
+    openf1((endpoint, key) => (endpoint === 'race_control' && key === 11388 ? HttpResponse.json(drift) : undefined));
+    expect(await processSession(deps, 11388, true)).toEqual({ ok: true, value: 'final' });
+    expect(lastLine()).toMatchObject({ session_key: 11388, rc_unmatched: 1 });
+    openf1((endpoint, key) => (endpoint === 'race_control' && key === 11392 ? HttpResponse.json(drift) : undefined));
+    expect(await processSession(deps, 11392, true)).toEqual({ ok: true, value: 'final' });
+    expect(lastLine()).toMatchObject({ session_key: 11392 });
+    expect(lastLine()).not.toHaveProperty('rc_unmatched');
+    openf1();
+    expect(await processSession(deps, 11388, true)).toEqual({ ok: true, value: 'final' });
+    expect(lastLine().rc_unmatched).toBe(0); // the fixture's own rows all match a form or a note
+  });
+
   it('last_error takes every D5 code through the CHECK; the 9th failure in a row marks the session failed and pings /fail once', async () => {
     const set = (code: string) =>
       sql`UPDATE session SET last_error = ${code} WHERE session_key = ${EMPTY}`.execute(db).then(
