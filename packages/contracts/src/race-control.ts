@@ -24,11 +24,12 @@ export function formOf(row: Row): Form | null {
  */
 export const PERIOD_LIKE = /SAFETY CAR|VSC|RED FLAG|RESUME|SUSPENDED|(^|[^A-Z])SC([^A-Z]|$)/;
 /**
- * Rows that mention a period without being one, in two halves: stewards' notes (INCIDENT to INFRINGEMENT), then the
- * known procedural wording of a safety-car start or restart (D4 of #105).
+ * Rows that mention a period without being one, in two halves: stewards' notes ("INCIDENT INVOLVING CAR(S) …",
+ * "FIA STEWARDS: …"; a period line that merely mentions an incident still counts), then the known procedural wording
+ * of a safety-car start or restart (D4 of #105).
  */
 export const IGNORED =
-  /INCIDENT|STEWARDS|INFRINGEMENT|LIGHTS (ON|OFF)|OVERTAKE THE SAFETY CAR|THROUGH THE PIT LANE|FORMATION LAP|START\/FINISH STRAIGHT|WILL ENTER PITS|START BEHIND THE SAFETY CAR|WILL STAY OUT|COVERS ON|STARTING PROCEDURE SUSPENDED/;
+  /INCIDENT INVOLVING|STEWARDS|LIGHTS (ON|OFF)|OVERTAKE THE SAFETY CAR|THROUGH THE PIT LANE|FORMATION LAP|START\/FINISH STRAIGHT|WILL ENTER PITS|START BEHIND THE SAFETY CAR|WILL STAY OUT|COVERS ON|STARTING PROCEDURE SUSPENDED/;
 
 /** A period-like row that matches no form and is ignored (a note or procedure): a wording the bands would miss. */
 export const isUnmatched = (row: Row): boolean => {

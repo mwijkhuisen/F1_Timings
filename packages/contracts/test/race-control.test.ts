@@ -12,6 +12,8 @@ test('isUnmatched: a period-like message with no form and no ignored wording', (
     'SC DEPLOYED',
     'VIRTUAL SC ENDING',
     'SESSION SUSPENDED',
+    'THE SAFETY CAR DEPLOYED - INCIDENT AT TURN 4', // a reworded period line that merely mentions an incident
+    'SAFETY CAR IN, INFRINGEMENT CAR 4',
   ])
     expect(isUnmatched(row(m)), m).toBe(true);
 });
@@ -27,9 +29,11 @@ test('isUnmatched: a known form, an unrelated message and a null are not counted
 
 // One real wording per ignored term (D4); all but the covers line are period-like with no form, so only IGNORED keeps them out.
 test.each([
-  'UNDER SAFETY CAR INCIDENT NOTED',
-  'STEWARDS: SAFETY CAR PROCEDURE',
-  'SAFETY CAR INFRINGEMENT CAR 4',
+  'INCIDENT INVOLVING CAR 4 (SAFETY CAR) NOTED',
+  'TURN 4 INCIDENT INVOLVING CARS 4, 81 UNDER SAFETY CAR NOTED',
+  'PIT EXIT INCIDENT INVOLVING CAR 4 (SAFETY CAR) NOTED',
+  'CORRECTION: INCIDENT INVOLVING CAR 4 (SAFETY CAR) NOTED',
+  'FIA STEWARDS: SAFETY CAR PROCEDURE',
   'SAFETY CAR LIGHTS ON',
   'SAFETY CAR LIGHTS OFF',
   'ALL CARS MAY OVERTAKE THE SAFETY CAR',
@@ -48,6 +52,10 @@ test.each([
 ])('isUnmatched: ignores the procedural wording %s', (m) => {
   expect(IGNORED.test(m), m).toBe(true);
   expect(isUnmatched(row(m)), m).toBe(false);
+});
+
+test('a period line that mentions an incident is not a stewards note', () => {
+  expect(IGNORED.test('SAFETY CAR DEPLOYED - INCIDENT AT TURN 4')).toBe(false);
 });
 
 test('SC counts as a word: SC DEPLOYED and VIRTUAL SC ENDING are period-like, MISCELLANEOUS and DISC are not', () => {

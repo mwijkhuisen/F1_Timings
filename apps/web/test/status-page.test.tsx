@@ -46,6 +46,7 @@ afterEach(() => {
 
 it('asks for /api/v1/status once at mount and again after 60 s', async () => {
   server.use(http.get('*/api/v1/status', () => HttpResponse.json(body)));
+  const mounted = Date.now(); // the interval starts at mount; vi.waitFor spends fake time too
   root.render(
     <QueryClientProvider client={client}>
       <Status />
@@ -53,6 +54,8 @@ it('asks for /api/v1/status once at mount and again after 60 s', async () => {
   );
   await vi.waitFor(() => expect(host.querySelector('h1')?.textContent).toBe('Status'));
   expect(requests).toBe(1);
-  await vi.advanceTimersByTimeAsync(60_000);
+  await vi.advanceTimersByTimeAsync(59_999 - (Date.now() - mounted));
+  expect(requests).toBe(1);
+  await vi.advanceTimersByTimeAsync(1);
   await vi.waitFor(() => expect(requests).toBe(2));
 });

@@ -16,6 +16,9 @@ const WARNINGS = {
   disk_low: 'Less than 5 GB free for recordings.',
 };
 
+/** A link needs text: a session without a name reads "Session <key>". */
+const named = (name: string | null, key: number) => name ?? `Session ${key}`;
+
 const at = (iso: string | null) => (iso === null ? '—' : fmtInstant(iso));
 
 /** The recorder's warning and its stale notice (also shown on /live). */
@@ -69,7 +72,7 @@ function FailedTable({ rows, view, label }: { rows: Failed; view: 'laps' | 'weat
               <td>{f.year}</td>
               <td>{f.meeting_name}</td>
               <td>
-                <Link to={`/${f.year}/0/${f.session_key}/${view}`}>{f.session_name}</Link>
+                <Link to={`/${f.year}/0/${f.session_key}/${view}`}>{named(f.session_name, f.session_key)}</Link>
               </td>
               <td>{f.fail_count}</td>
               <td>{f.last_error}</td>
@@ -144,7 +147,7 @@ export function StatusPanel({ status }: { status: StatusData }) {
                   <td>{r.year}</td>
                   <td>{r.meeting_name}</td>
                   <td>
-                    <Link to={`/${r.year}/0/${r.session_key}/laps`}>{r.session_name}</Link>
+                    <Link to={`/${r.year}/0/${r.session_key}/laps`}>{named(r.session_name, r.session_key)}</Link>
                   </td>
                   <td>{r.rows}</td>
                 </tr>

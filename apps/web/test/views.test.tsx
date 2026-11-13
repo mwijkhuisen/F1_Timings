@@ -327,6 +327,25 @@ describe('the status panel', () => {
     );
   });
 
+  it('a session without a name still gives its link the text "Session <key>", in every table', () => {
+    const failed = {
+      session_key: 9967,
+      year: 2026,
+      meeting_name: null,
+      session_name: null,
+      fail_count: 3,
+      last_error: 'http_500',
+      next_fetch_at: null,
+    };
+    const r = render(null, {
+      failed: [failed],
+      rain: { states: { live: 0, final: 0, failed: 1 }, failed: [failed] },
+      rc_unmatched: [{ session_key: 9967, year: 2026, meeting_name: null, session_name: null, rows: 2 }],
+    });
+    for (const view of ['laps', 'weather']) expect(r).toContain(`<a href="/2026/0/9967/${view}">Session 9967</a>`);
+    expect(r.match(/>Session 9967<\/a>/g)).toHaveLength(3);
+  });
+
   it('the recorder: nothing yet', () => {
     expect(html).toContain('<h2>Recorder</h2><p>The recorder has not reported yet.</p>');
     expect(html).not.toContain('role="alert"');

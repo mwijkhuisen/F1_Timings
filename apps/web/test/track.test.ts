@@ -120,7 +120,7 @@ describe('trackPeriods', () => {
       rc(11, 'THE SAFETY CAR DEPLOYED'), // the forms are anchored at the start
       rc(12, 'SAFETY CAR IN'),
       rc(14, 'VSC ENDED'),
-      rc(15, 'CAR 4 (NOR) UNDER SAFETY CAR INCIDENT NOTED - NO FURTHER INVESTIGATION'), // a note
+      rc(15, 'INCIDENT INVOLVING CAR 4 (NOR) NOTED - UNDER SAFETY CAR - NO FURTHER INVESTIGATION'), // a note
       rc(16, 'GREEN LIGHT - PIT EXIT OPEN'),
       rc(17, 'SC DEPLOYED'), // SC is a word now
     ];
