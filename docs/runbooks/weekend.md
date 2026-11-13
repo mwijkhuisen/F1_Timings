@@ -33,8 +33,8 @@ Do this by Thursday evening, outside a session.
 
 ## During a session
 
-- `/status` shows `recording` (`connecting` shows until the first subscribe and during a reconnect) and the session name. The recorder connects 60 minutes before the session's `date_start`; it stops at `Ends` + 30 minutes, or at `date_end` + 3 h at the latest (A§11.2).
-- The logs hold fixed codes only; reconnects (`feed_socket`) are normal; F1 closed the race connections about hourly (A§11.2):
+- `/status` shows `recording` (`connecting` shows until the first subscribe and during a reconnect) and the session name. The recorder connects 60 minutes before the session's `date_start`; it stops at `Ends` + 30 minutes, or at `date_end` + 3 h at the latest (A§11.2). When the next session's lead comes first (2.5 h gaps: FP1 → FP2, FP3 → Q), it stops there and logs `handover`, then the next session starts.
+- The logs hold fixed codes only; reconnects (`feed_socket`) are normal; F1 closed the race connections about hourly (A§11.2). One or two `feed_timeout` lines in the few minutes after `Ends` are normal too: the feed goes silent there, and the recorder reconnects (A§11.1):
 
   ```bash
   sudo docker logs --since 10m f1-live-1

@@ -61,7 +61,14 @@ export type OnFeed = (topic: string, payload: unknown, ts: string, receivedAt: n
 export type ConnectOptions = {
   base?: string;
   pingMs?: number;
+  /** No frame at all for this long ends the connection: a socket or an upgrade that hangs. Pings reset it. */
   idleMs?: number;
+  /**
+   * No feed message for this long, once one came, ends the connection: the server pings on, but the feed has stopped
+   * (A§11.1). Only a feed message resets it. Armed by the first one, because the feed is silent before the session
+   * and after `Ends`.
+   */
+  silentMs?: number;
   /**
    * The Subscribe result, in order with the `onFeed` calls. `subscribed` cannot give that: a promise reaction runs
    * only after every frame of the same network read has gone through `onFeed`, so the full state would land after
@@ -77,12 +84,13 @@ const HTTP_TIMEOUT_MS = 30_000;
 export function connect(
   token: string | undefined,
   onFeed: OnFeed,
-  { base = BASE, pingMs = 15_000, idleMs = 30_000, onSubscribed }: ConnectOptions = {},
+  { base = BASE, pingMs = 15_000, idleMs = 30_000, silentMs = 60_000, onSubscribed }: ConnectOptions = {},
 ): Conn {
   let ws: WebSocket | undefined;
   let done = false;
   let ping: ReturnType<typeof setInterval> | undefined;
   let idle: ReturnType<typeof setTimeout> | undefined;
+  let silence: ReturnType<typeof setTimeout> | undefined;
   let resolveSub: (v: unknown) => void = () => {};
   let rejectSub: (e: Error) => void = () => {};
   let resolveClosed: (c: Closed) => void = () => {};
@@ -100,6 +108,7 @@ export function connect(
     done = true;
     clearInterval(ping);
     clearTimeout(idle);
+    clearTimeout(silence);
     rejectSub(new Error('closed before the subscribe completed'));
     resolveClosed(c);
     ws?.close(1000);
@@ -185,6 +194,8 @@ export function connect(
           handshaken = true;
           send({ type: 1, invocationId: '1', target: 'Subscribe', arguments: [TOPICS] });
         } else if (msg.type === 1 && msg.target === 'feed') {
+          clearTimeout(silence);
+          silence = setTimeout(() => finish({ error: 'feed_timeout' }), silentMs);
           const [topic, payload, ts] = msg.arguments ?? [];
           onFeed(String(topic), payload, String(ts), receivedAt);
         } else if (msg.type === 3 && msg.invocationId === '1') {
@@ -198,7 +209,7 @@ export function connect(
           if (typeof msg.error === 'string') failed = true;
           socket.close(1000);
         }
-        // type 6 (ping) only resets the idle timer.
+        // type 6 (ping) only resets the idle timer, never the silence one.
       }
     });
   })().catch(() => finish({ error: step }));

@@ -9,7 +9,7 @@ import { createFeed } from '../src/live/merge.ts';
 import { parseFeedLine } from '../src/live/read.ts';
 
 // A real local stand-in for the F1 SignalR endpoint: node:http and hand-written WebSocket frames, no dependency. It
-// sends only what a test tells it to, so every stream is finite.
+// sends only what a test tells it to, so every stream is finite; `pingMs` pings end with their socket.
 
 const RS = '\x1e';
 
@@ -77,6 +77,8 @@ export type FakeSignalR = {
     fullState: unknown;
     /** Feed messages that go out in the same TCP write as the Subscribe answer. */
     afterSubscribe?: FeedMessage[];
+    /** After the Subscribe answer, a type-6 ping on that socket every pingMs, until it closes. */
+    pingMs?: number;
   };
   /** The upgrades so far (each one is a real TCP connection). */
   connections(): number;
@@ -235,6 +237,10 @@ export async function startFakeSignalR(): Promise<FakeSignalR> {
             socket.write(
               Buffer.concat([frame(JSON.stringify(answer) + RS), ...feedFrames(behaviour.afterSubscribe ?? [])]),
             );
+            if (behaviour.pingMs !== undefined) {
+              const pings = setInterval(() => socket.write(frame(JSON.stringify({ type: 6 }) + RS)), behaviour.pingMs);
+              socket.on('close', () => clearInterval(pings));
+            }
           }
         }
       }

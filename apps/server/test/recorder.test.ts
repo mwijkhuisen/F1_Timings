@@ -26,6 +26,28 @@ describe('decide', () => {
   ] as const)('%s', (_name, input, expected) => {
     expect(decide({ ...idle, ...input })).toBe(expected);
   });
+
+  // Las Vegas FP1 → FP2 and FP3 → Q: the next session starts 2.5 h after this one's planned end, so its lead
+  // begins at END + 90 min. The handover is at max(next start − 60 min, END) (#94).
+  const after = (gap: number) => ({ dateStart: END + gap, dateEnd: END + gap + 60 * MIN });
+  const vegas = { startedSeen: true, next: after(150 * MIN) };
+  const on = { startedSeen: true };
+  const cancelled = { ...session, cancelled: true };
+  it.each([
+    ['no Ends, just before the next lead', { ...vegas, now: END + 90 * MIN - 1 }, 'continue'],
+    ['no Ends, at the next lead', { ...vegas, now: END + 90 * MIN }, 'handover'],
+    ['a late Ends, at the next lead', { ...vegas, endsAt: END + 70 * MIN, now: END + 90 * MIN }, 'handover'],
+    ['an Ends that ends it before the next lead', { ...vegas, endsAt: END + 55 * MIN, now: END + 85 * MIN }, 'stop'],
+    ['never started, a next lead before the window end', { next: after(70 * MIN), now: END + 10 * MIN }, 'handover'],
+    ['a next lead inside this session: not before its end', { ...on, next: after(30 * MIN), now: END - 1 }, 'continue'],
+    ['a next lead inside this session: at its end', { ...on, next: after(30 * MIN), now: END }, 'handover'],
+    ['back to back: at the end', { ...on, next: after(0), now: END }, 'handover'],
+    ['truly overlapping: old rules, past the end', { ...on, next: after(-30 * MIN), now: END + 90 * MIN }, 'continue'],
+    ['truly overlapping: old rules, the hard stop', { ...on, next: after(-30 * MIN), now: END + 180 * MIN }, 'stop'],
+    ['cancelled wins over the handover', { ...on, session: cancelled, next: after(0), now: END }, 'abort'],
+  ] as const)('with a next session: %s', (_name, input, expected) => {
+    expect(decide({ ...idle, ...input })).toBe(expected);
+  });
 });
 
 describe('isComplete', () => {

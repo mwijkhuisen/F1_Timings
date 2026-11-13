@@ -22,8 +22,9 @@ import {
 
 // The live role (A§11.2): one tick loop that picks the session, keeps the token and reports the status, next to one
 // connection loop per recording that a slow tick cannot hold up. Sequential by construction: while a recording runs,
-// no other starts, so an overlapping session starts late. Logs carry fixed codes and non-secret fields only: never a
-// token, password, cookie, URL, payload, server text or error message.
+// no other starts. The next session's lead ends it (the handover), unless the two windows truly overlap: then the
+// next one starts late. Logs carry fixed codes and non-secret fields only: never a token, password, cookie, URL,
+// payload, server text or error message.
 
 const MINUTE = 60_000;
 const HOUR = 60 * MINUTE;
@@ -43,23 +44,30 @@ const BACKOFF_RESET_MS = 60_000;
 export const LIVE_DIR = '/srv/f1/live';
 
 export type SessionWindow = Session & { cancelled: boolean };
-export type Decision = 'continue' | 'stop' | 'abort';
+/** `handover` is a `stop` that the next session's lead brought forward. */
+export type Decision = 'continue' | 'stop' | 'handover' | 'abort';
 
 /**
  * Once started, a recording waits for `Ends`, up to the hard stop: between qualifying segments the status is `Finished`
- * and `Inactive`, and `Ends` comes once, at the very end (A§11.1). `endsAt` is set only after a `Started`.
+ * and `Inactive`, and `Ends` comes once, at the very end (A§11.1). `endsAt` is set only after a `Started`. A late
+ * `Ends`, or none, never holds it past the next session's lead, nor does the lead cut it before its own planned end;
+ * a next session that starts before that end truly overlaps and starts late (A§11.2).
  */
 export function decide(a: {
   session: SessionWindow;
+  next?: Session | undefined;
   startedSeen: boolean;
   endsAt: number | undefined;
   now: number;
 }): Decision {
-  const { session, now } = a;
+  const { session, next, now } = a;
   if (session.cancelled || now < session.dateStart - LEAD_MS) return 'abort';
   if (a.endsAt !== undefined && now >= a.endsAt + AFTER_MS) return 'stop';
   if (now >= session.dateEnd + HARD_STOP_MS) return 'stop';
   if (now >= session.dateEnd + AFTER_MS && !a.startedSeen) return 'stop';
+  if (next && next.dateStart >= session.dateEnd && now >= Math.max(next.dateStart - LEAD_MS, session.dateEnd)) {
+    return 'handover';
+  }
   return 'continue';
 }
 
@@ -402,6 +410,7 @@ export async function startRecorder(deps: RecorderDeps): Promise<void> {
       log.error({ last_error: 'unknown', cause: codeOf(err) }, 'connection loop failed');
     });
     active = r;
+    next = undefined; // read again next tick, without this one
     log.info({ session_key: s.key }, 'recording started');
   };
 
@@ -439,10 +448,12 @@ export async function startRecorder(deps: RecorderDeps): Promise<void> {
     const status = view(r.rec.state, 'SessionStatus')?.Status;
     if (status === 'Started') r.startedSeen = true;
     else if (status === 'Ends' && r.startedSeen) r.endsAt ??= ms();
-    const decision = decide({ session: r.session, startedSeen: r.startedSeen, endsAt: r.endsAt, now: ms() });
-    if (decision !== 'continue') await end(r, decision);
+    const decision = decide({ session: r.session, next, startedSeen: r.startedSeen, endsAt: r.endsAt, now: ms() });
+    if (decision === 'handover') log.info({ session_key: r.key, next_session_key: next?.key }, 'handover');
+    if (decision !== 'continue') await end(r, decision === 'handover' ? 'stop' : decision);
   };
 
+  /** The active row, and the next session (also while recording: the handover needs it). */
   const readSession = async () => {
     const r = active;
     const columns = ['session_key', 'date_start', 'date_end', 'is_cancelled'] as const;
@@ -452,8 +463,9 @@ export async function startRecorder(deps: RecorderDeps): Promise<void> {
         db.selectFrom('session').select(columns).where('session_key', '=', r.key).executeTakeFirst(),
       );
       if (row) r.session = windowOf(row);
-      return;
     }
+    const skip = [...finished];
+    if (r) skip.push(r.key);
     const found = await dbStep(async () => ({
       row: await db
         .selectFrom('session')
@@ -471,7 +483,7 @@ export async function startRecorder(deps: RecorderDeps): Promise<void> {
             ),
           ),
         )
-        .$if(finished.size > 0, (qb) => qb.where('session_key', 'not in', [...finished]))
+        .$if(skip.length > 0, (qb) => qb.where('session_key', 'not in', skip))
         .orderBy('date_start')
         .orderBy('session_key')
         .limit(1)
