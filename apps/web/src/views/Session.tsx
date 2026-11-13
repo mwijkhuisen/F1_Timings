@@ -9,6 +9,7 @@ import { Compare } from './Compare.tsx';
 import { DriverPicker } from './DriverPicker.tsx';
 import { LapsTab } from './LapsTab.tsx';
 import { MiniSectors } from './MiniSectors.tsx';
+import { Order } from './Order.tsx';
 import { SessionHeadLoader } from './SessionHead.tsx';
 import { StintsTab } from './Stints.tsx';
 import { WeatherTab } from './Weather.tsx';
@@ -21,7 +22,7 @@ const pathOf = (d: SessionDetail, view: View) =>
     view,
   );
 
-// One session: its header, the tabs Laps | Compare | Mini-sectors | Stints | Weather, and the view (D1, D11).
+// One session: its header, the tabs Laps | Order (races and sprints) | Compare | Mini-sectors | Stints | Weather, and the view (D1, D11).
 export function Session({ session, view }: { session: number; view: View }) {
   const detail = useSession(session);
   const d = detail.data;
@@ -66,19 +67,22 @@ export function Session({ session, view }: { session: number; view: View }) {
   }, [picks, chosen, search]);
 
   if (!d) return <Pending error={detail.error} />;
+  const race = d.session.type === 'Race';
   return (
     <>
       <SessionHeadLoader detail={d} view={view} live={live} />
       <nav className="tabs">
-        {(Object.keys(VIEW_LABEL) as View[]).map((v) => (
-          <Link
-            key={v}
-            to={pathOf(d, v) + (v === 'compare' || v === 'minisectors' ? search : '')}
-            aria-current={v === view ? 'page' : undefined}
-          >
-            {VIEW_LABEL[v]}
-          </Link>
-        ))}
+        {(Object.keys(VIEW_LABEL) as View[])
+          .filter((v) => v !== 'order' || race)
+          .map((v) => (
+            <Link
+              key={v}
+              to={pathOf(d, v) + (v === 'compare' || v === 'minisectors' ? search : '')}
+              aria-current={v === view ? 'page' : undefined}
+            >
+              {VIEW_LABEL[v]}
+            </Link>
+          ))}
       </nav>
       {/* No laps, no picker: the reason below instead of an empty pick (#99). */}
       {picks && laps.data && laps.data.length > 0 && (
@@ -93,6 +97,12 @@ export function Session({ session, view }: { session: number; view: View }) {
         <NoData session={d.session} live={live} what={view === 'stints' ? 'stints' : 'laps'} now={now} />
       ) : view === 'laps' ? (
         <LapsTab session={session} detail={d} laps={laps.data} />
+      ) : view === 'order' ? (
+        race ? (
+          <Order drivers={order} laps={laps.data} grid={null} noGrid="Grid not in the OpenF1 data" />
+        ) : (
+          <p className="muted">The running order is for races and sprints.</p>
+        )
       ) : view === 'compare' ? (
         <Compare session={session} detail={d} drivers={selected} laps={laps.data} onReference={setReference} />
       ) : view === 'minisectors' ? (

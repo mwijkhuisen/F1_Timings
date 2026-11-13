@@ -32,12 +32,12 @@ afterEach(() => {
   history.replaceState(null, '', '/');
 });
 
-const render = (url: string) => {
+const render = (url: string, type = 'Race', view: View = 'minisectors') => {
   history.replaceState(null, '', url);
   const client = new QueryClient({ defaultOptions: { queries: { retry: false, staleTime: Infinity } } });
   client.setQueryData(
     ['session', KEY],
-    sessionDetail('Race', 'Race', [
+    sessionDetail(type, type, [
       [1, 'VER'],
       [3, 'RIC'],
       [63, 'RUS'],
@@ -52,11 +52,12 @@ const render = (url: string) => {
   act(() =>
     root.render(
       <QueryClientProvider client={client}>
-        <Session session={KEY} view="minisectors" />
+        <Session session={KEY} view={view} />
       </QueryClientProvider>,
     ),
   );
 };
+const tabs = () => [...host.querySelectorAll('.tabs a')].map((a) => a.textContent);
 const chips = () => [...host.querySelectorAll('.chip')].map((c) => c.firstChild?.textContent);
 const href = (text: string) =>
   [...host.querySelectorAll('.tabs a')].find((a) => a.textContent === text)?.getAttribute('href');
@@ -96,6 +97,21 @@ describe('Session: the picks in ?d=', () => {
     click(host.querySelector('[aria-label="Remove RUS"]'));
     expect(location.search).toBe('?d=3');
     expect(location.hash).toBe('#top');
+  });
+});
+
+describe('Session: the Order tab (races and sprints only)', () => {
+  it('lists Order right after Laps in a race, and shows the running order', () => {
+    render(`${PATH}/order`, 'Race', 'order');
+    expect(tabs()).toEqual(['Laps', 'Order', 'Compare', 'Mini-sectors', 'Stints', 'Weather']);
+    expect(href('Order')).toBe(`${PATH}/order`);
+    expect(host.textContent).toContain('No line crossings in this session');
+  });
+
+  it('hides the tab outside races, and the route says why', () => {
+    render('/2026/1300-mexico-city/11000-practice/order', 'Practice', 'order');
+    expect(tabs()).toEqual(['Laps', 'Compare', 'Mini-sectors', 'Stints', 'Weather']);
+    expect(host.textContent).toContain('The running order is for races and sprints.');
   });
 });
 

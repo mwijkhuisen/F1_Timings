@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
+import { gapFromCrossings } from '../src/lib/crossings.ts';
 import type { Driver } from '../src/lib/session.ts';
-import { gapChartOption, gapFromCrossings } from '../src/views/gap-chart-option.ts';
+import { gapChartOption } from '../src/views/gap-chart-option.ts';
 import type { ChartTokens } from '../src/views/lap-chart-option.ts';
 
 // The gap chart (P4f): gaps from the times each driver crosses the line, never interpolated.

@@ -12,6 +12,7 @@ import {
   useSyncExternalStore,
 } from 'react';
 import { markStale } from '../lib/api.ts';
+import { closingAt } from '../lib/crossings.ts';
 import {
   fastestSoFar,
   fmtLeft,
@@ -39,9 +40,10 @@ import { fmtClock, parseT } from '../lib/time.ts';
 import { KIND_LABEL, KIND_NAME, type Kind } from '../lib/track.ts';
 import { OFFLINE } from '../ui/ErrorView.tsx';
 import { LapTable } from './LapTable.tsx';
+import { Order } from './Order.tsx';
 import { Panel, Strip, useTick } from './PitWall.tsx';
 import { RainMapCard } from './RainMap.tsx';
-import { driverOf, Tower } from './Tower.tsx';
+import { driverOf, gridOf, Tower, towerRows } from './Tower.tsx';
 import { WeatherPanels } from './Weather.tsx';
 
 // The player (A§13): one playback stream at a time; the bar holds the clock line, the seek bar with the marks at or
@@ -51,7 +53,7 @@ import { WeatherPanels } from './Weather.tsx';
 // paused T and closes on its snapshot. Only the clock line, the seek bar, the Back to chips and the strip's LEFT cell
 // (and, on the Weather tab, the rain map) tick each second, from values derived per flush (no state parsing per tick);
 // the tower, the pit wall and everything else derived from the state render on a store flush. The tabs are Tower ·
-// Laps · Weather; the Weather tab shows the feed's weather rows up to T (P5b), redrawn only when a row arrives, and the
+// Laps · Order (races) · Weather; the Weather tab shows the feed's weather rows up to T (P5b), redrawn only when a row arrives, and the
 // rain map's frames up to T (P5c).
 
 /** A SessionDetail whose drivers and results come from the stream: OpenF1 has no drivers during a live session. */
@@ -422,7 +424,7 @@ export function Player({
   const at = open.at;
   const playing = at !== null && !open.still;
   const [seek, setSeek] = useState<number | null>(null); // a pending seek, shown on the bar
-  const [tab, setTab] = useState<'tower' | 'laps' | 'weather'>('tower');
+  const [tab, setTab] = useState<'tower' | 'laps' | 'order' | 'weather'>('tower');
   // The focused driver's number (a tap on the tower's driver cell); page state that the player bar reads.
   const [focus, setFocus] = useState<string | null>(null);
   const [stale, setStale] = useState(false); // an event failed its contract: reload, no retry
@@ -616,15 +618,36 @@ export function Player({
     () => detail && feed && <Laps detail={streamDetail(detail, feed.state)} laps={snap.laps} />,
     [detail, feed, snap.laps],
   );
+  // The series is parsed once per flush; the ticking bar only filters it at T.
+  const series = useMemo(() => (snap.feed ? statusSeries(snap.feed.state) : []), [snap]);
+  // The tower's closing trend (A§13), in a race: the interval's change at the line over 1 and 3 laps, from the crossings
+  // up to the state's T and the SC, VSC and red bands up to it.
+  const trend = useMemo(() => {
+    const feed = snap.feed;
+    if (!feed || view(feed.state, 'SessionInfo')?.Type !== 'Race') return undefined;
+    const bands = markersUpTo(series, feed.t, [lo, Number.POSITIVE_INFINITY]);
+    return closingAt(
+      snap.laps,
+      towerRows(feed.state).map((r) => r.driver.number),
+      feed.t,
+      bands,
+    );
+  }, [snap, series, lo]);
   // The state is mutated in place: what is derived from it is keyed on the snapshot, a new object per store flush.
   const tower = useMemo(() => {
     const s = snap.feed?.state;
     return (
       s && (
-        <Tower state={s} sessionKey={sessionKey} focus={focus} onFocus={(n) => setFocus((f) => (f === n ? null : n))} />
+        <Tower
+          state={s}
+          sessionKey={sessionKey}
+          focus={focus}
+          onFocus={(n) => setFocus((f) => (f === n ? null : n))}
+          trend={trend}
+        />
       )
     );
-  }, [snap, sessionKey, focus]);
+  }, [snap, sessionKey, focus, trend]);
   // The pit wall, once the feed shows this session (as the tower waits): the previous session's chequered flag would
   // otherwise light up.
   const wall = useMemo(() => {
@@ -641,8 +664,29 @@ export function Player({
       fastest: fastestSoFar(s),
     };
   }, [snap, sessionKey]);
-  // The series is parsed once per flush; the ticking bar only filters it at T.
-  const series = useMemo(() => (snap.feed ? statusSeries(snap.feed.state) : []), [snap]);
+  // The tab shown: Order falls back to the Tower when the session is not (or no longer) a race.
+  const shown = tab === 'order' && !wall?.race ? 'tower' : tab;
+  // The running order (races only) from the stream's lap rows up to T, built only on its tab and, as the lap table, only
+  // when the lap rows change (the DriverList and the grid it reads are set before the first lap). Its drivers are the
+  // whole DriverList: the Grid row names a car that never set a lap.
+  const onOrder = shown === 'order';
+  const order = useMemo(() => {
+    const s = feed?.state;
+    return (
+      onOrder &&
+      detail &&
+      s && (
+        <Order
+          drivers={Object.keys(view(s, 'DriverList') ?? {})
+            .filter((n) => /^\d{1,3}$/.test(n))
+            .map((n) => driverOf(view(s, 'DriverList') ?? {}, n))}
+          laps={snap.laps}
+          grid={gridOf(s)}
+          noGrid="No grid position in the feed"
+        />
+      )
+    );
+  }, [onOrder, detail, feed, snap.laps]);
   const focused = useMemo(() => {
     const s = snap.feed?.state;
     return s === undefined || focus === null
@@ -734,22 +778,29 @@ export function Player({
       )}
       {detail && (
         <fieldset className="segmented" aria-label="View">
-          <button type="button" aria-pressed={tab === 'tower'} onClick={() => setTab('tower')}>
+          <button type="button" aria-pressed={shown === 'tower'} onClick={() => setTab('tower')}>
             Tower
           </button>
-          <button type="button" aria-pressed={tab === 'laps'} onClick={() => setTab('laps')}>
+          <button type="button" aria-pressed={shown === 'laps'} onClick={() => setTab('laps')}>
             Laps
           </button>
-          <button type="button" aria-pressed={tab === 'weather'} onClick={() => setTab('weather')}>
+          {wall?.race && (
+            <button type="button" aria-pressed={shown === 'order'} onClick={() => setTab('order')}>
+              Order
+            </button>
+          )}
+          <button type="button" aria-pressed={shown === 'weather'} onClick={() => setTab('weather')}>
             Weather
           </button>
         </fieldset>
       )}
       {!state ? (
         <p className="muted">Connecting…</p>
-      ) : tab === 'laps' && lapTable ? (
+      ) : shown === 'laps' && lapTable ? (
         lapTable
-      ) : tab === 'weather' ? (
+      ) : order ? (
+        order
+      ) : shown === 'weather' ? (
         // Gated as the strip is, so the two agree: nothing from the previous session.
         <>
           {wall && snap.weather.rows.length > 0 ? (

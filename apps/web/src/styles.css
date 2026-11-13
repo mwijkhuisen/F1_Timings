@@ -333,6 +333,56 @@ thead th:first-child {
   z-index: 2;
 }
 
+/* The running order (#115, A§13): the lap number (.ln) is the sticky first column (tbody th), the header row the sticky head;
+   a driver cell is the acronym after its team bar (.drv, so forced colours keep the border), about 50 px wide. Lap 1's
+   places won sit under the acronym. */
+.order {
+  font-size: 15px;
+}
+
+.order .ln {
+  width: 48px;
+  min-width: 48px;
+  text-align: center;
+}
+
+.order td.drv {
+  min-width: 50px;
+  padding: 0 4px 0 6px;
+  text-align: left;
+}
+
+.order .gain {
+  display: block;
+  font-size: 11px;
+  line-height: 1;
+}
+
+.scroll:has(.order) {
+  scroll-padding-left: 56px;
+}
+
+@media (max-width: 600px) {
+  .order {
+    font-size: 13px;
+  }
+
+  .order .ln {
+    width: 40px;
+    min-width: 40px;
+    padding: 0 4px;
+  }
+
+  .order td.drv {
+    min-width: 44px;
+    padding: 0 2px 0 5px;
+  }
+
+  .scroll:has(.order) {
+    scroll-padding-left: 48px;
+  }
+}
+
 /* One label grammar: small, bold, upper case, tracked, muted (table heads, eyebrows, strip labels). */
 thead th,
 .counts dt,
@@ -2544,4 +2594,20 @@ section.rainmap .raintime input[type="range"] {
   .rainbody {
     grid-template-columns: minmax(0, 1fr);
   }
+}
+
+/* The tower's closing trend at the line (#115): ▼ in --fg, ▲, 0.0 and — muted; the words are in .vh. */
+.tower .tr {
+  min-width: 3.4em;
+  font-size: 12px;
+}
+
+/* Compare's pit cycles (#115): one sentence per cycle. */
+.card .cycles {
+  margin: 0;
+  padding-left: 1.2em;
+}
+
+.card .cycles li {
+  margin-bottom: 6px;
 }

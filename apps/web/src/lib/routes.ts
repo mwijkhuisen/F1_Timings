@@ -5,11 +5,12 @@ import { type ComponentProps, createElement, type MouseEvent, useEffect, useMemo
 // canonicalised once the session is loaded). Importable in Node: `window` is
 // touched only inside functions.
 
-export type View = 'laps' | 'compare' | 'minisectors' | 'stints' | 'weather';
+export type View = 'laps' | 'order' | 'compare' | 'minisectors' | 'stints' | 'weather';
 
 /** A view's name on its tab and in the title. */
 export const VIEW_LABEL: Record<View, string> = {
   laps: 'Laps',
+  order: 'Order',
   compare: 'Compare',
   minisectors: 'Mini-sectors',
   stints: 'Stints',
@@ -58,7 +59,7 @@ export function routeOf(pathname: string): Route | null {
   const session = c === undefined ? null : keyOf(c);
   if (meeting === null || session === null) return null;
   if (d === undefined) return { id: 'session', year, meeting, session, view: null };
-  return d === 'laps' || d === 'compare' || d === 'minisectors' || d === 'stints' || d === 'weather'
+  return d === 'laps' || d === 'order' || d === 'compare' || d === 'minisectors' || d === 'stints' || d === 'weather'
     ? { id: 'session', year, meeting, session, view: d }
     : null;
 }
@@ -142,9 +143,19 @@ type Named = { key: number; name: string | null };
 
 const segment = (key: number, name: string) => (name === '' ? `${key}` : `${key}-${name}`);
 
-/** The canonical URL of a session view. Meetings drop a trailing " Grand Prix". */
-export const sessionPath = (year: number, meeting: Named, session: Named, view: View): string =>
-  `/${year}/${segment(meeting.key, slug(meeting.name?.replace(/ Grand Prix$/i, '') ?? null))}/${segment(session.key, slug(session.name))}/${view}`;
+/**
+ * The canonical URL of a session view. Meetings drop a trailing " Grand Prix". A session whose type is known and not a
+ * race (races and sprints are type Race) has no Order tab: `order` there is `laps`.
+ */
+export function sessionPath(
+  year: number,
+  meeting: Named,
+  session: Named & { type?: string | null },
+  view: View,
+): string {
+  const v = view === 'order' && session.type != null && session.type !== 'Race' ? 'laps' : view;
+  return `/${year}/${segment(meeting.key, slug(meeting.name?.replace(/ Grand Prix$/i, '') ?? null))}/${segment(session.key, slug(session.name))}/${v}`;
+}
 
 const D_PARAM = /^\d+(,\d+)*$/;
 

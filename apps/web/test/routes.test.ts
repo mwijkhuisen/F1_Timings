@@ -17,6 +17,10 @@ describe('routeOf', () => {
       { id: 'session', year: 2026, meeting: 1290, session: 9965, view: 'stints' },
     ],
     [
+      '/2026/1290-singapore/9965-race/order',
+      { id: 'session', year: 2026, meeting: 1290, session: 9965, view: 'order' },
+    ],
+    [
       '/2026/1290-singapore/9965-race/compare',
       { id: 'session', year: 2026, meeting: 1290, session: 9965, view: 'compare' },
     ],
@@ -83,6 +87,15 @@ describe('slug and sessionPath', () => {
 
   it('keeps a bare key when there is no name', () => {
     expect(sessionPath(2026, { key: 1, name: null }, { key: 2, name: '' }, 'stints')).toBe('/2026/1/2/stints');
+    // Order only to a race (a sprint is type Race), and kept when the type is unknown.
+    const order = (type?: string) =>
+      sessionPath(2026, { key: 1, name: null }, { key: 2, name: '', ...(type && { type }) }, 'order');
+    expect([order('Race'), order('Practice'), order('Qualifying'), order()]).toEqual([
+      '/2026/1/2/order',
+      '/2026/1/2/laps',
+      '/2026/1/2/laps',
+      '/2026/1/2/order',
+    ]);
   });
 });
 
@@ -95,6 +108,7 @@ describe('titleOf: the title for every route', () => {
     [{ id: 'year', year: 2026 }, '2026 · F1 Timings', '2026 · F1 Timings'],
     [session, '2026 · F1 Timings', 'Mexico City Grand Prix · Race · Laps · F1 Timings'],
     [{ ...session, view: null }, '2026 · F1 Timings', 'Mexico City Grand Prix · Race · Laps · F1 Timings'],
+    [{ ...session, view: 'order' }, '2026 · F1 Timings', 'Mexico City Grand Prix · Race · Order · F1 Timings'],
     [{ ...session, view: 'compare' }, '2026 · F1 Timings', 'Mexico City Grand Prix · Race · Compare · F1 Timings'],
     [
       { ...session, view: 'minisectors' },
