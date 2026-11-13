@@ -13,6 +13,7 @@ import {
 } from '@f1/contracts';
 import { QueryClient, queryOptions, useQuery } from '@tanstack/react-query';
 import { ZodError } from 'zod';
+import { savedSessions } from './saved.ts';
 
 // The P1c API, read through relative paths only. Every answer is parsed with
 // its contract before the UI sees it; anything else is an error state. There
@@ -40,7 +41,9 @@ export const retry = (failures: number, error: unknown): boolean =>
   failures < 1 && !(error instanceof HttpError && error.status < 500) && !(error instanceof ZodError);
 
 export const queryClient = new QueryClient({
-  defaultOptions: { queries: { retry, refetchOnWindowFocus: false } },
+  // 'always': the default 'online' pauses every query after an `offline` event, so it would never reach the service
+  // worker (#121), which decides what answers offline.
+  defaultOptions: { queries: { retry, refetchOnWindowFocus: false, networkMode: 'always' } },
 });
 
 const STALE_MS = 60_000;
@@ -152,6 +155,9 @@ export const useLive = () =>
     queryFn: ({ signal }) => getJson('/api/v1/live', Live, signal),
     refetchInterval: 30_000,
   });
+
+/** The sessions the service worker keeps (#121, D4); `/` asks only once /seasons has failed. */
+export const useSaved = (enabled: boolean) => useQuery({ queryKey: ['saved'], queryFn: savedSessions, enabled });
 
 export const useRecordings = (refetchMs: number | false = false) =>
   useQuery({

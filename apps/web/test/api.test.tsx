@@ -4,7 +4,7 @@ import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, expect, it, onTestFinished, vi } from 'vitest';
 import { ZodError } from 'zod';
 import { server } from '../../../test/msw.setup.ts';
-import { getJson, HttpError, retry } from '../src/lib/api.ts';
+import { getJson, HttpError, queryClient, retry } from '../src/lib/api.ts';
 import { ErrorView, errorText } from '../src/ui/ErrorView.tsx';
 
 // D6: every answer is parsed with its contract; the error view never echoes a body or a ZodError message.
@@ -32,6 +32,13 @@ describe('getJson', () => {
   it("turns a redirect (Access's login page) into a TypeError", async () => {
     server.use(http.get(url, () => HttpResponse.redirect('http://web.test/login', 302)));
     await expect(get()).rejects.toBeInstanceOf(TypeError);
+  });
+});
+
+describe('queryClient', () => {
+  // #121: the default 'online' pauses a query after an `offline` event; the service worker decides offline.
+  it("runs queries whatever the browser's online state", () => {
+    expect(queryClient.getDefaultOptions().queries?.networkMode).toBe('always');
   });
 });
 

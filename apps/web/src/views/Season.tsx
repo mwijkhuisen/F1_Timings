@@ -1,9 +1,8 @@
 import type { Live, Recordings, Season as SeasonData } from '@f1/contracts';
-import { useQuery } from '@tanstack/react-query';
 import { useEffect, useState } from 'react';
-import { useLive, useRecordings, useSeason, useSeasons } from '../lib/api.ts';
+import { useLive, useRecordings, useSaved, useSeason, useSeasons } from '../lib/api.ts';
 import { Link, replace, sessionPath } from '../lib/routes.ts';
-import { type Saved, savedSessions } from '../lib/saved.ts';
+import type { Saved } from '../lib/saved.ts';
 import {
   type Meeting,
   nextSession,
@@ -250,7 +249,7 @@ export function SavedList({ saved }: { saved: readonly Saved[] }) {
 export function Start() {
   const seasons = useSeasons();
   const live = useLive();
-  const saved = useQuery({ queryKey: ['saved'], queryFn: savedSessions, enabled: seasons.isError });
+  const saved = useSaved(seasons.isError);
   const liveData = live.isError ? null : live.data;
   const path = seasons.data && liveData !== undefined ? startPath(liveData, seasons.data) : undefined;
   useEffect(() => {
