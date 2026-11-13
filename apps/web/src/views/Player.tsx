@@ -365,6 +365,33 @@ type Open = { at: number | 'live' | null; still?: true };
 
 export type PlayerRecording = { id: number; started_at: string; ended_at: string | null };
 
+/** The screen stays on while the player plays and the page is visible (A§13); a refusal or no API changes nothing. */
+function useWakeLock(on: boolean) {
+  useEffect(() => {
+    if (!on || !navigator.wakeLock) return;
+    let lock: WakeLockSentinel | null = null;
+    let gone = false;
+    const request = async () => {
+      if (document.visibilityState !== 'visible') return;
+      try {
+        const l = await navigator.wakeLock.request('screen');
+        // A second grant while one is held (two quick requests) or after cleanup is let go at once.
+        if (gone || (lock && !lock.released)) void l.release().catch(() => {});
+        else lock = l;
+      } catch {
+        // refused (Low Power mode, not visible): the screen may lock, the player plays on
+      }
+    };
+    void request();
+    document.addEventListener('visibilitychange', request);
+    return () => {
+      gone = true;
+      document.removeEventListener('visibilitychange', request);
+      lock?.release().catch(() => {});
+    };
+  }, [on]);
+}
+
 export function Player({
   recording,
   sessionKey,
@@ -392,6 +419,7 @@ export function Player({
   const [open, setOpen] = useState<Open>(() => (resumed === null ? { at: start } : { at: resumed, still: true }));
   const at = open.at;
   const playing = at !== null && !open.still;
+  useWakeLock(playing);
   const [seek, setSeek] = useState<number | null>(null); // a pending seek, shown on the bar
   const [tab, setTab] = useState<'tower' | 'laps' | 'weather'>('tower');
   // The focused driver's number (a tap on the tower's driver cell); page state that the player bar reads.
