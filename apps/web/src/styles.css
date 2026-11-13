@@ -1006,6 +1006,16 @@ header .links {
   background: var(--live);
 }
 
+/* The header's Status warning (#100, D1): the border carries the colour, the word the meaning. */
+.pill.warn {
+  border-color: var(--amber);
+  color: var(--fg);
+}
+
+.links a .pill.warn {
+  margin-left: 6px;
+}
+
 /* The bar's head (#77): the clock line, then Play/Pause (minimized only) and the Controls toggle at the right end. The
    rest of the bar is a `display: contents` wrapper, so its controls stay items of the bar's grid; minimized it is empty
    and hidden. */

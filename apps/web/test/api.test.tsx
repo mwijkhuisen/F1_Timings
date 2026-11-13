@@ -52,8 +52,9 @@ describe('getJson', () => {
       .map((e) => join(e.parentPath, e.name))
       .filter((f) => /\bfetch\(/.test(readFileSync(f, 'utf8')))
       .map((f) => f.slice(src.length + 1));
-    // The worker (#121) only passes the page's own requests on and fetches its shell: it builds no API URL.
-    expect(fetching).toEqual(['lib/api.ts', 'sw/handlers.ts', 'sw/main.ts']);
+    // The worker (#121) only passes the page's own requests on and fetches its shell: it builds no API URL. The
+    // player's failure probe (#100) is a HEAD that reads no body.
+    expect(fetching).toEqual(['lib/api.ts', 'lib/stream.ts', 'sw/handlers.ts', 'sw/main.ts']);
   });
 
   // The stale flag is module state that never resets: each of these gets a fresh copy of the modules.

@@ -1,7 +1,7 @@
 import { useEffect } from 'react';
 import { useRecordings, useSession } from './lib/api.ts';
 import { type Route, replace, titleOf, useHeadingFocus, useRoute, useTitle } from './lib/routes.ts';
-import { NewVersion, NotFound } from './ui/ErrorView.tsx';
+import { ErrorBoundary, NewVersion, NotFound } from './ui/ErrorView.tsx';
 import { Header } from './views/Header.tsx';
 import { Live, Replay, Replays } from './views/Live.tsx';
 import { Season, Start } from './views/Season.tsx';
@@ -71,7 +71,11 @@ export function App() {
       <Header route={route} />
       <main>
         <NewVersion />
-        <Page route={route} />
+        {/* Reset by a new path, without a remount (a session's tab switch keeps its page); the header stays outside
+            (main.tsx holds the last net). */}
+        <ErrorBoundary reset={location.pathname}>
+          <Page route={route} />
+        </ErrorBoundary>
       </main>
     </>
   );

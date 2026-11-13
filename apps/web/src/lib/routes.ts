@@ -173,6 +173,26 @@ export function parseD(param: string | null, drivers: readonly { number: number 
 /** The value of `?d=`: the numbers in pick order, joined with ','. */
 export const formatD = (numbers: readonly number[]): string => numbers.join(',');
 
+export type PlayerTab = 'tower' | 'laps' | 'order' | 'weather';
+
+/** `?tab=` (#100): laps, order or weather; anything else, or none, is the tower. */
+export const parseTab = (param: string | null): PlayerTab =>
+  param === 'laps' || param === 'order' || param === 'weather' ? param : 'tower';
+
+const T_PARAM = /^\d{2}:\d{2}:\d{2}$/;
+
+/**
+ * The replay's query with `t` or `tab` set and the other kept: `t` first, kept only in HH:mm:ss form, ':' unescaped;
+ * the tower is left out. '' when neither is left.
+ */
+export function replayQuery(search: string, set: { t?: string; tab?: PlayerTab }): string {
+  const q = new URLSearchParams(search);
+  const t = set.t ?? q.get('t');
+  const tab = set.tab ?? parseTab(q.get('tab'));
+  const parts = [t !== null && T_PARAM.test(t) && `t=${t}`, tab !== 'tower' && `tab=${tab}`].filter(Boolean);
+  return parts.length > 0 ? `?${parts.join('&')}` : '';
+}
+
 const NAVIGATE = 'f1:navigate';
 
 /** Set by `navigate()` to a new path, cleared once `useHeadingFocus` has focused the h1 or by back/forward (A§13). */

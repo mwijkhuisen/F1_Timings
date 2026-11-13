@@ -1,18 +1,31 @@
-import type { Season, Seasons } from '@f1/contracts';
+import type { Live, Recordings, Season, Seasons } from '@f1/contracts';
 import { useQuery } from '@tanstack/react-query';
 import { useSyncExternalStore } from 'react';
-import { seasonQuery, useSeasons } from '../lib/api.ts';
+import { seasonQuery, useLive, useRecordings, useSeasons, useStatus } from '../lib/api.ts';
 import { Link, type Route, sessionPath } from '../lib/routes.ts';
 import { meetingTarget, neighbours, type Slot } from '../lib/season.ts';
 import { currentTheme, setTheme, subscribeTheme, type Theme } from '../lib/theme.ts';
 import { Cancelled } from '../ui/Cancelled.tsx';
 import { Menu } from '../ui/Menu.tsx';
+import { recorderWarning } from './Status.tsx';
 
 // The header (A§13): the session switcher (‹ year / meeting / session ›), Live · Replays · Status and the moon
-// (the dark theme on or off). It reads /seasons and the route's season only, never a session.
+// (the dark theme on or off). It reads /seasons, the route's season, /live (every 30 s) and /status (every 60 s), and
+// on the player routes /recordings, for the player's session in the switcher (#100); never a session itself.
 
 const yearOf = (route: Route | null): number | null =>
   route?.id === 'year' || route?.id === 'session' ? route.year : null;
+
+/** The player's session (#100): the replay's recording, or the one `/live` names; null on any other route. */
+export function playerSession(
+  route: Route | null,
+  live: Live | undefined,
+  recordings: Recordings | undefined,
+): { year: number; session: number } | null {
+  const id = route?.id === 'replay' ? route.recording : route?.id === 'live' ? live?.recording?.id : undefined;
+  const row = id === undefined ? undefined : recordings?.find((r) => r.id === id);
+  return row ? { year: row.year, session: row.session_key } : null;
+}
 
 const short = (name: string | null) => name?.replace(/ Grand Prix$/i, '') ?? '—';
 
@@ -28,15 +41,24 @@ export function HeaderView({
   season,
   theme,
   onTheme,
+  player = null,
+  live = false,
+  warning = null,
 }: {
   route: Route | null;
   seasons: Seasons | undefined;
   season: Season | undefined;
   theme: Theme;
   onTheme: (t: Theme) => void;
+  /** The player's session on `/live` and `/replay/:id` (`playerSession`). */
+  player?: { year: number; session: number } | null;
+  /** `/live` names an open recording: the Live link is the red pill (D1). */
+  live?: boolean;
+  /** The recorder's warning sentence (`recorderWarning`): the Status link gets the amber pill (D1). */
+  warning?: string | null;
 }) {
-  const year = yearOf(route);
-  const at = route?.id === 'session' ? route : null;
+  const year = yearOf(route) ?? player?.year ?? null;
+  const at = route?.id === 'session' ? route : player && { session: player.session, view: null };
   const view = at?.view ?? 'laps';
   const meeting = at && season?.find((m) => m.sessions.some((s) => s.session_key === at.session));
   const current = meeting?.sessions.find((s) => s.session_key === at?.session);
@@ -110,13 +132,21 @@ export function HeaderView({
       </nav>
       <nav className="links" aria-label="Pages">
         <Link to="/live" aria-current={page('live')}>
-          Live
+          {live ? (
+            <span className="pill live">
+              <span className="dot" aria-hidden="true" />
+              Live<span className="vh">, recording now</span>
+            </span>
+          ) : (
+            'Live'
+          )}
         </Link>
         <Link to="/replay" aria-current={page('replays')}>
           Replays
         </Link>
-        <Link to="/status" aria-current={page('status')}>
+        <Link to="/status" aria-current={page('status')} title={warning ?? undefined}>
           Status
+          {warning && <span className="pill warn">warning</span>}
         </Link>
       </nav>
       <button
@@ -137,7 +167,12 @@ export function HeaderView({
 
 export function Header({ route }: { route: Route | null }) {
   const seasons = useSeasons();
-  const year = yearOf(route);
+  // Their errors are ignored: no pill, no switcher.
+  const live = useLive();
+  const status = useStatus(60_000);
+  const recordings = useRecordings(false, route?.id === 'replay' || route?.id === 'live');
+  const player = playerSession(route, live.data, recordings.data);
+  const year = yearOf(route) ?? player?.year ?? null;
   const season = useQuery({ ...seasonQuery(year ?? 0), enabled: year !== null });
   const theme = useSyncExternalStore(subscribeTheme, currentTheme);
   return (
@@ -147,6 +182,9 @@ export function Header({ route }: { route: Route | null }) {
       season={year === null ? undefined : season.data}
       theme={theme}
       onTheme={setTheme}
+      player={player}
+      live={live.data?.recording?.ended_at === null}
+      warning={recorderWarning(status.data?.recorder ?? null)}
     />
   );
 }

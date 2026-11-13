@@ -1,7 +1,8 @@
 import { Laps, Recordings, SessionDetail, Status, Stints } from '@f1/contracts';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, expect, it } from 'vitest';
-import { Next, RecordingsList } from '../src/views/Live.tsx';
+import { sessionPath } from '../src/lib/routes.ts';
+import { Next, PlayerHead, RecordingsList } from '../src/views/Live.tsx';
 import { RecorderWarnings, StatusPanel } from '../src/views/Status.tsx';
 import { StintBars, stintLayout } from '../src/views/Stints.tsx';
 import { fetched } from './laps.ts';
@@ -475,6 +476,34 @@ describe('the recordings list', () => {
 
   it('says so when there are none', () => {
     expect(renderToStaticMarkup(<RecordingsList recordings={[]} />)).toBe('<p class="muted">No recordings yet.</p>');
+  });
+});
+
+describe('the player head (#100, D2)', () => {
+  const names = { meeting_name: 'Singapore Grand Prix', session_name: 'Race' };
+  const detail = SessionDetail.parse({
+    session: { ...session(9965, 'Race', '2026-10-11T12:00:00.000Z'), meeting_key: 1290, ...fetched },
+    meeting: { ...meeting, meeting_key: 1290, name: 'Singapore Grand Prix', year: 2026 },
+    drivers: [],
+    results: [],
+  });
+
+  it("has the meeting with the session boxed in the h1, and one link to the session's laps", () => {
+    const html = renderToStaticMarkup(<PlayerHead names={names} detail={detail} />);
+    expect(html).toBe(
+      '<div class="head"><h1 tabindex="-1">Singapore Grand Prix <span class="kind">Race</span></h1>' +
+        `<p class="muted"><a href="${sessionPath(2026, { key: 1290, name: 'Singapore Grand Prix' }, { key: 9965, name: 'Race', type: 'Race' }, 'laps')}">Results: laps, compare, stints</a></p></div>`,
+    );
+    expect(html).toContain('href="/2026/1290-singapore/9965-race/laps"');
+  });
+
+  it('has no link until the session loads, and dashes for missing names', () => {
+    expect(renderToStaticMarkup(<PlayerHead names={names} detail={undefined} />)).toBe(
+      '<div class="head"><h1 tabindex="-1">Singapore Grand Prix <span class="kind">Race</span></h1></div>',
+    );
+    expect(
+      renderToStaticMarkup(<PlayerHead names={{ meeting_name: null, session_name: null }} detail={undefined} />),
+    ).toContain('<h1 tabindex="-1">— <span class="kind">—</span></h1>');
   });
 });
 

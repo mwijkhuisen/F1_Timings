@@ -21,12 +21,18 @@ const named = (name: string | null, key: number) => name ?? `Session ${key}`;
 
 const at = (iso: string | null) => (iso === null ? '—' : fmtInstant(iso));
 
+const STALE = 'The recorder has not reported for over 5 minutes.';
+
+/** The header's Status pill text (#100): the recorder's warning, else its stale notice, else null. */
+export const recorderWarning = (r: StatusData['recorder']): string | null =>
+  r?.warning ? WARNINGS[r.warning] : r?.stale ? STALE : null;
+
 /** The recorder's warning and its stale notice (also shown on /live). */
 export function RecorderWarnings({ recorder: r }: { recorder: StatusData['recorder'] }) {
   return (
     <>
       {r?.warning && <p role="alert">{WARNINGS[r.warning]}</p>}
-      {r?.stale && <p role="alert">The recorder has not reported for over 5 minutes.</p>}
+      {r?.stale && <p role="alert">{STALE}</p>}
     </>
   );
 }
