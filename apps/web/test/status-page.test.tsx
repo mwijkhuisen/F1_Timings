@@ -9,6 +9,7 @@ import { Status } from '../src/views/Status.tsx';
 // The status page polls /api/v1/status every 60 s (#105). Date and the intervals are faked; the promises and msw's
 // responses stay real (as in season-page.test.tsx).
 const body = {
+  revision: 'dev',
   states: { scheduled: 0, due: 0, fetched: 0, final: 0, failed: 0 },
   cancelled: 0,
   failed: [],
