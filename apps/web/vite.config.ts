@@ -28,10 +28,13 @@ const worker = (): Plugin => ({
       const file = bundle[name];
       if (file) hash.update(`${name}\0`).update(file.type === 'chunk' ? file.code : file.source);
     }
-    const shell = ['/', ...names.filter((n) => n !== 'sw.js' && /\.(js|css)$/.test(n)).map((n) => `/${n}`)];
-    sw.code = sw.code
-      .replaceAll('__F1_BUILD__', hash.digest('hex').slice(0, 12))
-      .replaceAll('__F1_SHELL__', shell.join(','));
+    const files = names.filter((n) => n !== 'sw.js' && /\.(js|css)$/.test(n)).map((n) => `/${n}`);
+    // The list goes into a string literal, comma-joined: nothing but plain path characters.
+    for (const f of files) if (!/^\/[\w./-]+$/.test(f)) throw new Error(`shell file ${f}`);
+    const shell = ['/', ...files];
+    const build = hash.digest('hex').slice(0, 12);
+    // Replacer functions, so a `$&` or the like in a value is never interpreted.
+    sw.code = sw.code.replaceAll('__F1_BUILD__', () => build).replaceAll('__F1_SHELL__', () => shell.join(','));
     this.emitFile({ type: 'asset', fileName: 'icon-512.png', source: iconPng() });
   },
 });

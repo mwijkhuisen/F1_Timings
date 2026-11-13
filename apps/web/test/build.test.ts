@@ -213,6 +213,12 @@ describe('web build', () => {
     expect(code).not.toContain('__F1_');
   });
 
+  it("the app's entry registers /sw.js", () => {
+    const entry = chunks.filter((c) => c.isEntry);
+    expect(entry).toHaveLength(1);
+    expect(entry[0]?.code).toMatch(/register\(.\/sw\.js./);
+  });
+
   it('sw.js runs as a classic script: install keeps the shell, and a final session is answered', async () => {
     const caches = new FakeCaches();
     const fetch = vi.fn(async (input: Request | string) => {
@@ -293,7 +299,8 @@ describe('web build', () => {
 
   it('index.html links the manifest and the icon', () => {
     const html = page('index.html');
-    expect(html).toContain('<link rel="manifest" href="/manifest.webmanifest" />');
+    // With credentials: a manifest is fetched in CORS mode without them, and Access would redirect it.
+    expect(html).toContain('<link rel="manifest" href="/manifest.webmanifest" crossorigin="use-credentials" />');
     expect(html).toContain('<link rel="apple-touch-icon" href="/icon-512.png" />');
   });
 

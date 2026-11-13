@@ -14,8 +14,8 @@ matchMedia('(prefers-color-scheme: light)').addEventListener('change', () => {
 });
 
 // The offline cache (#121): never in dev or tests. No serviceWorker outside a secure context; a failed register leaves
-// the site as it was.
-if (import.meta.env.PROD) navigator.serviceWorker?.register('/sw.js').catch(() => {});
+// the site as it was. On load, so the precache does not compete with the first paint.
+if (import.meta.env.PROD) addEventListener('load', () => navigator.serviceWorker?.register('/sw.js').catch(() => {}));
 
 const root = document.getElementById('app');
 if (root === null) throw new Error('#app is missing');
