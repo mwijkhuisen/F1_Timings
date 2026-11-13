@@ -291,6 +291,13 @@ describe('cycleText', () => {
     expect(text(c(300, 500, { secondIn: 22 }))).toBe(
       'VER and NOR pitted L22: VER 0.3 s behind before, 0.5 s behind after',
     );
+    // On the same in-lap a swap is no undercut or overcut.
+    expect(text(c(1200, -800, { secondIn: 22 }))).toBe(
+      'VER and NOR pitted L22: VER 1.2 s behind before, 0.8 s ahead after',
+    );
+    expect(text(c(-1200, 800, { secondIn: 22 }))).toBe(
+      'VER and NOR pitted L22: VER 1.2 s ahead before, 0.8 s behind after',
+    );
   });
 
   it('says why a cycle is not comparable', () => {

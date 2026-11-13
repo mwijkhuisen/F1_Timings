@@ -3,6 +3,7 @@ import { fileURLToPath } from 'node:url';
 import type { Obj } from '@f1/contracts';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, expect, it } from 'vitest';
+import type { Trend } from '../src/lib/crossings.ts';
 import { Tower, towerRows } from '../src/views/Tower.tsx';
 import { practiceState, qualifyingState, raceState } from './feed-state.ts';
 
@@ -488,5 +489,68 @@ describe('focus', () => {
     expect(at).toBeGreaterThanOrEqual(0);
     expect(rule).toContain('width: 100%;');
     expect(rule).not.toMatch(/min-(width|height)/);
+  });
+});
+
+describe('the closing trend at the line (race, with a trend)', () => {
+  const trend = new Map<number, { one: Trend; three: Trend }>([
+    [2, { one: { delta: -400 }, three: { delta: 200 } }],
+    [3, { one: { delta: 20 }, three: { missing: 5 } }],
+    [4, { one: null, three: null }],
+  ]);
+  const html = renderToStaticMarkup(<Tower state={raceState()} trend={trend} />);
+  const row = (tla: string) => html.split('<tr').find((r) => r.includes(`>${tla}</th>`)) ?? '';
+  const headers = [...html.matchAll(/<th scope="col"[^>]*>(.*?)<\/th>/g)].map((m) => m[1]);
+
+  it('puts two headed columns right after Int, each read as an interval change at the line', () => {
+    const i = headers.indexOf('Int');
+    expect(headers.slice(i + 1, i + 3)).toEqual([
+      '<span class="vh">Interval change at the line over </span>1 lap',
+      '<span class="vh">Interval change at the line over </span>3 laps',
+    ]);
+    expect(headers[i + 3]).toBe('Last');
+  });
+
+  it('shows ▼ closing and ▲ pulling away with one decimal and the words', () => {
+    expect(row('BBB')).toContain(
+      '<td class="tr"><span><span aria-hidden="true">▼0.4</span><span class="vh">closing 0.4 s on the car ahead</span></span></td>' +
+        '<td class="tr"><span class="muted"><span aria-hidden="true">▲0.2</span><span class="vh">car ahead pulling away 0.2 s</span></span></td>',
+    );
+  });
+
+  it('shows a value that rounds to 0.0 without an arrow, as no change', () => {
+    expect(row('CCC')).toContain(
+      '<td class="tr"><span class="muted"><span aria-hidden="true">0.0</span><span class="vh">no change</span></span></td>',
+    );
+  });
+
+  it('shows — with the lap behind a tap where a crossing is missing', () => {
+    expect(row('CCC')).toContain(
+      '<div popover="auto" id="tower-t3-3" class="pop">No crossing for both cars on lap 5</div>',
+    );
+    expect(row('CCC')).toMatch(/title="No crossing for both cars on lap 5">—<\/button>/);
+  });
+
+  it('leaves a blank trend, a car without an entry and the leader as empty cells', () => {
+    expect(row('DDD')).toContain('<td class="tr"></td><td class="tr"></td>');
+    expect(row('EEE')).toContain('<td class="tr"></td><td class="tr"></td>');
+    expect(row('AAA')).toContain('<td class="tr"></td><td class="tr"></td>');
+  });
+
+  it('adds one item to the legend', () => {
+    expect(html).toContain(
+      'At the line: <span aria-hidden="true">▼</span> closing on the car ahead, <span aria-hidden="true">▲</span> car ahead pulling away, over 1 and 3 laps',
+    );
+  });
+
+  it('has no trend columns without a trend, nor outside a race', () => {
+    for (const none of [
+      renderToStaticMarkup(<Tower state={raceState()} />),
+      renderToStaticMarkup(<Tower state={practiceState()} trend={trend} />),
+    ]) {
+      expect(none).not.toContain('class="tr"');
+      expect(none).not.toContain('Interval change');
+      expect(none).not.toContain('At the line');
+    }
   });
 });

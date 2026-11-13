@@ -1,4 +1,4 @@
-import type { Lap } from '@f1/contracts';
+import type { Lap, RaceControl, Stints } from '@f1/contracts';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { use } from 'echarts/core';
 import { SVGRenderer } from 'echarts/renderers';
@@ -748,6 +748,91 @@ describe('the comparison', () => {
       ['PER', 'false'],
     ]);
     expect(html).toContain('<h2>Gap to NOR</h2>');
+  });
+});
+
+describe('the pit cycles card', () => {
+  const T0 = Date.parse('2026-10-25T20:00:00Z');
+  /** Car d's laps 1..last at 90 s from `start` s, in-laps as given. */
+  const run = (d: number, start: number, last: number, ins: number[]): Lap[] =>
+    Array.from({ length: last }, (_, i) =>
+      lap(d, i + 1, 90000 + (i % 2) * 10, [null], null, {
+        date_start: new Date(T0 + (start + 90 * i) * 1000).toISOString(),
+        is_pit_in: ins.includes(i + 1),
+      }),
+    );
+  // VER stops L4 and L20, NOR L6 and L21: L4/L6 is comparable; NOR has no lap 22, so L20/L21 has no crossing after.
+  const raceLaps = [...run(1, 0, 25, [4, 20]), ...run(4, 5, 21, [6, 21])];
+  const stints: Stints = [
+    [1, [1, 5, 21]],
+    [4, [1, 7, 22]],
+  ].flatMap(([d, starts]) =>
+    (starts as number[]).map((lap_start, i) => ({
+      driver_number: d as number,
+      stint_number: i + 1,
+      lap_start,
+      lap_end: null,
+      compound: 'HARD',
+      tyre_age_at_start: 0,
+    })),
+  );
+  const control: RaceControl = [];
+
+  type Seed = { stints?: Stints | 'error'; rc?: RaceControl | 'error' };
+  const render = (type: string, { stints: st, rc: control }: Seed = {}) => {
+    const client = new QueryClient();
+    const seed = (key: string, v: unknown) => {
+      // An errored query that once had data stays an error on a static render (without data it would refetch: pending).
+      if (v === 'error')
+        client
+          .getQueryCache()
+          .build(client, { queryKey: [key, 11000] })
+          .setState({ status: 'error', error: new Error('x'), data: [], dataUpdatedAt: Date.now() });
+      else if (v !== undefined) client.setQueryData([key, 11000], v);
+    };
+    seed('stints', st);
+    seed('race-control', control);
+    return renderToStaticMarkup(
+      <QueryClientProvider client={client}>
+        <Compare
+          session={11000}
+          detail={sessionDetail(type, type)}
+          drivers={[VER, NOR]}
+          laps={raceLaps}
+          onReference={() => {}}
+        />
+      </QueryClientProvider>,
+    );
+  };
+  const card = (html: string) => html.match(/<section class="card"><h2>Pit cycles<\/h2>.*?<\/section>/)?.[0];
+
+  it('lists one sentence per cycle of every picked pair, comparable or not', () => {
+    const html = card(render('Race', { stints, rc: control }));
+    expect(html).toBe(
+      '<section class="card"><h2>Pit cycles</h2><ul class="cycles">' +
+        '<li>VER pitted L4, NOR L6: VER 5.0 s ahead before, 5.0 s ahead after</li>' +
+        '<li>VER pitted L20, NOR L21: not comparable (a line crossing is missing)</li>' +
+        '</ul></section>',
+    );
+  });
+
+  it('says it is loading while the stints or race control load, and that they failed', () => {
+    expect(card(render('Race'))).toContain('<p class="muted">Loading pit cycles…</p>');
+    expect(card(render('Race', { stints }))).toContain('Loading pit cycles…');
+    expect(card(render('Race', { stints: 'error', rc: control }))).toContain(
+      '<p class="muted">Pit cycles need the stints and race control, which did not load.</p>',
+    );
+    expect(card(render('Race', { stints, rc: 'error' }))).toContain('which did not load.');
+  });
+
+  it('says so when no stop pairs up', () => {
+    expect(card(render('Race', { stints: stints.filter((s) => s.driver_number === 1), rc: control }))).toContain(
+      '<p class="muted">No pit cycles within 3 laps for the picked drivers.</p>',
+    );
+  });
+
+  it('is absent outside races', () => {
+    expect(render('Practice', { stints, rc: control })).not.toContain('Pit cycles');
   });
 });
 

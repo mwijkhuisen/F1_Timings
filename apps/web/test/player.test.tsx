@@ -9,7 +9,7 @@ import { streamUrl } from '../src/lib/stream.ts';
 import { fmtClock } from '../src/lib/time.ts';
 import { Live, Replay } from '../src/views/Live.tsx';
 import { Player, type PlayerRecording } from '../src/views/Player.tsx';
-import { raceState } from './feed-state.ts';
+import { practiceState, raceState } from './feed-state.ts';
 
 // `view` (a zod parse of a topic) counts what the tower, the pit wall and the status series derive from the state.
 vi.mock('@f1/contracts', async (load) => {
@@ -716,23 +716,75 @@ describe('the Weather tab in the player', () => {
     chart.options = [];
   });
 
-  it('the view switch reads Tower · Laps · Weather; aria-pressed follows the click', () => {
+  it('the view switch reads Tower · Laps · Order · Weather in a race; aria-pressed follows the click', () => {
     start(rows);
     const views = () => [...host.querySelectorAll('fieldset[aria-label="View"] button')];
-    expect(views().map((b) => b.textContent)).toEqual(['Tower', 'Laps', 'Weather']);
+    expect(views().map((b) => b.textContent)).toEqual(['Tower', 'Laps', 'Order', 'Weather']);
     const pressed = () => views().map((b) => b.getAttribute('aria-pressed'));
-    expect(pressed()).toEqual(['true', 'false', 'false']);
+    expect(pressed()).toEqual(['true', 'false', 'false', 'false']);
     button('Weather');
-    expect(pressed()).toEqual(['false', 'false', 'true']);
+    expect(pressed()).toEqual(['false', 'false', 'false', 'true']);
     expect(host.querySelector('table[aria-label="Timing tower"]')).toBeNull();
     expect(air()).toBe('20.0–22.4 °C');
     expect(host.querySelector('.strip')).not.toBeNull(); // the strip stays on every tab
     button('Laps');
-    expect(pressed()).toEqual(['false', 'true', 'false']);
+    expect(pressed()).toEqual(['false', 'true', 'false', 'false']);
     expect(host.querySelector('table.laps')).not.toBeNull();
     expect(host.querySelector('dl.tiles.wx')).toBeNull();
     button('Tower');
     expect(host.querySelector('table[aria-label="Timing tower"]')).not.toBeNull();
+  });
+
+  it('shows no Order tab and no trend outside a race', () => {
+    render({ recording: ended, start: T, detail });
+    last().emit('snapshot', { t: T, state: practiceState(), laps: [lap(1, 1)], stints: [], weather: [] });
+    advance(250);
+    expect([...host.querySelectorAll('fieldset[aria-label="View"] button')].map((b) => b.textContent)).toEqual([
+      'Tower',
+      'Laps',
+      'Weather',
+    ]);
+    expect(host.textContent).not.toContain('Interval change');
+  });
+
+  describe('in a race, from the stream laps', () => {
+    const started = (d: number, n: number, at: number) => ({
+      ...lap(d, n),
+      lap_ms: null,
+      date_start: new Date(at).toISOString(),
+    });
+    // AAA (1) leads and is 1 s ahead after lap 1, 3 s after lap 2: the gap grew by 2 s.
+    const laps = [
+      started(1, 1, T - 300_000),
+      started(1, 2, T - 210_000),
+      started(1, 3, T - 120_000),
+      started(2, 1, T - 299_000),
+      started(2, 2, T - 209_000),
+      started(2, 3, T - 117_000),
+    ];
+    const begin = () => {
+      render({ recording: ended, start: T, sessionKey: 9100, detail });
+      last().emit('snapshot', { t: T, state: raceState(), laps, stints: [], weather: [] });
+      advance(250);
+    };
+
+    it('the tower gets the closing trend', () => {
+      begin();
+      expect($('table[aria-label="Timing tower"]').textContent).toContain('car ahead pulling away 2.0 s');
+      expect($('table[aria-label="Timing tower"]').textContent).toContain('Interval change at the line over 3 laps');
+    });
+
+    it('the Order tab shows the running order with the feed grid and the lap 1 gains', () => {
+      begin();
+      button('Order');
+      const table = $('table[aria-label="Running order"]');
+      // raceState's GridPos: BBB 1, CCC 2, AAA 3, EEE 5 (DDD none). After lap 1 AAA leads: AAA gained 2 places, BBB lost 1.
+      const grid = [...(table.querySelectorAll('tbody tr')[0]?.querySelectorAll('td') ?? [])].map((c) => c.textContent);
+      expect(grid).toEqual(['BBB', 'CCC', 'AAA', 'EEE']);
+      expect(table.textContent).toContain('gained 2 places');
+      expect(table.textContent).toContain('lost 1 place');
+      expect(host.querySelector('table[aria-label="Timing tower"]')).toBeNull();
+    });
   });
 
   it('a WeatherData delta appends a row: the tiles and the chart after the flush', async () => {

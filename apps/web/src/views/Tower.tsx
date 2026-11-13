@@ -1,4 +1,5 @@
 import { type Obj, type Views, view } from '@f1/contracts';
+import type { Trend } from '../lib/crossings.ts';
 import { compoundOf, type Driver, teamColour, teamStyle } from '../lib/session.ts';
 import { Note } from '../ui/Note.tsx';
 import { Scroll } from '../ui/Scroll.tsx';
@@ -99,6 +100,16 @@ const PLACE = /^\d{1,2}$/;
 function placesOf(grid: string | undefined, position: string | undefined): number | 'none' | undefined {
   if (grid === undefined || !PLACE.test(grid) || Number(grid) < 1) return 'none';
   return position !== undefined && PLACE.test(position) ? Number(grid) - Number(position) : undefined;
+}
+
+/** The grid positions the feed gives (TimingAppData's GridPos, a number from 1 to 99), by driver number. */
+export function gridOf(state: Obj): Map<number, number> {
+  const out = new Map<number, number>();
+  for (const [n, l] of Object.entries(view(state, 'TimingAppData')?.Lines ?? {})) {
+    const g = l?.GridPos;
+    if (NUMBER.test(n) && g !== undefined && PLACE.test(g) && Number(g) >= 1) out.set(Number(n), Number(g));
+  }
+  return out;
 }
 
 /** A driver from the DriverList entry of number `n`: Tla, full name and team colour, the number when unknown. */
@@ -205,7 +216,23 @@ const GapCell = ({ gap, id, className }: { gap: Gap; id: string; className?: str
 
 const plural = (n: number) => `${n} place${n === 1 ? '' : 's'}`;
 
-/** Places since the start: ▲ gained in --fg, ▼ lost and – no change muted; the glyphs are hidden, the words say it. */
+/** A number of places: ▲ gained in --fg, ▼ lost and – no change muted; the glyphs are hidden, the words say it. */
+export function Places({ places }: { places: number }) {
+  const [glyph, words] =
+    places > 0
+      ? [`▲${places}`, `gained ${plural(places)}`]
+      : places < 0
+        ? [`▼${-places}`, `lost ${plural(-places)}`]
+        : ['–', 'no change'];
+  return (
+    <span className={places > 0 ? undefined : 'muted'}>
+      <span aria-hidden="true">{glyph}</span>
+      <span className="vh">{words}</span>
+    </span>
+  );
+}
+
+/** Places since the start, in its own cell. */
 function PlacesCell({ places, number }: { places: TowerRow['places']; number: number }) {
   if (places === 'none')
     return (
@@ -215,16 +242,30 @@ function PlacesCell({ places, number }: { places: TowerRow['places']; number: nu
         </Note>
       </td>
     );
-  if (places === undefined) return <td className="pc" />;
+  return <td className="pc">{places !== undefined && <Places places={places} />}</td>;
+}
+
+/** The change of the interval to the car ahead at the line (A§13): ▼ closing, ▲ pulling away; — with the lap missing. */
+function TrendCell({ trend, id }: { trend: Trend | undefined; id: string }) {
+  if (!trend) return <td className="tr" />;
+  if ('missing' in trend)
+    return (
+      <td className="tr">
+        <Note id={id} text={`No crossing for both cars on lap ${trend.missing}`}>
+          —
+        </Note>
+      </td>
+    );
+  const secs = (Math.abs(trend.delta) / 1000).toFixed(1);
   const [glyph, words] =
-    places > 0
-      ? [`▲${places}`, `gained ${plural(places)}`]
-      : places < 0
-        ? [`▼${-places}`, `lost ${plural(-places)}`]
-        : ['–', 'no change'];
+    secs === '0.0'
+      ? ['0.0', 'no change']
+      : trend.delta < 0
+        ? [`▼${secs}`, `closing ${secs} s on the car ahead`]
+        : [`▲${secs}`, `car ahead pulling away ${secs} s`];
   return (
-    <td className="pc">
-      <span className={places > 0 ? undefined : 'muted'}>
+    <td className="tr">
+      <span className={trend.delta < 0 && secs !== '0.0' ? undefined : 'muted'}>
         <span aria-hidden="true">{glyph}</span>
         <span className="vh">{words}</span>
       </span>
@@ -269,6 +310,7 @@ export function Tower({
   sessionKey,
   focus = null,
   onFocus,
+  trend,
 }: {
   state: Obj;
   sessionKey?: number | undefined;
@@ -276,6 +318,8 @@ export function Tower({
   focus?: string | null | undefined;
   /** Without it the driver cells are plain text. */
   onFocus?: ((n: string) => void) | undefined;
+  /** The interval's change at the line over 1 and 3 laps per driver number (race only; the columns show with it). */
+  trend?: ReadonlyMap<number, { one: Trend; three: Trend }> | undefined;
 }) {
   // After a session switch the feed shows the previous session until the new one's SessionInfo arrives.
   if (sessionKey !== undefined && view(state, 'SessionInfo')?.Key !== sessionKey)
@@ -284,6 +328,7 @@ export function Tower({
   if (rows.length === 0) return <p className="muted">No timing yet.</p>;
   // Places since the start: in races, once any line has a grid position.
   const places = rows.some((r) => typeof r.places === 'number');
+  const trends = trend !== undefined && view(state, 'SessionInfo')?.Type === 'Race';
   const head = (h: string) => (
     <th key={h} scope="col">
       {h}
@@ -295,6 +340,12 @@ export function Tower({
         {places && (
           <span>
             <span aria-hidden="true">▲</span> places since the start
+          </span>
+        )}
+        {trends && (
+          <span>
+            At the line: <span aria-hidden="true">▼</span> closing on the car ahead, <span aria-hidden="true">▲</span>{' '}
+            car ahead pulling away, over 1 and 3 laps
           </span>
         )}
         <span>
@@ -312,7 +363,15 @@ export function Tower({
                   <span className="vh">Places since the start</span>
                 </th>
               )}
-              {['Gap', 'Int', 'Last', 'Best', 'S1', 'S2', 'S3', 'Tyre', 'Pits'].map(head)}
+              {['Gap', 'Int'].map(head)}
+              {trends &&
+                ['1 lap', '3 laps'].map((h) => (
+                  <th key={h} scope="col">
+                    <span className="vh">Interval change at the line over </span>
+                    {h}
+                  </th>
+                ))}
+              {['Last', 'Best', 'S1', 'S2', 'S3', 'Tyre', 'Pits'].map(head)}
             </tr>
           </thead>
           <tbody>
@@ -343,6 +402,12 @@ export function Tower({
                     </td>
                   ) : (
                     <GapCell gap={r.interval} id={`tower-int-${n}`} />
+                  )}
+                  {trends && (
+                    <>
+                      <TrendCell trend={trend.get(r.driver.number)?.one} id={`tower-t1-${n}`} />
+                      <TrendCell trend={trend.get(r.driver.number)?.three} id={`tower-t3-${n}`} />
+                    </>
                   )}
                   <td className={last?.className}>
                     {r.last}

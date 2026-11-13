@@ -208,8 +208,15 @@ export function cycleText(c: Cycle, acronym: (n: number) => string): string {
   }
   const was = side(c.before);
   const now = side(c.after);
+  // Pitting on the same lap, a swap is pit-lane speed, not an undercut.
   const label =
-    was === 'behind' && now === 'ahead' ? ' (undercut)' : was === 'ahead' && now === 'behind' ? ' (overcut)' : '';
+    c.firstIn === c.secondIn
+      ? ''
+      : was === 'behind' && now === 'ahead'
+        ? ' (undercut)'
+        : was === 'ahead' && now === 'behind'
+          ? ' (overcut)'
+          : '';
   return `${head}: ${f} ${rel(c.before)} before, ${rel(c.after)} after${label}`;
 }
 

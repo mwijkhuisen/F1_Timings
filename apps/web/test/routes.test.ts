@@ -17,6 +17,10 @@ describe('routeOf', () => {
       { id: 'session', year: 2026, meeting: 1290, session: 9965, view: 'stints' },
     ],
     [
+      '/2026/1290-singapore/9965-race/order',
+      { id: 'session', year: 2026, meeting: 1290, session: 9965, view: 'order' },
+    ],
+    [
       '/2026/1290-singapore/9965-race/compare',
       { id: 'session', year: 2026, meeting: 1290, session: 9965, view: 'compare' },
     ],
@@ -95,6 +99,7 @@ describe('titleOf: the title for every route', () => {
     [{ id: 'year', year: 2026 }, '2026 · F1 Timings', '2026 · F1 Timings'],
     [session, '2026 · F1 Timings', 'Mexico City Grand Prix · Race · Laps · F1 Timings'],
     [{ ...session, view: null }, '2026 · F1 Timings', 'Mexico City Grand Prix · Race · Laps · F1 Timings'],
+    [{ ...session, view: 'order' }, '2026 · F1 Timings', 'Mexico City Grand Prix · Race · Order · F1 Timings'],
     [{ ...session, view: 'compare' }, '2026 · F1 Timings', 'Mexico City Grand Prix · Race · Compare · F1 Timings'],
     [
       { ...session, view: 'minisectors' },
