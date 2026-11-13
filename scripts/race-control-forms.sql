@@ -19,7 +19,7 @@
 -- The classes in queries 3 to 5 use the same patterns as track.ts:
 --   VSC+  ^(VIRTUAL SAFETY CAR|VSC) DEPLOYED     VSC-  ^(VIRTUAL SAFETY CAR|VSC) ENDING
 --   SC+   ^SAFETY CAR DEPLOYED                   SC-   ^SAFETY CAR IN THIS LAP
---   RED   flag RED, or ^RED FLAG                 RESUME ^RACE WILL RESUME
+--   RED   flag RED, or ^RED FLAG                 RESUME ^RACE WILL (BE )?RESUME
 --   END   flag CHEQUERED
 
 \if :{?from}
@@ -65,7 +65,7 @@ classed AS (
       WHEN rc.message ~ '^SAFETY CAR DEPLOYED' THEN 'SC+'
       WHEN rc.message ~ '^SAFETY CAR IN THIS LAP' THEN 'SC-'
       WHEN rc.flag = 'RED' OR rc.message ~ '^RED FLAG' THEN 'RED'
-      WHEN rc.message ~ '^RACE WILL RESUME' THEN 'RESUME'
+      WHEN rc.message ~ '^RACE WILL (BE )?RESUME' THEN 'RESUME'
       WHEN rc.flag = 'CHEQUERED' THEN 'END'
     END AS class
   FROM race_control rc JOIN races USING (session_key))
@@ -85,7 +85,7 @@ classed AS (
       WHEN rc.message ~ '^SAFETY CAR DEPLOYED' THEN 'SC+'
       WHEN rc.message ~ '^SAFETY CAR IN THIS LAP' THEN 'SC-'
       WHEN rc.flag = 'RED' OR rc.message ~ '^RED FLAG' THEN 'RED'
-      WHEN rc.message ~ '^RACE WILL RESUME' THEN 'RESUME'
+      WHEN rc.message ~ '^RACE WILL (BE )?RESUME' THEN 'RESUME'
       WHEN rc.flag = 'CHEQUERED' THEN 'END'
     END AS class
   FROM race_control rc JOIN races USING (session_key))
@@ -107,7 +107,7 @@ classed AS (
       WHEN rc.message ~ '^SAFETY CAR DEPLOYED' THEN 'SC+'
       WHEN rc.message ~ '^SAFETY CAR IN THIS LAP' THEN 'SC-'
       WHEN rc.flag = 'RED' OR rc.message ~ '^RED FLAG' THEN 'RED'
-      WHEN rc.message ~ '^RACE WILL RESUME' THEN 'RESUME'
+      WHEN rc.message ~ '^RACE WILL (BE )?RESUME' THEN 'RESUME'
       WHEN rc.flag = 'CHEQUERED' THEN 'END'
     END AS class
   FROM race_control rc JOIN races USING (session_key))
@@ -124,11 +124,11 @@ classed AS (
       WHEN rc.message ~ '^SAFETY CAR DEPLOYED' THEN 'SC+'
       WHEN rc.message ~ '^SAFETY CAR IN THIS LAP' THEN 'SC-'
       WHEN rc.flag = 'RED' OR rc.message ~ '^RED FLAG' THEN 'RED'
-      WHEN rc.message ~ '^RACE WILL RESUME' THEN 'RESUME'
+      WHEN rc.message ~ '^RACE WILL (BE )?RESUME' THEN 'RESUME'
       WHEN rc.flag = 'CHEQUERED' THEN 'END'
     END AS class
   FROM race_control rc JOIN races USING (session_key)
-  WHERE rc.message ~ 'SAFETY CAR|VSC|RED FLAG|RESUME|SUSPENDED|(^|[^A-Z])SC([^A-Z]|$)' AND rc.message !~ 'INCIDENT INVOLVING|STEWARDS|LIGHTS (ON|OFF)|OVERTAKE THE SAFETY CAR|THROUGH THE PIT LANE|FORMATION LAP|START\/FINISH STRAIGHT|WILL ENTER PITS|START BEHIND THE SAFETY CAR|WILL STAY OUT|COVERS ON|STARTING PROCEDURE SUSPENDED')
+  WHERE rc.message ~ 'SAFETY CAR|VSC|RED FLAG|RESUME|SUSPENDED|(^|[^A-Z])SC([^A-Z]|$)' AND rc.message !~ 'INCIDENT INVOLVING|STEWARDS|PENALTY FOR CAR|LIGHTS (ON|OFF)|OVERTAKE (THE )?SAFETY CAR|THROUGH THE PIT LANE|FORMATION LAP|START\/FINISH STRAIGHT|WILL ENTER PITS|START BEHIND THE SAFETY CAR|WILL STAY OUT|COVERS ON|START(ING)? PROCEDURE SUSPENDED|WILL NOT RESUME')
 SELECT regexp_replace(message, '[0-9]+', '#', 'g') AS form, count(*) AS n, count(DISTINCT session_key) AS races
 FROM classed WHERE class IS NULL GROUP BY 1 ORDER BY n DESC, form;
 

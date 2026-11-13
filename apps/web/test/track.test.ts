@@ -9,6 +9,7 @@ const SC_IN = 'SAFETY CAR IN THIS LAP';
 const red = (n: number | null) => rc(n, 'RED FLAG', { category: 'Flag', flag: 'RED' });
 const chq = (n: number) => rc(n, 'CHEQUERED FLAG', { category: 'Flag', flag: 'CHEQUERED' });
 const resume = (n: number) => rc(n, 'RACE WILL RESUME AT 15:05');
+const resumed = (n: number) => rc(n, 'RACE WILL BE RESUMED AT 15:10'); // the F1 archive's older wording
 const periods = (...rows: Parameters<typeof trackPeriods>[0]) => trackPeriods(rows).periods;
 
 describe('trackPeriods', () => {
@@ -36,6 +37,10 @@ describe('trackPeriods', () => {
     expect(periods(red(30), resume(31))).toEqual([{ kind: 'red', from: 30, to: 30 }]);
     expect(periods(red(30), resume(30))).toEqual([{ kind: 'red', from: 30, to: 30 }]);
     expect(periods(red(30), resume(33))).toEqual([{ kind: 'red', from: 30, to: 32 }]);
+  });
+
+  it('ends a red flag the lap before the older RACE WILL BE RESUMED AT', () => {
+    expect(periods(red(30), resumed(33))).toEqual([{ kind: 'red', from: 30, to: 32 }]);
   });
 
   it('ends a red flag the lap before a safety car that follows it without RACE WILL RESUME', () => {

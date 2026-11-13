@@ -5,7 +5,7 @@ import { formOf, isUnmatched, type RaceControl } from '@f1/contracts';
 // `scripts/race-control-forms.sql` found in 2023–2026 races, with its exact
 // regexes: SAFETY CAR DEPLOYED / IN THIS LAP; VIRTUAL SAFETY CAR or (2026) VSC
 // DEPLOYED / ENDING; Flag RED or a message starting RED FLAG (2026 sends
-// "RED FLAG - RACE SUSPENDED" as Other without a flag); RACE WILL RESUME;
+// "RED FLAG - RACE SUSPENDED" as Other without a flag); RACE WILL RESUME or (older) RACE WILL BE RESUMED;
 // Flag CHEQUERED. A period's end is often implicit (SC → RED, VSC → SC, CHQ). The forms live in
 // @f1/contracts (race-control.ts); `unmatched` counts the rows that look like a period but match none (#105).
 
