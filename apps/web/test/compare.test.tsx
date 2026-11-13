@@ -8,7 +8,7 @@ import { init } from '../src/lib/echarts.ts';
 import type { Driver } from '../src/lib/session.ts';
 import { fmtDelta } from '../src/lib/time.ts';
 import { Compare } from '../src/views/Compare.tsx';
-import { DeltaTable, Duel } from '../src/views/DeltaTable.tsx';
+import { DeltaTable, Duel, deltaReason } from '../src/views/DeltaTable.tsx';
 import { DriverPicker } from '../src/views/DriverPicker.tsx';
 import { type ChartTokens, lapChartOption, lineStyles } from '../src/views/lap-chart-option.ts';
 import { sessionDetail } from './laps.ts';
@@ -551,9 +551,16 @@ describe('fmtDelta', () => {
   });
 });
 
+/** A Note (ui/Note.tsx) as its visible text; the reasons are checked on their own below. */
+const unNote = (html: string) =>
+  html.replace(/<button type="button" class="note"[^>]*>([^<]*)<\/button><div popover="auto"[^>]*>[^<]*<\/div>/g, '$1');
+/** The reason behind the Note with this id. */
+const reasonOf = (html: string, id: string) =>
+  new RegExp(`<div popover="auto" id="${id}" class="pop">([^<]*)</div>`).exec(html)?.[1];
+
 /** The table's rows as [row header, ...cells]. */
 const rows = (html: string) =>
-  [...html.matchAll(/<tr>([\s\S]*?)<\/tr>/g)]
+  [...unNote(html).matchAll(/<tr>([\s\S]*?)<\/tr>/g)]
     .map(([, row = '']) =>
       // The delta bars (<i>, aria-hidden) are checked on their own below.
       [...row.matchAll(/<t([hd])[^>]*>([\s\S]*?)<\/t\1>/g)].map(([, , text = '']) =>
@@ -627,6 +634,47 @@ describe('the delta table', () => {
     // Lap 1: PER has none.
     expect(three[3]).toEqual(['1', '−5.000', '+0.000', '+0.000', '—', '—', '—']);
   });
+
+  it('says why each — is: no lap, no best lap, a deleted lap or a missing sector time (#99)', () => {
+    const three = table([VER, NOR, PER]);
+    expect(reasonOf(three, 'dt-2-4-s2')).toBe('No S2 time for NOR');
+    expect(reasonOf(three, 'dt-3-4-s1')).toBe('Deleted lap'); // NOR's lap 3 is deleted (and VER has no S2)
+    expect(reasonOf(three, 'dt-3-4-s2')).toBe('Deleted lap');
+    expect(reasonOf(three, 'dt-4-4-s3')).toBe('Deleted lap'); // VER's lap 4
+    expect(reasonOf(three, 'dt-1-11-s1')).toBe('No lap 1 for PER');
+    const noBest = laps.filter((l) => !(l.driver_number === 4 && l.lap_number === 5));
+    expect(reasonOf(renderToStaticMarkup(<DeltaTable drivers={[VER, NOR]} laps={noBest} />), 'dt-best-4-s1')).toBe(
+      'No best lap for NOR',
+    );
+    // Every — has its Note, and every id is unique.
+    const ids = [...three.matchAll(/ id="([^"]+)"/g)].map(([, id]) => id);
+    expect(new Set(ids).size).toBe(ids.length);
+    expect(ids.length).toBe(three.match(/>—</g)?.length);
+  });
+});
+
+describe('deltaReason', () => {
+  const pair = (a: Partial<Lap> | undefined, b: Partial<Lap> | undefined) =>
+    [
+      [NOR, a && lap(4, 12, 80000, [28000, 30000, 22000], null, a)],
+      [VER, b && lap(1, 12, 80000, [28000, 30000, 22000], null, b)],
+    ] as const;
+
+  it('names the driver without the lap, or both, and the best-lap row by its own words', () => {
+    expect(deltaReason('s1', pair(undefined, {}), 12)).toBe('No lap 12 for NOR');
+    expect(deltaReason('s1', pair({}, undefined), 12)).toBe('No lap 12 for VER');
+    expect(deltaReason('s1', pair(undefined, undefined), null)).toBe('No best lap for NOR and VER');
+  });
+
+  it('says "Deleted lap" for a deleted lap on either side, before a missing time', () => {
+    expect(deltaReason('s2', pair({ deleted: true, s2_ms: null }, {}), 12)).toBe('Deleted lap');
+    expect(deltaReason('s2', pair({}, { deleted: true }), 12)).toBe('Deleted lap');
+  });
+
+  it('names who has no time in the sector', () => {
+    expect(deltaReason('s2', pair({ s2_ms: null }, {}), 12)).toBe('No S2 time for NOR');
+    expect(deltaReason('s3', pair({ s3_ms: null }, { s3_ms: null }), null)).toBe('No S3 time for NOR and VER');
+  });
 });
 
 describe('the delta-cell bars', () => {
@@ -642,8 +690,12 @@ describe('the delta-cell bars', () => {
 
   it('has no bar for a zero and none, nor the dc class, for —', () => {
     expect(cells[4]).toEqual([' class="dc"', '+0.000']);
-    // Lap 2 S2: NOR has no S2.
-    expect(cells[7]).toEqual(['', '—']);
+    // Lap 2 S2: NOR has no S2, with the reason behind a tap.
+    expect(cells[7]).toEqual([
+      '',
+      '<button type="button" class="note" popoverTarget="dt-2-4-s2" aria-describedby="dt-2-4-s2" title="No S2 time for NOR">' +
+        '—</button><div popover="auto" id="dt-2-4-s2" class="pop">No S2 time for NOR</div>',
+    ]);
   });
 });
 
@@ -651,7 +703,7 @@ const duel = (drivers: Driver[], l: Lap[] = laps) => renderToStaticMarkup(<Duel 
 /** Each duel row as [sector, fill class or null, --w or null, the fill's --team or null, value]. */
 const duelRows = (html: string) =>
   [
-    ...html.matchAll(
+    ...unNote(html).matchAll(
       /<div><dt>(S\d)<\/dt><dd class="track" aria-hidden="true">(?:<span class="([^"]+)" style="--team:([^;]+);[^"]*--w:([^"]+)"><\/span>)?<\/dd><dd class="val">([^<]+)<\/dd><\/div>/g,
     ),
   ].map(([, s, cls = null, team = null, w = null, v]) => [s, cls, w, team, v]);
@@ -688,6 +740,7 @@ describe('the duel (C7)', () => {
       ['S2', null, null, null, '—'],
       ['S3', 'fill r', '16.7%', '#FF8000', '−0.100'],
     ]);
+    expect(reasonOf(duel([VER, NOR], l), 'duel-4-s2')).toBe('No S2 time for VER');
   });
 
   it('gives one block per other driver, and one muted line where a best lap is missing', () => {

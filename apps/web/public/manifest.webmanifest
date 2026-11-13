@@ -1,0 +1,11 @@
+{
+  "id": "/",
+  "start_url": "/",
+  "scope": "/",
+  "name": "F1 Timings",
+  "short_name": "F1 Timings",
+  "display": "standalone",
+  "background_color": "#15151e",
+  "theme_color": "#15151e",
+  "icons": [{ "src": "/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any maskable" }]
+}

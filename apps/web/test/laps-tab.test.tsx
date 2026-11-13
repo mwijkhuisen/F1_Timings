@@ -107,12 +107,4 @@ describe('LapsTab', () => {
     expect(host.querySelector('ul.legend')?.textContent).toBe('< 0.5 %< 1 %< 2 %≥ 2 % slower than own best');
     expect(host.querySelector('table.laps')?.getAttribute('aria-label')).toBe('Lap Δ to own best');
   });
-
-  it('says when there are no laps, and fetches nothing', async () => {
-    answer();
-    render('Race', 'Race', []);
-    expect(host.innerHTML).toBe('<p>No laps yet.</p>');
-    await act(() => new Promise((r) => setTimeout(r, 50)));
-    expect(calls).toBe(0);
-  });
 });

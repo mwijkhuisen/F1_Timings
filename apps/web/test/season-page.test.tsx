@@ -8,6 +8,8 @@ import { renderToStaticMarkup } from 'react-dom/server';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, onTestFinished, vi } from 'vitest';
 import { server } from '../../../test/msw.setup.ts';
 import { Season, SeasonView, Start } from '../src/views/Season.tsx';
+import { FakeCaches } from './caches.ts';
+import { sessionDetail } from './laps.ts';
 import { live, NOW, recordings, season, seasons } from './season-data.ts';
 
 // The season page (A§13, P4c): this weekend first with every state in words, Up next, the other meetings as cards,
@@ -229,6 +231,39 @@ describe('the season page requests', () => {
 
   it('/ goes to /live while a recording is open', async () => {
     expect(await start(live.recording)).toBe('/live');
+  });
+
+  // #121, D4: the worker's caches hold one final session's detail.
+  const saved = async () => {
+    const caches = new FakeCaches();
+    const d = sessionDetail('Race', 'Race');
+    const body = { ...d, session: { ...d.session, session_key: 11002 } };
+    await (await caches.open('f1-0123456789ab')).put('/api/v1/sessions/11002', Response.json(body));
+    vi.stubGlobal('caches', caches.storage);
+    onTestFinished(() => {
+      vi.unstubAllGlobals();
+    });
+    return vi.spyOn(caches, 'keys');
+  };
+
+  it('/ lists the saved sessions under the error when /seasons fails', async () => {
+    history.replaceState(null, '', '/');
+    await saved();
+    server.use(
+      http.get('*/api/v1/seasons', () => new HttpResponse(null, { status: 503 })),
+      http.get('*/api/v1/live', () => HttpResponse.json(live)),
+    );
+    mount(<Start />);
+    await vi.waitFor(() => expect(host.querySelector('section[aria-label="Saved on this device"]')).not.toBeNull());
+    expect(host.querySelector('h2')?.textContent).toBe('Saved on this device');
+    expect(host.querySelector('section a')?.getAttribute('href')).toBe('/2026/1300-mexico-city/11002-race/laps');
+    expect(location.pathname).toBe('/');
+  });
+
+  it('/ never reads the saved sessions when /seasons answers', async () => {
+    const keys = await saved();
+    expect(await start(live.recording)).toBe('/live');
+    expect(keys).not.toHaveBeenCalled();
   });
 });
 

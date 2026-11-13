@@ -1,3 +1,4 @@
+import { isUnmatched } from '@f1/contracts';
 import { Cron } from 'croner';
 import { type Insertable, type Kysely, sql, type Transaction } from 'kysely';
 import type { Logger } from 'pino';
@@ -36,8 +37,14 @@ export type Deps = {
   log: Pick<Logger, 'info' | 'error'>;
   /** Touches the heartbeat: the work proves it is alive, not a free-running timer (A§4). */
   beat: () => void;
-  /** The healthchecks.io ping (never throws); the daemon pings once a sync the daily Cron requested has succeeded, not after the startup sync. */
-  ping?: (slug: string) => Promise<void>;
+  /**
+   * The healthchecks.io ping (never throws), the daemon's only: `f1-ingest` once a sync the daily Cron requested has
+   * succeeded (not the startup sync), `f1-ingest/fail` with a fixed code when a session newly fails for good or the due
+   * backlog stalls (#105).
+   */
+  ping?: (slug: string, body?: string) => Promise<boolean>;
+  /** The daemon's status row and backlog check (`ingestHealth`), after each processed session and once per tick. */
+  report?: () => Promise<void>;
   /** The daemon's rain step (P5c, `createRainStep`), after the tick every minute; it never rejects. */
   rainStep?: (stopping: () => boolean) => Promise<void>;
 };
@@ -201,6 +208,7 @@ export async function processSession(deps: Deps, key: number, refetch = false): 
       }
     }
     log.error(line({ state, ...detail, last_error: code, unrecorded: lost }), 'session');
+    if (state === 'failed') await deps.ping?.('f1-ingest/fail', `session_failed ${code}`);
     return { ok: false, error: code };
   };
 
@@ -386,11 +394,22 @@ export async function processSession(deps: Deps, key: number, refetch = false): 
   }
   if (done.empty) {
     log.error(line({ state: refetch ? 'unchanged' : done.next.ingest_state, last_error: 'empty' }), 'session');
+    if (!refetch && done.next.ingest_state === 'failed') await deps.ping?.('f1-ingest/fail', 'session_failed empty');
     return { ok: false, error: 'empty' };
   }
   const counts = Object.fromEntries(Object.entries(rows).map(([table, list]) => [table, list.length]));
+  // Only a race gets bands: the period-like rows that match no form (#105), so a rewording shows in the log.
+  const rc_unmatched = type === 'Race' ? { rc_unmatched: rows.race_control.filter(isUnmatched).length } : {};
   log.info(
-    line({ state: done.next.ingest_state, rows: counts, skipped, rules, merge: done.merge, grid: done.grid }),
+    line({
+      state: done.next.ingest_state,
+      rows: counts,
+      skipped,
+      rules,
+      merge: done.merge,
+      grid: done.grid,
+      ...rc_unmatched,
+    }),
     'session',
   );
   return { ok: true, value: done.next.ingest_state };
@@ -451,9 +470,62 @@ export async function tick(deps: Deps, stopping: () => boolean = () => false): P
     await processSession(deps, session_key);
     deps.beat();
     processed++;
+    await deps.report?.(); // a long catch-up tick keeps the status row fresh
   }
+  await deps.report?.();
   deps.beat();
   return processed;
+}
+
+export const BACKLOG_MS = 6 * 60 * 60_000;
+
+/**
+ * The daemon's health (#105): `report()` pings `f1-ingest/fail` with `due_backlog` when, outside a live window, a due
+ * session has waited over 6 h (on the rising edge only; a live window leaves the latch as it is), then upserts the
+ * one `ingest_status` row. `synced(at)` records the last good sync and re-arms the latch (D3: a standing backlog
+ * alerts at most once a day). The row is display only, so `report()` never rejects: a failure is logged as a code.
+ */
+export function ingestHealth(deps: Pick<Deps, 'db' | 'now' | 'log' | 'ping'>) {
+  let lastSync: Date | null = null; // null until this process synced: the stored value stays
+  let alerted = false;
+  return {
+    synced(at: Date): void {
+      lastSync = at;
+      alerted = false;
+    },
+    async report(): Promise<void> {
+      try {
+        const at = deps.now();
+        const isLive = await live(deps);
+        if (!isLive) {
+          const stalled = await deps.db
+            .selectFrom('session')
+            .select('session_key')
+            .where('ingest_state', '=', 'due')
+            .where('source', '=', 'openf1')
+            .where('is_cancelled', '=', false)
+            .where('next_fetch_at', '<=', new Date(at.getTime() - BACKLOG_MS))
+            .executeTakeFirst();
+          // The latch is set only once a ping got through, so the next report retries one that failed.
+          alerted =
+            stalled !== undefined && (alerted || ((await deps.ping?.('f1-ingest/fail', 'due_backlog')) ?? true));
+        }
+        await deps.db
+          .insertInto('ingest_status')
+          .values({ id: true, last_sync_at: lastSync, live_wait: isLive, last_tick_at: at })
+          .onConflict((oc) =>
+            oc.column('id').doUpdateSet((eb) => ({
+              last_sync_at: eb.fn.coalesce('excluded.last_sync_at', 'ingest_status.last_sync_at'),
+              live_wait: eb.ref('excluded.live_wait'),
+              last_tick_at: eb.ref('excluded.last_tick_at'),
+            })),
+          )
+          .execute();
+      } catch (err) {
+        deps.log.error({ cause: codeOf(err) }, 'report failed'); // the code only
+      }
+    },
+  };
 }
 
 const yearRange = (from: number, to: number) => Array.from({ length: to - from + 1 }, (_, i) => from + i);
@@ -496,9 +568,9 @@ export const SYNC_RETRY_MS = 15 * 60_000;
 /**
  * The daemon's schedule sync: the current year plus every year from 2023 without a meeting
  * row. It runs once requested (at start, daily at 00:30 UTC), never in a live window, and a
- * failed or skipped sync is retried at most every 15 min until it succeeds.
+ * failed or skipped sync is retried at most every 15 min until it succeeds. `onSynced` follows every good sync.
  */
-export function scheduleSync(deps: Deps) {
+export function scheduleSync(deps: Deps, onSynced?: (at: Date) => void) {
   let next: number | undefined = 0; // epoch ms of the next try; undefined once synced
   // Set by a request (the daily Cron), not by the startup sync: a crash loop must not stay green.
   let daily = false;
@@ -522,6 +594,7 @@ export function scheduleSync(deps: Deps) {
       const years = yearRange(FIRST_YEAR, current).filter((y) => y === current || !seen.has(y));
       if (await syncSchedule(deps, years)) {
         next = undefined;
+        onSynced?.(deps.now());
         if (daily) await deps.ping?.('f1-ingest');
         daily = false;
       }
@@ -549,6 +622,14 @@ export async function minuteWork(
   await job.rain?.(stopping);
 }
 
+/** The daemon's wiring: the minute job (sync, tick, rain step) with its health report, and the Cron's sync request. */
+export function daemon(deps: Deps, stopped: () => boolean) {
+  const health = ingestHealth(deps);
+  const sync = scheduleSync(deps, health.synced);
+  const ticking = { ...deps, report: health.report };
+  return { sync: sync.run, tick: () => tick(ticking, stopped), rain: deps.rainStep, request: sync.request };
+}
+
 /**
  * The daemon: one job every minute that syncs the schedule when due, ticks, then runs the rain step. Resolves
  * after SIGTERM/SIGINT once the running job has finished.
@@ -563,14 +644,13 @@ export async function startIngest(deps: Deps): Promise<void> {
   }).then(() => {
     stopping = true;
   });
-  const sync = scheduleSync(deps);
-  const job = { sync: sync.run, tick: () => tick(deps, stopped), rain: deps.rainStep };
+  const job = daemon(deps, stopped);
   const work = busyGuard(() => minuteWork(job, log, stopped));
   deps.beat();
   void work.run();
   const jobs = [
     new Cron('30 0 * * *', { timezone: 'UTC' }, () => {
-      sync.request();
+      job.request();
       void work.run();
     }),
     new Cron('* * * * *', { timezone: 'UTC' }, () => void work.run()),

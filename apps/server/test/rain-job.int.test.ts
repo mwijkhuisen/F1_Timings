@@ -1,4 +1,5 @@
-import { readFileSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { Kysely } from 'kysely';
 import { HttpResponse, http } from 'msw';
@@ -6,6 +7,7 @@ import pino from 'pino';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { server } from '../../../test/msw.setup.ts';
 import { createDb, type DB } from '../src/db/db.ts';
+import { pingHealthchecks } from '../src/healthchecks.ts';
 import { tick } from '../src/ingest/ingest.ts';
 import { run } from '../src/main.ts';
 import { type Clock, createClient, OPENF1 } from '../src/openf1/client.ts';
@@ -93,10 +95,15 @@ const frames = (key: number) =>
   admin.selectFrom('rain_frame').selectAll().where('session_key', '=', key).orderBy('date').execute();
 const dates = (rows: { date: Date }[]) => rows.map((r) => r.date.toISOString().slice(11, 16));
 
+// The real healthchecks.io ping, with a key in a temp secrets directory; msw records every ping.
+let secrets: string;
+const pings: string[] = [];
+const ping = (slug: string, body?: string) => pingHealthchecks(slug, log, { secretsDir: secrets, body });
+
 /** A fresh daemon process's rain step: its own client, budget (on the test's `at`), seed and log memory. */
 function daemon(budget = createBudget({ now: () => at.getTime() })) {
   const client = createRainClient({ clock });
-  const step = createRainStep({ db, client, budget, now: () => at, log, beat: () => void beats++ });
+  const step = createRainStep({ db, client, budget, now: () => at, log, beat: () => void beats++, ping });
   return { run: () => step(() => false), budget, client };
 }
 
@@ -112,8 +119,11 @@ describe('rain job (Open-Meteo through msw, f1_ingest login)', { timeout: 120_00
     expect(await run(['migrate'], { PATH: process.env.PATH, DATABASE_URL: testDb.urls.f1_migrator }, () => {})).toBe(0);
     admin = createDb(testDb.urls.admin);
     db = createDb(testDb.urls.f1_ingest);
+    secrets = mkdtempSync(join(tmpdir(), 'f1-hc-'));
+    writeFileSync(join(secrets, 'hc_ping_key'), 'AbCdEfGhIjKlMnOpQrStUv\n');
   });
   afterAll(async () => {
+    rmSync(secrets, { recursive: true, force: true });
     await db?.destroy();
     await admin?.destroy();
     await testDb?.drop();
@@ -124,7 +134,17 @@ describe('rain job (Open-Meteo through msw, f1_ingest login)', { timeout: 120_00
     lines.length = 0;
     reply = () => undefined;
     wet = 0.1;
-    server.use(host('forecast', FORECAST), host('historical', HISTORICAL));
+    pings.length = 0;
+    server.use(
+      host('forecast', FORECAST),
+      host('historical', HISTORICAL),
+      http.all('https://hc-ping.com/*', async ({ request }) => {
+        pings.push(
+          `${request.method} ${new URL(request.url).pathname.split('/').slice(2).join('/')} ${await request.text()}`,
+        );
+        return new HttpResponse('OK');
+      }),
+    );
   });
 
   it('a session in its live window gets a grid, fetched every 15 min up to now; a refetch replaces the frames', async () => {
@@ -234,7 +254,7 @@ describe('rain job (Open-Meteo through msw, f1_ingest login)', { timeout: 120_00
     expect(seen).toHaveLength(2);
   });
 
-  it('a failure backs off 5 min · 2^(n−1) with a fixed code; the 9th in a row marks the grid failed', async () => {
+  it('a failure backs off 5 min · 2^(n−1) with a fixed code; the 9th in a row marks the grid failed and pings /fail', async () => {
     reply = () => HttpResponse.json({ error: true, reason: 'body-text' }, { status: 500 });
     await meeting(MC, 'Monte Carlo');
     await session(100, MC, LIVE);
@@ -265,11 +285,13 @@ describe('rain job (Open-Meteo through msw, f1_ingest login)', { timeout: 120_00
     }
     expect(delays).toEqual([5, 10, 20, 40, 80, 160, 320, 360]);
     expect(await grid(100)).toMatchObject({ state: 'failed', next_fetch_at: null, fail_count: 9, attempt_count: 9 });
+    expect(pings).toEqual(['POST f1-ingest/fail rain_failed http_500']); // the 9th failure only (the path after the key)
     expect(seen).toHaveLength(9);
     expect(seen.every((s) => s.host === 'forecast')).toBe(true);
     at = new Date('2026-11-18T00:00:00Z');
     await p.run();
     expect(seen).toHaveLength(9);
+    expect(pings).toHaveLength(1);
     expectClean();
   });
 

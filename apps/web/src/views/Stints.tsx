@@ -1,10 +1,11 @@
-import type { Laps, SessionDetail, Stints } from '@f1/contracts';
+import type { Laps, Live, SessionDetail, Stints } from '@f1/contracts';
 import type { CSSProperties } from 'react';
 import { useMemo } from 'react';
 import { useRaceControl, useStints } from '../lib/api.ts';
 import { compoundOf, type Driver, orderDrivers, teamStyle } from '../lib/session.ts';
 import { KIND_LABEL, type Period, trackPeriods } from '../lib/track.ts';
 import { Pending } from '../ui/ErrorView.tsx';
+import { NoData } from '../ui/NoData.tsx';
 
 // Stints on a real lap scale (P4f, A§13): a lane per driver, a stint at (lap_start − 1) / total and
 // (laps) / total wide, so a hole in the data shows as a gap and no row is stretched to fit. Each row is a
@@ -115,7 +116,6 @@ export function StintBars({
   periods?: readonly Period[];
 }) {
   const drivers = orderDrivers(detail, laps);
-  if (drivers.length === 0 || stints.length === 0) return <p>No stints yet.</p>;
   const { total, ticks, rows } = stintLayout(drivers, laps, stints);
   const used = new Set(rows.flatMap((r) => inOrder(r).map((s) => s.compound)));
   const compounds = [...COMPOUND_ORDER.filter((c) => used.has(c)), ...(used.has(null) ? [null] : [])];
@@ -217,7 +217,20 @@ export function StintBars({
   );
 }
 
-export function StintsTab({ session, detail, laps }: { session: number; detail: SessionDetail; laps: Laps }) {
+export function StintsTab({
+  session,
+  detail,
+  laps,
+  live,
+  now,
+}: {
+  session: number;
+  detail: SessionDetail;
+  laps: Laps;
+  live: Live | null;
+  /** The clock of the reason, epoch ms. */
+  now: number;
+}) {
   const stints = useStints(session);
   const rc = useRaceControl(session, detail.session.type === 'Race' && laps.length > 0);
   const periods = useMemo(
@@ -225,6 +238,7 @@ export function StintsTab({ session, detail, laps }: { session: number; detail: 
     [rc.data],
   );
   if (!stints.data) return <Pending error={stints.error} />;
+  if (stints.data.length === 0) return <NoData session={detail.session} live={live} what="stints" now={now} />;
   return (
     <>
       {rc.error && <p className="muted">Race control did not load: no SC or VSC lines.</p>}

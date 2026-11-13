@@ -282,8 +282,15 @@ const COMPOUND_NAME: Record<string, string> = {
 };
 
 /** The latest stint: the compound dot (a dashed outline on a used set), its words, and its age in laps. */
-function TyreCell({ tyre }: { tyre: Stint | undefined }) {
-  if (!tyre) return <td />;
+function TyreCell({ tyre, number }: { tyre: Stint | undefined; number: string }) {
+  if (!tyre)
+    return (
+      <td>
+        <Note id={`tower-tyre-${number}`} text="No stint in the feed">
+          —
+        </Note>
+      </td>
+    );
   const compound = compoundOf(tyre.Compound ?? null) ?? 'unknown';
   // The feed sends New as a string: "true" a new set, "false" a used one; anything else says neither.
   const set = tyre.New === 'true' ? 'new set' : tyre.New === 'false' ? 'used set' : undefined;
@@ -420,7 +427,7 @@ export function Tower({
                   {SECTORS.map((i) => (
                     <Sector key={i} s={line.Sectors?.[i]} />
                   ))}
-                  <TyreCell tyre={r.tyre} />
+                  <TyreCell tyre={r.tyre} number={n} />
                   <td>
                     {line.NumberOfPitStops}
                     {line.InPit ? (

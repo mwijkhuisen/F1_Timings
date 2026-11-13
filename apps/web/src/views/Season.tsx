@@ -1,7 +1,8 @@
 import type { Live, Recordings, Season as SeasonData } from '@f1/contracts';
 import { useEffect, useState } from 'react';
-import { useLive, useRecordings, useSeason, useSeasons } from '../lib/api.ts';
+import { useLive, useRecordings, useSaved, useSeason, useSeasons } from '../lib/api.ts';
 import { Link, replace, sessionPath } from '../lib/routes.ts';
+import type { Saved } from '../lib/saved.ts';
 import {
   type Meeting,
   nextSession,
@@ -221,15 +222,44 @@ export function Season({ year }: { year: number }) {
   );
 }
 
-/** `/`: waits for /seasons and /live (an error in /live counts as nothing open), then redirects without history. */
+/** The final sessions this device keeps (#121, D4), newest first, each opening on its laps: the way in offline. */
+export function SavedList({ saved }: { saved: readonly Saved[] }) {
+  if (saved.length === 0) return null;
+  return (
+    <section aria-label="Saved on this device">
+      <h2 className="eyebrow sect">Saved on this device</h2>
+      <ul className="sess">
+        {saved.map((s) => (
+          <li key={s.key}>
+            <Link to={s.path}>{s.name}</Link>
+            <time className="when" dateTime={s.date_start}>
+              {fmtInstant(s.date_start)}
+            </time>
+          </li>
+        ))}
+      </ul>
+    </section>
+  );
+}
+
+/**
+ * `/`: waits for /seasons and /live (an error in /live counts as nothing open), then redirects without history.
+ * When /seasons fails, the saved sessions show under the error.
+ */
 export function Start() {
   const seasons = useSeasons();
   const live = useLive();
+  const saved = useSaved(seasons.isError);
   const liveData = live.isError ? null : live.data;
   const path = seasons.data && liveData !== undefined ? startPath(liveData, seasons.data) : undefined;
   useEffect(() => {
     if (path) replace(path);
   }, [path]);
   if (path === null) return <p>No seasons yet.</p>;
-  return <Pending error={seasons.error} />;
+  return (
+    <>
+      <Pending error={seasons.error} />
+      <SavedList saved={saved.data ?? []} />
+    </>
+  );
 }

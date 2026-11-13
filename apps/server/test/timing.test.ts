@@ -628,3 +628,30 @@ describe('colours', () => {
     });
   });
 });
+
+describe('onRuling', () => {
+  it('sees each DELETED and REINSTATED message once, with its lap or none, and changes no result', () => {
+    const messages = [
+      rc('CAR 10 (GAS) TIME 1:36.764 DELETED - TRACK LIMITS', '2026-10-24T21:01:00+00:00'),
+      rc('CAR 10 (GAS) TIME 9:99.999 DELETED - TRACK LIMITS', '2026-10-24T21:02:00+00:00'),
+      rc('CAR 243 TIME 0:00.000 DELETED - DOUBLE YELLOW', '2026-10-24T21:03:00+00:00'),
+      rc('CAR 10 (GAS) TIME 1:36.764 WILL BE REINSTATED', '2026-10-24T21:04:00+00:00'),
+      rc('GREEN LIGHT - PIT EXIT OPEN', '2026-10-24T21:05:00+00:00'),
+    ];
+    const laps = () => [lap(10, 1, null), lap(10, 2, 96_764)];
+    const seen: [string, number | undefined][] = [];
+    const withHook = laps();
+    const counts = markLaps(withHook, messages, 'Race', (r, l) =>
+      seen.push([r === 'unparsed' ? r : r.kind, l?.lap_number]),
+    );
+    expect(seen).toEqual([
+      ['deleted', 2],
+      ['deleted', undefined],
+      ['unparsed', undefined],
+      ['reinstated', 2],
+    ]);
+    const without = laps();
+    expect(markLaps(without, messages, 'Race')).toEqual(counts);
+    expect(withHook).toEqual(without);
+  });
+});

@@ -4,6 +4,7 @@ import type { Views } from './live.ts';
 export * from './circuits.ts';
 export * from './geo.ts';
 export * from './live.ts';
+export * from './race-control.ts';
 
 // The zod contracts of every API answer (A§10), shared by the server and the web.
 // Field names are the A§7 column names (snake_case, no mapping layer). Nullability
@@ -49,7 +50,19 @@ const MeetingFields = {
 export const Season = z.array(z.strictObject({ ...MeetingFields, sessions: z.array(SeasonSession) }));
 
 export const SessionDetail = z.strictObject({
-  session: z.strictObject({ ...SeasonSession.shape, meeting_key: int }),
+  // #99: why data is missing. `last_error` is the DDL's CHECK list (A§8), so no other text reaches the page.
+  session: z.strictObject({
+    ...SeasonSession.shape,
+    meeting_key: int,
+    source: z.enum(['openf1', 'f1-archive', 'f1-live', 'jolpica']),
+    fetch_count: int,
+    fail_count: int,
+    last_error: z
+      .string()
+      .regex(/^(http_\d{3}|rate_limited|timeout|network|schema|empty|db|unknown)$/)
+      .nullable(),
+    next_fetch_at: date.nullable(),
+  }),
   meeting: z.strictObject({ ...MeetingFields, year: int }),
   drivers: z.array(
     z.strictObject({
@@ -203,20 +216,25 @@ export function withWeatherRow(rows: Weather, row: Weather[number]): Weather {
   return [...rows.slice(Math.max(0, rows.length + 1 - MAX_WEATHER_ROWS)), row];
 }
 
+/** F1_REVISION: the release's git commit (CI's `github.sha`), or `dev` for any other build (A§10). */
+export const REVISION = /^(?:[0-9a-f]{40}|dev)$/;
+
+// One session or rain grid whose last attempt failed: retrying (with next_fetch_at) or `failed` for good.
+const Failed = z.strictObject({
+  session_key: int,
+  year: int,
+  meeting_name: text,
+  session_name: text,
+  fail_count: int,
+  last_error: text,
+  next_fetch_at: date.nullable(),
+});
+
 export const Status = z.strictObject({
+  revision: z.string().regex(REVISION),
   states: z.strictObject({ scheduled: int, due: int, fetched: int, final: int, failed: int }),
   cancelled: int,
-  failed: z.array(
-    z.strictObject({
-      session_key: int,
-      year: int,
-      meeting_name: text,
-      session_name: text,
-      fail_count: int,
-      last_error: text,
-      next_fetch_at: date.nullable(),
-    }),
-  ),
+  failed: z.array(Failed),
   // The live recorder's one row (A§8), null until it has run; `stale` = no report for 5 minutes.
   recorder: z
     .strictObject({
@@ -231,6 +249,19 @@ export const Status = z.strictObject({
       updated_at: date,
     })
     .nullable(),
+  // The ingest daemon's one row (A§8), null until it has run; `stale` = no report for 5 minutes.
+  ingest: z
+    .strictObject({ last_sync_at: date.nullable(), live_wait: z.boolean(), last_tick_at: date, stale: z.boolean() })
+    .nullable(),
+  // The rain grids (A§6.3): counts per state and the grids whose last attempt failed.
+  rain: z.strictObject({
+    states: z.strictObject({ live: int, final: int, failed: int }),
+    failed: z.array(Failed),
+  }),
+  // Races with race-control rows that look like a period but match no known form (A§6.1), computed on read.
+  rc_unmatched: z.array(
+    z.strictObject({ session_key: int, year: int, meeting_name: text, session_name: text, rows: int }),
+  ),
 });
 
 export const Live = z.strictObject({

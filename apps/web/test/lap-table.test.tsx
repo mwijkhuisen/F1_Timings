@@ -6,7 +6,7 @@ import { describe, expect, it } from 'vitest';
 import { teamColour } from '../src/lib/session.ts';
 import type { Period } from '../src/lib/track.ts';
 import { LapGrid, LapTable, Legend, type Metric, missingReason, type Show } from '../src/views/LapTable.tsx';
-import { rc } from './laps.ts';
+import { fetched, rc } from './laps.ts';
 
 // D10's cell rules on a hand-built race: 2 drivers × 3 laps, rendered statically (D4).
 
@@ -128,6 +128,7 @@ const detail = SessionDetail.parse({
     ingest_state: 'final',
     is_cancelled: false,
     meeting_key: 1290,
+    ...fetched,
   },
   meeting: {
     meeting_key: 1290,
@@ -508,7 +509,9 @@ describe('the legend and the unplaced rows', () => {
 
   it('lists race-control rows without a lap number as text', () => {
     const unplaced = [rc(null, 'SAFETY CAR DEPLOYED <b>', { date: '2026-10-11T12:34:56.000Z' })];
-    const html = renderToStaticMarkup(<LapTable detail={detail} laps={laps} track={{ periods: [], unplaced }} />);
+    const html = renderToStaticMarkup(
+      <LapTable detail={detail} laps={laps} track={{ periods: [], unplaced, unmatched: 0 }} />,
+    );
     expect(html).toContain(
       '<div class="muted"><p>No lap number in the data, not banded:</p><ul><li>14:34:56 SAFETY CAR DEPLOYED &lt;b&gt;</li></ul></div>',
     );

@@ -3,9 +3,10 @@ import { createServer } from 'node:net';
 import { join } from 'node:path';
 import { Laps, Pits, RaceControl, Rain, Season, Seasons, SessionDetail, Status, Stints, Weather } from '@f1/contracts';
 import type { Hono } from 'hono';
-import type { Kysely } from 'kysely';
+import { type Kysely, sql } from 'kysely';
 import { HttpResponse, http, passthrough } from 'msw';
 import pino from 'pino';
+import { Agent, setGlobalDispatcher } from 'undici';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import type { z } from 'zod';
 import { server } from '../../../test/msw.setup.ts';
@@ -29,6 +30,8 @@ const GRID: Record<number, string> = { 11384: 'normal', 11379: 'sprint' };
 const RACE = 11388; // left non-final
 const QUALI = 11392; // final
 const SPRINT = 11383; // final
+const SHA = 'a'.repeat(40);
+const SHA2 = 'b'.repeat(40);
 const FAILING = 11397; // Mexico City practice 1, set retrying by hand
 // The race's fastest lap (car 16, lap 60, 1:36.628) is deleted by one synthetic message.
 const SYNTHETIC = {
@@ -169,7 +172,13 @@ describe('api (f1_api login, Access JWT)', { timeout: 120_000 }, () => {
       ])
       .execute();
     apiDb = createDb(testDb.urls.f1_api);
-    app = createApp({ db: apiDb, access: access({ team: TEAM, aud: AUD }, log), log, liveDir: '/nonexistent' });
+    app = createApp({
+      db: apiDb,
+      access: access({ team: TEAM, aud: AUD }, log),
+      log,
+      liveDir: '/nonexistent',
+      revision: SHA,
+    });
     key = await rsaKey('test-kid');
     token = await jwt(key.priv);
   });
@@ -241,6 +250,56 @@ describe('api (f1_api login, Access JWT)', { timeout: 120_000 }, () => {
     } finally {
       await down.destroy();
     }
+  });
+
+  const TAILS = ['', '/laps', '/stints', '/pits', '/race-control', '/weather', '/rain'];
+
+  it('?v=<the api revision> changes nothing: status, body, cache-control and f1-revision', async () => {
+    for (const session of [QUALI, RACE])
+      for (const tail of TAILS) {
+        const path = `/api/v1/sessions/${session}${tail}`;
+        const [plain, versioned] = [await get(path), await get(`${path}?v=${SHA}`)];
+        expect(versioned.status, path).toBe(plain.status);
+        expect(await versioned.text(), path).toBe(await plain.text());
+        expect(versioned.headers.get('cache-control'), path).toBe(plain.headers.get('cache-control'));
+        expect(versioned.headers.get('f1-revision'), path).toBe(SHA);
+        expect(plain.headers.get('f1-revision'), path).toBe(SHA);
+      }
+  });
+
+  it('?v=<another revision> gets the same body but no-store, so it is never cached under the new key', async () => {
+    for (const tail of TAILS) {
+      const path = `/api/v1/sessions/${QUALI}${tail}`;
+      const plain = await (await get(path)).text();
+      for (const v of [SHA2, 'dev']) {
+        const res = await get(`${path}?v=${v}`);
+        expect(res.status, path).toBe(200);
+        expect(await res.text(), path).toBe(plain);
+        expect(res.headers.get('cache-control'), path).toBe('no-store');
+        expect(res.headers.get('f1-revision'), path).toBe(SHA);
+      }
+    }
+  });
+
+  it('a malformed or repeated v is the fixed 400, never echoed', async () => {
+    const bad = [
+      'v=',
+      'v',
+      'v=abc',
+      `v=${'a'.repeat(41)}`,
+      `v=${'A'.repeat(40)}`,
+      'v=DEV',
+      `v=${SHA}&v=${SHA}`,
+      'v=%3Cscript%3E',
+      `v=${'a'.repeat(5000)}`,
+    ];
+    for (const q of bad)
+      for (const tail of ['', '/laps', '/rain']) {
+        const res = await get(`/api/v1/sessions/${QUALI}${tail}?${q}`);
+        expect(res.status, q).toBe(400);
+        expect(res.headers.get('cache-control'), q).toBe('no-store');
+        expect(await res.text(), q).toBe('{"error":"bad request"}');
+      }
   });
 
   it('Cache-Control: private, max-age=86400 for a final session, no-store otherwise and on every error', async () => {
@@ -396,6 +455,7 @@ describe('api (f1_api login, Access JWT)', { timeout: 120_000 }, () => {
     expect(race.results.find((r) => r.driver_number === 3)).toMatchObject({ position: 1, grid: 1 });
 
     expect(await body('/api/v1/status', Status)).toEqual({
+      revision: SHA,
       states: { scheduled: 117, due: 1, fetched: 1, final: 2, failed: 0 },
       cancelled: 10,
       failed: [
@@ -410,7 +470,162 @@ describe('api (f1_api login, Access JWT)', { timeout: 120_000 }, () => {
         },
       ],
       recorder: null,
+      ingest: null,
+      rain: { states: { live: 1, final: 2, failed: 0 }, failed: [] },
+      // The sprint is a Race-type session: its real FORMATION LAP(S) BEHIND SAFETY CAR and SAFETY CAR LIGHTS OFF are ignored (D4).
+      rc_unmatched: [],
     });
+  });
+
+  it('the status carries the ingest row (stale after 5 minutes), the rain counts and failed grids, and the races with unmatched wording', async () => {
+    const status = async () => body('/api/v1/status', Status);
+    const rc = (session_key: number, message: string, flag: string | null = null) => ({
+      session_key,
+      source: 'openf1',
+      date: new Date('2026-10-11T13:00:00Z'),
+      category: 'Other',
+      flag,
+      message,
+    });
+    try {
+      await admin
+        .insertInto('ingest_status')
+        .values({ last_sync_at: new Date('2026-10-26T03:00:00Z'), live_wait: false, last_tick_at: new Date() })
+        .execute();
+      expect((await status()).ingest).toEqual({
+        last_sync_at: '2026-10-26T03:00:00.000Z',
+        live_wait: false,
+        last_tick_at: expect.any(String),
+        stale: false,
+      });
+      await admin
+        .updateTable('ingest_status')
+        .set({ last_tick_at: new Date(Date.now() - 6 * 60_000), live_wait: true })
+        .execute();
+      expect((await status()).ingest).toMatchObject({ live_wait: true, stale: true });
+      await admin
+        .updateTable('ingest_status')
+        .set({ last_tick_at: new Date(Date.now() + 2 * 60_000) })
+        .execute();
+      expect((await status()).ingest).toMatchObject({ stale: true }); // a tick from the future is stale too
+
+      // The failed grid is FAILING's: the other three states are the seeded grids.
+      await admin
+        .insertInto('rain_grid')
+        .values({
+          session_key: FAILING,
+          source: 'open-meteo',
+          map_id: 'test-circuit',
+          centre_lat: 25.49,
+          centre_lon: -80.12,
+          size: 7,
+          step_m: 1000,
+          state: 'failed',
+          fail_count: 3,
+          last_error: 'http_429',
+          next_fetch_at: new Date('2026-10-30T20:25:00Z'),
+          updated_at: new Date('2026-10-26T00:00:00Z'),
+        })
+        .execute();
+      // RACE is a Race, FAILING a practice. Only the race's period-like row with no form and no note is listed.
+      await admin
+        .insertInto('race_control')
+        .values([
+          rc(RACE, 'SAFETY CAR IN'),
+          rc(RACE, 'STEWARDS: UNDER SAFETY CAR INCIDENT NOTED'),
+          rc(RACE, 'SAFETY CAR DEPLOYED'),
+          rc(RACE, 'RED FLAG - SESSION SUSPENDED'),
+          rc(FAILING, 'SAFETY CAR IN'),
+        ])
+        .execute();
+      const got = await status();
+      expect(got.rain).toEqual({
+        states: { live: 1, final: 2, failed: 1 },
+        failed: [
+          {
+            session_key: FAILING,
+            year: 2026,
+            meeting_name: expect.any(String),
+            session_name: 'Practice 1',
+            fail_count: 3,
+            last_error: 'http_429',
+            next_fetch_at: '2026-10-30T20:25:00.000Z',
+          },
+        ],
+      });
+      // Our one row of the race; the sprint's real rows are ignored procedure (D4).
+      expect(got.rc_unmatched).toEqual([
+        { session_key: RACE, year: 2026, meeting_name: expect.any(String), session_name: 'Race', rows: 1 },
+      ]);
+    } finally {
+      await admin.deleteFrom('ingest_status').execute();
+      await admin.deleteFrom('rain_grid').where('session_key', '=', FAILING).execute();
+      await admin
+        .deleteFrom('race_control')
+        .where('source', '=', 'openf1')
+        .where('date', '=', new Date('2026-10-11T13:00:00Z'))
+        .execute();
+    }
+  });
+
+  it('the api role reads ingest_status and cannot write it; f1_ingest cannot delete it', async () => {
+    const code = (p: Promise<unknown>) =>
+      p.then(
+        () => 'ok',
+        (e: { code?: string }) => e.code,
+      );
+    const ingestDb = createDb(testDb.urls.f1_ingest);
+    try {
+      expect(await code(sql`SELECT * FROM ingest_status`.execute(apiDb))).toBe('ok');
+      for (const stmt of [
+        sql`INSERT INTO ingest_status (live_wait, last_tick_at) VALUES (false, now())`,
+        sql`UPDATE ingest_status SET live_wait = true`,
+        sql`DELETE FROM ingest_status`,
+      ])
+        expect(await code(stmt.execute(apiDb))).toBe('42501');
+      expect(await code(sql`DELETE FROM ingest_status`.execute(ingestDb))).toBe('42501');
+    } finally {
+      await ingestDb.destroy();
+    }
+  });
+
+  it('a session says why data is missing (#99): source, fetch and fail counts, the error code and the next try', async () => {
+    const session = async (key: number) => (await body(`/api/v1/sessions/${key}`, SessionDetail)).session;
+    // Final: fetched once by the seeding, no failure.
+    expect(await session(QUALI)).toMatchObject({
+      ingest_state: 'final',
+      source: 'openf1',
+      fetch_count: 1,
+      fail_count: 0,
+      last_error: null,
+      next_fetch_at: null,
+    });
+    // Due in back-off: the code and the next try.
+    expect(await session(FAILING)).toMatchObject({
+      ingest_state: 'due',
+      source: 'openf1',
+      fetch_count: 0,
+      fail_count: 2,
+      last_error: 'timeout',
+      next_fetch_at: '2026-10-30T20:25:00.000Z',
+    });
+    // Failed: the 9th failure, never retried.
+    const failed = { ingest_state: 'failed', fail_count: 9, last_error: 'http_503', next_fetch_at: null };
+    try {
+      await admin.updateTable('session').set(failed).where('session_key', '=', FAILING).execute();
+      expect(await session(FAILING)).toMatchObject({ ...failed, source: 'openf1', fetch_count: 0 });
+    } finally {
+      await admin
+        .updateTable('session')
+        .set({
+          ingest_state: 'due',
+          fail_count: 2,
+          last_error: 'timeout',
+          next_fetch_at: new Date('2026-10-30T20:25:00Z'),
+        })
+        .where('session_key', '=', FAILING)
+        .execute();
+    }
   });
 
   it('the status carries the recorder row: names, and stale after 5 minutes', async () => {
@@ -451,7 +666,7 @@ describe('api (f1_api login, Access JWT)', { timeout: 120_000 }, () => {
   });
 
   it('the api role on @hono/node-server: a taken port exits 1; it listens, answers and exits 0 on SIGTERM', async () => {
-    const env = { CF_ACCESS_TEAM: TEAM, CF_ACCESS_AUD: AUD, DATABASE_URL: testDb.urls.f1_api };
+    const env = { CF_ACCESS_TEAM: TEAM, CF_ACCESS_AUD: AUD, DATABASE_URL: testDb.urls.f1_api, F1_REVISION: SHA2 };
     const blocker = createServer();
     const port = await new Promise<number>((resolve) =>
       blocker.listen(0, '0.0.0.0', () => resolve((blocker.address() as { port: number }).port)),
@@ -463,6 +678,9 @@ describe('api (f1_api login, Access JWT)', { timeout: 120_000 }, () => {
     server.use(http.all(`${base}/*`, () => passthrough())); // the real server, not msw
     const signals = process.listenerCount('SIGTERM');
     const interrupts = process.listenerCount('SIGINT');
+    // A connection pooled by an earlier test's msw-answered certs fetch makes the role's own fetch resolve the real
+    // host (a lookup, then 503): start from a fresh pool.
+    setGlobalDispatcher(new Agent());
     const exit = run(['api'], env, () => {}, port);
     let health: Response | undefined;
     for (let i = 0; i < 100 && !health; i++)
@@ -474,6 +692,11 @@ describe('api (f1_api login, Access JWT)', { timeout: 120_000 }, () => {
     const seasons = await fetch(`${base}/api/v1/seasons`);
     expect(seasons.status).toBe(401);
     expect(await seasons.text()).toBe('{"error":"unauthorized"}');
+    expect(seasons.headers.get('f1-revision')).toBeNull(); // a 401 carries no header
+    const status = await fetch(`${base}/api/v1/status`, { headers: { 'cf-access-jwt-assertion': token } });
+    expect(status.status).toBe(200);
+    expect(status.headers.get('f1-revision')).toBe(SHA2); // the role reads F1_REVISION
+    expect(((await status.json()) as { revision: string }).revision).toBe(SHA2);
     expect(process.listenerCount('SIGTERM')).toBe(signals + 1);
     process.emit('SIGTERM', 'SIGTERM'); // the listener only: no real signal reaches the worker
     expect(await exit).toBe(0);
@@ -481,8 +704,16 @@ describe('api (f1_api login, Access JWT)', { timeout: 120_000 }, () => {
     await expect(fetch(`${base}/healthz`)).rejects.toThrow();
   });
 
+  it('a malformed F1_REVISION exits 78 before listening and logs only the name', async () => {
+    const out: string[] = [];
+    const env = { CF_ACCESS_TEAM: TEAM, CF_ACCESS_AUD: AUD, DATABASE_URL: testDb.urls.f1_api, F1_REVISION: 'bad-rev' };
+    expect(await run(['api'], env, (l) => out.push(l))).toBe(78);
+    expect(out).toEqual(['api: F1_REVISION is malformed']);
+  });
+
   it('logs no token, header or password', () => {
     const text = lines.join('');
+    expect(text).not.toMatch(/%3Cscript|bad-rev|a{41}/);
     expect(text).not.toMatch(/eyJ|cf-access|cloudflareaccess/i);
     expect(text).not.toContain(new URL(testDb.urls.f1_api).password);
   });

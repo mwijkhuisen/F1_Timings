@@ -3,18 +3,26 @@ import { Lap, type Live as LiveData, type Recordings, SessionDetail, view, weath
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from 'vitest';
+import { isStale, markStale } from '../src/lib/api.ts';
 import { useTitle } from '../src/lib/routes.ts';
 import { streamUrl } from '../src/lib/stream.ts';
 import { fmtClock } from '../src/lib/time.ts';
 import { Live, Replay } from '../src/views/Live.tsx';
 import { Player, type PlayerRecording } from '../src/views/Player.tsx';
 import { practiceState, raceState } from './feed-state.ts';
+import { fetched } from './laps.ts';
 
 // `view` (a zod parse of a topic) counts what the tower, the pit wall and the status series derive from the state.
 vi.mock('@f1/contracts', async (load) => {
   const m = await load<typeof import('@f1/contracts')>();
   return { ...m, view: vi.fn(m.view) };
+});
+
+// markStale calls through: a test sees that a stream event that fails its contract raises the app-wide flag.
+vi.mock('../src/lib/api.ts', async (load) => {
+  const m = await load<typeof import('../src/lib/api.ts')>();
+  return { ...m, markStale: vi.fn(m.markStale) };
 });
 
 // The Weather tab's chart (P5b): a stub ECharts that keeps every option set, so a test sees each redraw.
@@ -317,10 +325,43 @@ describe('Player', () => {
     expect(openCount()).toBe(1);
     last().emit('snapshot', { t: start, state: {}, laps: [], stints: [] });
     expect(host.textContent).not.toContain(reload);
+  });
 
-    // Data that fails its contract is an error too.
-    last().emit('delta', { t: 'x' });
+  it.each([
+    ['a snapshot', 'snapshot'],
+    ['a delta', 'delta'],
+  ])('%s that fails its contract marks the app stale, closes and never reopens', (_name, event) => {
+    const start = S + 3_600_000;
+    render({ recording: ended, start });
+    if (event === 'delta') last().emit('snapshot', { t: start, state: {}, laps: [], stints: [] });
+    expect(markStale).not.toHaveBeenCalled();
+    last().emit(event, { t: 'x' });
+    expect(markStale).toHaveBeenCalledTimes(1);
+    expect(isStale()).toBe(true);
     expect(last().closed).toBe(true);
+    // The banner is the app's (ui/ErrorView.tsx): the player adds no line of its own.
+    expect(host.textContent).not.toContain('A new version is out');
+    expect(host.textContent).not.toContain('Reconnecting…');
+    expect(host.textContent).not.toContain('keeps failing');
+    const opened = FakeES.all.length;
+    advance(60_000);
+    expect(FakeES.all).toHaveLength(opened);
+    expect(openCount()).toBe(0);
+  });
+
+  it('offline, the hint after five failures says the page needs the network (#121, D5)', () => {
+    const onLine = vi.spyOn(navigator, 'onLine', 'get').mockReturnValue(false);
+    onTestFinished(() => onLine.mockRestore());
+    const start = S + 3_600_000;
+    render({ recording: ended, start });
+    last().emit('snapshot', { t: start, state: {}, laps: [], stints: [] });
+    for (const wait of [1_000, 2_000, 4_000, 8_000]) {
+      last().emit('error');
+      advance(wait);
+    }
+    last().emit('error');
+    expect(host.textContent).toContain('You are offline: this page needs the network.');
+    expect(host.textContent).not.toContain('The stream keeps failing.');
   });
 
   it('a silent stream is reopened after 40 s without events; pings keep it open', () => {
@@ -568,6 +609,8 @@ const detail = SessionDetail.parse({
     date_end: '2026-10-25T22:00:00.000Z',
     ingest_state: 'scheduled',
     is_cancelled: false,
+    ...fetched,
+    fetch_count: 0,
   },
   meeting: {
     meeting_key: 1300,
@@ -1872,6 +1915,19 @@ describe('wake lock', () => {
     last().emit('snapshot', { t: NOW, state: {}, laps: [], stints: [] });
     await flush();
     expect(held()).toBe(1);
+  });
+
+  it('a stale stream releases it and never takes it again', async () => {
+    render({});
+    await flush();
+    expect(held()).toBe(1);
+    last().emit('delta', { t: 'x' }); // fails its contract: reload, no retry
+    await flush();
+    expect(held()).toBe(0);
+    advance(60_000);
+    await visibility('visible');
+    expect(held()).toBe(0);
+    expect(request).toHaveBeenCalledTimes(1);
   });
 
   it('without the API the player plays', async () => {

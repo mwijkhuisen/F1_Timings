@@ -90,11 +90,12 @@ describe('trackPeriods', () => {
 
   it('lists a period row without a lap number as unplaced and changes nothing with it', () => {
     const open = rc(null, SC);
-    expect(trackPeriods([open, rc(5, SC_IN)])).toEqual({ periods: [], unplaced: [open] });
+    expect(trackPeriods([open, rc(5, SC_IN)])).toEqual({ periods: [], unplaced: [open], unmatched: 0 });
     const end = rc(null, SC_IN);
     expect(trackPeriods([rc(3, SC), end, rc(9, 'GREEN LIGHT - PIT EXIT OPEN')])).toEqual({
       periods: [{ kind: 'sc', from: 3, to: 9 }],
       unplaced: [end],
+      unmatched: 0,
     });
   });
 
@@ -109,7 +110,24 @@ describe('trackPeriods', () => {
         rc(6, SC_IN), // nothing open
         resume(7),
       ]),
-    ).toEqual({ periods: [], unplaced: [] });
+    ).toEqual({ periods: [], unplaced: [], unmatched: 0 }); // THROUGH THE PIT LANE looks like a period, no form, and is ignored (D4)
+  });
+
+  it('counts the period-like rows that match no form, 2027-style wording, and leaves the periods alone', () => {
+    const known = [rc(10, SC), rc(13, SC_IN), rc(20, 'RED FLAG - SESSION SUSPENDED'), resume(22)];
+    expect(trackPeriods(known)).toMatchObject({ unmatched: 0 }); // every one of these matches a form
+    const drift = [
+      rc(11, 'THE SAFETY CAR DEPLOYED'), // the forms are anchored at the start
+      rc(12, 'SAFETY CAR IN'),
+      rc(14, 'VSC ENDED'),
+      rc(15, 'INCIDENT INVOLVING CAR 4 (NOR) NOTED - UNDER SAFETY CAR - NO FURTHER INVESTIGATION'), // a note
+      rc(16, 'GREEN LIGHT - PIT EXIT OPEN'),
+      rc(17, 'SC DEPLOYED'), // SC is a word now
+    ];
+    const mixed = [...known.slice(0, 2), ...drift, ...known.slice(2)];
+    const t = trackPeriods(mixed);
+    expect(t.unmatched).toBe(4);
+    expect(t.periods).toEqual(trackPeriods(known).periods);
   });
 });
 
