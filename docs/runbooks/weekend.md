@@ -35,7 +35,7 @@ Do this by Thursday evening, outside a session.
 
 - **The screen stays on by itself** while the player plays and the page is in front, once #97 is deployed. Until then, turn Auto-Lock off: iPhone Settings, Display & Brightness, Auto-Lock, Never; Android Settings, Display, Screen timeout. Low Power mode (iPhone) or Battery Saver can refuse the lock: the screen then locks as usual, and the player reopens its stream after unlock.
 - **Add to Home Screen:** Safari: Share, Add to Home Screen; Chrome: the menu (three dots), Add to Home screen. On iOS 26, Safari's Add to Home Screen opens the site as a web app by default (the "Open as Web App" switch in the add sheet), even without a manifest; such a web app has its own cookies and storage, so it needs its own Access sign-in and keeps its own delay setting. With the switch off it opens in Safari. On Android the site has no manifest, so the icon opens it in the browser.
-- **An Access session that expires mid-race:** the player shows "The stream keeps failing. Reload the page (your Access session may have expired)." Reload and sign in to Access again. `/live` resumes at the live edge with the same delay (the delay is stored on the device).
+- **An Access session that expires mid-race:** the player shows "The stream keeps failing. Reload the page (your Access session may have expired)." The screen then locks as usual. Reload and sign in to Access again. `/live` resumes at the live edge with the same delay (the delay is stored on the device).
 
 ## During a session
 

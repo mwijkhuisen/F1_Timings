@@ -1787,6 +1787,25 @@ describe('wake lock', () => {
     await flush();
   });
 
+  it('the reload hint releases it, and the next snapshot takes it again', async () => {
+    render({});
+    await flush();
+    for (const wait of [1_000, 2_000, 4_000, 8_000]) {
+      last().emit('error');
+      advance(wait);
+    }
+    await flush();
+    expect(held()).toBe(1); // still reconnecting: the lock holds through the backoff
+    last().emit('error');
+    await flush();
+    expect(host.textContent).toContain('The stream keeps failing.');
+    expect(held()).toBe(0);
+    advance(16_000);
+    last().emit('snapshot', { t: NOW, state: {}, laps: [], stints: [] });
+    await flush();
+    expect(held()).toBe(1);
+  });
+
   it('without the API the player plays', async () => {
     Reflect.deleteProperty(navigator, 'wakeLock');
     render({});

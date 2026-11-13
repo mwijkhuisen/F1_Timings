@@ -419,12 +419,13 @@ export function Player({
   const [open, setOpen] = useState<Open>(() => (resumed === null ? { at: start } : { at: resumed, still: true }));
   const at = open.at;
   const playing = at !== null && !open.still;
-  useWakeLock(playing);
   const [seek, setSeek] = useState<number | null>(null); // a pending seek, shown on the bar
   const [tab, setTab] = useState<'tower' | 'laps' | 'weather'>('tower');
   // The focused driver's number (a tap on the tower's driver cell); page state that the player bar reads.
   const [focus, setFocus] = useState<string | null>(null);
   const [fails, setFails] = useState(0); // errors since the last snapshot
+  // The reload hint lets the screen lock (owner, 2026-11-13): an expired Access session never comes back by itself.
+  useWakeLock(playing && fails < FAILING);
   const [since, setSince] = useState<string | null>(null); // what the last forward seek skipped
   const [announce, setAnnounce] = useState(readAnnounce);
   // Minimized, the bar keeps only its head (the clock line, Play/Pause and the toggle); the stream is untouched.
