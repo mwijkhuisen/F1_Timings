@@ -11,7 +11,8 @@ import {
   Stints,
   Weather,
 } from '@f1/contracts';
-import { QueryClient, queryOptions, useQuery } from '@tanstack/react-query';
+import { QueryClient, queryOptions, useQuery, useQueryClient } from '@tanstack/react-query';
+import { useEffect, useRef } from 'react';
 import { ZodError } from 'zod';
 import { pollMs } from './session.ts';
 
@@ -65,32 +66,44 @@ export const seasonQuery = (year: number) =>
 export const useSeason = (year: number, poll?: (data: Season | undefined) => number | false) =>
   useQuery({ ...seasonQuery(year), refetchInterval: poll ? (q) => poll(q.state.data) : false });
 
-/** Polled while its data can still change (`pollMs`), so a page left open shows the laps once they arrive (#99). */
+/** Polled while its data can still change (`pollMs`), so a page left open sees each new fetch (#99). */
 export const sessionQuery = (key: number) =>
   queryOptions({
     queryKey: ['session', key],
     queryFn: ({ signal }) => getJson(`/api/v1/sessions/${key}`, SessionDetail, signal),
     staleTime: STALE_MS,
-    refetchInterval: (q) => (q.state.data ? pollMs(q.state.data.session, Date.now()) : false),
+    refetchInterval: (q) => (q.state.data ? pollMs(q.state.data.session) : false),
   });
 
 export const useSession = (key: number) => useQuery(sessionQuery(key));
 
-/** `poll`: the session's `pollMs`, from the session page (#99). */
-export const useLaps = (key: number, poll: number | false = false) =>
+/**
+ * A new fetch of the session (its `fetch_count` changed, not the first value seen) refetches its laps, stints and
+ * weather once (#99); only the session query polls.
+ */
+export function useRefetchOnFetch(key: number, fetchCount: number | undefined) {
+  const client = useQueryClient();
+  const seen = useRef(fetchCount);
+  useEffect(() => {
+    if (fetchCount === undefined) return;
+    if (seen.current !== undefined && seen.current !== fetchCount)
+      for (const what of ['laps', 'stints', 'weather']) void client.invalidateQueries({ queryKey: [what, key] });
+    seen.current = fetchCount;
+  }, [client, key, fetchCount]);
+}
+
+export const useLaps = (key: number) =>
   useQuery({
     queryKey: ['laps', key],
     queryFn: ({ signal }) => getJson(`/api/v1/sessions/${key}/laps`, Laps, signal),
     staleTime: STALE_MS,
-    refetchInterval: poll,
   });
 
-export const useStints = (key: number, poll: number | false = false) =>
+export const useStints = (key: number) =>
   useQuery({
     queryKey: ['stints', key],
     queryFn: ({ signal }) => getJson(`/api/v1/sessions/${key}/stints`, Stints, signal),
     staleTime: STALE_MS,
-    refetchInterval: poll,
   });
 
 /** Races only (`enabled`): the SC, VSC and red-flag bands (lib/track.ts). */
@@ -102,23 +115,27 @@ export const useRaceControl = (key: number, enabled: boolean) =>
     enabled,
   });
 
-/** The weather samples (P5a): the Weather tab and the session head's line; the head passes the session's `poll`. */
-export const useWeather = (key: number, poll: number | false = false) =>
+/** The weather samples (P5a): the Weather tab and the session head's line. */
+export const useWeather = (key: number) =>
   useQuery({
     queryKey: ['weather', key],
     queryFn: ({ signal }) => getJson(`/api/v1/sessions/${key}/weather`, Weather, signal),
     staleTime: STALE_MS,
-    refetchInterval: poll,
   });
 
-/** The rain map's grid and frames (P5c); `live` polls every 60 s, as the server adds a frame every 15 min. */
-export const useRain = (key: number, live = false) =>
-  useQuery({
+/**
+ * The rain map's grid and frames (P5c): polled every 60 s while `live` (the player) or while the grid is `live`
+ * (#99), as the server adds a frame every 15 min.
+ */
+export const rainQuery = (key: number, live = false) =>
+  queryOptions({
     queryKey: ['rain', key],
     queryFn: ({ signal }) => getJson(`/api/v1/sessions/${key}/rain`, Rain, signal),
     staleTime: STALE_MS,
-    refetchInterval: live ? 60_000 : false,
+    refetchInterval: (q) => (live || q.state.data?.grid?.state === 'live' ? 60_000 : false),
   });
+
+export const useRain = (key: number, live = false) => useQuery(rainQuery(key, live));
 
 /** A circuit's OpenStreetMap layers (ODbL, ADR-0008): SVG path data in km, any of them possibly empty. */
 export type OsmLayers = { water: string; coast: string; roads: string };
@@ -154,12 +171,16 @@ export const useStatus = (refetchMs: number | false = false) =>
     refetchInterval: refetchMs,
   });
 
-/** Polled every 30 s, so `/live` picks up a session that starts and the player an `ended_at` that is set. */
-export const useLive = () =>
+/**
+ * Polled every 30 s while `enabled`, so `/live` picks up a session that starts and the player an `ended_at` that is
+ * set; the session page enables it only while its session can be live.
+ */
+export const useLive = (enabled = true) =>
   useQuery({
     queryKey: ['live'],
     queryFn: ({ signal }) => getJson('/api/v1/live', Live, signal),
     refetchInterval: 30_000,
+    enabled,
   });
 
 export const useRecordings = (refetchMs: number | false = false) =>

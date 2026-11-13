@@ -1,9 +1,11 @@
 // @vitest-environment happy-dom
 import type { Laps, Live, SessionDetail, Stints } from '@f1/contracts';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
+import { HttpResponse, http } from 'msw';
 import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { server } from '../../../test/msw.setup.ts';
 import type { View } from '../src/lib/routes.ts';
 import { Session } from '../src/views/Session.tsx';
 import { lap, sessionDetail } from './laps.ts';
@@ -102,6 +104,7 @@ describe('Session without laps: the reason, no dead end (#99)', () => {
     session: { session_key: KEY, meeting_name: null, session_name: null, date_start: '', date_end: '' },
     recording: { id: 5, started_at: '2026-10-31T19:00:00.000Z', ended_at: null, complete: false },
   };
+  let client: QueryClient;
   const show = (
     view: View,
     session: Partial<SessionDetail['session']> = {},
@@ -111,7 +114,7 @@ describe('Session without laps: the reason, no dead end (#99)', () => {
     act(() => root.unmount());
     root = createRoot(host);
     history.replaceState(null, '', `${PATH}/${view}`);
-    const client = new QueryClient({ defaultOptions: { queries: { retry: false, staleTime: Infinity } } });
+    client = new QueryClient({ defaultOptions: { queries: { retry: false, staleTime: Infinity } } });
     client.setQueryData(['race-control', KEY], []);
     const d = sessionDetail('Race', 'Race', [[1, 'VER']]);
     client.setQueryData(['session', KEY], { ...d, session: { ...d.session, ...session } });
@@ -140,19 +143,97 @@ describe('Session without laps: the reason, no dead end (#99)', () => {
   });
 
   it('Laps, Stints and Weather each say why', () => {
-    expect(show('laps', { ingest_state: 'failed', fail_count: 9, last_error: 'schema' })).toBe(
+    expect(show('laps', { ingest_state: 'failed', fail_count: 9, last_error: 'schema', fetch_count: 0 })).toBe(
       '<p>The fetch failed 9 times (unexpected data) and is not retried.</p>',
     );
     expect(show('stints', { is_cancelled: true })).toBe('<p>No stints: the session was cancelled.</p>');
     expect(show('stints', {}, { laps: [lap(1, 1)] })).toBe('<p>No stints in the OpenF1 data.</p>');
     expect(show('weather', { source: 'f1-archive' })).toMatch(/^<p>No weather in the F1 archive.<\/p>/);
-    expect(show('laps', {}, { now: live })).toBe('<p>Live now: <a href="/live">follow it</a>.</p>');
+    expect(show('laps', { ingest_state: 'due', fetch_count: 0 }, { now: live })).toBe(
+      '<p>Live now: <a href="/live">follow it</a>.</p>',
+    );
   });
 
   it('the head says "data final", and "Live now · Follow" while live', () => {
-    show('laps', {}, { now: live });
+    show('laps');
+    expect(host.querySelector('.head p.muted')?.textContent).toContain(' · data final');
+    show('laps', { ingest_state: 'scheduled', fetch_count: 0 }, { now: live });
     const meta = host.querySelector('.head p.muted')?.textContent;
-    expect(meta).toContain(' · data final · Live now · Follow');
+    expect(meta).toMatch(/ · Live now · Follow$/);
+    expect(meta).not.toContain('data');
     expect(host.querySelector('.head a[href="/live"]')?.textContent).toBe('Follow');
+  });
+
+  it('asks /live only while the session is scheduled or due and not cancelled, and ignores a cached answer else (F7)', () => {
+    const asked = () =>
+      client
+        .getQueryCache()
+        .find({ queryKey: ['live'] })
+        ?.isActive();
+    for (const ingest_state of ['scheduled', 'due'] as const) {
+      show('laps', { ingest_state, fetch_count: 0 }, { now: live });
+      expect(asked()).toBe(true);
+    }
+    // The cache holds an open recording of this session, but a final, fetched, failed or cancelled one is never live.
+    for (const session of [
+      { ingest_state: 'final' },
+      { ingest_state: 'fetched' },
+      { ingest_state: 'failed' },
+      { ingest_state: 'due', is_cancelled: true },
+    ] as const) {
+      expect(show('laps', session, { now: live })).not.toContain('Live now');
+      expect(asked()).toBe(false);
+      expect(host.querySelector('.head p.muted')?.textContent).not.toContain('Live now');
+    }
+  });
+});
+
+describe('Session: a new fetch refetches its laps, stints and weather (#99)', () => {
+  const d = sessionDetail('Race', 'Race', [[1, 'VER']]);
+  const asked = { laps: 0, stints: 0, weather: 0 };
+  const count = (what: keyof typeof asked, body: unknown[]) =>
+    http.get(`*/api/v1/sessions/${KEY}/${what}`, () => {
+      asked[what]++;
+      return HttpResponse.json(body);
+    });
+
+  it('on a changed fetch_count, once each; not on an answer with the same fetch_count', async () => {
+    server.use(count('laps', [lap(1, 1)]), count('stints', []), count('weather', []));
+    asked.laps = asked.stints = asked.weather = 0;
+    history.replaceState(null, '', `${PATH}/stints`);
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false, staleTime: Infinity } } });
+    const due = { ...d, session: { ...d.session, ingest_state: 'due', fetch_count: 1 } } as const;
+    client.setQueryData(['session', KEY], due);
+    client.setQueryData(['laps', KEY], [lap(1, 1)]);
+    client.setQueryData(['stints', KEY], []);
+    client.setQueryData(['weather', KEY], []);
+    client.setQueryData(['race-control', KEY], []);
+    client.setQueryData(['season', 2026], null);
+    client.setQueryData(['recordings'], null);
+    client.setQueryData(['live'], null);
+    act(() =>
+      root.render(
+        <QueryClientProvider client={client}>
+          <Session session={KEY} view="stints" />
+        </QueryClientProvider>,
+      ),
+    );
+    expect(host.innerHTML).toContain('No stints in the OpenF1 data.');
+
+    // A poll whose answer changed, but not its fetch_count: nothing else is asked.
+    act(() => client.setQueryData(['session', KEY], { ...due, session: { ...due.session, ingest_state: 'fetched' } }));
+    await new Promise((r) => setTimeout(r, 50));
+    expect(asked).toEqual({ laps: 0, stints: 0, weather: 0 });
+
+    // A new fetch: the laps, the stints (this tab) and the weather (the head) are asked once each.
+    act(() =>
+      client.setQueryData(['session', KEY], {
+        ...due,
+        session: { ...due.session, ingest_state: 'final', fetch_count: 2 },
+      }),
+    );
+    await vi.waitFor(() => expect(asked).toEqual({ laps: 1, stints: 1, weather: 1 }));
+    await new Promise((r) => setTimeout(r, 50));
+    expect(asked).toEqual({ laps: 1, stints: 1, weather: 1 });
   });
 });

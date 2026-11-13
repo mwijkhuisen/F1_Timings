@@ -116,7 +116,6 @@ export function StintBars({
   periods?: readonly Period[];
 }) {
   const drivers = orderDrivers(detail, laps);
-  if (drivers.length === 0 || stints.length === 0) return <p>No stints yet.</p>;
   const { total, ticks, rows } = stintLayout(drivers, laps, stints);
   const used = new Set(rows.flatMap((r) => inOrder(r).map((s) => s.compound)));
   const compounds = [...COMPOUND_ORDER.filter((c) => used.has(c)), ...(used.has(null) ? [null] : [])];
@@ -223,22 +222,23 @@ export function StintsTab({
   detail,
   laps,
   live,
-  poll,
+  now,
 }: {
   session: number;
   detail: SessionDetail;
   laps: Laps;
   live: Live | null;
-  poll: number | false;
+  /** The clock of the reason, epoch ms. */
+  now: number;
 }) {
-  const stints = useStints(session, poll);
+  const stints = useStints(session);
   const rc = useRaceControl(session, detail.session.type === 'Race' && laps.length > 0);
   const periods = useMemo(
     () => (rc.data ? trackPeriods(rc.data).periods.filter((p) => p.kind !== 'red') : []),
     [rc.data],
   );
   if (!stints.data) return <Pending error={stints.error} />;
-  if (stints.data.length === 0) return <NoData session={detail.session} live={live} what="stints" />;
+  if (stints.data.length === 0) return <NoData session={detail.session} live={live} what="stints" now={now} />;
   return (
     <>
       {rc.error && <p className="muted">Race control did not load: no SC or VSC lines.</p>}

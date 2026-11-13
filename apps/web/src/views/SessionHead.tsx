@@ -2,8 +2,7 @@ import type { Live, Recordings, Season, SessionDetail, Weather } from '@f1/contr
 import { useMemo } from 'react';
 import { useRecordings, useSeason, useWeather } from '../lib/api.ts';
 import { Link, sessionPath, type View } from '../lib/routes.ts';
-import { roundNumbers, shortName } from '../lib/season.ts';
-import { isLiveNow } from '../lib/session.ts';
+import { isLiveNow, roundNumbers, shortName } from '../lib/season.ts';
 import { fmtInstant } from '../lib/time.ts';
 import { headLine, summarise } from '../lib/weather.ts';
 import { Cancelled } from '../ui/Cancelled.tsx';
@@ -90,22 +89,12 @@ export function SessionHead({
 
 /**
  * The head with the season, the recordings and the weather, each shown once it loads (cached across pages; the
- * weather is the Weather tab's query, polled here with the session's `poll` on every tab).
+ * weather is the Weather tab's query).
  */
-export function SessionHeadLoader({
-  detail,
-  view,
-  live,
-  poll,
-}: {
-  detail: SessionDetail;
-  view: View;
-  live: Live | null;
-  poll: number | false;
-}) {
+export function SessionHeadLoader({ detail, view, live }: { detail: SessionDetail; view: View; live: Live | null }) {
   const season = useSeason(detail.meeting.year);
   const recordings = useRecordings();
-  const weather = useWeather(detail.session.session_key, poll);
+  const weather = useWeather(detail.session.session_key);
   return (
     <SessionHead
       detail={detail}

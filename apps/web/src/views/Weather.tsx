@@ -18,8 +18,8 @@ import { weatherChartOption } from './weather-chart-option.ts';
 
 type Data = { detail: SessionDetail; laps: Laps | null; live: Live | null };
 
-export function WeatherTab({ session, ...data }: Data & { session: number }) {
-  // The session head's observer of this query polls (#99).
+/** `now`: the clock of the reason, epoch ms. */
+export function WeatherTab({ session, ...data }: Data & { session: number; now: number }) {
   const weather = useWeather(session);
   return (
     <>

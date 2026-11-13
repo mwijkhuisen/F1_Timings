@@ -204,7 +204,7 @@ describe('the rain map card', () => {
     const d = sessionDetail('Race', 'Race');
     return {
       ...d,
-      session: { ...d.session, date_start: '2026-11-09T14:10:00Z', ...over },
+      session: { ...d.session, date_start: '2026-11-09T14:10:00Z', date_end: '2026-11-09T15:10:00Z', ...over },
       meeting: { ...d.meeting, circuit_short_name: 'Monza' },
     };
   };
@@ -213,9 +213,11 @@ describe('the rain map card', () => {
     rain?: Rain,
     files?: { outline: string | null; osm: OsmLayers | null },
     cap?: number,
+    /** When the rain answer came (its `dataUpdatedAt`, the card's clock); by default the session's end. */
+    updatedAt = Date.parse(detail.session.date_end),
   ) => {
     const client = new QueryClient({ defaultOptions: { queries: { enabled: false } } });
-    if (rain) client.setQueryData(['rain', detail.session.session_key], rain);
+    if (rain) client.setQueryData(['rain', detail.session.session_key], rain, { updatedAt });
     if (files) client.setQueryData(['map', rain?.grid?.map_id ?? null], files);
     return renderToStaticMarkup(
       <QueryClientProvider client={client}>
@@ -256,17 +258,35 @@ describe('the rain map card', () => {
     );
   });
 
-  it('says frames are still arriving for a live grid on the session page, not in the player', () => {
+  it('says frames are still arriving for a live grid on the session page until the end + 30 min, not in the player', () => {
     const live = { ...grid, state: 'live' } as const;
     const files = { outline: OUTLINE, osm: null };
+    const end = Date.parse('2026-11-09T15:10:00Z');
     expect(card(monza(), { grid: live, frames }, files)).toMatch(
       /<p>Frames still arriving \(every 15 min\).<\/p><div class="rainbody"><svg class="rainfield"/,
+    );
+    expect(card(monza(), { grid: live, frames }, files, undefined, end + 30 * 60_000)).toContain(
+      '<p>Frames still arriving (every 15 min).</p>',
     );
     expect(card(monza(), { grid: live, frames }, files, Date.parse('2026-11-09T15:00:00Z'))).not.toContain(
       'Frames still arriving',
     );
     expect(card(monza(), { grid, frames }, files)).not.toContain('Frames still arriving');
     expect(card(monza(), { grid: live, frames: [] }, files)).toContain('<p>Rain map not fetched yet.</p>');
+  });
+
+  it('calls a live grid provisional after the end + 30 min, by the answer’s time, not in the player (E2)', () => {
+    const live = { ...grid, state: 'live' } as const;
+    const files = { outline: OUTLINE, osm: null };
+    const late = Date.parse('2026-11-09T15:10:00Z') + 30 * 60_000 + 1;
+    expect(card(monza(), { grid: live, frames }, files, undefined, late)).toMatch(
+      /<p>Rain data provisional: the final frames come 24 h after the end.<\/p><div class="rainbody">/,
+    );
+    expect(card(monza(), { grid: live, frames }, files, undefined, late)).not.toContain('Frames still arriving');
+    expect(card(monza(), { grid: live, frames }, files, Date.parse('2026-11-09T15:00:00Z'), late)).not.toContain(
+      'Rain data provisional',
+    );
+    expect(card(monza(), { grid, frames }, files, undefined, late)).not.toContain('Rain data provisional');
   });
 
   it('opens at the first frame at or after the start, with the outline and a native model', () => {

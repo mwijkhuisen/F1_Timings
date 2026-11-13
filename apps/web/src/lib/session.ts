@@ -1,7 +1,7 @@
 import type { Live, SessionDetail } from '@f1/contracts';
 import type { CSSProperties } from 'react';
 import { linear } from './colour.ts';
-import { isOpen } from './season.ts';
+import { isLiveNow } from './season.ts';
 import { fmtHm } from './time.ts';
 
 // Helpers shared by the session's tabs: why data is missing and when to refresh (#99), the lap table and the stints.
@@ -10,10 +10,6 @@ type Session = SessionDetail['session'];
 
 /** After its first fetch a session is `fetched` or `due` only until date_end + 24 h (A§8). */
 const DAY_MS = 24 * 3_600_000;
-
-/** Whether `/live` names an open recording of this session. */
-export const isLiveNow = (key: number, live: Live | null): boolean =>
-  isOpen(live) && live?.session?.session_key === key;
 
 const ERROR_WORDS: Record<string, string> = {
   rate_limited: 'rate limited',
@@ -47,17 +43,21 @@ const ARRIVE = { laps: 'Laps arrive', stints: 'Stints arrive', weather: 'Weather
 export const LIVE_TEXT = 'Live now: follow it.';
 
 /**
- * Why a tab has no laps, stints or weather (A§13), the first rule that holds: cancelled; live now; in back-off (with
- * the next try in Amsterdam time); failed; `fetched` or `due` past date_end + 24 h, which only a new fetch puts there
- * (a re-queue, a retry, A§8); not started; still to come (`scheduled`, `due`); else none in the session's source.
+ * Why a tab has no laps, stints or weather (A§13), the first rule that holds: cancelled; live now; after a fetch that
+ * succeeded (`fetch_count` > 0), none in the session's source (the head's "data provisional" says the rest); in
+ * back-off (with the next try in Amsterdam time, or a retry due); failed; `fetched` or `due` past date_end + 24 h; not
+ * started; still to come (`scheduled`, `due`); else none in the session's source.
  */
 export function noDataText(s: Session, live: Live | null, now: number, what: 'laps' | 'stints' | 'weather'): string {
   if (s.is_cancelled) return `No ${what}: the session was cancelled.`;
   if (isLiveNow(s.session_key, live)) return LIVE_TEXT;
+  const none = `No ${what} in ${sourceWords(s.source)}.`;
+  if (s.fetch_count > 0) return none;
   const error = errorWords(s.last_error);
   if (s.ingest_state === 'due' && s.fail_count > 0) {
-    const next = s.next_fetch_at === null ? '' : `; next try at ${fmtHm(Date.parse(s.next_fetch_at))}`;
-    return `The fetch failed (${error})${next}.`;
+    const next = s.next_fetch_at === null ? null : Date.parse(s.next_fetch_at);
+    const when = next === null ? '' : next <= now ? '; a retry is due' : `; next try at ${fmtHm(next)}`;
+    return `The fetch failed (${error})${when}.`;
   }
   if (s.ingest_state === 'failed') return `The fetch failed ${s.fail_count} times (${error}) and is not retried.`;
   const queued = s.ingest_state === 'fetched' || s.ingest_state === 'due';
@@ -65,18 +65,17 @@ export function noDataText(s: Session, live: Live | null, now: number, what: 'la
   const arrive = `${ARRIVE[what]} about 35 min after the end.`;
   if (now < Date.parse(s.date_start)) return `Not started yet. ${arrive}`;
   if (s.ingest_state === 'scheduled' || s.ingest_state === 'due') return arrive;
-  return `No ${what} in ${sourceWords(s.source)}.`;
+  return none;
 }
 
 /**
- * The session's refetch interval (A§13): every 60 s while its data can still change, that is while it is not
- * cancelled and `scheduled`, `due`, or `fetched` until date_end + 24 h; else false.
+ * The session query's refetch interval (A§13): every 60 s while its data can still change, that is while it is not
+ * cancelled and `scheduled`, `due` or `fetched`; else false. A new `fetch_count` refetches the rest (`useRefetchOnFetch`).
  */
-export function pollMs(s: Pick<Session, 'is_cancelled' | 'ingest_state' | 'date_end'>, now: number): 60_000 | false {
-  if (s.is_cancelled) return false;
-  if (s.ingest_state === 'scheduled' || s.ingest_state === 'due') return 60_000;
-  return s.ingest_state === 'fetched' && now <= Date.parse(s.date_end) + DAY_MS ? 60_000 : false;
-}
+export const pollMs = (s: Pick<Session, 'is_cancelled' | 'ingest_state'>): 60_000 | false =>
+  !s.is_cancelled && (s.ingest_state === 'scheduled' || s.ingest_state === 'due' || s.ingest_state === 'fetched')
+    ? 60_000
+    : false;
 
 const COMPOUNDS = ['SOFT', 'MEDIUM', 'HARD', 'INTERMEDIATE', 'WET'];
 

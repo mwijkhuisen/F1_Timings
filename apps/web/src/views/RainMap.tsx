@@ -20,6 +20,8 @@ import { Pending } from '../ui/ErrorView.tsx';
 
 const NO_OUTLINE = 'No circuit outline for this venue.';
 const NOT_FETCHED = 'Rain map not fetched yet.';
+/** A live grid's frames still arrive until date_end + 30 min; after that it waits for the final fetch (A§8). */
+const ARRIVING_MS = 30 * 60_000;
 const RINGS = [1, 2, 3, 4, 5];
 const LEGEND = [
   [1, 'Light 0.1–2.5 mm/h'],
@@ -221,11 +223,15 @@ function RainLoader({
   if (last < 0) return <p>No rain frame up to this time yet.</p>;
   if (!map.data) return <Pending error={map.error} />;
   const lastFrame = frames.at(-1)?.date;
+  // The clock is the query's last answer, which a live grid refreshes every 60 s, so the note moves on with it.
+  const arriving = rain.dataUpdatedAt <= Date.parse(session.date_end) + ARRIVING_MS;
   const note =
     grid.state === 'failed' && lastFrame
       ? `Rain data incomplete: the fetch failed after ${fmtHm(Date.parse(lastFrame))}.`
       : grid.state === 'live' && !capped
-        ? 'Frames still arriving (every 15 min).'
+        ? arriving
+          ? 'Frames still arriving (every 15 min).'
+          : 'Rain data provisional: the final frames come 24 h after the end.'
         : null;
   const index = capped
     ? pick !== null && pick < last

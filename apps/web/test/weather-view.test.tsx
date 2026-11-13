@@ -90,11 +90,17 @@ describe('the Weather tab', () => {
           now={at(h)}
         />,
       );
-    expect(empty({ ingest_state: 'due', fail_count: 0 }, 1)).toBe('<p>Weather arrives about 35 min after the end.</p>');
-    expect(empty({ ingest_state: 'fetched' }, 168)).toBe('<p>Queued for a new fetch; check back later.</p>');
+    expect(empty({ ingest_state: 'due', fail_count: 0, fetch_count: 0 }, 1)).toBe(
+      '<p>Weather arrives about 35 min after the end.</p>',
+    );
+    expect(empty({ ingest_state: 'due', fetch_count: 0 }, 168)).toBe(
+      '<p>Queued for a new fetch; check back later.</p>',
+    );
+    // Re-queued after a fetch that succeeded (the P5a re-queue): the source has none; the head says "data provisional".
+    expect(empty({ ingest_state: 'fetched' }, 168)).toBe('<p>No weather in the OpenF1 data.</p>');
     expect(empty({ ingest_state: 'final' }, 168)).toBe('<p>No weather in the OpenF1 data.</p>');
     expect(empty({ ingest_state: 'final', source: 'f1-archive' }, 168)).toBe('<p>No weather in the F1 archive.</p>');
-    expect(empty({ ingest_state: 'failed', fail_count: 9, last_error: 'http_500' }, 168)).toBe(
+    expect(empty({ ingest_state: 'failed', fail_count: 9, last_error: 'http_500', fetch_count: 0 }, 168)).toBe(
       '<p>The fetch failed 9 times (HTTP 500) and is not retried.</p>',
     );
     const live: Live = {

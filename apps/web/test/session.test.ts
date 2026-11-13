@@ -1,6 +1,6 @@
-import type { Live, SessionDetail } from '@f1/contracts';
+import type { Live, Rain, SessionDetail } from '@f1/contracts';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { sessionQuery } from '../src/lib/api.ts';
+import { rainQuery, sessionQuery } from '../src/lib/api.ts';
 import { errorWords, LIVE_TEXT, noDataText, pollMs, sourceWords } from '../src/lib/session.ts';
 import { sessionDetail } from './laps.ts';
 
@@ -12,7 +12,8 @@ const END = '2026-10-31T21:00:00.000Z';
 const H = 3_600_000;
 const at = (h: number) => Date.parse(END) + h * H;
 const base = sessionDetail('Race', 'Race').session;
-const s = (over: Partial<S> = {}): S => ({ ...base, date_start: START, date_end: END, ...over });
+/** Before its first successful fetch unless `over` says otherwise. */
+const s = (over: Partial<S> = {}): S => ({ ...base, date_start: START, date_end: END, fetch_count: 0, ...over });
 const open = (session_key: number | null, ended_at: string | null = null): Live => ({
   session:
     session_key === null
@@ -46,17 +47,19 @@ describe('noDataText', () => {
     );
   });
 
-  it('in back-off: the failure in words and the next try in Amsterdam time', () => {
-    // 2026-10-31T21:05Z is 22:05 in Amsterdam (CET).
+  it('in back-off: the failure in words and the next try in Amsterdam time, or a retry due once it is past', () => {
+    // 2026-10-31T21:05Z, 5 min after the end, is 22:05 in Amsterdam (CET).
     const backoff = {
       ingest_state: 'due',
       fail_count: 2,
       last_error: 'schema',
       next_fetch_at: '2026-10-31T21:05:00.000Z',
     } as const;
-    expect(text(backoff, 1)).toBe('The fetch failed (unexpected data); next try at 22:05.');
+    expect(text(backoff, 0)).toBe('The fetch failed (unexpected data); next try at 22:05.');
+    expect(text(backoff, 5 / 60)).toBe('The fetch failed (unexpected data); a retry is due.');
+    expect(text(backoff, 1)).toBe('The fetch failed (unexpected data); a retry is due.');
     // Back-off wins over the 24 h queue.
-    expect(text({ ...backoff, last_error: 'http_503' }, 48)).toBe('The fetch failed (HTTP 503); next try at 22:05.');
+    expect(text({ ...backoff, last_error: 'http_503' }, 48)).toBe('The fetch failed (HTTP 503); a retry is due.');
     expect(text({ ...backoff, next_fetch_at: null }, 1)).toBe('The fetch failed (unexpected data).');
   });
 
@@ -66,9 +69,9 @@ describe('noDataText', () => {
     );
   });
 
-  it('fetched or due past date_end + 24 h: queued for a new fetch', () => {
-    expect(text({ ingest_state: 'fetched' }, 24)).toBe('No laps in the OpenF1 data.');
-    expect(text({ ingest_state: 'fetched' }, 24 + 1 / H)).toBe('Queued for a new fetch; check back later.');
+  it('due past date_end + 24 h before any fetch: queued for a new fetch', () => {
+    expect(text({ ingest_state: 'due' }, 24)).toBe('Laps arrive about 35 min after the end.');
+    expect(text({ ingest_state: 'due' }, 24 + 1 / H)).toBe('Queued for a new fetch; check back later.');
     expect(text({ ingest_state: 'due' }, 24 * 30)).toBe('Queued for a new fetch; check back later.');
     // Scheduled is never queued: its first fetch is still to come.
     expect(text({ ingest_state: 'scheduled' }, 24 * 30)).toBe('Laps arrive about 35 min after the end.');
@@ -86,12 +89,32 @@ describe('noDataText', () => {
     );
   });
 
-  it('fetched within the day or final: none in the session’s source', () => {
+  it('after a fetch that succeeded: none in the source, whatever the state, back-off and failed included (E3)', () => {
+    const once = { fetch_count: 1 } as const;
+    for (const [over, h] of [
+      [{ ingest_state: 'fetched' }, 1],
+      [{ ingest_state: 'fetched' }, 48],
+      [{ ingest_state: 'due' }, 1],
+      [{ ingest_state: 'due' }, 48],
+      [{ ingest_state: 'due', fail_count: 2, last_error: 'schema', next_fetch_at: END }, 1],
+      [{ ingest_state: 'failed', fail_count: 9, last_error: 'timeout' }, 48],
+      [{ ingest_state: 'final' }, 48],
+    ] as const)
+      expect(text({ ...once, ...over }, h)).toBe('No laps in the OpenF1 data.');
+    expect(noDataText(s({ ...once, ingest_state: 'due' }), null, at(1), 'stints')).toBe(
+      'No stints in the OpenF1 data.',
+    );
+    // Cancelled and live now still come first.
+    expect(text({ ...once, is_cancelled: true }, 1)).toBe('No laps: the session was cancelled.');
+    expect(text({ ...once, ingest_state: 'due' }, 1, open(base.session_key))).toBe(LIVE_TEXT);
+  });
+
+  it('final without a fetch (archive, Jolpica): none in the session’s source', () => {
     expect(text({ ingest_state: 'final' }, 48)).toBe('No laps in the OpenF1 data.');
     expect(text({ ingest_state: 'final', source: 'f1-archive' }, 48)).toBe('No laps in the F1 archive.');
     expect(text({ ingest_state: 'final', source: 'f1-live' }, 48)).toBe('No laps in the F1 live feed.');
     expect(text({ ingest_state: 'final', source: 'jolpica' }, 48)).toBe('No laps in the Jolpica data.');
-    expect(noDataText(s({ ingest_state: 'fetched' }), null, at(1), 'weather')).toBe('No weather in the OpenF1 data.');
+    expect(noDataText(s({ ingest_state: 'final' }), null, at(1), 'weather')).toBe('No weather in the OpenF1 data.');
     expect(noDataText(s({ ingest_state: 'final' }), null, at(48), 'stints')).toBe('No stints in the OpenF1 data.');
   });
 });
@@ -142,24 +165,41 @@ describe('the refresh (pollMs, through the session query)', () => {
     return refetch({ state: { data: { ...sessionDetail('Race', 'Race'), session: s(over) } } });
   };
 
-  it('polls every 60 s while scheduled or due, and fetched until date_end + 24 h', () => {
+  it('polls every 60 s while scheduled, due or fetched, with no bound on the clock', () => {
     expect(interval({ ingest_state: 'scheduled' }, -48)).toBe(60_000);
     expect(interval({ ingest_state: 'due', fail_count: 3 }, 2)).toBe(60_000);
     expect(interval({ ingest_state: 'fetched' }, 3)).toBe(60_000);
-    expect(interval({ ingest_state: 'fetched' }, 24)).toBe(60_000);
+    expect(interval({ ingest_state: 'fetched' }, 24 * 30)).toBe(60_000);
+    expect(pollMs(s({ ingest_state: 'due' }))).toBe(60_000);
   });
 
-  it('stops when fetched past date_end + 24 h, final, failed or cancelled, and before any data', () => {
-    expect(interval({ ingest_state: 'fetched' }, 24 + 1 / H)).toBe(false);
+  it('stops when final, failed or cancelled, and before any data', () => {
     expect(interval({ ingest_state: 'final' }, 1)).toBe(false);
     expect(interval({ ingest_state: 'failed', fail_count: 9 }, 1)).toBe(false);
-    expect(interval({ ingest_state: 'scheduled', is_cancelled: true }, -48)).toBe(false);
+    for (const ingest_state of ['scheduled', 'due', 'fetched'] as const)
+      expect(interval({ ingest_state, is_cancelled: true }, -48)).toBe(false);
     const refetch = sessionQuery(1).refetchInterval as (q: { state: { data: undefined } }) => number | false;
     expect(refetch({ state: { data: undefined } })).toBe(false);
+    expect(pollMs(s({ ingest_state: 'final' }))).toBe(false);
+  });
+});
+
+describe('the rain map refresh (rainQuery)', () => {
+  type Q = { state: { data: Rain | undefined } };
+  const grid = { map_id: 'it-1922', centre_lat: 45.6, centre_lon: 9.3, size: 7, step_m: 1500 };
+  const interval = (live: boolean, data: Rain | undefined) =>
+    (rainQuery(1, live).refetchInterval as (q: Q) => number | false)({ state: { data } });
+
+  it('polls every 60 s in the player (live), and on the session tab while the grid is live (E2)', () => {
+    for (const data of [undefined, { grid: null, frames: [] }, { grid: { ...grid, state: 'final' }, frames: [] }])
+      expect(interval(true, data as Rain | undefined)).toBe(60_000);
+    expect(interval(false, { grid: { ...grid, state: 'live' }, frames: [] })).toBe(60_000);
   });
 
-  it('is the same rule the page passes to the laps, stints and weather', () => {
-    expect(pollMs(s({ ingest_state: 'fetched' }), at(1))).toBe(60_000);
-    expect(pollMs(s({ ingest_state: 'final' }), at(1))).toBe(false);
+  it('does not poll on the session tab for a final or failed grid, no grid or no answer', () => {
+    expect(interval(false, { grid: { ...grid, state: 'final' }, frames: [] })).toBe(false);
+    expect(interval(false, { grid: { ...grid, state: 'failed' }, frames: [] })).toBe(false);
+    expect(interval(false, { grid: null, frames: [] })).toBe(false);
+    expect(interval(false, undefined)).toBe(false);
   });
 });
