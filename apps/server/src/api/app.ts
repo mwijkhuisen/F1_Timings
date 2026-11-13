@@ -1,7 +1,7 @@
 import { stat } from 'node:fs/promises';
 import { join } from 'node:path';
 import { setTimeout as sleep } from 'node:timers/promises';
-import type { Rain, Seasons, Status, Stints } from '@f1/contracts';
+import { isUnmatched, PERIOD_LIKE, type Rain, REVISION, type Seasons, type Status, type Stints } from '@f1/contracts';
 import { type Context, Hono, type MiddlewareHandler } from 'hono';
 import { streamSSE } from 'hono/streaming';
 import { type Kysely, sql } from 'kysely';
@@ -25,8 +25,6 @@ const STATES = ['scheduled', 'due', 'fetched', 'final', 'failed'] as const;
 const badRequest = (c: Context) => c.json({ error: 'bad request' }, 400, NO_STORE);
 const notFound = (c: Context) => c.json({ error: 'not found' }, 404, NO_STORE);
 
-/** A§10: a final session's data no longer changes. */
-const cache = (state: string) => (state === 'final' ? FINAL : NO_STORE);
 const sessionKey = (c: Context) => {
   const key = c.req.param('key') ?? '';
   return /^\d{1,9}$/.test(key) ? Number(key) : undefined;
@@ -37,6 +35,7 @@ export function createApp({
   access,
   log,
   liveDir,
+  revision = 'dev',
   writeTimeoutMs = WRITE_TIMEOUT_MS,
 }: {
   db: Kysely<DB>;
@@ -44,16 +43,29 @@ export function createApp({
   log: Pick<Logger, 'error'>;
   /** The recordings' root (A§11.2), read-only here. */
   liveDir: string;
+  /** The release's git commit or `dev` (A§10): the `F1-Revision` header and the check of a request's `v`. */
+  revision?: string;
   /** For tests only. */
   writeTimeoutMs?: number;
 }) {
   let streams = 0;
-  /** The session of a per-session route: its key and state, or the 400/404 answer. */
-  const lookup = async (c: Context): Promise<{ key: number; state: string } | Response> => {
+  /** A§10: the web's `?v=<revision>` is a cache key. null when absent; else exactly one REVISION value, or the 400. */
+  const version = (c: Context): string | null | Response => {
+    const v = c.req.queries('v');
+    if (v === undefined) return null;
+    return v.length === 1 && REVISION.test(v[0] as string) ? (v[0] as string) : badRequest(c);
+  };
+  /** A§10: a final session's data no longer changes, unless it answers a request made for another revision. */
+  const cache = (state: string, v: string | null) =>
+    state === 'final' && (v === null || v === revision) ? FINAL : NO_STORE;
+  /** The session of a per-session route: its key, state and `v`, or the 400/404 answer. */
+  const lookup = async (c: Context): Promise<{ key: number; state: string; v: string | null } | Response> => {
     const key = sessionKey(c);
     if (key === undefined) return badRequest(c);
+    const v = version(c);
+    if (v instanceof Response) return v;
     const row = await db.selectFrom('session').select('ingest_state').where('session_key', '=', key).executeTakeFirst();
-    return row ? { key, state: row.ingest_state } : notFound(c);
+    return row ? { key, state: row.ingest_state, v } : notFound(c);
   };
   const app = new Hono();
 
@@ -71,6 +83,10 @@ export function createApp({
   app.use('/api/*', access);
 
   const api = new Hono();
+  api.use('*', async (c, next) => {
+    c.header('F1-Revision', revision);
+    await next();
+  });
 
   api.get('/seasons', async (c) => {
     const rows: Seasons = await db
@@ -139,6 +155,8 @@ export function createApp({
   api.get('/sessions/:key', async (c) => {
     const key = sessionKey(c);
     if (key === undefined) return badRequest(c);
+    const v = version(c);
+    if (v instanceof Response) return v;
     const row = await db
       .selectFrom('session as s')
       .innerJoin('meeting as m', 'm.meeting_key', 's.meeting_key')
@@ -151,6 +169,11 @@ export function createApp({
         's.ingest_state',
         's.is_cancelled',
         's.meeting_key',
+        's.source',
+        's.fetch_count',
+        's.fail_count',
+        's.last_error',
+        's.next_fetch_at',
         'm.name as m_name',
         'm.official_name',
         'm.location',
@@ -188,6 +211,11 @@ export function createApp({
         ingest_state: row.ingest_state,
         is_cancelled: row.is_cancelled,
         meeting_key: row.meeting_key,
+        source: row.source,
+        fetch_count: row.fetch_count,
+        fail_count: row.fail_count,
+        last_error: row.last_error,
+        next_fetch_at: row.next_fetch_at,
       },
       meeting: {
         meeting_key: row.meeting_key,
@@ -205,7 +233,7 @@ export function createApp({
       drivers,
       results,
     };
-    return c.json(body, 200, cache(row.ingest_state));
+    return c.json(body, 200, cache(row.ingest_state, v));
   });
 
   api.get('/sessions/:key/laps', async (c) => {
@@ -250,7 +278,7 @@ export function createApp({
       .execute();
     const colour = colours(laps);
     const body = laps.map((l, i) => ({ ...l, colour: colour[i] }));
-    return c.json(body, 200, cache(session.state));
+    return c.json(body, 200, cache(session.state, session.v));
   });
 
   api.get('/sessions/:key/stints', async (c) => {
@@ -263,7 +291,7 @@ export function createApp({
       .orderBy('driver_number')
       .orderBy('stint_number')
       .execute();
-    return c.json(body, 200, cache(session.state));
+    return c.json(body, 200, cache(session.state, session.v));
   });
 
   api.get('/sessions/:key/pits', async (c) => {
@@ -277,7 +305,7 @@ export function createApp({
       .orderBy('driver_number')
       .orderBy('lap_number')
       .execute();
-    return c.json(body, 200, cache(session.state));
+    return c.json(body, 200, cache(session.state, session.v));
   });
 
   api.get('/sessions/:key/race-control', async (c) => {
@@ -300,7 +328,7 @@ export function createApp({
       .orderBy('date')
       .orderBy('id')
       .execute();
-    return c.json(body, 200, cache(session.state));
+    return c.json(body, 200, cache(session.state, session.v));
   });
 
   api.get('/sessions/:key/weather', async (c) => {
@@ -321,7 +349,7 @@ export function createApp({
       .where('session_key', '=', session.key)
       .orderBy('date')
       .execute();
-    return c.json(body, 200, cache(session.state));
+    return c.json(body, 200, cache(session.state, session.v));
   });
 
   api.get('/sessions/:key/rain', async (c) => {
@@ -345,7 +373,7 @@ export function createApp({
       frames: frames.map((f) => ({ date: f.date.toISOString(), mm: f.mm })),
     };
     // Immutable only when the grid will never change: its own state, not just the session's.
-    return c.json(body, 200, cache(grid?.state === 'final' ? session.state : 'live'));
+    return c.json(body, 200, cache(grid?.state === 'final' ? session.state : 'live', session.v));
   });
 
   api.get('/status', async (c) => {
@@ -393,7 +421,78 @@ export function createApp({
       ])
       .executeTakeFirst();
     const recorder = row && { ...row, stale: Date.now() - row.updated_at.getTime() > STALE_MS };
-    const body = { states, cancelled, failed, recorder: recorder ?? null };
+    const ingestRow = await db.selectFrom('ingest_status').selectAll().executeTakeFirst();
+    const ingest = ingestRow && {
+      last_sync_at: ingestRow.last_sync_at,
+      live_wait: ingestRow.live_wait,
+      last_tick_at: ingestRow.last_tick_at,
+      // A tick stamped more than a minute ahead of this clock is no sign of life either.
+      stale:
+        Date.now() - ingestRow.last_tick_at.getTime() > STALE_MS ||
+        ingestRow.last_tick_at.getTime() - Date.now() > 60_000,
+    };
+    const rainStates: Status['rain']['states'] = { live: 0, final: 0, failed: 0 };
+    const rainCounts = await db
+      .selectFrom('rain_grid')
+      .select(['state', sql<number>`count(*)::int`.as('n')])
+      .groupBy('state')
+      .execute();
+    for (const { state, n } of rainCounts) if (state in rainStates) rainStates[state as keyof typeof rainStates] = n;
+    const rainFailed = await db
+      .selectFrom('rain_grid as g')
+      .innerJoin('session as s', 's.session_key', 'g.session_key')
+      .innerJoin('meeting as m', 'm.meeting_key', 's.meeting_key')
+      .select([
+        's.session_key',
+        'm.year',
+        'm.name as meeting_name',
+        's.name as session_name',
+        'g.fail_count',
+        'g.last_error',
+        'g.next_fetch_at',
+      ])
+      .where('g.fail_count', '>', 0)
+      .orderBy('s.date_start', 'desc')
+      .orderBy('s.session_key')
+      .execute();
+    // Computed on read (A§6.1): the period-like rows of races, narrowed in SQL, then the forms in TS.
+    const period = await db
+      .selectFrom('race_control as r')
+      .innerJoin('session as s', 's.session_key', 'r.session_key')
+      .innerJoin('meeting as m', 'm.meeting_key', 's.meeting_key')
+      .select([
+        's.session_key',
+        'm.year',
+        'm.name as meeting_name',
+        's.name as session_name',
+        's.date_start',
+        'r.message',
+        'r.flag',
+      ])
+      .where('s.type', '=', 'Race')
+      .where('s.is_cancelled', '=', false)
+      .where('r.message', '~', PERIOD_LIKE.source)
+      .execute();
+    const unmatched = new Map<number, Status['rc_unmatched'][number] & { date_start: Date }>();
+    for (const { date_start, message, flag, ...session } of period) {
+      if (!isUnmatched({ message, flag })) continue;
+      const found = unmatched.get(session.session_key);
+      if (found) found.rows++;
+      else unmatched.set(session.session_key, { ...session, rows: 1, date_start });
+    }
+    const rc_unmatched = [...unmatched.values()]
+      .sort((a, b) => b.date_start.getTime() - a.date_start.getTime() || a.session_key - b.session_key)
+      .map(({ date_start, ...item }) => item);
+    const body = {
+      revision,
+      states,
+      cancelled,
+      failed,
+      recorder: recorder ?? null,
+      ingest: ingest ?? null,
+      rain: { states: rainStates, failed: rainFailed },
+      rc_unmatched,
+    };
     return c.json(body, 200, NO_STORE);
   });
 
@@ -506,7 +605,11 @@ export function createApp({
     // hono runs this handler for HEAD and drops the body without cancelling it: a generator would stay open for good.
     if (c.req.method === 'HEAD')
       return new Response(null, {
-        headers: { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-store, no-transform' },
+        headers: {
+          'Content-Type': 'text/event-stream',
+          'Cache-Control': 'no-store, no-transform',
+          'F1-Revision': revision,
+        },
       });
     if (streams >= MAX_STREAMS) return c.json({ error: 'unavailable' }, 503, NO_STORE);
 

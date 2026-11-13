@@ -17,7 +17,12 @@ export type SessionState =
   | { kind: 'next' }
   | { kind: 'scheduled' };
 
-const isOpen = (live: Live | null): boolean => live?.recording?.ended_at === null;
+/** Whether `/live` names an open recording (`ended_at` null). */
+export const isOpen = (live: Live | null): boolean => live?.recording?.ended_at === null;
+
+/** Whether `/live` names an open recording of this session. */
+export const isLiveNow = (key: number, live: Live | null): boolean =>
+  isOpen(live) && live?.session?.session_key === key;
 
 /** `/`: `/live` while a recording is open, else the newest season with a session, else null (owner D1). */
 export function startPath(live: Live | null, seasons: Seasons): string | null {
@@ -85,7 +90,7 @@ export function sessionState(
 ): SessionState {
   const key = session.session_key;
   if (session.is_cancelled) return { kind: 'cancelled' };
-  if (isOpen(live) && live?.session?.session_key === key) return { kind: 'live' };
+  if (isLiveNow(key, live)) return { kind: 'live' };
   const recording = recordings.find((r) => r.session_key === key && r.ended_at !== null);
   if (recording) return { kind: 'recorded', recording };
   if (session.ingest_state === 'fetched' || session.ingest_state === 'final') return { kind: 'ready' };

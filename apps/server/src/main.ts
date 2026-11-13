@@ -2,6 +2,7 @@ import type { Server } from 'node:http';
 import { resolve, sep } from 'node:path';
 import { setTimeout as sleep } from 'node:timers/promises';
 import { parseArgs } from 'node:util';
+import { REVISION } from '@f1/contracts';
 import { serve } from '@hono/node-server';
 import pino from 'pino';
 import { access, accessConfig } from './api/access.ts';
@@ -89,14 +90,15 @@ async function runIngest(role: 'ingest' | 'backfill' | 'refetch', key: number, e
   // An idle-connection error must not crash the process; the pool reconnects.
   const db = createDb(url, (err) => logger.error({ cause: codeOf(err) }, 'database pool error'));
   const beat = () => touch();
-  // Only the daemon's scheduleSync pings; the backfill and refetch jobs never reach it.
-  const ping = (slug: string) => pingHealthchecks(slug, logger);
-  const deps = { db, client: createClient({ onAttempt: beat }), now: () => new Date(), log: logger, beat, ping };
+  const deps = { db, client: createClient({ onAttempt: beat }), now: () => new Date(), log: logger, beat };
   try {
     if (role === 'ingest') {
-      // Only the daemon has a rain step (P5c); the backfill and refetch jobs never fetch rain.
+      // Only the daemon pings (the daily sync, and `/fail` for a session or grid that fails for good or a stalled
+      // backlog, #105) and has a rain step (P5c); the backfill and refetch jobs get neither.
+      const ping = (slug: string, body?: string) => pingHealthchecks(slug, logger, { body });
       const rain = { client: createRainClient({ onAttempt: beat }), budget: createBudget(systemClock) };
-      await startIngest({ ...deps, rainStep: createRainStep({ ...deps, ...rain }) });
+      const daemon = { ...deps, ping };
+      await startIngest({ ...daemon, rainStep: createRainStep({ ...daemon, ...rain }) });
       return 0;
     }
     if (role === 'backfill') return (await backfill(deps)) ? 0 : 1;
@@ -289,6 +291,11 @@ async function runApi(env: Env, log: (line: string) => void, port: number): Prom
     log(`api: ${config} is missing or malformed`);
     return EXIT_CONFIG;
   }
+  const revision = env.F1_REVISION ?? 'dev';
+  if (!REVISION.test(revision)) {
+    log('api: F1_REVISION is malformed'); // the name only, never the value
+    return EXIT_CONFIG;
+  }
   const url = dbUrl('f1_api', env);
   if (typeof url === 'string') {
     log(`api: ${url}`);
@@ -296,7 +303,7 @@ async function runApi(env: Env, log: (line: string) => void, port: number): Prom
   }
   const logger = pino({ base: { role: 'api' } });
   const db = createDb(url, (err) => logger.error({ cause: codeOf(err) }, 'database pool error'));
-  const app = createApp({ db, access: access(config, logger), log: logger, liveDir: LIVE_DIR });
+  const app = createApp({ db, access: access(config, logger), log: logger, liveDir: LIVE_DIR, revision });
   const server = serve({ fetch: app.fetch, port, hostname: '0.0.0.0' }) as Server; // plain http: no createServer option
   const listening = await new Promise<boolean>((resolve) => {
     server.once('listening', () => resolve(true));

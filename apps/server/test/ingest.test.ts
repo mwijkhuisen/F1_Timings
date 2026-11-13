@@ -257,7 +257,7 @@ describe('scheduleSync pings healthchecks', () => {
   /** A sync with a settable OpenF1 reply and clock; `ping` counts the healthchecks calls. */
   const setup = () => {
     const state: { reply: Reply; at: number } = { reply: good, at: end.getTime() };
-    const ping = vi.fn(async (_slug: string) => {});
+    const ping = vi.fn(async (_slug: string) => true);
     const client = { get: async () => state.reply } as unknown as ReturnType<typeof createClient>;
     const log = { info: vi.fn(), error: vi.fn() };
     const sync = scheduleSync({ db, client, now: () => new Date(state.at), log, beat: () => {}, ping });

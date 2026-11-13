@@ -1,7 +1,7 @@
 import { useEffect } from 'react';
 import { useRecordings, useSession } from './lib/api.ts';
 import { type Route, replace, titleOf, useHeadingFocus, useRoute, useTitle } from './lib/routes.ts';
-import { NotFound } from './ui/ErrorView.tsx';
+import { NewVersion, NotFound } from './ui/ErrorView.tsx';
 import { Header } from './views/Header.tsx';
 import { Live, Replay, Replays } from './views/Live.tsx';
 import { Season, Start } from './views/Season.tsx';
@@ -70,6 +70,7 @@ export function App() {
       <Title route={route} />
       <Header route={route} />
       <main>
+        <NewVersion />
         <Page route={route} />
       </main>
     </>

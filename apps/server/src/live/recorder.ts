@@ -97,7 +97,7 @@ export type RecorderDeps = {
   log: Pick<Logger, 'info' | 'error'>;
   /** Touches the heartbeat. */
   beat: () => void;
-  ping: (slug: string) => Promise<void>;
+  ping: (slug: string) => Promise<unknown>;
   signal: AbortSignal;
   liveDir?: string;
   tokenPath?: string;

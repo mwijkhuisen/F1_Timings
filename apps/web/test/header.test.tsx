@@ -7,7 +7,8 @@ import type { Route } from '../src/lib/routes.ts';
 import type { Theme } from '../src/lib/theme.ts';
 import { HeaderView } from '../src/views/Header.tsx';
 import { SessionHead } from '../src/views/SessionHead.tsx';
-import { recordings, season, seasons } from './season-data.ts';
+import { fetched } from './laps.ts';
+import { live, recordings, season, seasons } from './season-data.ts';
 
 // The header's switcher and links, and the session head (A§13, P4c), on the hand-built 2026.
 
@@ -142,6 +143,7 @@ describe('the session head', () => {
       date_end: '2026-11-06T19:30:00.000Z',
       ingest_state: 'fetched',
       is_cancelled: false,
+      ...fetched,
     },
     meeting: {
       meeting_key: 1320,
@@ -190,6 +192,29 @@ describe('the session head', () => {
     expect(html).toContain('<a href="/replay/41">Replay</a>');
     expect(head({ recordings: [] })).not.toContain('/replay/');
     expect(head({ recordings: null })).not.toContain('/replay/');
+  });
+
+  it('says on the meta line whether the data is final or provisional, and nothing before the first fetch (#99)', () => {
+    const meta = (session: Partial<SessionDetail['session']>) =>
+      /<p class="muted">([\s\S]*?)<\/p>/
+        .exec(head({ detail: { ...detail, session: { ...detail.session, ...session } }, recordings: [] }))?.[1]
+        ?.replace(/<!-- -->/g, '');
+    expect(meta({})).toBe('Fri 6 Nov 2026, 19:30 · Interlagos · data provisional');
+    expect(meta({ ingest_state: 'final' })).toBe('Fri 6 Nov 2026, 19:30 · Interlagos · data final');
+    expect(meta({ ingest_state: 'failed', fetch_count: 1 })).toContain(' · data provisional');
+    expect(meta({ ingest_state: 'scheduled', fetch_count: 0 })).toBe('Fri 6 Nov 2026, 19:30 · Interlagos');
+  });
+
+  it('shows "Live now · Follow" only while /live names an open recording of this session', () => {
+    const open = { ...live, session: live.session && { ...live.session, session_key: 9103 } };
+    expect(head({ live: open })).toContain(' · Live now · <a href="/live">Follow</a></p>');
+    expect(head({ live })).not.toContain('Follow'); // another session's recording
+    expect(
+      head({
+        live: { ...open, recording: open.recording && { ...open.recording, ended_at: '2026-11-06T19:40:00.000Z' } },
+      }),
+    ).not.toContain('Follow');
+    expect(head({ live: null })).not.toContain('Follow');
   });
 
   it('leaves out the round and the pills until the season loads', () => {

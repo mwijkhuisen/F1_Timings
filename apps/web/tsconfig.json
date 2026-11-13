@@ -11,6 +11,6 @@
     "rewriteRelativeImportExtensions": false,
     "tsBuildInfoFile": "node_modules/.cache/tsc/web.tsbuildinfo"
   },
-  "include": ["src", "vite.config.ts"],
+  "include": ["src", "vite.config.ts", "icon.ts"],
   "references": [{ "path": "../../packages/contracts" }]
 }
