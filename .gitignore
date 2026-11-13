@@ -7,7 +7,6 @@ coverage/
 secrets/
 *.secret
 fixtures-private/
-spikes/**/out/
 .DS_Store
 *.tsbuildinfo
 # registry auth tokens; pnpm settings belong in pnpm-workspace.yaml
