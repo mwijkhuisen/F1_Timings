@@ -6,6 +6,7 @@ import type { Hono } from 'hono';
 import type { Kysely } from 'kysely';
 import { HttpResponse, http, passthrough } from 'msw';
 import pino from 'pino';
+import { Agent, setGlobalDispatcher } from 'undici';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import type { z } from 'zod';
 import { server } from '../../../test/msw.setup.ts';
@@ -27,6 +28,8 @@ const CASES: Record<number, string> = { 11388: 'normal', 11392: 'quali', 11383: 
 const RACE = 11388; // left non-final
 const QUALI = 11392; // final
 const SPRINT = 11383; // final
+const SHA = 'a'.repeat(40);
+const SHA2 = 'b'.repeat(40);
 const FAILING = 11397; // Mexico City practice 1, set retrying by hand
 // The race's fastest lap (car 16, lap 60, 1:36.628) is deleted by one synthetic message.
 const SYNTHETIC = {
@@ -165,7 +168,13 @@ describe('api (f1_api login, Access JWT)', { timeout: 120_000 }, () => {
       ])
       .execute();
     apiDb = createDb(testDb.urls.f1_api);
-    app = createApp({ db: apiDb, access: access({ team: TEAM, aud: AUD }, log), log, liveDir: '/nonexistent' });
+    app = createApp({
+      db: apiDb,
+      access: access({ team: TEAM, aud: AUD }, log),
+      log,
+      liveDir: '/nonexistent',
+      revision: SHA,
+    });
     key = await rsaKey('test-kid');
     token = await jwt(key.priv);
   });
@@ -237,6 +246,56 @@ describe('api (f1_api login, Access JWT)', { timeout: 120_000 }, () => {
     } finally {
       await down.destroy();
     }
+  });
+
+  const TAILS = ['', '/laps', '/stints', '/pits', '/race-control', '/weather', '/rain'];
+
+  it('?v=<the api revision> changes nothing: status, body, cache-control and f1-revision', async () => {
+    for (const session of [QUALI, RACE])
+      for (const tail of TAILS) {
+        const path = `/api/v1/sessions/${session}${tail}`;
+        const [plain, versioned] = [await get(path), await get(`${path}?v=${SHA}`)];
+        expect(versioned.status, path).toBe(plain.status);
+        expect(await versioned.text(), path).toBe(await plain.text());
+        expect(versioned.headers.get('cache-control'), path).toBe(plain.headers.get('cache-control'));
+        expect(versioned.headers.get('f1-revision'), path).toBe(SHA);
+        expect(plain.headers.get('f1-revision'), path).toBe(SHA);
+      }
+  });
+
+  it('?v=<another revision> gets the same body but no-store, so it is never cached under the new key', async () => {
+    for (const tail of TAILS) {
+      const path = `/api/v1/sessions/${QUALI}${tail}`;
+      const plain = await (await get(path)).text();
+      for (const v of [SHA2, 'dev']) {
+        const res = await get(`${path}?v=${v}`);
+        expect(res.status, path).toBe(200);
+        expect(await res.text(), path).toBe(plain);
+        expect(res.headers.get('cache-control'), path).toBe('no-store');
+        expect(res.headers.get('f1-revision'), path).toBe(SHA);
+      }
+    }
+  });
+
+  it('a malformed or repeated v is the fixed 400, never echoed', async () => {
+    const bad = [
+      'v=',
+      'v',
+      'v=abc',
+      `v=${'a'.repeat(41)}`,
+      `v=${'A'.repeat(40)}`,
+      'v=DEV',
+      `v=${SHA}&v=${SHA}`,
+      'v=%3Cscript%3E',
+      `v=${'a'.repeat(5000)}`,
+    ];
+    for (const q of bad)
+      for (const tail of ['', '/laps', '/rain']) {
+        const res = await get(`/api/v1/sessions/${QUALI}${tail}?${q}`);
+        expect(res.status, q).toBe(400);
+        expect(res.headers.get('cache-control'), q).toBe('no-store');
+        expect(await res.text(), q).toBe('{"error":"bad request"}');
+      }
   });
 
   it('Cache-Control: private, max-age=86400 for a final session, no-store otherwise and on every error', async () => {
@@ -387,6 +446,7 @@ describe('api (f1_api login, Access JWT)', { timeout: 120_000 }, () => {
     expect(detail.results[0]).toMatchObject({ position: 1 });
 
     expect(await body('/api/v1/status', Status)).toEqual({
+      revision: SHA,
       states: { scheduled: 117, due: 1, fetched: 1, final: 2, failed: 0 },
       cancelled: 10,
       failed: [
@@ -481,7 +541,7 @@ describe('api (f1_api login, Access JWT)', { timeout: 120_000 }, () => {
   });
 
   it('the api role on @hono/node-server: a taken port exits 1; it listens, answers and exits 0 on SIGTERM', async () => {
-    const env = { CF_ACCESS_TEAM: TEAM, CF_ACCESS_AUD: AUD, DATABASE_URL: testDb.urls.f1_api };
+    const env = { CF_ACCESS_TEAM: TEAM, CF_ACCESS_AUD: AUD, DATABASE_URL: testDb.urls.f1_api, F1_REVISION: SHA2 };
     const blocker = createServer();
     const port = await new Promise<number>((resolve) =>
       blocker.listen(0, '0.0.0.0', () => resolve((blocker.address() as { port: number }).port)),
@@ -493,6 +553,9 @@ describe('api (f1_api login, Access JWT)', { timeout: 120_000 }, () => {
     server.use(http.all(`${base}/*`, () => passthrough())); // the real server, not msw
     const signals = process.listenerCount('SIGTERM');
     const interrupts = process.listenerCount('SIGINT');
+    // A connection pooled by an earlier test's msw-answered certs fetch makes the role's own fetch resolve the real
+    // host (a lookup, then 503): start from a fresh pool.
+    setGlobalDispatcher(new Agent());
     const exit = run(['api'], env, () => {}, port);
     let health: Response | undefined;
     for (let i = 0; i < 100 && !health; i++)
@@ -504,6 +567,11 @@ describe('api (f1_api login, Access JWT)', { timeout: 120_000 }, () => {
     const seasons = await fetch(`${base}/api/v1/seasons`);
     expect(seasons.status).toBe(401);
     expect(await seasons.text()).toBe('{"error":"unauthorized"}');
+    expect(seasons.headers.get('f1-revision')).toBeNull(); // a 401 carries no header
+    const status = await fetch(`${base}/api/v1/status`, { headers: { 'cf-access-jwt-assertion': token } });
+    expect(status.status).toBe(200);
+    expect(status.headers.get('f1-revision')).toBe(SHA2); // the role reads F1_REVISION
+    expect(((await status.json()) as { revision: string }).revision).toBe(SHA2);
     expect(process.listenerCount('SIGTERM')).toBe(signals + 1);
     process.emit('SIGTERM', 'SIGTERM'); // the listener only: no real signal reaches the worker
     expect(await exit).toBe(0);
@@ -511,8 +579,16 @@ describe('api (f1_api login, Access JWT)', { timeout: 120_000 }, () => {
     await expect(fetch(`${base}/healthz`)).rejects.toThrow();
   });
 
+  it('a malformed F1_REVISION exits 78 before listening and logs only the name', async () => {
+    const out: string[] = [];
+    const env = { CF_ACCESS_TEAM: TEAM, CF_ACCESS_AUD: AUD, DATABASE_URL: testDb.urls.f1_api, F1_REVISION: 'bad-rev' };
+    expect(await run(['api'], env, (l) => out.push(l))).toBe(78);
+    expect(out).toEqual(['api: F1_REVISION is malformed']);
+  });
+
   it('logs no token, header or password', () => {
     const text = lines.join('');
+    expect(text).not.toMatch(/%3Cscript|bad-rev|a{41}/);
     expect(text).not.toMatch(/eyJ|cf-access|cloudflareaccess/i);
     expect(text).not.toContain(new URL(testDb.urls.f1_api).password);
   });

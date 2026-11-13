@@ -12,7 +12,7 @@ import {
   Weather,
 } from '@f1/contracts';
 import { QueryClient, queryOptions, useQuery, useQueryClient } from '@tanstack/react-query';
-import { useEffect, useRef } from 'react';
+import { useEffect, useRef, useSyncExternalStore } from 'react';
 import { ZodError } from 'zod';
 import { pollMs } from './session.ts';
 
@@ -30,14 +30,43 @@ export class HttpError extends Error {
   }
 }
 
+/** This build's git commit or `dev` (vite.config.ts, A§10). */
+export const REVISION: string = import.meta.env.F1_REVISION ?? 'dev';
+
+// One app-wide flag: the api answered for another revision, or an answer failed its contract. A reload is the fix,
+// so the banner (ui/ErrorView.tsx) stays up; it is never cleared (A§13).
+let stale = false;
+const listeners = new Set<() => void>();
+export const isStale = () => stale;
+export function markStale() {
+  if (stale) return;
+  stale = true;
+  for (const l of listeners) l();
+}
+const subscribe = (l: () => void) => {
+  listeners.add(l);
+  return () => void listeners.delete(l);
+};
+export const useStale = () => useSyncExternalStore(subscribe, isStale, isStale);
+
 export async function getJson<T>(path: string, contract: { parse(data: unknown): T }, signal: AbortSignal): Promise<T> {
+  // A per-session answer may sit in the browser cache for 24 h: `v` makes the cache key per build (A§10).
+  const url = path.includes('/api/v1/sessions/') ? `${path}?v=${REVISION}` : path;
   // redirect: 'error' turns Access's login redirect into a TypeError instead of an HTML page.
-  const res = await fetch(path, { signal, redirect: 'error', headers: { accept: 'application/json' } });
+  const res = await fetch(url, { signal, redirect: 'error', headers: { accept: 'application/json' } });
   if (!res.ok) throw new HttpError(res.status);
-  return contract.parse(await res.json());
+  const rev = res.headers.get('f1-revision');
+  // Another revision's answer is still data: keep it, and ask for a reload.
+  if (rev !== null && rev !== REVISION) markStale();
+  try {
+    return contract.parse(await res.json());
+  } catch (err) {
+    if (err instanceof ZodError) markStale();
+    throw err;
+  }
 }
 
-/** One retry, but never for an answer that will not change: a 4xx or data that fails its contract. */
+/** One retry, but never for an answer that will not change: a 4xx, or data that fails its contract. */
 export const retry = (failures: number, error: unknown): boolean =>
   failures < 1 && !(error instanceof HttpError && error.status < 500) && !(error instanceof ZodError);
 

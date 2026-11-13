@@ -138,6 +138,7 @@ const cases = [
     'Status',
     Status,
     {
+      revision: 'a'.repeat(40),
       states: { scheduled: 1, due: 0, fetched: 0, final: 2, failed: 1 },
       cancelled: 0,
       failed: [
