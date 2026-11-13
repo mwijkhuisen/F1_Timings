@@ -576,6 +576,25 @@ describe('playback', () => {
     expect(rest.at(-1)?.ev.event).toBe('end');
   });
 
+  it('never sends a recorded topic it does not parse yet (#96): no delta, and none in a snapshot', async () => {
+    const dir = tmp();
+    const pit = { PitTimes: { 7: { RacingNumber: '7', Duration: '20.0', Lap: '3' } } };
+    const values: Value[] = [
+      [T0, '_subscribe', { PitLaneTimeCollection: pit, PitStopSeries: { PitTimes: {} }, PitStop: { Lap: '2' } }],
+      at(T0 + 1000, 'PitLaneTimeCollection', pit),
+      at(T0 + 2000, 'PitStopSeries', { PitTimes: { 7: [{ Timestamp: iso(T0), PitStop: { PitStopTime: '2.5' } }] } }),
+      at(T0 + 3000, 'PitStop', { RacingNumber: '7', PitStopTime: '2.5' }),
+      at(T0 + 4000, 'TimingData', { Lines: { 7: { NumberOfLaps: 3 } } }),
+    ];
+    await record(dir, values, 3_600_000);
+    for (const t of [T0, T0 + 5000]) {
+      const { gen, clock } = start(dir, { at: t });
+      const sent = JSON.stringify(await drain(gen, clock));
+      expect(sent).toContain('NumberOfLaps'); // the stream itself goes on: a delta from T0, in the snapshot after
+      expect(sent).not.toMatch(/PitLaneTimeCollection|PitStop|PitTimes|PitStopTime/);
+    }
+  });
+
   it('sends a heartbeat event with T after 15 s without a write', async () => {
     const dir = tmp();
     const values = counter(2, 40_000);

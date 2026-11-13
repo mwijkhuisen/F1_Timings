@@ -28,7 +28,10 @@ const USAGE =
 /** A topic name is a URL path segment and a file name: never `/`, `.`, `%` or `?`, except a final `.z`. */
 const TOPIC = /^[A-Za-z][A-Za-z0-9]*(\.z)?$/;
 
-/** The 11 topics the views need, plus SessionData and Heartbeat (the archive's t0). Each `--topic` adds one. */
+/**
+ * The 11 topics the views need, SessionData and Heartbeat (the archive's t0), and the recorder's pit topics (#96). Each
+ * `--topic` adds one.
+ */
 export const TOPICS = [
   'DriverList',
   'TimingData',
@@ -43,6 +46,9 @@ export const TOPICS = [
   'WeatherData',
   'SessionData',
   'Heartbeat',
+  'PitLaneTimeCollection',
+  'PitStopSeries',
+  'PitStop',
 ];
 
 const describe = (error: Failure) => (error.code === 'http' ? `http ${error.status}` : error.code);

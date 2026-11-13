@@ -150,6 +150,27 @@ describe('fetchArchive', () => {
     expect(existsSync(join(root, 'archive/11397/DriverList.jsonStream'))).toBe(false);
   });
 
+  it('downloads the 13 topics and the pit topics of the recorder (#96)', () => {
+    expect(TOPICS).toEqual([
+      'DriverList',
+      'TimingData',
+      'TimingAppData',
+      'TimingStats',
+      'SessionInfo',
+      'SessionStatus',
+      'TrackStatus',
+      'LapCount',
+      'RaceControlMessages',
+      'ExtrapolatedClock',
+      'WeatherData',
+      'SessionData',
+      'Heartbeat',
+      'PitLaneTimeCollection',
+      'PitStopSeries',
+      'PitStop',
+    ]);
+  });
+
   it('--topic adds a topic once, after the list, and refuses under CI like the rest', async () => {
     const files: string[] = [];
     server.use(
@@ -159,10 +180,10 @@ describe('fetchArchive', () => {
         return new HttpResponse('data');
       }),
     );
-    const argv = ['2026', '11397', '--token-file', tokenFile(FRESH), '--topic', 'PitLaneTimeCollection'];
+    const argv = ['2026', '11397', '--token-file', tokenFile(FRESH), '--topic', 'TyreStintSeries'];
     expect(
       await fetchArchive(
-        [...argv, '--topic', 'TimingData', '--topic', 'CarData.z'],
+        [...argv, '--topic', 'PitStop', '--topic', 'CarData.z'],
         {},
         () => {},
         tmp(),
@@ -171,8 +192,8 @@ describe('fetchArchive', () => {
     ).toBe(0);
     expect(files).toHaveLength((TOPICS.length + 2) * 2);
     expect(files.slice(-4)).toEqual([
-      'PitLaneTimeCollection.jsonStream',
-      'PitLaneTimeCollection.json',
+      'TyreStintSeries.jsonStream',
+      'TyreStintSeries.json',
       'CarData.z.jsonStream',
       'CarData.z.json',
     ]);
