@@ -365,6 +365,33 @@ type Open = { at: number | 'live' | null; still?: true };
 
 export type PlayerRecording = { id: number; started_at: string; ended_at: string | null };
 
+/** The screen stays on while the player plays and the page is visible (A§13); a refusal or no API changes nothing. */
+function useWakeLock(on: boolean) {
+  useEffect(() => {
+    if (!on || !navigator.wakeLock) return;
+    let lock: WakeLockSentinel | null = null;
+    let gone = false;
+    const request = async () => {
+      if (document.visibilityState !== 'visible' || (lock && !lock.released)) return;
+      try {
+        const l = await navigator.wakeLock.request('screen');
+        // A second grant while one is held (two quick requests) or after cleanup is let go at once.
+        if (gone || (lock && !lock.released)) void l.release().catch(() => {});
+        else lock = l;
+      } catch {
+        // refused (Low Power mode, not visible): the screen may lock, the player plays on
+      }
+    };
+    void request();
+    document.addEventListener('visibilitychange', request);
+    return () => {
+      gone = true;
+      document.removeEventListener('visibilitychange', request);
+      lock?.release().catch(() => {});
+    };
+  }, [on]);
+}
+
 export function Player({
   recording,
   sessionKey,
@@ -397,6 +424,8 @@ export function Player({
   // The focused driver's number (a tap on the tower's driver cell); page state that the player bar reads.
   const [focus, setFocus] = useState<string | null>(null);
   const [fails, setFails] = useState(0); // errors since the last snapshot
+  // The reload hint lets the screen lock (owner, 2026-11-13): an expired Access session never comes back by itself.
+  useWakeLock(playing && fails < FAILING);
   const [since, setSince] = useState<string | null>(null); // what the last forward seek skipped
   const [announce, setAnnounce] = useState(readAnnounce);
   // Minimized, the bar keeps only its head (the clock line, Play/Pause and the toggle); the stream is untouched.

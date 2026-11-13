@@ -60,7 +60,9 @@ export const seasonQuery = (year: number) =>
     staleTime: STALE_MS,
   });
 
-export const useSeason = (year: number) => useQuery(seasonQuery(year));
+/** `poll`: the refetch interval in ms for the data so far, or false; it is asked after each fetch and each render. */
+export const useSeason = (year: number, poll?: (data: Season | undefined) => number | false) =>
+  useQuery({ ...seasonQuery(year), refetchInterval: poll ? (q) => poll(q.state.data) : false });
 
 export const useSession = (key: number) =>
   useQuery({
@@ -151,9 +153,10 @@ export const useLive = () =>
     refetchInterval: 30_000,
   });
 
-export const useRecordings = () =>
+export const useRecordings = (refetchMs: number | false = false) =>
   useQuery({
     queryKey: ['recordings'],
     queryFn: ({ signal }) => getJson('/api/v1/recordings', Recordings, signal),
     staleTime: STALE_MS,
+    refetchInterval: refetchMs,
   });

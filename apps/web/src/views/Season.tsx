@@ -9,6 +9,7 @@ import {
   type SeasonSession,
   type SessionState,
   sessionState,
+  started,
   startPath,
   thisWeekend,
 } from '../lib/season.ts';
@@ -16,29 +17,39 @@ import { fmtCountdown, fmtInstant, fmtTrack } from '../lib/time.ts';
 import { Cancelled } from '../ui/Cancelled.tsx';
 import { Pending } from '../ui/ErrorView.tsx';
 
-// `/:year` (A§13): this weekend first, its sessions in words, then the other meetings. Never a result.
+// `/:year` (A§13): this weekend first, then the other meetings, every session with its state in words. A recorded
+// session's name is its replay link, with Laps beside it. Never a result.
 // `/` goes to /live while a recording is open, else to the newest season with a session (owner D1).
 
 const dot = (...parts: (string | number | null | undefined | false)[]) => parts.filter(Boolean).join(' · ');
 
 /**
- * The session's name: a link to its lap table, struck through and unlinked when cancelled, with the word for a screen
- * reader unless `worded` (the state beside it says so).
+ * The session's name: a link to its replay with "Laps" beside it once a recording has ended, else a link to its lap
+ * table; struck through and unlinked when cancelled (the state beside it says so).
  */
 function Name({
   year,
   meeting: m,
   session: s,
-  worded,
+  state,
 }: {
   year: number;
   meeting: Meeting;
   session: SeasonSession;
-  worded?: boolean;
+  state: SessionState;
 }) {
-  if (m.is_cancelled || s.is_cancelled) return worded ? <s>{s.name}</s> : <Cancelled>{s.name}</Cancelled>;
-  const to = sessionPath(year, { key: m.meeting_key, name: m.name }, { key: s.session_key, name: s.name }, 'laps');
-  return <Link to={to}>{s.name}</Link>;
+  if (state.kind === 'cancelled') return <s>{s.name}</s>;
+  const laps = sessionPath(year, { key: m.meeting_key, name: m.name }, { key: s.session_key, name: s.name }, 'laps');
+  if (state.kind !== 'recorded') return <Link to={laps}>{s.name}</Link>;
+  return (
+    <span className="name">
+      <Link to={`/replay/${state.recording.id}`}>{s.name}</Link>
+      <span className="laps">
+        {' · '}
+        <Link to={laps}>Laps</Link>
+      </span>
+    </span>
+  );
 }
 
 const WORD: Record<SessionState['kind'], string> = {
@@ -61,24 +72,18 @@ const State = ({ state }: { state: SessionState }) => (
         <Link to="/live">Follow</Link>
       </>
     )}
-    {state.kind === 'recorded' && (
-      <>
-        {' · '}
-        <Link to={`/replay/${state.recording.id}`}>Replay</Link>
-      </>
-    )}
   </span>
 );
 
-/** Time left until `to` (epoch ms), ticking every minute; rendered with `key={to}`, so a new `to` starts afresh. */
-function Countdown({ to }: { to: number }) {
-  const [now, setNow] = useState(Date.now);
-  useEffect(() => {
-    const id = setInterval(() => setNow(Date.now()), 60_000);
-    return () => clearInterval(id);
-  }, []);
-  return <p className="count">{fmtCountdown(to - now)}</p>;
-}
+/** The state of a session of `m`: every session of a cancelled meeting is cancelled. */
+const stateOf = (
+  m: Meeting,
+  s: SeasonSession,
+  recordings: Recordings,
+  live: Live | null,
+  now: number,
+  nextKey: number | null,
+): SessionState => (m.is_cancelled ? { kind: 'cancelled' } : sessionState(s, recordings, live, now, nextKey));
 
 export function SeasonView({
   year,
@@ -126,14 +131,15 @@ export function SeasonView({
             <ul className="sess full">
               {weekend.sessions.map((s) => {
                 const track = fmtTrack(s.date_start, weekend.gmt_offset);
+                const state = stateOf(weekend, s, recordings, live, now, nextKey);
                 return (
                   <li key={s.session_key}>
-                    <Name year={year} meeting={weekend} session={s} worded />
+                    <Name year={year} meeting={weekend} session={s} state={state} />
                     <span className="when">
                       <time dateTime={s.date_start}>{fmtInstant(s.date_start)}</time>
                       {track && ` · ${track} at the track`}
                     </span>
-                    <State state={sessionState(s, recordings, live, now, nextKey)} />
+                    <State state={state} />
                   </li>
                 );
               })}
@@ -142,7 +148,7 @@ export function SeasonView({
           {upNext && (
             <div className="upnext">
               <p className="eyebrow">Up next</p>
-              <Countdown key={upNext.date_start} to={Date.parse(upNext.date_start)} />
+              <p className="count">{fmtCountdown(Date.parse(upNext.date_start) - now)}</p>
               <p>
                 {upNext.name} · <time dateTime={upNext.date_start}>{fmtInstant(upNext.date_start)}</time>
               </p>
@@ -165,14 +171,18 @@ export function SeasonView({
               <h3>{m.is_cancelled ? <Cancelled>{m.name}</Cancelled> : m.name}</h3>
               {m.circuit_short_name && <p className="muted">{m.circuit_short_name}</p>}
               <ul className="sess">
-                {m.sessions.map((s) => (
-                  <li key={s.session_key}>
-                    <Name year={year} meeting={m} session={s} />
-                    <time className="when" dateTime={s.date_start}>
-                      {fmtInstant(s.date_start)}
-                    </time>
-                  </li>
-                ))}
+                {m.sessions.map((s) => {
+                  const state = stateOf(m, s, recordings, live, now, nextKey);
+                  return (
+                    <li key={s.session_key}>
+                      <Name year={year} meeting={m} session={s} state={state} />
+                      <time className="when" dateTime={s.date_start}>
+                        {fmtInstant(s.date_start)}
+                      </time>
+                      <State state={state} />
+                    </li>
+                  );
+                })}
               </ul>
             </article>
           ))}
@@ -181,10 +191,24 @@ export function SeasonView({
   );
 }
 
+const WEEKEND_POLL_MS = 5 * 60_000;
+
+/** The weekend has started (in progress or in its grace day): the page then refetches. `/live` is not needed. */
+const polling = (data: SeasonData | undefined, now: number): boolean => {
+  const weekend = data && thisWeekend(data, now, null);
+  return !!weekend && started(weekend, now);
+};
+
+/** Owns the clock: `now` moves every minute, so the states and the countdown move together. */
 export function Season({ year }: { year: number }) {
-  const season = useSeason(year);
+  const [now, setNow] = useState(Date.now);
+  useEffect(() => {
+    const id = setInterval(() => setNow(Date.now()), 60_000);
+    return () => clearInterval(id);
+  }, []);
+  const season = useSeason(year, (data) => (polling(data, Date.now()) ? WEEKEND_POLL_MS : false));
   const live = useLive();
-  const recordings = useRecordings();
+  const recordings = useRecordings(polling(season.data, now) && WEEKEND_POLL_MS);
   if (!season.data) return <Pending error={season.error} />;
   return (
     <SeasonView
@@ -192,7 +216,7 @@ export function Season({ year }: { year: number }) {
       season={season.data}
       live={live.data ?? null}
       recordings={recordings.data ?? []}
-      now={Date.now()}
+      now={now}
     />
   );
 }

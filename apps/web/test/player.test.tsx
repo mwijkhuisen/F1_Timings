@@ -1665,3 +1665,151 @@ describe('the player bar', () => {
     });
   });
 });
+
+describe('wake lock', () => {
+  type Sentinel = { released: boolean; release: () => Promise<void> };
+  let sentinels: Sentinel[];
+  let request: ReturnType<typeof vi.fn>;
+  const held = () => sentinels.filter((s) => !s.released).length;
+  const flush = () => act(async () => {});
+  const visibility = (v: 'visible' | 'hidden') => {
+    Object.defineProperty(document, 'visibilityState', { value: v, configurable: true });
+    return act(async () => {
+      document.dispatchEvent(new Event('visibilitychange'));
+    });
+  };
+  const install = (fn: () => Promise<unknown>) => {
+    request = vi.fn(fn);
+    Object.defineProperty(navigator, 'wakeLock', { value: { request }, configurable: true });
+  };
+  beforeEach(() => {
+    sentinels = [];
+    install(async () => {
+      const s: Sentinel = {
+        released: false,
+        release: vi.fn(async () => {
+          s.released = true;
+        }),
+      };
+      sentinels.push(s);
+      return s;
+    });
+    history.replaceState(null, '', '/');
+  });
+  afterEach(() => {
+    Reflect.deleteProperty(navigator, 'wakeLock');
+    Reflect.deleteProperty(document, 'visibilityState');
+  });
+
+  it('a live player that plays and is visible requests the screen lock once', async () => {
+    render({});
+    await flush();
+    expect(request).toHaveBeenCalledTimes(1);
+    expect(request).toHaveBeenCalledWith('screen');
+    expect(held()).toBe(1);
+  });
+
+  it('hidden then visible requests again; a visibilitychange while held keeps one lock', async () => {
+    render({});
+    await flush();
+    await visibility('hidden');
+    (sentinels[0] as Sentinel).released = true; // the browser lets go of a hidden page's lock
+    await visibility('visible');
+    expect(request).toHaveBeenCalledTimes(2);
+    expect(held()).toBe(1);
+    await visibility('visible');
+    expect(held()).toBe(1);
+  });
+
+  it('Pause releases it, Play requests again, an unmount releases it', async () => {
+    render({});
+    await flush();
+    button('Pause');
+    await flush();
+    expect(held()).toBe(0);
+    button('Play');
+    await flush();
+    expect(request).toHaveBeenCalledTimes(2);
+    expect(held()).toBe(1);
+    act(() => root.unmount());
+    await flush();
+    expect(held()).toBe(0);
+    root = createRoot(host); // the afterEach unmounts it
+  });
+
+  it('a grant that lands after Pause is released at once', async () => {
+    let grant: (s: Sentinel) => void = () => {};
+    install(() => new Promise((resolve) => (grant = resolve)));
+    render({});
+    await flush();
+    expect(request).toHaveBeenCalledTimes(1);
+    button('Pause'); // cleanup runs while the request is pending
+    await flush();
+    const late: Sentinel = {
+      released: false,
+      release: vi.fn(async () => {
+        late.released = true;
+      }),
+    };
+    sentinels.push(late);
+    await act(async () => grant(late));
+    expect(late.release).toHaveBeenCalledTimes(1);
+    expect(held()).toBe(0);
+  });
+
+  it('a still frame requests nothing, a hidden page waits for visible', async () => {
+    history.replaceState(null, '', '/replay/7?t=20:30:00');
+    render({ recording: ended, start: S, keepT: true });
+    await flush();
+    expect(request).not.toHaveBeenCalled();
+    act(() => root.unmount());
+    root = createRoot(host);
+    history.replaceState(null, '', '/');
+    Object.defineProperty(document, 'visibilityState', { value: 'hidden', configurable: true });
+    render({});
+    await flush();
+    expect(request).not.toHaveBeenCalled();
+    await visibility('visible');
+    expect(request).toHaveBeenCalledTimes(1);
+    expect(held()).toBe(1);
+  });
+
+  it('a refused request leaves the stream open and Pause and Play working', async () => {
+    install(() => Promise.reject(new DOMException('no', 'NotAllowedError')));
+    render({});
+    await flush();
+    expect(request).toHaveBeenCalledTimes(1);
+    expect(openCount()).toBe(1);
+    button('Pause');
+    expect(openCount()).toBe(0);
+    button('Play');
+    expect(openCount()).toBe(1);
+    await flush();
+  });
+
+  it('the reload hint releases it, and the next snapshot takes it again', async () => {
+    render({});
+    await flush();
+    for (const wait of [1_000, 2_000, 4_000, 8_000]) {
+      last().emit('error');
+      advance(wait);
+    }
+    await flush();
+    expect(held()).toBe(1); // still reconnecting: the lock holds through the backoff
+    last().emit('error');
+    await flush();
+    expect(host.textContent).toContain('The stream keeps failing.');
+    expect(held()).toBe(0);
+    advance(16_000);
+    last().emit('snapshot', { t: NOW, state: {}, laps: [], stints: [] });
+    await flush();
+    expect(held()).toBe(1);
+  });
+
+  it('without the API the player plays', async () => {
+    Reflect.deleteProperty(navigator, 'wakeLock');
+    render({});
+    await flush();
+    expect(openCount()).toBe(1);
+  });
+});

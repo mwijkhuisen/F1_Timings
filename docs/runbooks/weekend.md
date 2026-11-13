@@ -29,7 +29,13 @@ Do this by Thursday evening, outside a session.
 
    `disk` holds `<UTC time> <use %>` from the last `f1-tick`. Free space before the weekend if it is near 5 GiB.
 7. **The alarm.** The `f1-live` check on healthchecks.io exists (A6 is open: its ping got a 404 on 2026-11-06, so create it now). Without it a recording that ends incomplete rings nobody (`docs/runbooks/update.md`, "Check a recording [box]").
-8. **A replay opens on the phone.** On `/live`, under Recordings, tap the newest recording (the link is `/replay/<recording id>`, `id` being the `recording` row's id, also in the query of "Check a recording [box]"). The phone goes through the tunnel.
+8. **A replay opens on the phone.** On `/replay`, tap the newest recording (the link is `/replay/<recording id>`, `id` being the `recording` row's id, also in the query of "Check a recording [box]"). Once a recording has ended, its session's name on the season page opens the same replay. The phone goes through the tunnel.
+
+## The phone [owner]
+
+- **The screen stays on by itself** while the player plays and the page is in front, once #97 is deployed. Until then, turn Auto-Lock off: iPhone Settings, Display & Brightness, Auto-Lock, Never; Android Settings, Display, Screen timeout. Low Power mode (iPhone) or Battery Saver can refuse the lock: the screen then locks as usual, and the player reopens its stream after unlock.
+- **Add to Home Screen:** Safari: Share, Add to Home Screen; Chrome: the menu (three dots), Add to Home screen. On iOS 26, Safari's Add to Home Screen opens the site as a web app by default (the "Open as Web App" switch in the add sheet), even without a manifest; such a web app has its own cookies and storage, so it needs its own Access sign-in and keeps its own delay setting. With the switch off it opens in Safari. On Android the site has no manifest, so the icon opens it in the browser.
+- **An Access session that expires mid-race:** the player shows "The stream keeps failing. Reload the page (your Access session may have expired)." The screen then locks as usual. Reload and sign in to Access again. `/live` resumes at the live edge with the same delay (the delay is stored on the device).
 
 ## During a session
 
@@ -72,7 +78,7 @@ The summary is a Markdown table per service (samples, CPU mean and max %, memory
 ## After a session
 
 1. **Check the recording** about 30 minutes after the session ends: `docs/runbooks/update.md`, "Check a recording [box]". It must show `complete = t`, intact segments and a snapshot every 30 s.
-2. **Replay on the phone.** Tap the recording under Recordings on `/live` (`/replay/<recording id>`).
+2. **Replay on the phone.** Tap the recording on `/replay` (`/replay/<recording id>`), or the session's name on the season page.
 3. **healthchecks.io.** `f1-live` is green. Red means the recording ended incomplete (`complete = f`); the `recording` row and `docker logs f1-live-1` say why.
 4. **The deploy.** `journalctl -u f1-update` shows the deferred deploy going through after the recording ended (`deployed …`).
 5. **The measurement** (if run): keep the summary for PR 2.

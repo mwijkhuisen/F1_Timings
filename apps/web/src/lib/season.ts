@@ -41,9 +41,13 @@ function slots(season: Season): Slot[] {
     );
 }
 
+const GRACE_MS = 86_400_000;
+
 /**
- * The meeting in progress, else the next one to start, else null; spans run over the non-cancelled sessions. While
- * `live` names an open recording of a session, its meeting's span reaches `now` (a race that overruns `date_end`).
+ * The meeting in progress, else the one that ended less than 24 h ago (owner D1, 2026-11-13: its replays stay in
+ * reach), else the next one to start, else null; spans run over the non-cancelled sessions. While `live` names an open
+ * recording of a session, its meeting's span reaches `now` (a race that overruns `date_end`). A meeting truly in
+ * progress beats one in its grace day.
  */
 export function thisWeekend(season: Season, now: number, live: Live | null): Meeting | null {
   const liveKey = isOpen(live) ? live?.session?.session_key : undefined;
@@ -53,13 +57,19 @@ export function thisWeekend(season: Season, now: number, live: Live | null): Mee
     span.end = Math.max(span.end, Date.parse(session.date_end), session.session_key === liveKey ? now : -Infinity);
     spans.set(meeting, span);
   }
+  let grace: Meeting | null = null;
   let next: { meeting: Meeting; start: number } | null = null;
   for (const [meeting, { start, end }] of spans) {
     if (start <= now && now <= end) return meeting;
+    if (start <= now && now <= end + GRACE_MS) grace ??= meeting;
     if (start > now && (next === null || start < next.start)) next = { meeting, start };
   }
-  return next?.meeting ?? null;
+  return grace ?? next?.meeting ?? null;
 }
+
+/** Whether a non-cancelled session of the meeting has started. */
+export const started = (m: Meeting, now: number): boolean =>
+  m.sessions.some((s) => !s.is_cancelled && Date.parse(s.date_start) <= now);
 
 /** The first session to start after `now` that is not cancelled, or null. */
 export const nextSession = (season: Season, now: number): Slot | null =>

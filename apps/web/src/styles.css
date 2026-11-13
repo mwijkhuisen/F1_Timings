@@ -1806,6 +1806,22 @@ header .theme[aria-pressed="true"] {
   margin: 0;
 }
 
+/* A card is too narrow for name, time and state in one row: the time takes a second row of its own, as the weekend's
+   does under 640 px. */
+.meeting .sess li {
+  padding: 4px 0;
+}
+
+.sess .laps {
+  white-space: nowrap;
+}
+
+.meeting .sess .when {
+  grid-column: 1 / -1;
+  grid-row: 2;
+  font-size: 12.5px;
+}
+
 @media (max-width: 640px) {
   .crumbs .sep {
     display: none;

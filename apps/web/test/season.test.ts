@@ -9,6 +9,7 @@ import {
   type SeasonSession,
   sessionState,
   shortName,
+  started,
   startPath,
   thisWeekend,
 } from '../src/lib/season.ts';
@@ -142,7 +143,7 @@ describe('thisWeekend: the weekend choice', () => {
   });
 
   it('picks the next meeting between weekends, skipping a cancelled one', () => {
-    expect(weekend('2026-03-08T06:00:01.000Z')).toBe(1003);
+    expect(weekend('2026-03-09T06:00:01.000Z')).toBe(1003);
     expect(weekend('2026-04-11T00:00:00.000Z')).toBe(1003);
   });
 
@@ -153,16 +154,45 @@ describe('thisWeekend: the weekend choice', () => {
 
   it('spans a meeting whose race is cancelled over its open sessions, and is null after the last meeting', () => {
     expect(weekend('2026-11-27T14:00:00.000Z')).toBe(1005);
-    expect(weekend('2026-11-27T14:30:01.000Z')).toBeNull();
+    expect(weekend('2026-11-28T14:30:01.000Z')).toBeNull();
     expect(thisWeekend([], at('2026-01-01T00:00:00.000Z'), null)).toBeNull();
   });
 
   it('keeps the weekend while its race is recording past date_end, and moves on once it ends', () => {
-    expect(weekend('2026-04-19T09:30:00.000Z', live(34, null))).toBe(1003);
-    expect(weekend('2026-04-19T09:30:00.000Z')).toBe(1004);
-    expect(weekend('2026-04-19T09:30:00.000Z', live(34, '2026-04-19T09:25:00.000Z'))).toBe(1004);
+    // A day past date_end, so the grace day is not what keeps it.
+    const late = '2026-04-20T09:30:00.000Z';
+    expect(weekend(late, live(34, null))).toBe(1003);
+    expect(weekend(late)).toBe(1004);
+    expect(weekend(late, live(34, '2026-04-19T09:25:00.000Z'))).toBe(1004);
     // An open recording of a session the season does not know changes nothing.
-    expect(weekend('2026-04-19T09:30:00.000Z', live(999, null))).toBe(1004);
+    expect(weekend(late, live(999, null))).toBe(1004);
+  });
+
+  it('keeps a finished meeting for 24 h after its last session ends (owner D1)', () => {
+    expect(weekend('2026-03-08T06:00:01.000Z')).toBe(1001);
+    expect(weekend('2026-03-09T05:59:00.000Z')).toBe(1001); // end + 23 h 59 min
+    expect(weekend('2026-03-09T06:00:00.000Z')).toBe(1001); // end + 24 h, the last instant
+    expect(weekend('2026-03-09T06:00:01.000Z')).toBe(1003);
+  });
+
+  it('prefers a meeting in progress to one in its grace day, and a grace day to the next meeting', () => {
+    const two = Season.parse([
+      meeting(2000, 'A', [session(60, 'Race', '2026-06-06T13:00:00.000Z')]),
+      meeting(2001, 'B', [session(61, 'Race', '2026-06-07T10:00:00.000Z')]),
+    ]);
+    const key = (now: string) => thisWeekend(two, at(now), null)?.meeting_key;
+    expect(key('2026-06-07T09:00:00.000Z')).toBe(2000); // A ended 14:00 the day before, B has not started
+    expect(key('2026-06-07T10:30:00.000Z')).toBe(2001); // B is in progress, A is still in its grace day
+  });
+});
+
+describe('started', () => {
+  it('is true once a non-cancelled session of the meeting has started', () => {
+    const m = meetingOf(1003);
+    expect(started(m, at('2026-04-17T03:29:59.000Z'))).toBe(false);
+    expect(started(m, at('2026-04-17T03:30:00.000Z'))).toBe(true);
+    // Bahrain's sessions are all cancelled.
+    expect(started(meetingOf(1002), at('2026-04-20T00:00:00.000Z'))).toBe(false);
   });
 });
 
