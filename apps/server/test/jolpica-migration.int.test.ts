@@ -117,6 +117,7 @@ it('rolls back: jolpica rows gone (also a candidate on another session), grid go
   await sql`INSERT INTO lap_source (session_key, source, driver_number, lap_number) VALUES (10, 'openf1', 1, 1)`.execute(
     ingest,
   );
+  expect(await dbmate('rollback')).toMatch(/Rolled back: 20261113000002_ingest_status\.sql/); // the newer one first
   expect(await dbmate('rollback')).toMatch(/Rolled back: 20261113000001_jolpica\.sql/);
   for (const t of ['meeting', 'session', 'driver', 'lap', 'pit', 'result']) {
     const own = t === 'meeting' || t === 'session' ? 1 : 0;

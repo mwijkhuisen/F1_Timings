@@ -42,6 +42,21 @@ describe('pingHealthchecks', () => {
     expect(log.error).not.toHaveBeenCalled();
   });
 
+  it('sends a body as a POST with that text', async () => {
+    key(KEY);
+    const posts: string[] = [];
+    server.use(
+      http.post('https://hc-ping.com/*', async ({ request }) => {
+        posts.push(`${request.url} ${await request.text()}`);
+        return new HttpResponse('OK');
+      }),
+    );
+    await pingHealthchecks('f1-ingest/fail', log, { secretsDir: dir, body: 'session_failed schema' });
+    expect(posts).toEqual([`https://hc-ping.com/${KEY}/f1-ingest/fail session_failed schema`]);
+    expect(urls).toEqual([]); // no GET
+    expect(log.error).not.toHaveBeenCalled();
+  });
+
   it('sends no request without the secret file', async () => {
     await pingHealthchecks('f1-ingest', log, { secretsDir: dir });
     expect(urls).toEqual([]);

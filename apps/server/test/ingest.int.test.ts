@@ -1,4 +1,5 @@
-import { readFileSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { type Kysely, sql } from 'kysely';
 import { HttpResponse, http } from 'msw';
@@ -6,9 +7,12 @@ import pino from 'pino';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { server } from '../../../test/msw.setup.ts';
 import { createDb, type DB } from '../src/db/db.ts';
+import { pingHealthchecks } from '../src/healthchecks.ts';
 import {
+  BACKLOG_MS,
   backfill,
   type Deps,
+  ingestHealth,
   processSession,
   SYNC_RETRY_MS,
   scheduleSync,
@@ -89,6 +93,26 @@ let testDb: TestDb;
 let db: Kysely<DB>;
 let deps: Deps;
 
+// The real healthchecks.io ping: `secrets` holds a valid key, `nokey` none. msw records each ping as
+// `<method> <path after the key> <body>`.
+let secrets: string;
+let nokey: string;
+const pinging = (dir = secrets): Deps => ({
+  ...deps,
+  ping: (slug, body) => pingHealthchecks(slug, deps.log, { secretsDir: dir, body }),
+});
+const hc = () => {
+  const pings: string[] = [];
+  server.use(
+    http.all('https://hc-ping.com/*', async ({ request }) => {
+      const path = new URL(request.url).pathname.split('/').slice(2).join('/');
+      pings.push(`${request.method} ${path} ${await request.text()}`.trim());
+      return new HttpResponse('OK');
+    }),
+  );
+  return pings;
+};
+
 const session = (key: number) =>
   db.selectFrom('session').selectAll().where('session_key', '=', key).executeTakeFirstOrThrow();
 const states = async () => {
@@ -127,8 +151,12 @@ describe('ingest (fixtures through msw, f1_ingest login)', { timeout: 120_000 },
     db = createDb(testDb.urls.f1_ingest);
     const log = pino({ base: null }, { write: (line: string) => void lines.push(line) });
     deps = { db, client: createClient({ clock }), now: () => at, log, beat: () => void beats++ };
+    secrets = mkdtempSync(join(tmpdir(), 'f1-hc-'));
+    nokey = mkdtempSync(join(tmpdir(), 'f1-hc-'));
+    writeFileSync(join(secrets, 'hc_ping_key'), 'AbCdEfGhIjKlMnOpQrStUv\n');
   });
   afterAll(async () => {
+    for (const dir of [secrets, nokey]) if (dir) rmSync(dir, { recursive: true, force: true });
     await db?.destroy();
     await testDb?.drop();
   });
@@ -571,7 +599,7 @@ describe('ingest (fixtures through msw, f1_ingest login)', { timeout: 120_000 },
     expect(await processSession(deps, 999_999, true)).toEqual({ ok: false, error: 'unknown_session' });
   });
 
-  it('last_error takes every D5 code through the CHECK; the 9th failure in a row marks the session failed', async () => {
+  it('last_error takes every D5 code through the CHECK; the 9th failure in a row marks the session failed and pings /fail once', async () => {
     const set = (code: string) =>
       sql`UPDATE session SET last_error = ${code} WHERE session_key = ${EMPTY}`.execute(db).then(
         () => 'ok',
@@ -580,11 +608,15 @@ describe('ingest (fixtures through msw, f1_ingest login)', { timeout: 120_000 },
     for (const code of ['http_401', 'http_500', ...ERROR_CODES]) expect(await set(code)).toBe('ok');
     for (const code of ['http_5000', 'boom', 'live_session']) expect(await set(code)).toBe('23514');
 
-    await db.updateTable('session').set({ fail_count: 8, last_error: null }).where('session_key', '=', EMPTY).execute();
+    await db.updateTable('session').set({ fail_count: 7, last_error: null }).where('session_key', '=', EMPTY).execute();
     openf1((endpoint, key) =>
       endpoint === 'laps' && key === EMPTY ? new HttpResponse(null, { status: 500 }) : undefined,
     );
-    expect(await processSession(deps, EMPTY)).toEqual({ ok: false, error: 'http_500' });
+    const pings = hc();
+    expect(await processSession(pinging(), EMPTY)).toEqual({ ok: false, error: 'http_500' }); // the 8th
+    expect(pings).toEqual([]);
+    expect(await processSession(pinging(), EMPTY)).toEqual({ ok: false, error: 'http_500' });
+    expect(pings).toEqual(['POST f1-ingest/fail session_failed http_500']);
     expect(await session(EMPTY)).toMatchObject({
       ingest_state: 'failed',
       next_fetch_at: null,
@@ -594,6 +626,17 @@ describe('ingest (fixtures through msw, f1_ingest login)', { timeout: 120_000 },
     openf1();
     expect(await processSession(deps, EMPTY, true)).toEqual({ ok: true, value: 'final' }); // a refetch recovers it
     expect(await session(EMPTY)).toMatchObject({ ingest_state: 'final', fail_count: 0, last_error: null });
+
+    // No key file: the same 9th failure sends no request at all.
+    await db.updateTable('session').set({ fail_count: 8 }).where('session_key', '=', EMPTY).execute();
+    openf1((endpoint, key) =>
+      endpoint === 'laps' && key === EMPTY ? new HttpResponse(null, { status: 500 }) : undefined,
+    );
+    expect(await processSession(pinging(nokey), EMPTY)).toEqual({ ok: false, error: 'http_500' });
+    expect(await session(EMPTY)).toMatchObject({ ingest_state: 'failed', fail_count: 9 });
+    expect(pings).toHaveLength(1);
+    openf1();
+    expect(await processSession(deps, EMPTY, true)).toEqual({ ok: true, value: 'final' });
   });
 
   it('the daemon sync skips a live window and retries every 15 min until it succeeds', async () => {
@@ -685,6 +728,76 @@ describe('ingest (fixtures through msw, f1_ingest login)', { timeout: 120_000 },
     expect(await backfill(deps)).toBe(true); // a session the backfill took up would fail with not_openf1
     expect(requests.slice(sent).filter((r) => r.includes(`session_key=${KEY}`))).toEqual([]);
     expect({ session: await session(KEY), rows: await rowCounts(KEY) }).toEqual(before);
+  });
+
+  it('a good sync calls onSynced; only a requested (daily) one pings f1-ingest', async () => {
+    openf1();
+    const pings = hc();
+    const synced: Date[] = [];
+    const sync = scheduleSync(pinging(), (t) => void synced.push(t));
+    at = new Date('2026-11-02T12:00:00Z'); // outside every live window
+    await sync.run(); // the startup sync
+    expect(synced).toEqual([at]);
+    expect(pings).toEqual([]);
+    sync.request();
+    await sync.run();
+    expect(synced).toEqual([at, at]);
+    expect(pings).toEqual(['GET f1-ingest']);
+  });
+
+  it('a due backlog over 6 h pings /fail once, again after a good sync; never inside a live window', async () => {
+    const pings = hc();
+    const health = ingestHealth(pinging());
+    const backlog = (t: Date, ms: number) =>
+      db
+        .updateTable('session')
+        .set({ ingest_state: 'due', next_fetch_at: new Date(t.getTime() - ms) })
+        .where('session_key', '=', EMPTY)
+        .execute();
+
+    at = new Date('2026-10-30T22:30:00Z'); // Mexico practice 2 is live
+    await backlog(at, BACKLOG_MS + 60_000);
+    await health.report();
+    expect(pings).toEqual([]);
+
+    at = new Date('2026-11-02T12:00:00Z');
+    await backlog(at, BACKLOG_MS - 60_000); // not yet 6 h
+    await health.report();
+    expect(pings).toEqual([]);
+    await backlog(at, BACKLOG_MS);
+    await health.report();
+    expect(pings).toEqual(['POST f1-ingest/fail due_backlog']);
+    await health.report(); // the backlog stands: quiet
+    expect(pings).toHaveLength(1);
+    health.synced(at); // D3: re-armed
+    await health.report();
+    expect(pings).toEqual(['POST f1-ingest/fail due_backlog', 'POST f1-ingest/fail due_backlog']);
+    await db
+      .updateTable('session')
+      .set({ ingest_state: 'final', next_fetch_at: null })
+      .where('session_key', '=', EMPTY)
+      .execute();
+  });
+
+  it('report() upserts the one ingest_status row as f1_ingest; a restart keeps last_sync_at; tick reports', async () => {
+    const row = () => db.selectFrom('ingest_status').selectAll().executeTakeFirstOrThrow();
+    const synced = new Date('2026-11-02T00:30:00Z');
+    at = new Date('2026-11-02T12:00:00Z');
+    const first = ingestHealth(deps);
+    first.synced(synced);
+    await first.report();
+    expect(await row()).toEqual({ id: true, last_sync_at: synced, live_wait: false, last_tick_at: at });
+
+    at = new Date('2026-10-30T22:30:00Z'); // a restart (no sync in memory), inside a live window
+    await ingestHealth(deps).report();
+    expect(await row()).toEqual({ id: true, last_sync_at: synced, live_wait: true, last_tick_at: at });
+    expect(await count('ingest_status', 'true')).toBe(1);
+
+    let reports = 0;
+    at = new Date('2026-11-02T12:00:00Z');
+    expect(await tick({ ...deps, report: async () => void reports++ })).toBe(0);
+    expect(reports).toBe(1); // once at the end; once more after each processed session
+    expect(logged('report failed')).toBe(0);
   });
 
   it('logs one line per session with fixed codes: no URL, password or response body', () => {

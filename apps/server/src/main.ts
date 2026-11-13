@@ -90,14 +90,15 @@ async function runIngest(role: 'ingest' | 'backfill' | 'refetch', key: number, e
   // An idle-connection error must not crash the process; the pool reconnects.
   const db = createDb(url, (err) => logger.error({ cause: codeOf(err) }, 'database pool error'));
   const beat = () => touch();
-  // Only the daemon's scheduleSync pings; the backfill and refetch jobs never reach it.
-  const ping = (slug: string) => pingHealthchecks(slug, logger);
-  const deps = { db, client: createClient({ onAttempt: beat }), now: () => new Date(), log: logger, beat, ping };
+  const deps = { db, client: createClient({ onAttempt: beat }), now: () => new Date(), log: logger, beat };
   try {
     if (role === 'ingest') {
-      // Only the daemon has a rain step (P5c); the backfill and refetch jobs never fetch rain.
+      // Only the daemon pings (the daily sync, and `/fail` for a session or grid that fails for good or a stalled
+      // backlog, #105) and has a rain step (P5c); the backfill and refetch jobs get neither.
+      const ping = (slug: string, body?: string) => pingHealthchecks(slug, logger, { body });
       const rain = { client: createRainClient({ onAttempt: beat }), budget: createBudget(systemClock) };
-      await startIngest({ ...deps, rainStep: createRainStep({ ...deps, ...rain }) });
+      const daemon = { ...deps, ping };
+      await startIngest({ ...daemon, rainStep: createRainStep({ ...daemon, ...rain }) });
       return 0;
     }
     if (role === 'backfill') return (await backfill(deps)) ? 0 : 1;

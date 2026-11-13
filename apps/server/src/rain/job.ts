@@ -29,6 +29,8 @@ export type RainDeps = {
   now: () => Date;
   log: Pick<Logger, 'info' | 'error'>;
   beat: () => void;
+  /** The daemon's healthchecks.io ping (never throws): `f1-ingest/fail` when a grid newly fails for good (#105). */
+  ping?: (slug: string, body?: string) => Promise<void>;
 };
 
 const HOUR_MS = 3_600_000;
@@ -86,7 +88,7 @@ const countAttempt = (trx: Transaction<DB>, key: number, at: Date) =>
 
 /** The minute job's rain step, with its per-process memory (the budget seed, the unmapped log, the refusal streaks). */
 export function createRainStep(deps: RainDeps) {
-  const { db, client, budget, now, log, beat } = deps;
+  const { db, client, budget, now, log, beat, ping } = deps;
   let seeded = false;
   let unmappedLogged = false; // C5: once per process
   let pausedLogged = false;
@@ -143,16 +145,21 @@ export function createRainStep(deps: RainDeps) {
       .execute();
   }
 
-  /** A failure is its own short locked write. Never throws: an unrecorded failure leaves the grid as it was. */
+  /**
+   * A failure is its own short locked write; one that makes a live grid failed pings `f1-ingest/fail`. Never throws:
+   * an unrecorded failure leaves the grid as it was.
+   */
   async function fail(key: number, at: Date, code: RainCode): Promise<{ state: string; unrecorded?: string }> {
     try {
-      return await db.transaction().execute(async (trx) => {
+      const done = await db.transaction().execute(async (trx) => {
         const row = await countAttempt(trx, key, at);
-        if (row?.state !== 'live') return { state: row?.state ?? 'gone' };
+        if (row?.state !== 'live') return { state: row?.state ?? 'gone', newly: false };
         const next = afterRainFailure(row, at, code);
         await trx.updateTable('rain_grid').set(next).where('session_key', '=', key).execute();
-        return { state: next.state };
+        return { state: next.state, newly: next.state === 'failed' };
       });
+      if (done.newly) await ping?.('f1-ingest/fail', `rain_failed ${code}`);
+      return { state: done.state };
     } catch (err) {
       return { state: 'unchanged', unrecorded: codeOf(err) };
     }
