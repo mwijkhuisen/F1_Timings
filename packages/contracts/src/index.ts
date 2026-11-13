@@ -202,7 +202,11 @@ export function withWeatherRow(rows: Weather, row: Weather[number]): Weather {
   return [...rows.slice(Math.max(0, rows.length + 1 - MAX_WEATHER_ROWS)), row];
 }
 
+/** F1_REVISION: the release's git commit (CI's `github.sha`), or `dev` for any other build (A§10). */
+export const REVISION = /^(?:[0-9a-f]{40}|dev)$/;
+
 export const Status = z.strictObject({
+  revision: z.string().regex(REVISION),
   states: z.strictObject({ scheduled: int, due: int, fetched: int, final: int, failed: int }),
   cancelled: int,
   failed: z.array(

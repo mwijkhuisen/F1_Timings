@@ -1,7 +1,7 @@
 import { stat } from 'node:fs/promises';
 import { join } from 'node:path';
 import { setTimeout as sleep } from 'node:timers/promises';
-import type { Rain, Seasons, Status, Stints } from '@f1/contracts';
+import { type Rain, REVISION, type Seasons, type Status, type Stints } from '@f1/contracts';
 import { type Context, Hono, type MiddlewareHandler } from 'hono';
 import { streamSSE } from 'hono/streaming';
 import { type Kysely, sql } from 'kysely';
@@ -25,8 +25,6 @@ const STATES = ['scheduled', 'due', 'fetched', 'final', 'failed'] as const;
 const badRequest = (c: Context) => c.json({ error: 'bad request' }, 400, NO_STORE);
 const notFound = (c: Context) => c.json({ error: 'not found' }, 404, NO_STORE);
 
-/** A§10: a final session's data no longer changes. */
-const cache = (state: string) => (state === 'final' ? FINAL : NO_STORE);
 const sessionKey = (c: Context) => {
   const key = c.req.param('key') ?? '';
   return /^\d{1,9}$/.test(key) ? Number(key) : undefined;
@@ -37,6 +35,7 @@ export function createApp({
   access,
   log,
   liveDir,
+  revision = 'dev',
   writeTimeoutMs = WRITE_TIMEOUT_MS,
 }: {
   db: Kysely<DB>;
@@ -44,16 +43,29 @@ export function createApp({
   log: Pick<Logger, 'error'>;
   /** The recordings' root (A§11.2), read-only here. */
   liveDir: string;
+  /** The release's git commit or `dev` (A§10): the `F1-Revision` header and the check of a request's `v`. */
+  revision?: string;
   /** For tests only. */
   writeTimeoutMs?: number;
 }) {
   let streams = 0;
-  /** The session of a per-session route: its key and state, or the 400/404 answer. */
-  const lookup = async (c: Context): Promise<{ key: number; state: string } | Response> => {
+  /** A§10: the web's `?v=<revision>` is a cache key. null when absent; else exactly one REVISION value, or the 400. */
+  const version = (c: Context): string | null | Response => {
+    const v = c.req.queries('v');
+    if (v === undefined) return null;
+    return v.length === 1 && REVISION.test(v[0] as string) ? (v[0] as string) : badRequest(c);
+  };
+  /** A§10: a final session's data no longer changes, unless it answers a request made for another revision. */
+  const cache = (state: string, v: string | null) =>
+    state === 'final' && (v === null || v === revision) ? FINAL : NO_STORE;
+  /** The session of a per-session route: its key, state and `v`, or the 400/404 answer. */
+  const lookup = async (c: Context): Promise<{ key: number; state: string; v: string | null } | Response> => {
     const key = sessionKey(c);
     if (key === undefined) return badRequest(c);
+    const v = version(c);
+    if (v instanceof Response) return v;
     const row = await db.selectFrom('session').select('ingest_state').where('session_key', '=', key).executeTakeFirst();
-    return row ? { key, state: row.ingest_state } : notFound(c);
+    return row ? { key, state: row.ingest_state, v } : notFound(c);
   };
   const app = new Hono();
 
@@ -71,6 +83,10 @@ export function createApp({
   app.use('/api/*', access);
 
   const api = new Hono();
+  api.use('*', async (c, next) => {
+    c.header('F1-Revision', revision);
+    await next();
+  });
 
   api.get('/seasons', async (c) => {
     const rows: Seasons = await db
@@ -139,6 +155,8 @@ export function createApp({
   api.get('/sessions/:key', async (c) => {
     const key = sessionKey(c);
     if (key === undefined) return badRequest(c);
+    const v = version(c);
+    if (v instanceof Response) return v;
     const row = await db
       .selectFrom('session as s')
       .innerJoin('meeting as m', 'm.meeting_key', 's.meeting_key')
@@ -205,7 +223,7 @@ export function createApp({
       drivers,
       results,
     };
-    return c.json(body, 200, cache(row.ingest_state));
+    return c.json(body, 200, cache(row.ingest_state, v));
   });
 
   api.get('/sessions/:key/laps', async (c) => {
@@ -250,7 +268,7 @@ export function createApp({
       .execute();
     const colour = colours(laps);
     const body = laps.map((l, i) => ({ ...l, colour: colour[i] }));
-    return c.json(body, 200, cache(session.state));
+    return c.json(body, 200, cache(session.state, session.v));
   });
 
   api.get('/sessions/:key/stints', async (c) => {
@@ -263,7 +281,7 @@ export function createApp({
       .orderBy('driver_number')
       .orderBy('stint_number')
       .execute();
-    return c.json(body, 200, cache(session.state));
+    return c.json(body, 200, cache(session.state, session.v));
   });
 
   api.get('/sessions/:key/pits', async (c) => {
@@ -277,7 +295,7 @@ export function createApp({
       .orderBy('driver_number')
       .orderBy('lap_number')
       .execute();
-    return c.json(body, 200, cache(session.state));
+    return c.json(body, 200, cache(session.state, session.v));
   });
 
   api.get('/sessions/:key/race-control', async (c) => {
@@ -300,7 +318,7 @@ export function createApp({
       .orderBy('date')
       .orderBy('id')
       .execute();
-    return c.json(body, 200, cache(session.state));
+    return c.json(body, 200, cache(session.state, session.v));
   });
 
   api.get('/sessions/:key/weather', async (c) => {
@@ -321,7 +339,7 @@ export function createApp({
       .where('session_key', '=', session.key)
       .orderBy('date')
       .execute();
-    return c.json(body, 200, cache(session.state));
+    return c.json(body, 200, cache(session.state, session.v));
   });
 
   api.get('/sessions/:key/rain', async (c) => {
@@ -345,7 +363,7 @@ export function createApp({
       frames: frames.map((f) => ({ date: f.date.toISOString(), mm: f.mm })),
     };
     // Immutable only when the grid will never change: its own state, not just the session's.
-    return c.json(body, 200, cache(grid?.state === 'final' ? session.state : 'live'));
+    return c.json(body, 200, cache(grid?.state === 'final' ? session.state : 'live', session.v));
   });
 
   api.get('/status', async (c) => {
@@ -393,7 +411,7 @@ export function createApp({
       ])
       .executeTakeFirst();
     const recorder = row && { ...row, stale: Date.now() - row.updated_at.getTime() > STALE_MS };
-    const body = { states, cancelled, failed, recorder: recorder ?? null };
+    const body = { revision, states, cancelled, failed, recorder: recorder ?? null };
     return c.json(body, 200, NO_STORE);
   });
 
@@ -506,7 +524,11 @@ export function createApp({
     // hono runs this handler for HEAD and drops the body without cancelling it: a generator would stay open for good.
     if (c.req.method === 'HEAD')
       return new Response(null, {
-        headers: { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-store, no-transform' },
+        headers: {
+          'Content-Type': 'text/event-stream',
+          'Cache-Control': 'no-store, no-transform',
+          'F1-Revision': revision,
+        },
       });
     if (streams >= MAX_STREAMS) return c.json({ error: 'unavailable' }, 503, NO_STORE);
 
