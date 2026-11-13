@@ -59,7 +59,7 @@ describe('the season page', () => {
 
   it('links a recorded session to its replay with Laps beside it, in This weekend', () => {
     expect(html).toContain(
-      '<span class="name"><a href="/replay/41">Sprint Qualifying</a> · <a href="/2026/1320-sao-paulo/9103-sprint-qualifying/laps">Laps</a></span>',
+      '<span class="name"><a href="/replay/41">Sprint Qualifying</a><span class="laps"> · <a href="/2026/1320-sao-paulo/9103-sprint-qualifying/laps">Laps</a></span></span>',
     );
     // An open recording is not a replay: the live Sprint links to its laps only.
     expect(html).toContain('<a href="/2026/1320-sao-paulo/9105-sprint/laps">Sprint</a>');
@@ -109,7 +109,7 @@ describe('the season page', () => {
       <SeasonView year={2026} season={season} live={live} recordings={ended} now={NOW} />,
     );
     expect(card).toContain(
-      '<span class="name"><a href="/replay/43">Race</a> · <a href="/2026/1310-mexico-city/9002-race/laps">Laps</a></span><time class="when" dateTime="2026-10-25T20:00:00.000Z">',
+      '<span class="name"><a href="/replay/43">Race</a><span class="laps"> · <a href="/2026/1310-mexico-city/9002-race/laps">Laps</a></span></span><time class="when" dateTime="2026-10-25T20:00:00.000Z">',
     );
     expect(card).toContain('<span class="state recorded">recorded</span>');
     // Mexico's Qualifying has no recording: its name is its laps link, as before.
@@ -317,6 +317,74 @@ describe('the season page moves', () => {
     expect(seasonRequests).toBe(1);
     await vi.advanceTimersByTimeAsync(11 * 60_000);
     await vi.waitFor(() => expect(seasonRequests).toBeGreaterThan(1));
+  });
+
+  it('turns a recording that ends into a replay link after the 5 min poll, without a remount', async () => {
+    server.use(
+      http.get('*/api/v1/seasons/2026', () => HttpResponse.json(season)),
+      http.get('*/api/v1/live', () =>
+        HttpResponse.json(liveOf({ id: 45, started_at: '2026-11-07T17:00:00.000Z', ended_at: null, complete: false })),
+      ),
+      http.get('*/api/v1/recordings', () => HttpResponse.json(ended)),
+    );
+    mount('2026-11-07T18:30:00.000Z');
+    await vi.waitFor(() => expect(stateOf('Qualifying')).toBe('live now · Follow'));
+
+    const done = {
+      id: 45,
+      started_at: '2026-11-07T17:00:00.000Z',
+      ended_at: '2026-11-07T19:05:00.000Z',
+      complete: true,
+    };
+    server.use(
+      http.get('*/api/v1/live', () => HttpResponse.json(liveOf(done))),
+      http.get('*/api/v1/recordings', () =>
+        HttpResponse.json(
+          Recordings.parse([
+            {
+              ...done,
+              session_key: 9106,
+              year: 2026,
+              meeting_name: 'São Paulo Grand Prix',
+              session_name: 'Qualifying',
+              session_type: 'Qualifying',
+              date_start: qualifying.date_start,
+            },
+            ...ended,
+          ]),
+        ),
+      ),
+    );
+    await vi.advanceTimersByTimeAsync(6 * 60_000);
+    await vi.waitFor(() => expect(stateOf('Qualifying')).toBe('recorded'));
+    const link = [...host.querySelectorAll('.weekend .sess li')]
+      .find((li) => li.textContent?.startsWith('Qualifying'))
+      ?.querySelector('a');
+    expect(link?.getAttribute('href')).toBe('/replay/45');
+  });
+
+  it('starts polling when the weekend begins: nothing before the first session counts as started', async () => {
+    answer({ session: null, recording: null });
+    mount('2026-11-06T14:28:00.000Z'); // two minutes before São Paulo FP1
+    await vi.waitFor(() => expect(host.querySelector('.weekend h2')?.textContent).toBe('São Paulo Grand Prix'));
+    await vi.advanceTimersByTimeAsync(60_000); // 14:29, not started
+    await new Promise((r) => setTimeout(r, 50));
+    expect(seasonRequests).toBe(1);
+    await vi.advanceTimersByTimeAsync(10 * 60_000);
+    await vi.waitFor(() => expect(seasonRequests).toBeGreaterThan(1));
+  });
+
+  it("stops polling once the weekend's grace day is over", async () => {
+    answer({ session: null, recording: null });
+    mount('2026-11-09T17:59:00.000Z'); // the Race ended 2026-11-08T18:00Z: the grace day ends at 2026-11-09T18:00Z
+    await vi.waitFor(() => expect(host.querySelector('.weekend h2')?.textContent).toBe('São Paulo Grand Prix'));
+    await vi.advanceTimersByTimeAsync(2 * 60_000); // past the first minute ticks: now Las Vegas is the weekend
+    await vi.waitFor(() => expect(host.querySelector('.weekend h2')?.textContent).toBe('Las Vegas Grand Prix'));
+    await new Promise((r) => setTimeout(r, 50));
+    const after = seasonRequests;
+    await vi.advanceTimersByTimeAsync(9 * 60_000);
+    await new Promise((r) => setTimeout(r, 50));
+    expect(seasonRequests).toBe(after);
   });
 
   it('does not refetch while the weekend has not started', async () => {

@@ -44,8 +44,10 @@ function Name({
   return (
     <span className="name">
       <Link to={`/replay/${state.recording.id}`}>{s.name}</Link>
-      {' · '}
-      <Link to={laps}>Laps</Link>
+      <span className="laps">
+        {' · '}
+        <Link to={laps}>Laps</Link>
+      </span>
     </span>
   );
 }

@@ -372,7 +372,7 @@ function useWakeLock(on: boolean) {
     let lock: WakeLockSentinel | null = null;
     let gone = false;
     const request = async () => {
-      if (document.visibilityState !== 'visible') return;
+      if (document.visibilityState !== 'visible' || (lock && !lock.released)) return;
       try {
         const l = await navigator.wakeLock.request('screen');
         // A second grant while one is held (two quick requests) or after cleanup is let go at once.

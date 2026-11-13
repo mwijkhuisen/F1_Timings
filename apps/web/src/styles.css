@@ -1809,8 +1809,11 @@ header .theme[aria-pressed="true"] {
 /* A card is too narrow for name, time and state in one row: the time takes a second row of its own, as the weekend's
    does under 640 px. */
 .meeting .sess li {
-  grid-template-columns: minmax(0, 1fr) auto;
   padding: 4px 0;
+}
+
+.sess .laps {
+  white-space: nowrap;
 }
 
 .meeting .sess .when {

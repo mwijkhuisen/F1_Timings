@@ -1737,6 +1737,26 @@ describe('wake lock', () => {
     root = createRoot(host); // the afterEach unmounts it
   });
 
+  it('a grant that lands after Pause is released at once', async () => {
+    let grant: (s: Sentinel) => void = () => {};
+    install(() => new Promise((resolve) => (grant = resolve)));
+    render({});
+    await flush();
+    expect(request).toHaveBeenCalledTimes(1);
+    button('Pause'); // cleanup runs while the request is pending
+    await flush();
+    const late: Sentinel = {
+      released: false,
+      release: vi.fn(async () => {
+        late.released = true;
+      }),
+    };
+    sentinels.push(late);
+    await act(async () => grant(late));
+    expect(late.release).toHaveBeenCalledTimes(1);
+    expect(held()).toBe(0);
+  });
+
   it('a still frame requests nothing, a hidden page waits for visible', async () => {
     history.replaceState(null, '', '/replay/7?t=20:30:00');
     render({ recording: ended, start: S, keepT: true });
