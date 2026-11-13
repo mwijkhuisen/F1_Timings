@@ -1611,6 +1611,12 @@ header .theme[aria-pressed="true"] {
   text-underline-offset: 6px;
 }
 
+/* The underline does not reach into an inline-flex pill (the Live link on its own page, #100). */
+.links a[aria-current="page"] .pill {
+  text-decoration: underline 2px;
+  text-underline-offset: 6px;
+}
+
 /* A switcher popover (ui/Menu.tsx): a list of 44 px links; a ring inside it is inset so the scroll never clips it. */
 .menu {
   min-width: min(90vw, 16rem);

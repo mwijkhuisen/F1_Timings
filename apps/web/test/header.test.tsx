@@ -206,7 +206,7 @@ describe('the Live and Status words (#100, D1)', () => {
   it('Status gets the amber pill with the warning in its title, else plain', () => {
     const warning = 'Less than 5 GB free for recordings.';
     expect(links({ warning })).toContain(
-      `<a title="${warning}" href="/status">Status<span class="pill warn">warning</span></a>`,
+      `<a title="${warning}" href="/status">Status <span class="pill warn">warning</span></a>`,
     );
     expect(links({ warning: null })).toContain('<a href="/status">Status</a>');
   });

@@ -206,7 +206,7 @@ const PROBE_TEXT: Record<Probe, string> = {
   missing: "The recording's files are missing on the server: playback stopped. Press Play to try again.",
   expired: 'The stream keeps failing: your Access session has expired. Reload the page to sign in.',
   offline: OFFLINE,
-  up: 'The stream keeps failing, but the server has the recording: still retrying.',
+  up: 'The stream keeps failing, but the server answers: still retrying.',
 };
 
 const MARK_NAME: Record<MarkKind, string> = { start: 'Start', ...KIND_NAME, chequered: 'Chequered flag' };
@@ -379,6 +379,41 @@ function PlayerRain({
   return <RainMapCard detail={detail} live={live} cap={now()} />;
 }
 
+/**
+ * The tower with its closing trend (A§13), in a race: the interval's change at the line over 1 and 3 laps, from the
+ * crossings up to the state's T and the SC, VSC and red bands up to it. Its own component, so the tab's error boundary
+ * covers the trend and it runs only while the tower is shown (#100).
+ */
+function TowerTab({
+  snap,
+  series,
+  lo,
+  sessionKey,
+  focus,
+  onFocus,
+}: {
+  snap: Snap;
+  series: Status[];
+  lo: number;
+  sessionKey: number | undefined;
+  focus: string | null;
+  onFocus(n: string): void;
+}) {
+  const state = snap.feed?.state;
+  const trend = useMemo(() => {
+    const feed = snap.feed;
+    if (!feed || view(feed.state, 'SessionInfo')?.Type !== 'Race') return undefined;
+    const bands = markersUpTo(series, feed.t, [lo, Number.POSITIVE_INFINITY]);
+    return closingAt(
+      snap.laps,
+      towerRows(feed.state).map((r) => r.driver.number),
+      feed.t,
+      bands,
+    );
+  }, [snap, series, lo]);
+  return state && <Tower state={state} sessionKey={sessionKey} focus={focus} onFocus={onFocus} trend={trend} />;
+}
+
 type Open = { at: number | 'live' | null; still?: true };
 
 export type PlayerRecording = { id: number; started_at: string; ended_at: string | null };
@@ -535,7 +570,9 @@ export function Player({
                 if (ctl.signal.aborted) return;
                 setProbe(p);
                 if (p !== 'missing') return;
-                // Stop at T, clamped as the retry does; the open change clears the pending retry.
+                // Stop at T, clamped as the retry does; a retry timer still pending would reopen the stream.
+                clearTimeout(retry);
+                backoff.current = 1000;
                 const { started_at, ended_at } = rec.current;
                 const end = ended_at === null ? Date.now() : Date.parse(ended_at);
                 const now = still ? clock.current.t : clock.current.t + Math.max(0, Date.now() - clock.current.wall);
@@ -625,8 +662,15 @@ export function Player({
     }, DEBOUNCE_MS);
   };
 
+  // A new stream starts a new streak of errors: the 3rd one probes again. A late 404 would stop at a T that ran on.
+  const rearm = () => {
+    probing.current?.abort();
+    failCount.current = 0;
+    setFails(0);
+    setProbe(null);
+  };
   const pause = () => {
-    probing.current?.abort(); // a late 404 would stop at a T that ran on past the pause
+    rearm();
     const t = nowT();
     freeze(t);
     stood.current = t;
@@ -635,12 +679,14 @@ export function Player({
   };
   // A reopen starts T where the stream opens, so it does not jump by the pause before the first event.
   const play = () => {
+    rearm();
     const t = Math.round(clamp(nowT(), lo, hi()));
     freeze(t);
     setResumed(null);
     setOpen({ at: t });
   };
   const goLive = () => {
+    rearm();
     freeze(Date.now() - delay * 1000);
     setResumed(null);
     setOpen({ at: 'live' });
@@ -676,34 +722,21 @@ export function Player({
   );
   // The series is parsed once per flush; the ticking bar only filters it at T.
   const series = useMemo(() => (snap.feed ? statusSeries(snap.feed.state) : []), [snap]);
-  // The tower's closing trend (A§13), in a race: the interval's change at the line over 1 and 3 laps, from the crossings
-  // up to the state's T and the SC, VSC and red bands up to it.
-  const trend = useMemo(() => {
-    const feed = snap.feed;
-    if (!feed || view(feed.state, 'SessionInfo')?.Type !== 'Race') return undefined;
-    const bands = markersUpTo(series, feed.t, [lo, Number.POSITIVE_INFINITY]);
-    return closingAt(
-      snap.laps,
-      towerRows(feed.state).map((r) => r.driver.number),
-      feed.t,
-      bands,
-    );
-  }, [snap, series, lo]);
   // The state is mutated in place: what is derived from it is keyed on the snapshot, a new object per store flush.
-  const tower = useMemo(() => {
-    const s = snap.feed?.state;
-    return (
-      s && (
-        <Tower
-          state={s}
+  const tower = useMemo(
+    () =>
+      snap.feed && (
+        <TowerTab
+          snap={snap}
+          series={series}
+          lo={lo}
           sessionKey={sessionKey}
           focus={focus}
           onFocus={(n) => setFocus((f) => (f === n ? null : n))}
-          trend={trend}
         />
-      )
-    );
-  }, [snap, sessionKey, focus, trend]);
+      ),
+    [snap, series, lo, sessionKey, focus],
+  );
   // The pit wall, once the feed shows this session (as the tower waits): the previous session's chequered flag would
   // otherwise light up.
   const wall = useMemo(() => {
@@ -807,7 +840,9 @@ export function Player({
       : at === null || fails === 0
         ? null
         : probe !== null && probe !== 'missing'
-          ? PROBE_TEXT[probe]
+          ? navigator.onLine === false
+            ? OFFLINE // offline wins over the probe's answer
+            : PROBE_TEXT[probe]
           : fails >= FAILING
             ? navigator.onLine === false
               ? OFFLINE

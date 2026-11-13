@@ -7,7 +7,7 @@ import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { server } from '../../../test/msw.setup.ts';
 import { App } from '../src/App.tsx';
 import { ErrorBoundary } from '../src/ui/ErrorView.tsx';
-import { live, recordings, seasons } from './season-data.ts';
+import { live, recordings, season, seasons } from './season-data.ts';
 
 // The page's error boundary (#100): reset by the pathname inside <main>, so a view that throws leaves the header usable
 // and a navigation resets it. Status throws while `boom.on` is set; everything else in it is real.
@@ -101,6 +101,48 @@ it('a view that throws leaves the header usable, and a navigation resets the bou
     expect(host.textContent).not.toContain(BROKEN);
   } finally {
     error.mockRestore();
+  }
+});
+
+it('/live naming a recording that /recordings lacks refetches /recordings, so the header gets its session menus', async () => {
+  // Only the intervals are faked (as in status-page.test.tsx): the promises and msw's responses stay real.
+  vi.useFakeTimers({ toFake: ['Date', 'setInterval', 'clearInterval'] });
+  try {
+    let named = false; // the recorder has started: /live names recording 42, and /recordings has it from now on
+    let recordingsRequests = 0;
+    server.use(
+      // Ended, so the page shows "Next" and no player (no stream): the header alone reads the recording.
+      http.get('*/api/v1/live', () =>
+        HttpResponse.json(
+          named
+            ? { ...live, recording: { ...live.recording, ended_at: '2026-11-07T14:50:00.000Z', complete: true } }
+            : { ...live, recording: null },
+        ),
+      ),
+      http.get('*/api/v1/recordings', () => {
+        recordingsRequests++;
+        return HttpResponse.json(named ? recordings : recordings.slice(1));
+      }),
+      http.get('*/api/v1/seasons/2026', () => HttpResponse.json(season)),
+    );
+    history.replaceState(null, '', '/live');
+    await act(async () =>
+      root.render(
+        <QueryClientProvider client={client}>
+          <App />
+        </QueryClientProvider>,
+      ),
+    );
+    await vi.waitFor(() => expect(recordingsRequests).toBe(1));
+    expect(host.querySelector('[popovertarget="menu-meeting"]')).toBeNull();
+
+    named = true;
+    // The 30 s /live poll names 42; the loaded list (just 41) lacks it, so the header asks again, once.
+    await act(async () => vi.advanceTimersByTimeAsync(30_000));
+    await vi.waitFor(() => expect(host.querySelector('[popovertarget="menu-meeting"]')).not.toBeNull());
+    expect(recordingsRequests).toBe(2);
+  } finally {
+    vi.useRealTimers();
   }
 });
 

@@ -1,6 +1,6 @@
 import type { Live, Recordings, Season, Seasons } from '@f1/contracts';
 import { useQuery } from '@tanstack/react-query';
-import { useSyncExternalStore } from 'react';
+import { useEffect, useSyncExternalStore } from 'react';
 import { seasonQuery, useLive, useRecordings, useSeasons, useStatus } from '../lib/api.ts';
 import { Link, type Route, sessionPath } from '../lib/routes.ts';
 import { meetingTarget, neighbours, type Slot } from '../lib/season.ts';
@@ -146,7 +146,12 @@ export function HeaderView({
         </Link>
         <Link to="/status" aria-current={page('status')} title={warning ?? undefined}>
           Status
-          {warning && <span className="pill warn">warning</span>}
+          {warning && (
+            <>
+              {' '}
+              <span className="pill warn">warning</span>
+            </>
+          )}
         </Link>
       </nav>
       <button
@@ -172,6 +177,16 @@ export function Header({ route }: { route: Route | null }) {
   const status = useStatus(60_000);
   const recordings = useRecordings(false, route?.id === 'replay' || route?.id === 'live');
   const player = playerSession(route, live.data, recordings.data);
+  // A recording that started after /recordings was read (a new session's recorder): ask again, once per id.
+  const id = live.data?.recording?.id;
+  const want =
+    route?.id === 'live' && id !== undefined && recordings.data && !recordings.data.some((r) => r.id === id)
+      ? id
+      : undefined;
+  const { refetch } = recordings;
+  useEffect(() => {
+    if (want !== undefined) void refetch();
+  }, [want, refetch]);
   const year = yearOf(route) ?? player?.year ?? null;
   const season = useQuery({ ...seasonQuery(year ?? 0), enabled: year !== null });
   const theme = useSyncExternalStore(subscribeTheme, currentTheme);

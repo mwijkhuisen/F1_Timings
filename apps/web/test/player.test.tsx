@@ -8,6 +8,7 @@ import { HttpError, isStale, markStale } from '../src/lib/api.ts';
 import { useTitle } from '../src/lib/routes.ts';
 import { streamUrl } from '../src/lib/stream.ts';
 import { fmtClock } from '../src/lib/time.ts';
+import { OFFLINE } from '../src/ui/ErrorView.tsx';
 import { Live, Replay } from '../src/views/Live.tsx';
 import { Player, type PlayerRecording } from '../src/views/Player.tsx';
 import { practiceState, raceState } from './feed-state.ts';
@@ -1965,7 +1966,7 @@ describe('the failure probe (#100, D3)', () => {
   const start = S + 3_600_000;
   const MISSING = "The recording's files are missing on the server: playback stopped. Press Play to try again.";
   const EXPIRED = 'The stream keeps failing: your Access session has expired. Reload the page to sign in.';
-  const UP = 'The stream keeps failing, but the server has the recording: still retrying.';
+  const UP = 'The stream keeps failing, but the server answers: still retrying.';
   const settle = () => act(async () => {});
   /** Plays, then fails `n` times, each time waiting out the backoff but the last. */
   const failing = (n: number) => {
@@ -2021,6 +2022,67 @@ describe('the failure probe (#100, D3)', () => {
     failing(3);
     await settle();
     expect($('p[role="status"]').textContent).toBe('You are offline: this page needs the network.');
+  });
+
+  it.each([
+    ['a 200', () => Promise.resolve({ status: 200 } as Response)],
+    ['a 401', () => Promise.resolve({ status: 401 } as Response)],
+  ])('offline wins over the probe answer (%s)', async (_name, answer) => {
+    const onLine = vi.spyOn(navigator, 'onLine', 'get').mockReturnValue(false);
+    onTestFinished(() => onLine.mockRestore());
+    fetchStub.mockImplementation(answer);
+    failing(3);
+    await settle();
+    expect($('p[role="status"]').textContent).toBe(OFFLINE);
+  });
+
+  /** A probe answer that the test resolves itself, and the signal the player passed. */
+  const deferred = () => {
+    let resolve: (status: number) => void = () => {};
+    fetchStub.mockImplementation(() => new Promise<Response>((r) => (resolve = (status) => r({ status } as Response))));
+    return { answer: (status: number) => act(async () => resolve(status)) };
+  };
+  const signalOf = (call: number) => {
+    const signal = (fetchStub.mock.calls[call]?.[1] as RequestInit | undefined)?.signal;
+    if (!signal) throw new Error(`no probe ${call}`);
+    return signal;
+  };
+
+  it('a snapshot while the probe is pending, then a 404: the player is not stopped and says nothing is missing', async () => {
+    const probe = deferred();
+    failing(3);
+    expect(fetchStub).toHaveBeenCalledTimes(1);
+    advance(4_000); // the retry opens a stream
+    last().emit('snapshot', { t: start + 5_000, state: {}, laps: [], stints: [] });
+    expect(signalOf(0).aborted).toBe(true);
+    await probe.answer(404);
+    expect(host.textContent).not.toContain(MISSING);
+    expect(openCount()).toBe(1);
+    expect(host.querySelector('button.play')?.textContent).toBe('Pause');
+  });
+
+  it('Pause while the probe is pending, then a 404: no missing line; after Play the 3rd error of the new streak probes again', async () => {
+    const probe = deferred();
+    failing(3);
+    button('Pause');
+    expect(signalOf(0).aborted).toBe(true);
+    await probe.answer(404);
+    expect(host.textContent).not.toContain(MISSING);
+    button('Play');
+    for (let i = 0; i < 3; i++) {
+      if (i > 0) advance(30_000); // the backoff has grown: wait out any of it
+      last().emit('error');
+    }
+    expect(fetchStub).toHaveBeenCalledTimes(2);
+  });
+
+  it('unmounting while the probe is pending aborts it', () => {
+    deferred();
+    failing(3);
+    expect(signalOf(0).aborted).toBe(false);
+    act(() => root.unmount());
+    expect(signalOf(0).aborted).toBe(true);
+    root = createRoot(host); // the afterEach unmounts it
   });
 
   it('a 404 stops at T: no new stream after the backoff, the line stays while paused, and Play tries again', async () => {
@@ -2103,6 +2165,7 @@ describe('the tab in the URL (#100)', () => {
   const T = S + 3_600_000;
   const pressed = () =>
     [...host.querySelectorAll('fieldset[aria-label="View"] button[aria-pressed="true"]')].map((b) => b.textContent);
+  afterEach(() => history.replaceState(null, '', '/'));
   const play = (props: Partial<Parameters<typeof Player>[0]>) => {
     render({ recording: ended, start: T, detail, ...props });
     last().emit('snapshot', { t: T, state: raceState(), laps: [lap(1, 1)], stints: [] });
