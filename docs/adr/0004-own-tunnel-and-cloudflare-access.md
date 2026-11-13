@@ -25,6 +25,7 @@
 - Waterheight's tunnel, invariants and tests stay untouched.
 - Cloudflare sees all traffic, which is acceptable for a personal site.
 - A misconfigured Access policy still can't expose data, because the API refuses requests without a valid JWT. The static SPA holds no F1 data.
+- Since #121 the installed app keeps the final sessions the owner opened on the device (A§12.1, D1). "The static SPA holds no F1 data" stays true at the origin.
 
 ## Alternatives rejected
 

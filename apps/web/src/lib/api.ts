@@ -14,6 +14,7 @@ import {
 import { QueryClient, queryOptions, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useEffect, useRef, useSyncExternalStore } from 'react';
 import { ZodError } from 'zod';
+import { savedSessions } from './saved.ts';
 import { pollMs } from './session.ts';
 
 // The P1c API, read through relative paths only. Every answer is parsed with
@@ -71,7 +72,9 @@ export const retry = (failures: number, error: unknown): boolean =>
   failures < 1 && !(error instanceof HttpError && error.status < 500) && !(error instanceof ZodError);
 
 export const queryClient = new QueryClient({
-  defaultOptions: { queries: { retry, refetchOnWindowFocus: false } },
+  // 'always': the default 'online' pauses every query after an `offline` event, so it would never reach the service
+  // worker (#121), which decides what answers offline.
+  defaultOptions: { queries: { retry, refetchOnWindowFocus: false, networkMode: 'always' } },
 });
 
 const STALE_MS = 60_000;
@@ -211,6 +214,9 @@ export const useLive = (enabled = true) =>
     refetchInterval: 30_000,
     enabled,
   });
+
+/** The sessions the service worker keeps (#121, D4); `/` asks only once /seasons has failed. */
+export const useSaved = (enabled: boolean) => useQuery({ queryKey: ['saved'], queryFn: savedSessions, enabled });
 
 export const useRecordings = (refetchMs: number | false = false) =>
   useQuery({

@@ -4,9 +4,13 @@ import { HttpError, useStale } from '../lib/api.ts';
 
 export const NEW_VERSION = 'A new version is out: reload the page.';
 
+/** D5 (#121): what a page that needs the network says offline. Node has no `onLine`: compare with false. */
+export const OFFLINE = 'You are offline: this page needs the network.';
+
 /** What the error view says. Never a response body or a ZodError message (A§12.1). */
 export function errorText(error: unknown): string {
-  // A TypeError is Access's login redirect under `redirect: 'error'` (or no network).
+  // A TypeError is no network, or else Access's login redirect under `redirect: 'error'`.
+  if (error instanceof TypeError && navigator.onLine === false) return OFFLINE;
   if ((error instanceof HttpError && error.status === 401) || error instanceof TypeError)
     return 'Your Access session may have expired: reload to sign in.';
   if (error instanceof HttpError && error.status === 404) return 'Not found.';

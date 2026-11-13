@@ -3,7 +3,7 @@ import { Lap, type Live as LiveData, type Recordings, SessionDetail, view, weath
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from 'vitest';
 import { isStale, markStale } from '../src/lib/api.ts';
 import { useTitle } from '../src/lib/routes.ts';
 import { streamUrl } from '../src/lib/stream.ts';
@@ -347,6 +347,21 @@ describe('Player', () => {
     advance(60_000);
     expect(FakeES.all).toHaveLength(opened);
     expect(openCount()).toBe(0);
+  });
+
+  it('offline, the hint after five failures says the page needs the network (#121, D5)', () => {
+    const onLine = vi.spyOn(navigator, 'onLine', 'get').mockReturnValue(false);
+    onTestFinished(() => onLine.mockRestore());
+    const start = S + 3_600_000;
+    render({ recording: ended, start });
+    last().emit('snapshot', { t: start, state: {}, laps: [], stints: [] });
+    for (const wait of [1_000, 2_000, 4_000, 8_000]) {
+      last().emit('error');
+      advance(wait);
+    }
+    last().emit('error');
+    expect(host.textContent).toContain('You are offline: this page needs the network.');
+    expect(host.textContent).not.toContain('The stream keeps failing.');
   });
 
   it('a silent stream is reopened after 40 s without events; pings keep it open', () => {

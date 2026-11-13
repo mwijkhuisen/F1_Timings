@@ -37,6 +37,7 @@ import { setTitleWord } from '../lib/routes.ts';
 import { createStore, type Feed, openStream, type Snap } from '../lib/stream.ts';
 import { fmtClock, parseT } from '../lib/time.ts';
 import { KIND_LABEL, KIND_NAME, type Kind } from '../lib/track.ts';
+import { OFFLINE } from '../ui/ErrorView.tsx';
 import { LapTable } from './LapTable.tsx';
 import { Panel, Strip, useTick } from './PitWall.tsx';
 import { RainMapCard } from './RainMap.tsx';
@@ -700,7 +701,11 @@ export function Player({
   return (
     <>
       {stale ? null : at !== null && fails >= FAILING ? (
-        <p role="status">The stream keeps failing. Reload the page (your Access session may have expired).</p>
+        <p role="status">
+          {navigator.onLine === false
+            ? OFFLINE
+            : 'The stream keeps failing. Reload the page (your Access session may have expired).'}
+        </p>
       ) : (
         at !== null &&
         fails > 0 && (

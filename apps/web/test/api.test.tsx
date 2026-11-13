@@ -4,10 +4,10 @@ import { fileURLToPath } from 'node:url';
 import { Seasons } from '@f1/contracts';
 import { HttpResponse, http, type JsonBodyType } from 'msw';
 import { renderToStaticMarkup } from 'react-dom/server';
-import { describe, expect, it, vi } from 'vitest';
+import { describe, expect, it, onTestFinished, vi } from 'vitest';
 import { ZodError } from 'zod';
 import { server } from '../../../test/msw.setup.ts';
-import { getJson, HttpError, REVISION, retry } from '../src/lib/api.ts';
+import { getJson, HttpError, queryClient, REVISION, retry } from '../src/lib/api.ts';
 import { ErrorView, errorText, NEW_VERSION } from '../src/ui/ErrorView.tsx';
 
 // D6: every answer is parsed with its contract; the error view never echoes a body or a ZodError message.
@@ -52,7 +52,8 @@ describe('getJson', () => {
       .map((e) => join(e.parentPath, e.name))
       .filter((f) => /\bfetch\(/.test(readFileSync(f, 'utf8')))
       .map((f) => f.slice(src.length + 1));
-    expect(fetching).toEqual(['lib/api.ts']);
+    // The worker (#121) only passes the page's own requests on and fetches its shell: it builds no API URL.
+    expect(fetching).toEqual(['lib/api.ts', 'sw/handlers.ts', 'sw/main.ts']);
   });
 
   // The stale flag is module state that never resets: each of these gets a fresh copy of the modules.
@@ -99,6 +100,13 @@ describe('getJson', () => {
   });
 });
 
+describe('queryClient', () => {
+  // #121: the default 'online' pauses a query after an `offline` event; the service worker decides offline.
+  it("runs queries whatever the browser's online state", () => {
+    expect(queryClient.getDefaultOptions().queries?.networkMode).toBe('always');
+  });
+});
+
 describe('errorText', () => {
   it.each([
     ['a 401', new HttpError(401), 'Your Access session may have expired: reload to sign in.'],
@@ -109,6 +117,20 @@ describe('errorText', () => {
     ['anything else', new Error('secret detail'), 'API error'],
   ])('%s', (_name, error, text) => {
     expect(errorText(error)).toBe(text);
+  });
+
+  // D5 (#121). Node's navigator has no onLine, which leaves every text above as it is.
+  it('says offline for a TypeError while the browser is offline, and only then', () => {
+    onTestFinished(() => {
+      vi.unstubAllGlobals();
+    });
+    vi.stubGlobal('navigator', { onLine: false });
+    expect(errorText(new TypeError('Failed to fetch'))).toBe('You are offline: this page needs the network.');
+    expect(errorText(new HttpError(401))).toBe('Your Access session may have expired: reload to sign in.');
+    vi.stubGlobal('navigator', { onLine: true });
+    expect(errorText(new TypeError('Failed to fetch'))).toBe(
+      'Your Access session may have expired: reload to sign in.',
+    );
   });
 
   it('renders as an alert without the error message', () => {
