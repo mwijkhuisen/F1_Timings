@@ -224,13 +224,16 @@ export function createLaps(
     // (another lap's) are dropped. An honest gap (A§2.4). Only a state: a driver's first delta is its pit exit, which
     // carries its first count. Relies on TimingAppData coming before TimingData in a state, which opens the gate first.
     const joined = full && n !== null && n >= 1 && !laps.has(driver);
+    // Outside a race no lap comes before lap 1, so its state values and PitOut are its own (11408: 20 drivers in the
+    // garage at count 1). A race keeps the stricter rule: no recording has joined one on lap 1.
+    const stale = joined && (race || n > 1);
     if (joined) {
       const lap = newLap(driver, n);
       if (race && n === 1) lap.date_start = started; // a race joined on lap 1 still has its start (Started, below)
       laps.set(driver, [lap]);
     }
     const last = isObj(line.LastLapTime) ? line.LastLapTime.Value : undefined;
-    if (typeof last === 'string' && !joined) {
+    if (typeof last === 'string' && !stale) {
       const ms = fit(duration(last));
       const lap = ms === null ? undefined : ending(driver, t);
       if (lap) set(lap, 'lap_ms', ms, t);
@@ -240,7 +243,7 @@ export function createLaps(
       const i = index(key, 3) as 0 | 1 | 2 | null;
       if (i === null || !isObj(sector)) continue;
       const [time, segs] = SECTORS[i];
-      const target = () => (i === 0 ? current(driver) : joined ? undefined : ending(driver, t));
+      const target = () => (i === 0 ? current(driver) : stale ? undefined : ending(driver, t));
       const ms = seconds(sector.Value);
       const lap = ms === null ? undefined : target();
       if (lap) set(lap, time, ms, t);
@@ -273,8 +276,8 @@ export function createLaps(
       }
     }
     // Any PitOut but null marks the current lap as an out-lap, false included (OpenF1; FastF1 ignores PitOut). A state
-    // always holds one, so a joined line marks it only when true.
-    const pitOut = line.PitOut !== undefined && line.PitOut !== null && (!joined || line.PitOut === true);
+    // always holds one, so a stale joined line marks it only when true.
+    const pitOut = line.PitOut !== undefined && line.PitOut !== null && (!stale || line.PitOut === true);
     if (pitOut) set(current(driver), 'is_pit_out', true, t);
     for (const lap of marked) shown.set(lap, row(lap));
     marked.clear();

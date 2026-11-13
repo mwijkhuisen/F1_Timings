@@ -259,7 +259,7 @@ describe('createLaps', () => {
     );
   });
 
-  it('a recording that starts mid-session: each driver starts at its count with no date_start, and no lap 1', () => {
+  it('a recording that starts mid-session: each driver starts at its count with no date_start, never a phantom lap 1', () => {
     // A restart 20 min into qualifying (#95): the first line is a Subscribe state with counts already.
     const q = session(9001, '2026-01-10');
     const clock = (hms: string) => Date.parse(`2026-01-10T${hms}Z`);
@@ -270,7 +270,13 @@ describe('createLaps', () => {
         '_subscribe',
         {
           SessionInfo: { Key: 9001, Type: 'Qualifying' },
-          TimingAppData: { Lines: { 7: { Stints: [{ Compound: 'SOFT' }] }, 99: { Stints: [{ Compound: 'MEDIUM' }] } } },
+          TimingAppData: {
+            Lines: {
+              7: { Stints: [{ Compound: 'SOFT' }] },
+              44: { Stints: [{ Compound: 'SOFT' }] },
+              99: { Stints: [{ Compound: 'MEDIUM' }] },
+            },
+          },
           TimingData: {
             Lines: {
               // On track in lap 5: the state still holds lap 4's time, S2 and S3, and the PitOut false of any state.
@@ -288,6 +294,17 @@ describe('createLaps', () => {
               },
               // In the garage after an in-lap: lap 3 is its next out-lap.
               99: { NumberOfLaps: 3, InPit: true, PitOut: false, LastLapTime: { Value: '1:45.000' } },
+              // In the garage after its first lap (11408): no lap came before, so the state's values are lap 1's own.
+              44: {
+                NumberOfLaps: 1,
+                InPit: true,
+                PitOut: false,
+                Sectors: {
+                  0: { Value: '29.000' },
+                  1: { Value: '34.000', Segments: { 0: { Status: 2049 } } },
+                  2: { Value: '31.000' },
+                },
+              },
             },
           },
         },
@@ -312,6 +329,13 @@ describe('createLaps', () => {
         { date_start: null, i1_kph: 285, seg1: [2049] },
       ),
       q.lap(7, 6, '12:20:50'),
+      q.lap(
+        44,
+        1,
+        '12:20:00',
+        { lap: [94_000, '12:20:00'], s1: [29_000, '12:20:00'], s2: [34_000, '12:20:00'], s3: [31_000, '12:20:00'] }, // lap: S1 + S2 + S3
+        { date_start: null, is_pit_out: true, seg2: [2049] },
+      ),
       q.lap(99, 3, '12:20:00', {}, { date_start: null, is_pit_out: true }),
       q.lap(99, 4, '12:22:20'),
     ]);
