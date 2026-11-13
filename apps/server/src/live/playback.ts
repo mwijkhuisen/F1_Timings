@@ -6,9 +6,10 @@ import { createGunzip } from 'node:zlib';
 import { type Lap, type Obj, type Stints, view, type Weather, weatherRow, withWeatherRow } from '@f1/contracts';
 import { codeOf } from '../db/db.ts';
 import { progressiveColours } from '../timing/colours.ts';
-import { createLaps, type LapRow, type StintRow } from './laps.ts';
+import { markLaps } from '../timing/rules.ts';
+import { createLaps, type LapRow, qualifyingParts, type StintRow } from './laps.ts';
 import { createFeed } from './merge.ts';
-import { isObj, parseFeedLine } from './read.ts';
+import { isObj, parseFeedLine, utc } from './read.ts';
 
 // State at T over one recording's files (A§11.3, ADR-0007): a replay from the first line up to T, then a delta per
 // change, paced by the live clock (T = now − delay) or the replay clock (T = at + elapsed × speed). The time axis is
@@ -46,13 +47,34 @@ const missing = (err: unknown): undefined => {
 };
 const tooLarge = () => Object.assign(new Error('playback_too_large'), { code: 'playback_too_large' });
 const keyOf = (info: unknown) => (isObj(info) && typeof info.Key === 'number' ? info.Key : undefined);
+// The topics the lap rows read: the engine's two, and A§9's race control and qualifying parts (lapRows).
+const LAP_TOPICS = new Set(['TimingData', 'TimingAppData', 'RaceControlMessages', 'SessionData']);
 
 /**
- * The engine's rows in the shapes of the Lap and Stints contracts, with the tower's progressive colours. The lap table
- * does not use the segments (the tower reads them from the state), and a live row has no quali phase. A lap's compound
- * is that of the driver's stint covering it (the later one when two do), an open stint running to infinity.
+ * The engine's rows in the shapes of the Lap and Stints contracts, with A§9's deleted laps and qualifying phases from
+ * the state at T, and the tower's progressive colours. Spoiler-safe: the state holds only the race control aired by
+ * T, so a lap is struck once its ruling has aired. The phases come from SessionData's parts in a qualifying session
+ * only: after a switch the series can still hold the previous day's entries (A§11.3), and practice and races have none.
+ * The lap table does not use the segments (the tower reads them from the state). A lap's compound is that of the
+ * driver's stint covering it (the later one when two do), an open stint running to infinity. Marks `laps` in place.
  */
-export function lapRows({ laps, stints }: { laps: LapRow[]; stints: StintRow[] }): { laps: Lap[]; stints: Stints } {
+export function lapRows(
+  { laps, stints }: { laps: LapRow[]; stints: StintRow[] },
+  state: Obj,
+): { laps: Lap[]; stints: Stints } {
+  const type = view(state, 'SessionInfo')?.Type ?? null;
+  const at = (ms: number | null) => (ms === null ? null : new Date(ms).toISOString());
+  const said = Object.values(view(state, 'RaceControlMessages')?.Messages ?? {}).map((m) => ({
+    date: at(utc(m?.Utc)), // the feed's Utc has no Z
+    qualifying_phase: null,
+    message: m?.Message ?? null,
+  }));
+  const parts = (type === 'Qualifying' ? qualifyingParts(state) : []).map((p) => ({
+    date: at(p.at),
+    qualifying_phase: p.part,
+    message: null,
+  }));
+  markLaps(laps, [...said, ...parts], type);
   const starts = laps.map((l) => (l.date_start === null ? null : new Date(l.date_start)));
   const colour = progressiveColours(laps.map((l, i) => ({ ...l, date_start: starts[i] ?? null })));
   return {
@@ -74,7 +96,7 @@ export function lapRows({ laps, stints }: { laps: LapRow[]; stints: StintRow[] }
       seg3: null,
       deleted: l.deleted,
       deleted_reason: l.deleted_reason,
-      quali_phase: null,
+      quali_phase: l.quali_phase,
       compound:
         stints.findLast(
           (s) =>
@@ -214,7 +236,7 @@ export async function* playback(o: {
   let weather: Weather = [];
   const engine = createLaps(o.sessionKey, 'f1-live');
   const sent = new Map<string, string>(); // row key → the row's JSON as last sent
-  let dirty = false; // a TimingData or TimingAppData change since the rows were last sent
+  let dirty = false; // a LAP_TOPICS change since the rows were last sent
   let lapsAt = Number.NEGATIVE_INFINITY; // wall time of the last `laps` check
   let applied = Number.NEGATIVE_INFINITY; // receivedAt of the last line applied
 
@@ -237,7 +259,7 @@ export async function* playback(o: {
       const data = feed.apply(ev);
       if (data === undefined) continue;
       engine.push(ev, data);
-      if (ev.topic === 'TimingData' || ev.topic === 'TimingAppData') dirty = true;
+      if (LAP_TOPICS.has(ev.topic)) dirty = true;
       if (ev.topic === 'WeatherData')
         weather = withWeatherRow(weather, weatherRow(view(feed.state, 'WeatherData'), line.r));
       out?.push({ event: 'delta', data: { t: line.r, topic: ev.topic, data } });
@@ -254,7 +276,11 @@ export async function* playback(o: {
     });
   const rows = () => {
     dirty = false;
-    const all = lapRows(engine.rows());
+    // A§9 from the recording's own session only: after a switch to a later one, its rulings must not strike these laps.
+    // ponytail: re-reads every race-control message per laps check (about 200 in a race); cache the rulings per message
+    // key if a state ever holds far more.
+    const own = keyOf(feed.state.SessionInfo) === o.sessionKey ? feed.state : {};
+    const all = lapRows(engine.rows(), own);
     return {
       laps: unsent(all.laps, (l) => `lap ${l.driver_number} ${l.lap_number}`),
       stints: unsent(all.stints, (s) => `stint ${s.driver_number} ${s.stint_number}`),

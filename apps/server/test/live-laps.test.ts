@@ -259,6 +259,115 @@ describe('createLaps', () => {
     );
   });
 
+  it('a recording that starts mid-session: each driver starts at its count with no date_start, never a phantom lap 1', () => {
+    // A restart 20 min into qualifying (#95): the first line is a Subscribe state with counts already.
+    const q = session(9001, '2026-01-10');
+    const clock = (hms: string) => Date.parse(`2026-01-10T${hms}Z`);
+    const line = (hms: string, payload: Obj) => [clock(hms), 'TimingData', payload, `2026-01-10T${hms}.0000000Z`];
+    const lines = [
+      [
+        clock('12:20:00'),
+        '_subscribe',
+        {
+          SessionInfo: { Key: 9001, Type: 'Qualifying' },
+          TimingAppData: {
+            Lines: {
+              7: { Stints: [{ Compound: 'SOFT' }] },
+              44: { Stints: [{ Compound: 'SOFT' }] },
+              99: { Stints: [{ Compound: 'MEDIUM' }] },
+            },
+          },
+          TimingData: {
+            Lines: {
+              // On track in lap 5: the state still holds lap 4's time, S2 and S3, and the PitOut false of any state.
+              7: {
+                NumberOfLaps: 5,
+                InPit: false,
+                PitOut: false,
+                LastLapTime: { Value: '1:31.000' },
+                Sectors: {
+                  0: { Value: '28.100', Segments: { 0: { Status: 2049 } } },
+                  1: { Value: '33.000', Segments: { 0: { Status: 2051 } } },
+                  2: { Value: '30.000' },
+                },
+                Speeds: { I1: { Value: '285' } },
+              },
+              // In the garage after an in-lap: lap 3 is its next out-lap.
+              99: { NumberOfLaps: 3, InPit: true, PitOut: false, LastLapTime: { Value: '1:45.000' } },
+              // In the garage after its first lap (11408): no lap came before, so the state's values are lap 1's own.
+              44: {
+                NumberOfLaps: 1,
+                InPit: true,
+                PitOut: false,
+                Sectors: {
+                  0: { Value: '29.000' },
+                  1: { Value: '34.000', Segments: { 0: { Status: 2049 } } },
+                  2: { Value: '31.000' },
+                },
+              },
+            },
+          },
+        },
+      ],
+      line('12:20:20', { Lines: { 7: { Sectors: { 1: { Value: '33.100' } } } } }),
+      line('12:20:30', { Lines: { 99: { InPit: false, PitOut: true } } }),
+      line('12:20:50', {
+        Lines: { 7: { LastLapTime: { Value: '1:31.400' }, Sectors: { 2: { Value: '30.200' } }, NumberOfLaps: 6 } },
+      }),
+      line('12:22:20', { Lines: { 99: { NumberOfLaps: 4 } } }),
+    ];
+    const { laps } = build(
+      lines.flatMap((v) => parseFeedLine(JSON.stringify(v))),
+      9001,
+    );
+    expect(laps).toEqual([
+      q.lap(
+        7,
+        5,
+        '12:20:00',
+        { lap: [91_400, '12:20:50'], s1: [28_100, '12:20:00'], s2: [33_100, '12:20:20'], s3: [30_200, '12:20:50'] },
+        { date_start: null, i1_kph: 285, seg1: [2049] },
+      ),
+      q.lap(7, 6, '12:20:50'),
+      q.lap(
+        44,
+        1,
+        '12:20:00',
+        { lap: [94_000, '12:20:00'], s1: [29_000, '12:20:00'], s2: [34_000, '12:20:00'], s3: [31_000, '12:20:00'] }, // lap: S1 + S2 + S3
+        { date_start: null, is_pit_out: true, seg2: [2049] },
+      ),
+      q.lap(99, 3, '12:20:00', {}, { date_start: null, is_pit_out: true }),
+      q.lap(99, 4, '12:22:20'),
+    ]);
+  });
+
+  it('a race state joins at count + 1, lap 1 at Started; a count of 0 outside a race keeps the old rule', () => {
+    const t0 = Date.parse('2026-01-11T14:05:00Z');
+    const state = (Type: string, lines: Obj) =>
+      parseFeedLine(
+        JSON.stringify([
+          t0,
+          '_subscribe',
+          {
+            SessionInfo: { Key: 9002, Type },
+            SessionData: { StatusSeries: [{ Utc: '2026-01-11T14:03:00', SessionStatus: 'Started' }] },
+            TimingAppData: { Lines: { 7: { Stints: [{ Compound: 'SOFT' }] }, 99: { Stints: [{ Compound: 'SOFT' }] } } },
+            TimingData: { Lines: lines },
+          },
+        ]),
+      );
+    const rows = (events: FeedEvent[]) =>
+      build(events, 9002).laps.map((l) => [l.driver_number, l.lap_number, l.date_start]);
+    const s1 = { Sectors: { 0: { Value: '30.000' } } }; // so each joined lap shows
+    // 7 has done 10 laps, so it is on lap 11; 99 has done none and is on lap 1, which started at Started.
+    expect(rows(state('Race', { 7: { NumberOfLaps: 10, ...s1 }, 99: { NumberOfLaps: 0, ...s1 } }))).toEqual([
+      [7, 11, null],
+      [99, 1, '2026-01-11T14:03:00.000Z'],
+    ]);
+    // Outside a race a count of 0 names no lap: lap 1 as before, started at the state's time.
+    expect(rows(state('Practice', { 99: { NumberOfLaps: 0, ...s1 } }))).toEqual([[99, 1, new Date(t0).toISOString()]]);
+  });
+
   it('the archive form of practice gives the same rows as its feed.jsonl form, apart from source', () => {
     const events = read('practice.jsonl');
     const t0 = (events[0] as FeedEvent).t;

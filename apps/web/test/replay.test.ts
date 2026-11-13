@@ -1,7 +1,7 @@
 import type { Obj } from '@f1/contracts';
 import { describe, expect, it } from 'vitest';
 import { lastStop, markersUpTo, skipped, skippedText, statusSeries } from '../src/lib/replay.ts';
-import type { Feed } from '../src/lib/stream.ts';
+import { type Feed, openStream } from '../src/lib/stream.ts';
 import { fmtClock, parseT } from '../src/lib/time.ts';
 import { lap } from './laps.ts';
 
@@ -228,6 +228,44 @@ describe('skipped', () => {
       deleted: 2,
       incidents: 2,
     });
+  });
+
+  it('counts a lap the stream deleted, from its rows (#95)', () => {
+    // openStream itself: each event parsed with its contract, the rows kept by key. Node has EventTarget and MessageEvent.
+    const opened: EventTarget[] = [];
+    class ES extends EventTarget {
+      constructor() {
+        super();
+        opened.push(this);
+      }
+      close() {}
+    }
+    const stream = (events: (readonly [string, unknown])[]) => {
+      let feed: Feed | undefined;
+      const close = openStream(
+        { recording: 1, at: 0, delay: 0 },
+        { onData: (f) => (feed = f), onError: () => {}, onEnd: () => {} },
+        ES as unknown as typeof EventSource,
+      );
+      for (const [name, data] of events)
+        opened.at(-1)?.dispatchEvent(new MessageEvent(name, { data: JSON.stringify(data) }));
+      close();
+      if (!feed) throw new Error('no snapshot');
+      return feed;
+    };
+    const valid = lap(7, 2, { lap_ms: 90_000, colour: { lap: 'purple', s1: null, s2: null, s3: null } });
+    const struck = {
+      ...valid,
+      deleted: true,
+      deleted_reason: 'TRACK LIMITS AT TURN 4',
+      colour: { ...valid.colour, lap: 'yellow' as const },
+    };
+    const snapshot = (t: number) => ['snapshot', { t, state: {}, laps: [valid], stints: [], weather: [] }] as const;
+    const old = stream([snapshot(OLD)]);
+    // The new seek's stream: its snapshot, then the laps event the ruling sent.
+    const next = stream([snapshot(NEW - 1000), ['laps', { t: NEW, laps: [struck], stints: [] }]]);
+    expect(next.laps.get('7:2')).toEqual(struck);
+    expect(skipped(old, next)?.deleted).toBe(1);
   });
 
   it('is null unless the new T is later', () => {
