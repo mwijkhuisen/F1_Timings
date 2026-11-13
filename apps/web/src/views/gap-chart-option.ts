@@ -1,4 +1,4 @@
-import type { Lap } from '@f1/contracts';
+import { type CrossLap, gapFromCrossings } from '../lib/crossings.ts';
 import type { Driver } from '../lib/session.ts';
 import { fmtDelta } from '../lib/time.ts';
 import type { Period } from '../lib/track.ts';
@@ -16,49 +16,11 @@ import {
 // The gap chart (P4f): each other driver's gap to the reference, after each lap, from the times they cross the line.
 // Pure: no ECharts import at runtime, no HTML.
 
-type GapLap = Pick<Lap, 'driver_number' | 'lap_number' | 'date_start' | 'lap_ms'>;
-
-/**
- * When a driver crossed the line after each of its laps, in epoch ms: lap n+1's `date_start`, else lap n's
- * `date_start + lap_ms`, else null. `date_start` is approximate (A§6.1); on the dev DB it is null only on lap 1
- * (6 of 525 laps) and agrees with the previous start + lap time to a median of 51 ms.
- */
-function crossings(laps: readonly GapLap[]): (number | null)[] {
-  const start = new Map<number, number>();
-  const time = new Map<number, number>();
-  let last = 0;
-  for (const l of laps) {
-    last = Math.max(last, l.lap_number);
-    if (l.date_start !== null) start.set(l.lap_number, Date.parse(l.date_start));
-    if (l.lap_ms !== null) time.set(l.lap_number, l.lap_ms);
-  }
-  return Array.from({ length: last }, (_, i) => {
-    const next = start.get(i + 2);
-    if (next !== undefined) return next;
-    const s = start.get(i + 1);
-    const t = time.get(i + 1);
-    return s !== undefined && t !== undefined ? s + t : null;
-  });
-}
-
-/**
- * The driver's gap to the reference after each of its laps, in ms (index n − 1 for lap n): its crossing − the
- * reference's crossing at the same lap count, so a lapped driver shows a gap over one lap. Nothing is interpolated:
- * null where either crossing is unknown, which breaks the line.
- */
-export function gapFromCrossings(reference: readonly GapLap[], driver: readonly GapLap[]): (number | null)[] {
-  const ref = crossings(reference);
-  return crossings(driver).map((c, i) => {
-    const r = ref[i];
-    return c === null || r == null ? null : c - r;
-  });
-}
-
 const fmtSeconds = (v: number) => (v === 0 ? '0' : `${v < 0 ? '−' : '+'}${Math.abs(v)}`);
 
 export function gapChartOption(
   drivers: readonly Driver[],
-  laps: readonly GapLap[],
+  laps: readonly CrossLap[],
   tokens: ChartTokens,
   periods: readonly Period[],
 ) {
