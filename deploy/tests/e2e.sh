@@ -14,6 +14,8 @@
 #      127.0.0.1:8180 (caddy, api and db as 62532; the publish through f1-publish; local tags),
 #      every container healthy when it returns (the smoke test waits for that); live is idle on an
 #      empty schedule.
+#  3a. The app's files (#121): /sw.js a 200 of text/javascript with Cache-Control no-cache,
+#      /manifest.webmanifest application/manifest+json and /icon-512.png image/png.
 #  3b. The archive job (profile jobs) without a token file: exit 1 with token_file, after its f1_ingest
 #      login and before any request (it never reaches the Index: invariant 4).
 #  3c. The fill job (profile jobs) on the migrated, empty database: exit 0 with fill_done.
@@ -144,6 +146,20 @@ for h in "${health[@]}"; do [[ $h == *'(healthy)' ]] || fail "not healthy when f
 live_status=$(docker exec f1-db-1 psql -U postgres -d f1 -tAc "SELECT state, (SELECT count(*) FROM session) FROM recorder_status")
 [[ $live_status == 'idle|0' ]] || fail "recorder_status.state and the session count are '$live_status', not 'idle|0'"
 proof "f1-update deployed the local tags f1-server:ci and f1-web:ci (exit 0, current.env written); $URL answers 200 through caddy, api and db (db as 62532 on a new f1_pgdata, roles.sql through initdb, migrate as f1_migrator) with table inet f1 loaded; containers: ${services% } (no ingest, no cloudflared), each healthy when f1-update returned; live idle on an empty schedule (state|sessions: $live_status)"
+
+# ------------------------------------------------------------------ 3a
+step "3a. The service worker, the manifest and the icon are served with their types (#121)"
+# served <path> <type regexp>: a 200 with that Content-Type; the headers stay in $tmp/head.
+served() {
+  curl -sSI --max-time 5 "http://127.0.0.1:8180$1" | tr -d '\r' >"$tmp/head"
+  [[ $(head -n 1 "$tmp/head") =~ ^HTTP/[0-9.]+\ 200 ]] || fail "$1 is not 200: $(head -n 1 "$tmp/head")"
+  grep -qiE "^content-type: $2\$" "$tmp/head" || fail "$1: $(grep -i '^content-type' "$tmp/head" || echo 'no Content-Type')"
+}
+served /sw.js 'text/javascript(; ?charset=utf-8)?'
+grep -qix 'cache-control: no-cache' "$tmp/head" || fail "/sw.js: $(grep -i '^cache-control' "$tmp/head" || echo 'no Cache-Control')"
+served /manifest.webmanifest 'application/manifest\+json'
+served /icon-512.png 'image/png'
+proof "HEAD on 127.0.0.1:8180: /sw.js 200 text/javascript with Cache-Control no-cache, /manifest.webmanifest 200 application/manifest+json, /icon-512.png 200 image/png"
 
 # ------------------------------------------------------------------ 3b
 step "3b. The archive job without a token file exits 1 before any request"
