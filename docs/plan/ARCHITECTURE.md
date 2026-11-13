@@ -391,6 +391,18 @@ Size (measured 2026-10-26, the [box] backfill of 2023 up to the 2026 Mexican GP)
       - 10 laps were skipped as `dup` (E6): 7 in 9157 and 3 in 11353. Before E6 they showed as duplicates, and 11353's TIME deletion moved onto the added copy.
       - There were 2,626 conflicts. 1,658 are lap 1 (another definition), and most of the rest are 11234, where OpenF1's lap n equals Jolpica's lap n + 1 for every driver (follow-up #140).
       - 11388 keeps its 4 `lap_ms` nulls. Each is a driver's last lap, never finished (a retirement), and Jolpica does not list it.
+    - **VM run (A10)** (2026-11-13, the production database with OpenF1 from 2023 and the archive of 2018–2021, the same dump of 2026-10-27; counts only; the evidence is on issue #18):
+      - **Counts:** 164 races attached, 27 `no_match`, 6 `no_laps`, 0 `ambiguous`, 0 `unknown_driver` and 0 `stale_lap`.
+      - **The 27 `no_match`:**
+        - 22 are 2022 (no archive) and 2 are 2018 races missing from the archive Index.
+        - 3 are races whose Jolpica start is more than 1 h from OpenF1's: 2024 round 21 (1.5 h, the race was brought forward), 2024 round 22 (Jolpica's date is a day early) and 2026 round 4 (3 h). The dev run skipped the same 3.
+      - **No set value changed:** every non-null `lap` value of the OpenF1 and archive races was unpivoted before and after the run (2,798,859 values). None changed or disappeared.
+      - **Fills and added laps:** 81 `lap_ms` were filled and 552 laps added, in 9 races:
+        - 446 in 10033, as on dev; 2 of them are deleted by race control (track limits);
+        - 94 in 5744 (2020): laps 10–14 of 19 drivers, a gap in the archive;
+        - 1–3 each in 5074, 5122, 5138, 5162, 5170, 5202 and 5434.
+        - None of them equals an OpenF1 or archive neighbour lap within 1 ms. 11234 gets none (3 on dev).
+      - **E6 at work:** E6 skipped 16–24 laps as `dup` in each of five 2018 archive races (5074, 5122, 5138, 5162 and 5170) and 1 in 5744. In those five, 17–19 drivers each lack an archive lap 2, and their archive lap 1 holds lap 2's time, so Jolpica's lap 2 shows the shift E6 guards against. This is a fault of the P3a archive import, not of P3c: follow-up #144.
   - **Smoke** (S3, on the real dump of 2026-10-27, a throw-away database; counts only): all years took 33 s at a peak of 439 MB RSS and imported 1,321 sessions (976 races and 345 qualifyings) with 0 failed. It wrote 29,933 drivers and as many results, 426,643 laps and 6,251 pit stops, every count matched an independent `python3 -I` count, and a second run changed no table's md5.
   - **[box] P3c** (WSL, 2026-11-12, the dev database; counts only):
     - All years took 38 s at a peak of 494–506 MB RSS, with 0 failed.
