@@ -12,6 +12,7 @@ import {
   BACKLOG_MS,
   backfill,
   type Deps,
+  daemon,
   ingestHealth,
   processSession,
   SYNC_RETRY_MS,
@@ -603,11 +604,13 @@ describe('ingest (fixtures through msw, f1_ingest login)', { timeout: 120_000 },
     const drift = [
       ...(raw('race_control-normal') as Record<string, unknown>[]),
       // 2027-style: no form matches. A stewards' note and a known form are not counted.
-      ...['SAFETY CAR IN', 'UNDER SAFETY CAR INCIDENT NOTED', 'SAFETY CAR DEPLOYED'].map((message) => ({
-        ...(raw('race_control-normal') as Record<string, unknown>[])[0],
-        flag: null,
-        message,
-      })),
+      ...['SAFETY CAR IN', 'INCIDENT INVOLVING CAR 4 NOTED - UNDER SAFETY CAR', 'SAFETY CAR DEPLOYED'].map(
+        (message) => ({
+          ...(raw('race_control-normal') as Record<string, unknown>[])[0],
+          flag: null,
+          message,
+        }),
+      ),
     ];
     const lastLine = () => JSON.parse(lines.at(-1) ?? '{}');
     openf1((endpoint, key) => (endpoint === 'race_control' && key === 11388 ? HttpResponse.json(drift) : undefined));
@@ -660,6 +663,21 @@ describe('ingest (fixtures through msw, f1_ingest login)', { timeout: 120_000 },
     expect(pings).toHaveLength(1);
     openf1();
     expect(await processSession(deps, EMPTY, true)).toEqual({ ok: true, value: 'final' });
+  });
+
+  it('the 9th failure in a row on the empty guard pings /fail once with `session_failed empty`', async () => {
+    const before = await session(11388);
+    await db
+      .updateTable('session')
+      .set({ ingest_state: 'due', fail_count: 8 })
+      .where('session_key', '=', 11388)
+      .execute();
+    openf1((endpoint, key) => (endpoint === 'laps' && key === 11388 ? fixture('laps-empty') : undefined));
+    const pings = hc();
+    expect(await processSession(pinging(), 11388)).toEqual({ ok: false, error: 'empty' });
+    expect(await session(11388)).toMatchObject({ ingest_state: 'failed', fail_count: 9, last_error: 'empty' });
+    expect(pings).toEqual(['POST f1-ingest/fail session_failed empty']);
+    await db.updateTable('session').set(before).where('session_key', '=', 11388).execute(); // the rows were kept
   });
 
   it('the daemon sync skips a live window and retries every 15 min until it succeeds', async () => {
@@ -800,6 +818,47 @@ describe('ingest (fixtures through msw, f1_ingest login)', { timeout: 120_000 },
       .set({ ingest_state: 'final', next_fetch_at: null })
       .where('session_key', '=', EMPTY)
       .execute();
+  });
+
+  it('a backlog ping that failed is retried by the next report, and the latch is set once one got through', async () => {
+    let status = 500;
+    const posts: string[] = [];
+    server.use(
+      http.all('https://hc-ping.com/*', async ({ request }) => {
+        posts.push(await request.text());
+        return new HttpResponse(null, { status });
+      }),
+    );
+    const health = ingestHealth(pinging());
+    at = new Date('2026-11-02T12:00:00Z');
+    await db
+      .updateTable('session')
+      .set({ ingest_state: 'due', next_fetch_at: new Date(at.getTime() - BACKLOG_MS) })
+      .where('session_key', '=', EMPTY)
+      .execute();
+    await health.report();
+    expect(posts).toEqual(['due_backlog']); // answered 500
+    status = 200;
+    await health.report(); // retried
+    expect(posts).toEqual(['due_backlog', 'due_backlog']);
+    await health.report(); // got through: quiet
+    expect(posts).toHaveLength(2);
+    await db
+      .updateTable('session')
+      .set({ ingest_state: 'final', next_fetch_at: null })
+      .where('session_key', '=', EMPTY)
+      .execute();
+  });
+
+  it('daemon(): the minute job wires a good sync to last_sync_at and the tick to the ingest_status row', async () => {
+    openf1();
+    at = new Date('2026-11-02T12:00:00Z');
+    const job = daemon(deps, () => false);
+    await job.sync();
+    await job.tick();
+    const row = await db.selectFrom('ingest_status').selectAll().executeTakeFirstOrThrow();
+    expect(row).toEqual({ id: true, last_sync_at: at, live_wait: false, last_tick_at: at });
+    expect(typeof job.request).toBe('function');
   });
 
   it('report() upserts the one ingest_status row as f1_ingest; a restart keeps last_sync_at; tick reports', async () => {

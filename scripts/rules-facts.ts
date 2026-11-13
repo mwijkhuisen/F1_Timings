@@ -4,8 +4,9 @@ import { EXIT_USAGE } from '../apps/server/src/main.ts';
 import { markLaps, type RuleLap, type RuleMessage, type Ruling } from '../apps/server/src/timing/rules.ts';
 
 // The A§9 rule checks behind A§6.1 (P1c), reproducible: the real `markLaps` over the final sessions of a dev
-// backfill, counts only. (a) Per form of race-control message, how it found its lap; (b) per qualifying phase, the
-// fastest valid lap of each driver against the official time (`result.durations_ms`). Never a time, a message or a
+// backfill, counts only, of the OpenF1 sessions (`source = 'openf1'`: the Jolpica and F1-archive sessions of a
+// dev database have no race-control rules to check). (a) Per form of race-control message, how it found its lap;
+// (b) per qualifying phase, the fastest valid lap of each driver against the official time (`result.durations_ms`). Never a time, a message or a
 // name: only counts and session keys. Read-only, on the owner's machine (`DATABASE_URL`); refuses under CI
 // (A§12.1 invariant 4).
 
@@ -130,6 +131,7 @@ async function load(url: string): Promise<FactSession[]> {
           .selectFrom('session')
           .select(['session_key', 'type'])
           .where('ingest_state', '=', 'final')
+          .where('source', '=', 'openf1')
           .where('is_cancelled', '=', false)
           .orderBy('session_key')
           .execute();

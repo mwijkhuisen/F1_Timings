@@ -10,7 +10,7 @@ const KEY = /^[A-Za-z0-9_-]{22}$/;
  * Pings `https://hc-ping.com/<key>/<slug>` with the key from the file secret `hc_ping_key`.
  * No secret file (dev, tests) means no request. With `body`, a POST with that text, which
  * healthchecks.io keeps as the ping's log (fixed codes only). Never throws: a failed ping is
- * logged as a code and the work that called it goes on.
+ * logged as a code and the work that called it goes on. Resolves true only when a request got a 2xx.
  */
 export async function pingHealthchecks(
   slug: string,
@@ -20,12 +20,12 @@ export async function pingHealthchecks(
     timeoutMs = 10_000,
     body,
   }: { secretsDir?: string | undefined; timeoutMs?: number; body?: string | undefined } = {},
-): Promise<void> {
+): Promise<boolean> {
   const key = readSecret('hc_ping_key', secretsDir);
-  if (key === undefined) return;
+  if (key === undefined) return false;
   if (!KEY.test(key)) {
     log.error({ last_error: 'hc_key_invalid' }, 'healthchecks');
-    return;
+    return false;
   }
   try {
     const res = await fetch(`https://hc-ping.com/${key}/${slug}`, {
@@ -35,7 +35,9 @@ export async function pingHealthchecks(
     });
     await res.body?.cancel();
     if (!res.ok) log.error({ last_error: 'hc_ping_failed', status: res.status }, 'healthchecks');
+    return res.ok;
   } catch {
     log.error({ last_error: 'hc_ping_failed' }, 'healthchecks'); // not the error: its message can quote the URL
+    return false;
   }
 }

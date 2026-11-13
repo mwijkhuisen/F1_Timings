@@ -41,7 +41,7 @@ export type Deps = {
    * succeeded (not the startup sync), `f1-ingest/fail` with a fixed code when a session newly fails for good or the due
    * backlog stalls (#105).
    */
-  ping?: (slug: string, body?: string) => Promise<void>;
+  ping?: (slug: string, body?: string) => Promise<boolean>;
   /** The daemon's status row and backlog check (`ingestHealth`), after each processed session and once per tick. */
   report?: () => Promise<void>;
   /** The daemon's rain step (P5c, `createRainStep`), after the tick every minute; it never rejects. */
@@ -397,8 +397,9 @@ export function ingestHealth(deps: Pick<Deps, 'db' | 'now' | 'log' | 'ping'>) {
             .where('is_cancelled', '=', false)
             .where('next_fetch_at', '<=', new Date(at.getTime() - BACKLOG_MS))
             .executeTakeFirst();
-          if (stalled && !alerted) await deps.ping?.('f1-ingest/fail', 'due_backlog');
-          alerted = stalled !== undefined;
+          // The latch is set only once a ping got through, so the next report retries one that failed.
+          alerted =
+            stalled !== undefined && (alerted || ((await deps.ping?.('f1-ingest/fail', 'due_backlog')) ?? true));
         }
         await deps.db
           .insertInto('ingest_status')
@@ -512,6 +513,14 @@ export async function minuteWork(
   await job.rain?.(stopping);
 }
 
+/** The daemon's wiring: the minute job (sync, tick, rain step) with its health report, and the Cron's sync request. */
+export function daemon(deps: Deps, stopped: () => boolean) {
+  const health = ingestHealth(deps);
+  const sync = scheduleSync(deps, health.synced);
+  const ticking = { ...deps, report: health.report };
+  return { sync: sync.run, tick: () => tick(ticking, stopped), rain: deps.rainStep, request: sync.request };
+}
+
 /**
  * The daemon: one job every minute that syncs the schedule when due, ticks, then runs the rain step. Resolves
  * after SIGTERM/SIGINT once the running job has finished.
@@ -526,16 +535,13 @@ export async function startIngest(deps: Deps): Promise<void> {
   }).then(() => {
     stopping = true;
   });
-  const health = ingestHealth(deps);
-  const sync = scheduleSync(deps, health.synced);
-  const ticking = { ...deps, report: health.report };
-  const job = { sync: sync.run, tick: () => tick(ticking, stopped), rain: deps.rainStep };
+  const job = daemon(deps, stopped);
   const work = busyGuard(() => minuteWork(job, log, stopped));
   deps.beat();
   void work.run();
   const jobs = [
     new Cron('30 0 * * *', { timezone: 'UTC' }, () => {
-      sync.request();
+      job.request();
       void work.run();
     }),
     new Cron('* * * * *', { timezone: 'UTC' }, () => void work.run()),

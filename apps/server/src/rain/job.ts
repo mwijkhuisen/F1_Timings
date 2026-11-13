@@ -30,7 +30,7 @@ export type RainDeps = {
   log: Pick<Logger, 'info' | 'error'>;
   beat: () => void;
   /** The daemon's healthchecks.io ping (never throws): `f1-ingest/fail` when a grid newly fails for good (#105). */
-  ping?: (slug: string, body?: string) => Promise<void>;
+  ping?: (slug: string, body?: string) => Promise<boolean>;
 };
 
 const HOUR_MS = 3_600_000;

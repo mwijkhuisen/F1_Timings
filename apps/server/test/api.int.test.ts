@@ -494,6 +494,11 @@ describe('api (f1_api login, Access JWT)', { timeout: 120_000 }, () => {
         .set({ last_tick_at: new Date(Date.now() - 6 * 60_000), live_wait: true })
         .execute();
       expect((await status()).ingest).toMatchObject({ live_wait: true, stale: true });
+      await admin
+        .updateTable('ingest_status')
+        .set({ last_tick_at: new Date(Date.now() + 2 * 60_000) })
+        .execute();
+      expect((await status()).ingest).toMatchObject({ stale: true }); // a tick from the future is stale too
 
       // The failed grid is FAILING's: the other three states are the seeded grids.
       await admin

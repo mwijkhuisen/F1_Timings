@@ -416,7 +416,10 @@ export function createApp({
       last_sync_at: ingestRow.last_sync_at,
       live_wait: ingestRow.live_wait,
       last_tick_at: ingestRow.last_tick_at,
-      stale: Date.now() - ingestRow.last_tick_at.getTime() > STALE_MS,
+      // A tick stamped more than a minute ahead of this clock is no sign of life either.
+      stale:
+        Date.now() - ingestRow.last_tick_at.getTime() > STALE_MS ||
+        ingestRow.last_tick_at.getTime() - Date.now() > 60_000,
     };
     const rainStates: Status['rain']['states'] = { live: 0, final: 0, failed: 0 };
     const rainCounts = await db
