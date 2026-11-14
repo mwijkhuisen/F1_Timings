@@ -114,13 +114,13 @@ export function gridOf(state: Obj): Map<number, number> {
   return out;
 }
 
-/** A driver from the DriverList entry of number `n`: Tla, full name and team colour, the number when unknown. */
+/** A driver from the DriverList entry of number `n`: Tla, "full name · team" and team colour, the number when unknown. */
 export function driverOf(list: Views['DriverList'], n: string): Driver {
   const d = list[n];
   return {
     number: Number(n),
     acronym: d?.Tla ?? n,
-    name: d?.FullName ?? null,
+    name: [d?.FullName, d?.TeamName].filter(Boolean).join(' · ') || null,
     team: teamColour(d?.TeamColour ?? null),
   };
 }

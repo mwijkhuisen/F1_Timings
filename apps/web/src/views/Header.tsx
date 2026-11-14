@@ -2,7 +2,7 @@ import type { Live, Recordings, Season, Seasons } from '@f1/contracts';
 import { useQuery } from '@tanstack/react-query';
 import { useEffect, useSyncExternalStore } from 'react';
 import { seasonQuery, useLive, useRecordings, useSeasons, useStatus } from '../lib/api.ts';
-import { Link, type Route, sessionPath } from '../lib/routes.ts';
+import { Link, type Route, sessionPath, switchView } from '../lib/routes.ts';
 import { meetingTarget, neighbours, type Slot } from '../lib/season.ts';
 import { currentTheme, setTheme, subscribeTheme, type Theme } from '../lib/theme.ts';
 import { Cancelled } from '../ui/Cancelled.tsx';
@@ -63,12 +63,13 @@ export function HeaderView({
   const meeting = at && season?.find((m) => m.sessions.some((s) => s.session_key === at.session));
   const current = meeting?.sessions.find((s) => s.session_key === at?.session);
   const near = at && season ? neighbours(season, at.session) : { prev: null, next: null };
+  // The kept view; Result falls back to Laps on every other session: a switcher never shows another session's result.
   const path = ({ meeting: m, session: s }: Slot) =>
     sessionPath(
       year ?? 0,
       { key: m.meeting_key, name: m.name },
       { key: s.session_key, name: s.name, type: s.type },
-      view,
+      s.session_key === at?.session ? view : switchView(view),
     );
   const step = (slot: Slot | null, label: string, glyph: string) =>
     slot && (

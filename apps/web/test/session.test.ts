@@ -1,8 +1,8 @@
 import type { Live, Rain, SessionDetail } from '@f1/contracts';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { rainQuery, sessionQuery } from '../src/lib/api.ts';
-import { errorWords, LIVE_TEXT, noDataText, pollMs, sourceWords } from '../src/lib/session.ts';
-import { sessionDetail } from './laps.ts';
+import { errorWords, LIVE_TEXT, noDataText, orderDrivers, pollMs, sourceWords, statusOf } from '../src/lib/session.ts';
+import { result, sessionDetail } from './laps.ts';
 
 // Why a session's tab has no data, and when its page refreshes (#99, A§13), on a hand-built session.
 
@@ -116,6 +116,47 @@ describe('noDataText', () => {
     expect(text({ ingest_state: 'final', source: 'jolpica' }, 48)).toBe('No laps in the Jolpica data.');
     expect(noDataText(s({ ingest_state: 'final' }), null, at(1), 'weather')).toBe('No weather in the OpenF1 data.');
     expect(noDataText(s({ ingest_state: 'final' }), null, at(48), 'stints')).toBe('No stints in the OpenF1 data.');
+  });
+
+  it('names the results on the Result tab (#110)', () => {
+    expect(noDataText(s({ is_cancelled: true }), null, at(1), 'results')).toBe(
+      'No results: the session was cancelled.',
+    );
+    expect(noDataText(s({ ingest_state: 'due' }), null, at(1), 'results')).toBe(
+      'Results arrive about 35 min after the end.',
+    );
+    expect(noDataText(s({ ingest_state: 'final', source: 'jolpica' }), null, at(48), 'results')).toBe(
+      'No results in the Jolpica data.',
+    );
+  });
+});
+
+describe('the driver cells and the status words (#110)', () => {
+  it("orderDrivers' name is the cells' title: full name · team, whichever is known", () => {
+    const d = sessionDetail('Race', 'Race', [
+      [4, 'NOR'],
+      [44, 'HAM'],
+      [63, 'RUS'],
+    ]);
+    const named = {
+      ...d,
+      drivers: d.drivers.map((x) =>
+        x.driver_number === 4
+          ? { ...x, full_name: 'Lando Norris', team_name: 'McLaren' }
+          : x.driver_number === 44
+            ? { ...x, team_name: 'Ferrari' }
+            : x,
+      ),
+    };
+    const laps = [4, 44, 63].map((driver_number) => ({ driver_number }));
+    expect(orderDrivers(named, laps).map((x) => x.name)).toEqual(['Lando Norris · McLaren', 'Ferrari', null]);
+  });
+
+  it('statusOf: DSQ before DNS before DNF, else none', () => {
+    expect(statusOf({ ...result(1), dsq: true, dnf: true })).toBe('DSQ');
+    expect(statusOf({ ...result(1), dns: true, dnf: true })).toBe('DNS');
+    expect(statusOf({ ...result(1), dnf: true })).toBe('DNF');
+    expect(statusOf({ ...result(1), dnf: false })).toBeNull();
   });
 });
 

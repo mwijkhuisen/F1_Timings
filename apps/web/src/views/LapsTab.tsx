@@ -42,7 +42,7 @@ export function LapsTab({ session, detail, laps }: { session: number; detail: Se
       {quali && byPhase ? (
         <QualiTable detail={detail} quali={quali} />
       ) : (
-        <LapTable detail={detail} laps={laps} track={track} />
+        <LapTable detail={detail} laps={laps} track={track} marks />
       )}
     </>
   );

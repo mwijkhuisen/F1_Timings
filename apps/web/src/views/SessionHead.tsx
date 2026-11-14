@@ -1,14 +1,14 @@
 import type { Live, Recordings, Season, SessionDetail, Weather } from '@f1/contracts';
 import { useMemo } from 'react';
 import { useRecordings, useSeason, useWeather } from '../lib/api.ts';
-import { Link, sessionPath, type View } from '../lib/routes.ts';
+import { Link, sessionPath, switchView, type View } from '../lib/routes.ts';
 import { isLiveNow, roundNumbers, shortName } from '../lib/season.ts';
 import { fmtInstant } from '../lib/time.ts';
 import { headLine, summarise } from '../lib/weather.ts';
 import { Cancelled } from '../ui/Cancelled.tsx';
 
 // A session's head (A§13): "2026 · Round 19 · Mexico City", the meeting with the session boxed beside it, the start
-// and circuit, the weekend's other sessions as pills (the view kept, Order only to a race), and a Replay link when there is a recording.
+// and circuit, the weekend's other sessions as pills (the view kept, Order only to a race, Result as Laps), and a Replay link when there is a recording.
 // P5a: a weather line under the meta line on every tab, "Air 24–27 °C · Track 38–45 °C · Dry", once there are rows.
 // #99: the meta line says whether the data is final or provisional, and "Live now · Follow" while `/live` names it.
 
@@ -73,7 +73,8 @@ export function SessionHead({
                   d.meeting.year,
                   { key, name: d.meeting.name },
                   { key: s.session_key, name: s.name, type: s.type },
-                  view,
+                  // Result stays on its own session's pill only (#110).
+                  s.session_key === d.session.session_key ? view : switchView(view),
                 )}
                 aria-current={s.session_key === d.session.session_key ? 'page' : undefined}
               >
