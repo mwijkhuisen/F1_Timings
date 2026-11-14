@@ -22,6 +22,7 @@ The owner wants the same kind of stack as Waterheight (`mwijkhuisen/Waterheight`
   - the owner-audience machinery and WireGuard owner site
   - Paraglide i18n, the map stack, restic backups and restore drills
   - the watchdog role and public status page
+    - amended: host alerts go through healthchecks.io's `f1-ingest/fail` (owner, 2026-11-09, #104); still no watchdog role
   - the BOM check script, boundary/OpenAPI generators, CodeQL, the browser matrix and Lighthouse
   - A§3 gives a one-line reason for each.
 - **Deploy:** CI pushes images to GHCR by digest, and a systemd timer on the VM pulls them, migrates, smoke-tests and rolls back on failure.

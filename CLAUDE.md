@@ -32,7 +32,7 @@ The plan is binding: `docs/plan/ARCHITECTURE.md` (cited A§x), `docs/plan/PHASES
 1. No secret in git, environment variables, image layers, logs or error messages. Secrets are files under `/etc/f1/secrets`, `root:<gid> 0440`.
 2. Nothing is reachable without Cloudflare Access. `/api` verifies the Access JWT itself. Only `127.0.0.1:8180` is published.
 3. Data from the F1 TV feed or archive or the FIA timing PDFs is never committed, nor the Jolpica dump. Their parser fixtures are synthetic. Real files live in the gitignored `fixtures-private/`.
-4. CI never calls OpenF1, F1, Jolpica, the FIA, Open-Meteo or Overpass.
+4. CI never calls OpenF1, F1, Jolpica, the FIA, Open-Meteo, Overpass or hc-ping.com.
 5. The F1 stack shares nothing with Waterheight (`rws`): no networks, volumes, secrets, GIDs, ports, subnets, nftables table, timers or healthchecks group. Never touch `/etc/rws`, `/srv/rws` or the `rws` compose project.
 6. Strict CSP. The browser makes no third-party requests.
 7. Containers are hardened: `read_only`, `cap_drop: ALL`, `no-new-privileges`, non-root UID 62532, resource limits.

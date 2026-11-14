@@ -54,10 +54,13 @@ changed  /etc/f1/secrets/db_postgres (empty, root:62001 0440)
 changed  db_postgres generated
 …
 changed  /etc/f1/f1.env (template)
+changed  /etc/f1/recorder-watch.sql
 changed  /etc/f1/compose.yaml
 changed  /usr/local/bin/f1-update
+changed  /usr/local/bin/f1-alert
 changed  /etc/f1/nftables-f1.conf
 changed  /etc/systemd/system/f1-firewall.service
+changed  /etc/systemd/system/f1-alert@.service
 …
 changed  f1-firewall.service enabled
 changed  f1-firewall.service started (table inet f1)
@@ -141,7 +144,7 @@ sudo cat /srv/f1/state/current.env
 
 Expected: `db`, `api`, `ingest`, `live`, `caddy` and `cloudflared` running, and healthy after about a minute, the health body from `/healthz`, and `current.env` with `F1_SERVER_IMAGE=…@sha256:…` and `F1_WEB_IMAGE=…@sha256:…`.
 
-If the first deploy fails: `f1-update: first deploy failed: … is in /srv/f1/state/failed.env and is not retried automatically`, exit 1, containers left as they are. Read `journalctl -u f1-update`, `sudo docker compose -p f1 ps` and `sudo docker logs f1-db-1`; fix the cause; `sudo rm /srv/f1/state/failed.env`; start the service again. Common causes: the GHCR packages are private (A5), `cf_tunnel_token` empty (cloudflared restarts), a malformed `f1.env`.
+If the first deploy fails: `f1-update: first deploy failed: … is in /srv/f1/state/failed.env and is not retried automatically`, exit 1, containers left as they are. Read `journalctl -u f1-update`, `sudo docker compose -p f1 ps` and `sudo docker logs f1-db-1`; fix the cause; `sudo rm /srv/f1/state/failed.env`; start the service again. Common causes: the GHCR packages are private (A5), `cf_tunnel_token` empty (cloudflared restarts), a malformed `f1.env`. The failed run also alerts `unit_failed f1-update.service` through `f1-ingest/fail` (A6; without a valid key it logs `alert_no_key` or `alert_key_invalid` and sends nothing).
 
 ## 7. Egress acceptance [box]
 
@@ -192,7 +195,7 @@ sudo rm /srv/f1/state/failed.env
 sudo docker rmi f1-server:broken
 ```
 
-Expected: `current-unchanged`, the health body, then `skipping known-bad server f1-server:broken web …; rm /srv/f1/state/failed.env to retry` and `exit 0`. The `rm` is required: it clears the known-bad pair.
+Expected: `current-unchanged`, the health body, then `skipping known-bad server f1-server:broken web …; rm /srv/f1/state/failed.env to retry` and `exit 0`. The `rm` is required: it clears the known-bad pair. The drill sends no alert (owner, 2026-11-14, #104, D1): a `--server`/`--web` run sends neither `known_bad` nor `hold_14h`, and typed in a shell it is not `f1-update.service`, so its exit 1 sends no `unit_failed` either.
 
 ## 9. Waterheight still works [owner]
 
@@ -223,6 +226,16 @@ Invariant 5: F1 shares no healthchecks group with Waterheight.
 4. Put the ping key in the secret file (a shell line is fine; the value is not logged):
    `sudo nano /etc/f1/secrets/hc_ping_key`
 5. `ingest` pings `https://hc-ping.com/<ping key>/f1-ingest` once the schedule sync requested by the daily `30 0 * * *` (UTC) Cron, or by its 15-minute retry, has succeeded. The startup sync does not ping, so a crash-looping ingest cannot stay green. The check turns up after the first deploy and the first 00:30 UTC; period 1 day and grace 1 hour still fit.
+6. `f1-ingest/fail` also carries the host's alerts since #104 (`f1-alert`, run by root on the VM: `unit_failed <unit>`, `known_bad`, `hold_14h`, `restart_loop`, `recorder_missing`, `recorder_stale`, `login_failed`, `disk_low`, `test_alert`; what each means: `docs/runbooks/update.md`, "Alerts from the host"). The body is the code, shown in the check's ping log. The next daily success ping (00:30 UTC) clears the check.
+
+**[box] drill** (after `f1-install`, outside a session, with the key filled in step 4):
+
+```bash
+curl -sS -o /dev/null -w '%{http_code}\n' --max-time 10 https://hc-ping.com/
+sudo f1-alert test_alert; echo "exit $?"
+```
+
+Expected: `200` first (the [U] that the host itself reaches hc-ping.com: `table inet f1` has no output hook, but the host shares Waterheight's network, A§12.5), then `f1-alert: alert_sent test_alert` and `exit 0`. `f1-ingest` turns red with the body `test_alert` in its ping log, and the 00:30 UTC ping clears it. `alert_no_key test_alert` means the key file is empty, `alert_key_invalid test_alert` that it is not 22 characters of `A-Za-z0-9_-`, `alert_failed test_alert (curl <rc>, http <status>)` (exit 1) that the request failed: check the first command.
 
 `f1-live` (P2c): create a second check in the same project with slug `f1-live`. `live` pings `https://hc-ping.com/<ping key>/f1-live` only when a recording ends complete (a normal stop, the session seen to start, a token throughout, no disconnect over 60 s inside the session), so it is quiet between race weekends. It pings `https://hc-ping.com/<ping key>/f1-live/fail` when a recording ends incomplete at a normal stop or on a disk failure, which alerts at once, so a failed weekend does not wait for the period; a cancelled or moved session and a SIGTERM (a deploy) ping neither. Pick a period and grace to suit that (the owner's choice; a long period such as 30 days keeps the summer break from alerting).
 
