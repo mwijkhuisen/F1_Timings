@@ -5,19 +5,21 @@
 # "f1-install: N change(s)", so a second run reports 0 changes.
 #
 # It installs compose.yaml, roles.sql, recorder-watch.sql (f1-tick's query) and the firewall into
-# /etc/f1, the host scripts (f1-update, f1-tick, f1-measure, f1-resolvers and f1-alert; root-owned
-# copies: the timers never run a file of the checkout) into /usr/local/bin and the units, the
-# template f1-alert@.service too, into /etc/systemd/system. It creates the
+# /etc/f1, the host scripts (f1-update, f1-tick, f1-measure, f1-resolvers, f1-alert, f1-status and
+# f1-psql; root-owned copies: the timers never run a file of the checkout) into /usr/local/bin and
+# the units, the template f1-alert@.service too, into /etc/systemd/system. It creates the
 # secret files (the four db_* filled with random hex, cf_tunnel_token, hc_ping_key, f1tv_username
 # and f1tv_password left empty for the owner), the f1.env template and the recorder's directories
 # /srv/f1/live, /srv/f1/archive and /srv/f1/state/live (62532, 0700) and /srv/f1/jolpica (root:62532, 0750); it enables and (re)starts f1-firewall.service.
 # It never enables the timers: the owner does that after filling the secrets and f1.env (install
 # runbook). When compose.yaml changed under a running deploy, it recreates the stack with the
-# current images and smoke-tests it. It has no deploy hold: never run it during a recording.
+# current images and smoke-tests it. That recreation ends live's recording, so while live records
+# (the row f1-update's hold reads) a changed compose.yaml makes it exit 1 before it writes anything;
+# --during-recording installs anyway. Still, never run it during a session (weekend runbook).
 # It never touches /etc/rws, /srv/rws, the rws project, daemon.json, sysctl, apt,
 # nftables.service or docker.service (ADR-0003), and never prints a secret.
 #
-# Usage: sudo deploy/bin/f1-install
+# Usage: sudo deploy/bin/f1-install [--during-recording]
 set -euo pipefail
 
 repo=$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/../.." && pwd)
@@ -25,8 +27,13 @@ repo=$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/../.." && pwd)
 . "$repo/deploy/bin/f1-lib.sh"
 umask 022
 
+during=0
+if [[ ${1:-} == --during-recording ]]; then
+  during=1
+  shift
+fi
 if (($#)); then
-  echo "usage: f1-install" >&2
+  echo "usage: f1-install [--during-recording]" >&2
   exit 64
 fi
 
@@ -40,10 +47,14 @@ fix() {
   "$@"
   printf 'changed  %s\n' "$what"
 }
+# installed <src> <dest> <mode>: <dest> is a copy of <src>, root:root <mode> (nothing to install).
+installed() {
+  [[ -f $2 ]] && cmp -s "$1" "$2" && [[ $(stat -c '%a %u %g' "$2") == "${3#0} 0 0" ]]
+}
 # install_file <src> <dest> <mode>: root:root <mode>; returns 0 when it changed the file.
 install_file() {
   local src=$1 dest=$2 mode=$3
-  if [[ -f $dest ]] && cmp -s "$src" "$dest" && [[ $(stat -c '%a %u %g' "$dest") == "${mode#0} 0 0" ]]; then
+  if installed "$src" "$dest" "$mode"; then
     ok "$dest"
     return 1
   fi
@@ -76,6 +87,16 @@ echo "f1-install from $repo"
 # No deploy while the files change under it (f1-update takes the same lock).
 exec 9>"$(lockfile update)"
 flock -n 9 || die "f1-update is running: try again in a minute"
+
+# The recorder hold (#106): a changed compose.yaml recreates the stack below, which ends live's
+# recording (complete = f). Checked before anything is installed, so a refusal changes nothing.
+if ((!during)) && [[ -f $F1_STATE/current.env ]] && ! installed "$repo/deploy/compose.yaml" "$F1_ETC/compose.yaml" 0644; then
+  if ! session=$(recording); then
+    log "warning: cannot read recorder_status: installing without the hold"
+  elif [[ -n $session ]]; then
+    die "live is recording (session $session): run again after it ends, or with --during-recording"
+  fi
+fi
 
 # O1: f1's subnets (from compose.yaml) must not overlap a route of the host (other than on its
 # own f1-* bridges) or a Docker network that is not f1's. Integer math on IPv4 CIDRs.
@@ -208,7 +229,7 @@ install_file "$repo/deploy/host/recorder-watch.sql" "$F1_ETC/recorder-watch.sql"
 compose_changed=0
 install_file "$repo/deploy/compose.yaml" "$F1_ETC/compose.yaml" 0644 && compose_changed=1
 install_file "$repo/deploy/bin/f1-lib.sh" /usr/local/bin/f1-lib.sh 0644 || true
-for script in f1-update f1-tick f1-measure f1-resolvers f1-alert; do
+for script in f1-update f1-tick f1-measure f1-resolvers f1-alert f1-status f1-psql; do
   install_file "$repo/deploy/bin/$script" "/usr/local/bin/$script" 0755 || true
 done
 fw_changed=0 units_changed=0

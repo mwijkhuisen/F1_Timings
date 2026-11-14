@@ -110,6 +110,16 @@ unready() {
   printf '%s' "$list"
 }
 
+# recording: the session key ('-' when the row names none) while live records, nothing when it does
+# not (A§14.4: state not idle, updated_at under 5 min old and at most 1 min ahead). As f1_api (SELECT
+# only) over the db container's local socket: 20 s at most, 15 s in the server. Fails when the query
+# fails; the callers (f1-update, f1-install) fail open.
+recording() {
+  local out
+  out=$(timeout 20 docker exec -e PGOPTIONS='-c statement_timeout=15s' f1-db-1 psql -U f1_api -d f1 -tAc "SELECT coalesce(session_key::text, '-') FROM recorder_status WHERE state <> 'idle' AND updated_at > now() - interval '5 minutes' AND updated_at <= now() + interval '1 minute'" 2>/dev/null) || return 1
+  printf '%s' "${out//[[:space:]]/}"
+}
+
 # smoke: /healthz through caddy (so caddy, api and db) answers 200 on the published port, and then
 # no f1 container is unready (every one that runs is healthy), within F1_SMOKE_TIMEOUT seconds
 # (default 120).

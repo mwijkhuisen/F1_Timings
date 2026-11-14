@@ -1,0 +1,87 @@
+#!/usr/bin/env bash
+# f1-status (#106; A§14.5): a one-shot, read-only view of the f1 host for the owner: the deploy
+# state, the disk, the containers, the recorder and the timers. It never reads /etc/f1/secrets or
+# f1.env, and a probe that fails prints "unavailable: …" instead of stopping the rest.
+# Rows and labels come from containers and images (a container writes recorder_status), so all
+# output goes through a filter that drops the C0 and UTF-8 C1 control characters (tab and newline
+# kept): nothing it prints can drive root's terminal.
+#
+# Exit: 0 printed; 1 not root; 64 usage.
+#
+# Usage: sudo f1-status
+set -euo pipefail
+# shellcheck source=deploy/bin/f1-lib.sh
+. "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/f1-lib.sh"
+
+if (($#)); then
+  echo "usage: f1-status" >&2
+  exit 64
+fi
+((EUID == 0)) || die "run as root (sudo)"
+
+# env_images <file>: each line of one of f1-update's env files, with its image's revision label.
+env_images() {
+  local line ref rev
+  if [[ ! -f $1 ]]; then
+    echo "${1##*/}: (not present)"
+    return 0
+  fi
+  while IFS= read -r line || [[ -n $line ]]; do
+    ref=${line#*=}
+    if [[ ! $ref =~ $F1_REF_RE ]]; then
+      rev='unavailable: not an image reference'
+    elif ! rev=$(docker image inspect -f '{{index .Config.Labels "org.opencontainers.image.revision"}}' "$ref" 2>/dev/null); then
+      rev='unavailable: image not present'
+    fi
+    printf '%s  %s  revision %s\n' "${1##*/}" "$line" "$rev"
+  done <"$1"
+}
+
+status() {
+  local since docker_root
+  echo '== deploy'
+  env_images "$F1_STATE/current.env" || echo 'unavailable: current.env'
+  env_images "$F1_STATE/failed.env" || echo 'unavailable: failed.env'
+  if [[ -f $F1_STATE/candidate.env ]]; then env_images "$F1_STATE/candidate.env" || echo 'unavailable: candidate.env'; fi
+  if [[ ! -f $F1_STATE/held-since ]]; then
+    echo 'held-since: (not present)'
+  elif since=$(<"$F1_STATE/held-since") && [[ $since =~ ^[0-9]{1,12}$ ]]; then
+    echo "held-since: $(date -u -d "@$since" +%Y-%m-%dT%H:%M:%SZ) (f1-update defers while live records)"
+  else
+    echo 'held-since: unavailable: not an epoch'
+  fi
+  if [[ -e $F1_FW_STOPPED ]]; then
+    echo 'firewall-stopped: present (f1-tick stopped the stack: table inet f1 would not load)'
+  else
+    echo 'firewall-stopped: (not present)'
+  fi
+  if nft list table inet f1 >/dev/null 2>&1; then echo 'table inet f1: loaded'; else echo 'table inet f1: NOT loaded'; fi
+
+  echo '== disk'
+  printf 'f1-tick (time, free bytes of /srv/f1 and of the Docker data root): '
+  cat -- "$F1_STATE/disk" 2>/dev/null || echo "unavailable: no $F1_STATE/disk"
+  docker_root=$(docker info -f '{{.DockerRootDir}}' 2>/dev/null) || docker_root=''
+  [[ -n $docker_root ]] || echo 'unavailable: the Docker data root (docker info)'
+  df -h -- /srv/f1 ${docker_root:+"$docker_root"} || echo 'unavailable: df'
+
+  echo '== containers'
+  # Every container of project f1 (a job's too), without compose: it needs no current.env.
+  docker ps -a --filter label=com.docker.compose.project=f1 \
+    --format 'table {{.Label "com.docker.compose.service"}}\t{{.Names}}\t{{.State}}\t{{.Status}}' </dev/null ||
+    echo 'unavailable: docker ps'
+
+  echo '== recorder'
+  # </dev/null: timeout runs f1-psql in its own process group, which a read of the TTY would stop.
+  timeout 20 "$F1_BIN/f1-psql" -c 'SELECT state, session_key, updated_at, warning FROM recorder_status' \
+    -c 'SELECT id, session_key, path, started_at, ended_at, bytes, complete FROM recording ORDER BY id DESC LIMIT 3' </dev/null ||
+    echo 'unavailable: f1-psql (db down, or nothing deployed)'
+
+  echo '== timers'
+  systemctl list-timers --all --no-pager f1-update.timer f1-tick.timer || echo 'unavailable: systemctl list-timers'
+  systemctl show -p Id -p Result -p ExecMainStatus -p ExecMainExitTimestamp f1-update.service f1-tick.service ||
+    echo 'unavailable: systemctl show'
+  return 0
+}
+
+# C0 (but tab and newline) and DEL, then the UTF-8 C1 range U+0080-U+009F (CSI is C2 9B).
+status 2>&1 | tr -d '\000-\010\013-\037\177' | LC_ALL=C sed 's/\xc2[\x80-\x9f]//g' || true

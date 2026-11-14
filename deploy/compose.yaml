@@ -26,6 +26,12 @@ x-hardening: &hardening
       soft: 0
       hard: 0
   restart: unless-stopped
+  # Log rotation is ours, not the shared daemon's default (#106): at most 3 × 10 MB per container.
+  logging:
+    driver: local
+    options:
+      max-size: 10m
+      max-file: "3"
 
 x-node-healthcheck: &node-healthcheck
   # The contract heartbeat (A§4): exit 0 iff /tmp/f1-heartbeat is < 120 s old. No shell in distroless.

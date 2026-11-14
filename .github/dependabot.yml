@@ -39,7 +39,10 @@ updates:
         patterns: ['*']
     open-pull-requests-limit: 5
 
-  # postgres and cloudflared in deploy/compose.yaml.
+  # postgres and cloudflared in deploy/compose.yaml. PGDATA is per postgres major, so a major
+  # bump is never a PR: it goes through docs/runbooks/update.md "A PostgreSQL major upgrade". A
+  # postgres minor gets its own PR (not in the group), and test/pins.test.ts fails it until the
+  # owner pushes the matching service image line in ci.yml (Dependabot cannot edit that file).
   - package-ecosystem: docker-compose
     directory: /deploy
     schedule:
@@ -49,4 +52,9 @@ updates:
     groups:
       compose-images:
         patterns: ['*']
+        exclude-patterns: [postgres]
     open-pull-requests-limit: 5
+    ignore:
+      - dependency-name: postgres
+        versions: [">=19"]
+        update-types: ["version-update:semver-major"]
