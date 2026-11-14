@@ -589,7 +589,7 @@ export function createApp({
       (still !== undefined && (still !== '1' || live))
     )
       return badRequest(c);
-    const mode = live ? 'live' : still === '1' ? 'still' : 'replay';
+    const mode = live ? 'live' : still ? 'still' : 'replay'; // `still` is '1' or absent by now
     const row = await db
       .selectFrom('recording')
       .select(['path', 'session_key', 'started_at', 'ended_at'])
@@ -673,10 +673,7 @@ export function createApp({
             // What an open costs (#101, A§11.3): fixed fields only, never the URL, an id, a time or feed text.
             const { ms, lines } = seek;
             seek = undefined;
-            log.info(
-              { mode, scan_ms: Math.round(ms), lines, snapshot_bytes: Buffer.byteLength(data) },
-              'playback open',
-            );
+            log.info({ mode, scan_ms: ms, lines, snapshot_bytes: Buffer.byteLength(data) }, 'playback open');
           }
           await within(stream.writeSSE({ event: ev.event, data }));
         }
