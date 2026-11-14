@@ -146,7 +146,7 @@ function Cell({
     >
       {dot && (
         <>
-          <span className={`cmp cmp-${dot.key}`} title={lap.compound ?? undefined} aria-hidden="true">
+          <span className={`cmp cmp-${dot.key}`} title={dot.name} aria-hidden="true">
             {dot.letter}
           </span>
           <span className="vh">{tyresWords(dot)}, </span>

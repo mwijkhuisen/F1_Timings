@@ -271,12 +271,12 @@ describe('the lap grid', () => {
         ?.slice(1),
     );
     expect(dots).toEqual([
-      ['cmp-soft', 'SOFT', 'S', 'soft tyres, '],
+      ['cmp-soft', 'Soft', 'S', 'soft tyres, '],
       undefined,
       undefined,
-      ['cmp-soft', 'SOFT', 'S', 'soft tyres, '],
+      ['cmp-soft', 'Soft', 'S', 'soft tyres, '],
       undefined,
-      ['cmp-medium', 'MEDIUM', 'M', 'medium tyres, '],
+      ['cmp-medium', 'Medium', 'M', 'medium tyres, '],
     ]);
   });
 
@@ -303,11 +303,11 @@ describe('the lap grid', () => {
           ?.slice(1),
       );
     expect(dots(2018)).toEqual([
-      ['cmp-ultrasoft', 'ULTRASOFT', 'US', 'ultrasoft tyres, '],
-      ['cmp-supersoft', 'SUPERSOFT', 'SS', 'supersoft tyres, '],
-      ['cmp-soft-2018', 'SOFT', 'S', 'soft tyres, '],
+      ['cmp-ultrasoft', 'Ultrasoft', 'US', 'ultrasoft tyres, '],
+      ['cmp-supersoft', 'Supersoft', 'SS', 'supersoft tyres, '],
+      ['cmp-soft-2018', 'Soft', 'S', 'soft tyres, '],
     ]);
-    expect(dots(2019)).toEqual([undefined, undefined, ['cmp-soft', 'SOFT', 'S', 'soft tyres, ']]);
+    expect(dots(2019)).toEqual([undefined, undefined, ['cmp-soft', 'Soft', 'S', 'soft tyres, ']]);
     // 2019's unknown names get no dot, as an unknown compound always has.
     expect(renderToStaticMarkup(<LapGrid detail={detail} laps={rows} metric="lap" columns={false} />)).not.toContain(
       'cmp-unknown',

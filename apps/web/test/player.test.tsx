@@ -861,6 +861,29 @@ describe('Player', () => {
     // Drivers come from the stream's DriverList, ordered by its TimingData positions.
     expect([...host.querySelectorAll('table.laps tbody th')].map((x) => x.textContent)).toEqual(['VER', 'HAM']);
   });
+
+  // #126: the tower names a tyre in the session's season, from the session detail's meeting year.
+  it.each([
+    [2018, 'cmp-ultrasoft', 'US'],
+    [2026, 'cmp-unknown', '?'],
+  ])("the tower's tyre in a %s session is %s %s", (year, cls, letter) => {
+    render({ recording: ended, start: S + 60_000, detail: { ...detail, meeting: { ...detail.meeting, year } } });
+    last().emit('snapshot', {
+      t: S + 60_000,
+      state: {
+        DriverList: { '1': { Tla: 'VER' }, _kf: true },
+        SessionInfo: { Type: 'Race' },
+        TimingData: { Lines: { '1': { Line: 1, Position: '1' } } },
+        TimingAppData: { Lines: { '1': { Stints: { '0': { Compound: 'ULTRASOFT', TotalLaps: 3 } } } } },
+      },
+      laps: [],
+      stints: [],
+    });
+    advance(250);
+    const dot = host.querySelector('table[aria-label="Timing tower"] .cmp');
+    expect(dot?.className).toBe(`cmp ${cls}`);
+    expect(dot?.textContent).toBe(letter);
+  });
 });
 
 const lap = (driver_number: number, lap_number: number) =>

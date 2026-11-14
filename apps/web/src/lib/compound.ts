@@ -13,7 +13,8 @@ export type Compound = {
   letter: string;
 };
 
-const entry = (key: string, name: string, letter: string): Compound => ({ key, name, letter });
+// Frozen: the entries are shared by both seasons and handed out by reference.
+const entry = (key: string, name: string, letter: string): Compound => Object.freeze({ key, name, letter });
 
 const WET_WEATHER: [string, Compound][] = [
   ['INTERMEDIATE', entry('intermediate', 'Intermediate', 'I')],
