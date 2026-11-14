@@ -1,6 +1,14 @@
 import type { Obj } from '@f1/contracts';
 import { describe, expect, it } from 'vitest';
-import { lastStop, markersUpTo, skipped, skippedText, statusSeries } from '../src/lib/replay.ts';
+import {
+  feedRaceControl,
+  lapPeriods,
+  lastStop,
+  markersUpTo,
+  skipped,
+  skippedText,
+  statusSeries,
+} from '../src/lib/replay.ts';
 import { type Feed, openStream } from '../src/lib/stream.ts';
 import { fmtClock, parseT } from '../src/lib/time.ts';
 import { lap } from './laps.ts';
@@ -144,6 +152,85 @@ describe('markersUpTo', () => {
       { kind: 'start', t: at('2026-10-25T20:00:00Z') },
       { kind: 'sc', t: at('2026-10-25T20:50:00Z'), end: at('2026-10-25T21:00:00Z') },
     ]);
+  });
+});
+
+// #112: the bands as the leader's laps for the player's Laps, Stints and Compare tabs, and the feed's race control.
+describe('lapPeriods', () => {
+  const T0 = at('2026-10-25T20:00:00Z');
+  const hm = (s: string) => at(`2026-10-25T${s}Z`);
+  /** The leader's laps 1…n, each 90 s, from 20:00:00: lap 3 starts 20:03:00, lap 6 20:07:30. */
+  const leader = (n: number) =>
+    Array.from({ length: n }, (_, i) => lap(1, i + 1, { date_start: new Date(T0 + i * 90_000).toISOString() }));
+  const laps = leader(8);
+
+  it('a closed SC runs from the leader’s lap at its start to the one at its end', () => {
+    const s = series([
+      { Utc: '2026-10-25T20:00:00', SessionStatus: 'Started' },
+      { Utc: '2026-10-25T20:04:00', TrackStatus: 'SCDeployed' },
+      { Utc: '2026-10-25T20:07:00', TrackStatus: 'AllClear' },
+    ]);
+    expect(lapPeriods(s, laps, hm('20:12:00'), T0, 'Race')).toEqual([{ kind: 'sc', from: 3, to: 5 }]);
+  });
+
+  it('an open SC ends at the leader’s lap at T, growing with it', () => {
+    const s = series([{ Utc: '2026-10-25T20:04:00', TrackStatus: 'SCDeployed' }]);
+    expect(lapPeriods(s, leader(4), hm('20:05:00'), T0, 'Race')).toEqual([{ kind: 'sc', from: 3, to: 4 }]);
+    expect(lapPeriods(s, leader(6), hm('20:08:00'), T0, 'Race')).toEqual([{ kind: 'sc', from: 3, to: 6 }]);
+    // Nothing after T: the series' later entry is not seen yet.
+    const later = series([
+      { Utc: '2026-10-25T20:04:00', TrackStatus: 'SCDeployed' },
+      { Utc: '2026-10-25T20:20:00', TrackStatus: 'VSCDeployed' },
+    ]);
+    expect(lapPeriods(later, laps, hm('20:05:00'), T0, 'Race')).toEqual([{ kind: 'sc', from: 3, to: 4 }]);
+  });
+
+  it('drops a band that ended before lap 1 started, and starts one from before it at lap 1', () => {
+    const s = series([
+      { Utc: '2026-10-25T19:50:00', TrackStatus: 'VSCDeployed' },
+      { Utc: '2026-10-25T19:55:00', TrackStatus: 'AllClear' },
+      { Utc: '2026-10-25T19:58:00', TrackStatus: 'SCDeployed' },
+      { Utc: '2026-10-25T20:02:00', TrackStatus: 'AllClear' },
+    ]);
+    expect(lapPeriods(s, laps, hm('20:12:00'), T0 - 3_600_000, 'Race')).toEqual([{ kind: 'sc', from: 1, to: 2 }]);
+    // A band that starts before the recording (lo) is not drawn, as on the seek bar.
+    expect(lapPeriods(s, laps, hm('20:12:00'), hm('19:59:00'), 'Race')).toEqual([]);
+  });
+
+  it('a red flag runs from Aborted to the restart', () => {
+    const s = series([
+      { Utc: '2026-10-25T20:00:00', SessionStatus: 'Started' },
+      { Utc: '2026-10-25T20:04:00', SessionStatus: 'Aborted' },
+      { Utc: '2026-10-25T20:04:05', TrackStatus: 'Red' },
+      { Utc: '2026-10-25T20:05:00', TrackStatus: 'AllClear' },
+      { Utc: '2026-10-25T20:08:00', SessionStatus: 'Started' },
+    ]);
+    expect(lapPeriods(s, laps, hm('20:12:00'), T0, 'Race')).toEqual([{ kind: 'red', from: 3, to: 6 }]);
+  });
+
+  it('gives no band outside a race', () => {
+    const s = series([{ Utc: '2026-10-25T20:04:00', TrackStatus: 'SCDeployed' }]);
+    expect(lapPeriods(s, laps, hm('20:12:00'), T0, 'Practice')).toEqual([]);
+    expect(lapPeriods(s, laps, hm('20:12:00'), T0, null)).toEqual([]);
+  });
+});
+
+describe('feedRaceControl', () => {
+  it('keeps the messages with a text, each with its Utc as an ISO date, null when unusable', () => {
+    const state: Obj = {
+      RaceControlMessages: {
+        Messages: {
+          '0': { Utc: '2026-10-25T20:05:00', Category: 'Other', Message: 'CAR 1 (VER) TIME PENALTY' },
+          '1': { Utc: 'soon', Category: 'Other', Message: 'GREEN LIGHT - PIT EXIT OPEN' },
+          '2': { Utc: '2026-10-25T20:06:00', Category: 'Flag' },
+        },
+      },
+    };
+    expect(feedRaceControl(state)).toEqual([
+      { date: '2026-10-25T20:05:00.000Z', message: 'CAR 1 (VER) TIME PENALTY' },
+      { date: null, message: 'GREEN LIGHT - PIT EXIT OPEN' },
+    ]);
+    expect(feedRaceControl({})).toEqual([]);
   });
 });
 

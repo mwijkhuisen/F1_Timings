@@ -1,10 +1,13 @@
 import { type Lap, type Obj, view } from '@f1/contracts';
 import { type Feed, utc } from './stream.ts';
-import type { Kind } from './track.ts';
+import type { Kind, Period } from './track.ts';
+import { leaderLap } from './weather.ts';
 
 // The player's view of the state at T (A§13, P4e): the seek-bar marks, the "Back to" chips, the last stop and the
-// events a forward seek skipped. Pure: `statusSeries` runs once per store flush (the one `view()` here besides
-// `skipped`'s, once per seek), everything else works on its result, so the 1 s tick parses nothing.
+// events a forward seek skipped; since #112 the bands as laps and the race-control texts for the session tabs. Pure:
+// `statusSeries` runs once per store flush and once more per `laps` event for the session tabs, `skipped` once per
+// seek and `feedRaceControl` once per `laps` event on Compare; everything else works on their results, so the 1 s
+// tick parses nothing.
 
 /** One `SessionData.StatusSeries` entry. */
 export type Status = { t: number; track?: string | undefined; session?: string | undefined };
@@ -67,6 +70,34 @@ export function markersUpTo(series: readonly Status[], T: number, [lo, hi]: read
     .filter((m) => m.t >= lo && m.t <= hi)
     .map((m) => (m.end !== undefined && m.end > hi ? { ...m, end: hi } : m))
     .sort((a, b) => a.t - b.t);
+}
+
+/**
+ * The SC, VSC and red bands at or before T (`markersUpTo` from `lo`) as the leader's laps (#112): a band runs from the
+ * leader's lap at its start (lap 1 before the first lap) to the leader's lap at its end, an open band's end being T; a
+ * band that ended before lap 1 started is dropped. `leaderLap` is null outside `Race`-type sessions, so there are none.
+ */
+export function lapPeriods(
+  series: readonly Status[],
+  laps: readonly Pick<Lap, 'lap_number' | 'date_start'>[],
+  T: number,
+  lo: number,
+  type: string | null,
+): Period[] {
+  return markersUpTo(series, T, [lo, Number.POSITIVE_INFINITY]).flatMap((m) => {
+    if (m.kind === 'start' || m.kind === 'chequered') return [];
+    const to = leaderLap(laps, m.end ?? T, type);
+    return to === null ? [] : [{ kind: m.kind, from: leaderLap(laps, m.t, type) ?? 1, to }];
+  });
+}
+
+/** The feed's race-control messages that have a text (#112, the player's pit cycles); `date` is null without a Utc. */
+export function feedRaceControl(state: Obj): { date: string | null; message: string }[] {
+  return Object.values(view(state, 'RaceControlMessages')?.Messages ?? {}).flatMap((m) => {
+    if (m?.Message === undefined) return [];
+    const t = utc(m.Utc);
+    return [{ date: Number.isNaN(t) ? null : new Date(t).toISOString(), message: m.Message }];
+  });
 }
 
 /** The driver's latest stop at or before T: its out-lap's start, and the in-lap (a pit-out on lap 1 is no stop). */

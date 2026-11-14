@@ -39,8 +39,14 @@ export function deltaReason(
   return `No ${field === 'lap' ? 'lap' : field.toUpperCase()} time for ${who((l) => l?.[`${field}_ms` as const] === null)}`;
 }
 
-/** The driver's own best lap: the server colours exactly that lap purple or green (A§9). */
-const bestOf = (laps: readonly DeltaLap[]) => laps.find((l) => l.colour.lap === 'purple' || l.colour.lap === 'green');
+/**
+ * The driver's own best lap: its fastest lap coloured purple or green. A§9 colours exactly that lap; the player's
+ * progressive colours (A§11.3) colour each improvement, the last being the fastest (#112).
+ */
+const bestOf = (laps: readonly DeltaLap[]) =>
+  laps
+    .filter((l) => l.colour.lap === 'purple' || l.colour.lap === 'green')
+    .toSorted((a, b) => (a.lap_ms ?? 0) - (b.lap_ms ?? 0))[0];
 
 /** Lap 0 pairs the two best laps whatever their own numbers (E3). */
 const bestDeltas = (ref: DeltaLap | undefined, other: DeltaLap | undefined) =>

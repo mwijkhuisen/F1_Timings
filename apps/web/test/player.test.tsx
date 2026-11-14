@@ -1,5 +1,5 @@
 // @vitest-environment happy-dom
-import { Lap, type Live as LiveData, type Recordings, SessionDetail, view, weatherRow } from '@f1/contracts';
+import { Lap, type Live as LiveData, type Recordings, SessionDetail, Stints, view, weatherRow } from '@f1/contracts';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
@@ -1070,19 +1070,19 @@ describe('the Weather tab in the player', () => {
     chart.options = [];
   });
 
-  it('the view switch reads Tower · Laps · Order · Weather in a race; aria-pressed follows the click', () => {
+  it('the view switch reads Tower · Laps · Order · Compare · Stints · Weather in a race (#112); aria-pressed follows the click', () => {
     start(rows);
     const views = () => [...host.querySelectorAll('fieldset[aria-label="View"] button')];
-    expect(views().map((b) => b.textContent)).toEqual(['Tower', 'Laps', 'Order', 'Weather']);
+    expect(views().map((b) => b.textContent)).toEqual(['Tower', 'Laps', 'Order', 'Compare', 'Stints', 'Weather']);
     const pressed = () => views().map((b) => b.getAttribute('aria-pressed'));
-    expect(pressed()).toEqual(['true', 'false', 'false', 'false']);
+    expect(pressed()).toEqual(['true', 'false', 'false', 'false', 'false', 'false']);
     button('Weather');
-    expect(pressed()).toEqual(['false', 'false', 'false', 'true']);
+    expect(pressed()).toEqual(['false', 'false', 'false', 'false', 'false', 'true']);
     expect(host.querySelector('table[aria-label="Timing tower"]')).toBeNull();
     expect(air()).toBe('20.0–22.4 °C');
     expect(host.querySelector('.strip')).not.toBeNull(); // the strip stays on every tab
     button('Laps');
-    expect(pressed()).toEqual(['false', 'true', 'false', 'false']);
+    expect(pressed()).toEqual(['false', 'true', 'false', 'false', 'false', 'false']);
     expect(host.querySelector('table.laps')).not.toBeNull();
     expect(host.querySelector('dl.tiles.wx')).toBeNull();
     button('Tower');
@@ -1096,6 +1096,8 @@ describe('the Weather tab in the player', () => {
     expect([...host.querySelectorAll('fieldset[aria-label="View"] button')].map((b) => b.textContent)).toEqual([
       'Tower',
       'Laps',
+      'Compare',
+      'Stints',
       'Weather',
     ]);
     expect(host.textContent).not.toContain('Interval change');
@@ -1112,6 +1114,8 @@ describe('the Weather tab in the player', () => {
     expect(views.map((b) => [b.textContent, b.getAttribute('aria-pressed')])).toEqual([
       ['Tower', 'true'],
       ['Laps', 'false'],
+      ['Compare', 'false'],
+      ['Stints', 'false'],
       ['Weather', 'false'],
     ]);
     expect(host.querySelector('table[aria-label="Timing tower"]')).not.toBeNull();
@@ -2492,6 +2496,22 @@ describe('the tab in the URL (#100)', () => {
     expect(location.pathname).toBe('/replay/7');
   });
 
+  // #112: Compare and Stints are in the URL too.
+  it.each([
+    ['compare', 'Compare'],
+    ['stints', 'Stints'],
+  ])('?tab=%s opens the replay there, and a click on it writes &tab=', (tab, label) => {
+    history.replaceState(null, '', `/replay/7?tab=${tab}`);
+    play({ keepT: true });
+    expect(pressed()).toEqual([label]);
+    button('Pause');
+    button('Tower');
+    expect(location.search).toBe('?t=21:00:00');
+    button(label);
+    expect(pressed()).toEqual([label]);
+    expect(location.search).toBe(`?t=21:00:00&tab=${tab}`);
+  });
+
   it('/live neither reads nor writes the tab', () => {
     history.replaceState(null, '', '/live?tab=weather');
     play({ recording: open, start: 'live' });
@@ -2499,5 +2519,203 @@ describe('the tab in the URL (#100)', () => {
     button('Laps');
     expect(pressed()).toEqual(['Laps']);
     expect(location.pathname + location.search).toBe('/live?tab=weather');
+  });
+});
+
+// #112: Compare, Stints and the Laps tab's tiles and bands, from the stream's rows and the feed's status series at T.
+describe('Compare, Stints and the Laps tab in the player (#112)', () => {
+  const T = S + 3_600_000; // 20:00Z
+  const iso = (t: number) => new Date(t).toISOString();
+  /** Lap n starts at T − 240 s + 90 s × (n − 1), HAM 1 s behind VER: laps 1–3 start before T, lap 4 after it. */
+  const row = (d: number, n: number, extra: Partial<Lap> = {}): Lap => ({
+    ...lap(d, n),
+    date_start: iso(T - 240_000 + (n - 1) * 90_000 + (d === 44 ? 1_000 : 0)),
+    ...extra,
+  });
+  const upTo = (n: number) => [1, 44].flatMap((d) => Array.from({ length: n }, (_, i) => row(d, i + 1)));
+  const stints = (...s: [number, number, number, number, string][]) =>
+    Stints.parse(
+      s.map(([driver_number, stint_number, lap_start, lap_end, compound]) => ({
+        driver_number,
+        stint_number,
+        lap_start,
+        lap_end,
+        compound,
+        tyre_age_at_start: 0,
+      })),
+    );
+  /** The StatusSeries from [epoch ms, field, value] entries, keyed 0, 1, …; the race starts with lap 1. */
+  const state = (...entries: [number, 'SessionStatus' | 'TrackStatus', string][]) =>
+    raceState({
+      extra: {
+        DriverList: { '1': { Tla: 'VER', TeamColour: '3671C6' }, '44': { Tla: 'HAM', TeamColour: '27F4D2' } },
+        TimingData: { Lines: { '1': { Line: 1, Position: '1' }, '44': { Line: 2, Position: '2' } } },
+        SessionData: {
+          StatusSeries: Object.fromEntries(
+            [[T - 240_000, 'SessionStatus', 'Started'] as const, ...entries].map(([t, k, v], i) => [
+              String(i),
+              { Utc: iso(t), [k]: v },
+            ]),
+          ),
+        },
+      },
+    });
+  const snapshot = (t: number, st: object, laps: Lap[], rows: Stints) => {
+    last().emit('snapshot', { t, state: st, laps, stints: rows, weather: [] });
+    advance(250);
+  };
+  const begin = (st: object, laps: Lap[], rows: Stints) => {
+    render({ recording: ended, start: T, sessionKey: 9100, detail });
+    snapshot(T, st, laps, rows);
+  };
+  const seekTo = (t: number) => {
+    slide('Position', t);
+    advance(400);
+  };
+  const lanes = () =>
+    [...host.querySelectorAll('ol.stints > li')].map((li) => [
+      li.querySelector('.drv')?.textContent,
+      li.querySelectorAll('.seg').length,
+      li.querySelector('.stop')?.textContent,
+    ]);
+  const scHeads = () => [...host.querySelectorAll('table.laps thead th.band-sc')].map((th) => th.textContent);
+  const scLegend = () =>
+    [...host.querySelectorAll('ul.legend li')].map((li) => li.textContent).filter((t) => t?.startsWith('SC'));
+  // The charts' options as Compare sets them: the lap axis ends half a lap after the last lap, a band is a markArea.
+  type Drawn = { xAxis: { max: number }; series: { markArea?: { data: [{ name: string }, unknown][] } }[] };
+  const drawnSince = (mark: number) => chart.options.slice(mark) as unknown as Drawn[];
+  const lastLap = (o: Drawn) => o.xAxis.max - 0.5;
+  const scAreas = (o: Drawn) => o.series.flatMap((x) => x.markArea?.data ?? []).filter(([a]) => a.name === 'SC').length;
+  const compare = async () => {
+    const mark = chart.options.length;
+    button('Compare');
+    for (let i = 0; i < 5; i++) await act(async () => {}); // the chart's lazy import, then its first draw
+    const drawn = drawnSince(mark);
+    expect(drawn.length).toBeGreaterThan(0);
+    return drawn;
+  };
+  const cycles = () =>
+    [...host.querySelectorAll('section.card')].find((c) => c.querySelector('h2')?.textContent === 'Pit cycles');
+
+  beforeEach(() => {
+    chart.options = [];
+  });
+
+  it('shows only the rows at or before T on Stints and Compare: a laps event adds, a seek back takes away', async () => {
+    begin(state(), upTo(3), stints([1, 1, 1, 3, 'MEDIUM'], [44, 1, 1, 3, 'HARD']));
+    button('Stints');
+    expect(lanes()).toEqual([
+      ['VER', 1, '0 stops'],
+      ['HAM', 1, '0 stops'],
+    ]);
+    expect(Math.max(...(await compare()).map(lastLap))).toBe(3);
+    // VER pits at the end of lap 3: its stint 2 from lap 4, and the lap 4 rows.
+    last().emit('laps', {
+      t: T + 31_000,
+      laps: [row(1, 3, { is_pit_in: true }), row(1, 4, { is_pit_out: true }), row(44, 4)],
+      stints: stints([1, 2, 4, 4, 'HARD']),
+    });
+    const mark = chart.options.length;
+    advance(250);
+    for (let i = 0; i < 3; i++) await act(async () => {});
+    expect(drawnSince(mark).map(lastLap)).toContain(4);
+    button('Stints');
+    expect(lanes()).toEqual([
+      ['VER', 2, '1 stop'],
+      ['HAM', 1, '0 stops'],
+    ]);
+    // Back to T − 100 s: its snapshot holds laps 1–2, and the later stint and laps are gone from both tabs.
+    seekTo(T - 100_000);
+    snapshot(T - 100_000, state(), upTo(2), stints([1, 1, 1, 2, 'MEDIUM'], [44, 1, 1, 2, 'HARD']));
+    expect(lanes()).toEqual([
+      ['VER', 1, '0 stops'],
+      ['HAM', 1, '0 stops'],
+    ]);
+    expect(Math.max(...(await compare()).map(lastLap))).toBe(2);
+  });
+
+  it('shows no SC band before the series has one, on Laps, Stints and Compare; never asks /race-control or /stints', async () => {
+    const shown = async () => {
+      button('Laps');
+      const laps = scHeads();
+      button('Stints');
+      const legend = scLegend();
+      const charts = (await compare()).some((o) => scAreas(o) > 0);
+      return { laps, legend, charts };
+    };
+    const none = { laps: [], legend: [], charts: false };
+    const rows = stints([1, 1, 1, 3, 'MEDIUM'], [44, 1, 1, 3, 'HARD']);
+    begin(state(), upTo(3), rows);
+    expect(await shown()).toEqual(none);
+    // The SC comes out on lap 3 (the leader's lap 3 started at T − 60 s); a row change brings the `laps` event.
+    last().emit('delta', {
+      t: T + 5_000,
+      topic: 'SessionData',
+      data: { StatusSeries: { '1': { Utc: iso(T + 5_000), TrackStatus: 'SCDeployed' } } },
+    });
+    last().emit('laps', { t: T + 6_000, laps: [row(44, 3, { s1_ms: 30_000 })], stints: [] });
+    advance(250);
+    expect(await shown()).toEqual({ laps: ['3 SC'], legend: ['SC, lap 3'], charts: true });
+    // Back to T: the snapshot's series has no SC yet.
+    seekTo(T);
+    snapshot(T, state(), upTo(3), rows);
+    expect(await shown()).toEqual(none);
+    const urls = fetchStub.mock.calls.map(([url]) => String(url));
+    expect(urls.filter((u) => /race-control|stints/.test(u))).toEqual([]);
+    // The test client runs no query (`enabled: false`), so only the cache shows that no hook asked for them.
+    const keys = client
+      .getQueryCache()
+      .findAll()
+      .map((q) => q.queryKey[0]);
+    expect(keys).not.toContain('race-control');
+    expect(keys).not.toContain('stints');
+  });
+
+  it('the Laps tab: the Fastest lap tile skips a deleted lap; an open SC bands the laps up to the leader’s, growing', () => {
+    const laps = [
+      ...upTo(3).filter((l) => l.lap_number !== 2),
+      row(1, 2, { lap_ms: 79_000, deleted: true, deleted_reason: 'TRACK LIMITS' }),
+      row(44, 2, { lap_ms: 79_500 }),
+    ];
+    // The SC from T − 140 s, in the leader's lap 2, still out at T (the leader's lap 3).
+    begin(state([T - 140_000, 'TrackStatus', 'SCDeployed']), laps, []);
+    button('Laps');
+    const tile = $('dl.tiles[aria-label="Session bests"] > div');
+    expect([tile.querySelector('dt')?.textContent, tile.querySelector('.v')?.textContent]).toEqual([
+      'Fastest lap',
+      '1:19.500',
+    ]);
+    expect(tile.querySelector('.who')?.textContent).toBe('HAM · L2');
+    expect(scHeads()).toEqual(['2 SC', '3 SC']);
+    last().emit('laps', { t: T + 31_000, laps: [row(1, 4), row(44, 4)], stints: [] });
+    advance(250);
+    expect(scHeads()).toEqual(['2 SC', '3 SC', '4 SC']);
+  });
+
+  it('lists a pit cycle only once its after line is crossed (D1)', async () => {
+    // VER pits at the end of lap 2, HAM of lap 3 (its new stint is known): the cycle's after line is the crossing after
+    // lap 4, after T. Unsettled, it would read "not comparable (a line crossing is missing)".
+    const laps = [
+      row(1, 1),
+      row(1, 2, { is_pit_in: true }),
+      row(1, 3, { is_pit_out: true }),
+      row(44, 1),
+      row(44, 2),
+      row(44, 3, { is_pit_in: true }),
+    ];
+    const rows = stints([1, 1, 1, 2, 'MEDIUM'], [1, 2, 3, 3, 'HARD'], [44, 1, 1, 3, 'MEDIUM'], [44, 2, 4, 4, 'HARD']);
+    begin(state(), laps, rows);
+    await compare();
+    expect(cycles()?.textContent).toBe('Pit cycles' + 'No pit cycles within 3 laps for the picked drivers.');
+    // Lap 5 starts for both: the crossings after lap 4 are known.
+    last().emit('laps', {
+      t: T + 125_000,
+      laps: [row(1, 4), row(1, 5), row(44, 4, { is_pit_out: true }), row(44, 5)],
+      stints: stints([1, 2, 3, 5, 'HARD'], [44, 2, 4, 5, 'HARD']),
+    });
+    advance(250);
+    expect(cycles()?.querySelector('ul.cycles')?.textContent).toBe(
+      'VER pitted L2, HAM L3: VER 1.0 s ahead before, 1.0 s ahead after',
+    );
   });
 });

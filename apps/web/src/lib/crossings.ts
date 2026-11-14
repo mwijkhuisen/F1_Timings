@@ -151,7 +151,8 @@ export function pitCycles(
   laps: readonly PitLap[],
   stints: Stints,
   periods: readonly Period[],
-  rc: RaceControl,
+  /** Only the date and text are read: the player passes the feed's messages (#112). */
+  rc: readonly Pick<RaceControl[number], 'date' | 'message'>[],
 ): Cycle[] {
   const cross = new Map([a, b].map((d) => [d, crossings(laps.filter((l) => l.driver_number === d))]));
   const at = (d: number, n: number) => (n >= 1 ? (cross.get(d)?.[n - 1] ?? null) : null);

@@ -205,14 +205,21 @@ export const utc = (v: string | undefined) =>
   v === undefined ? Number.NaN : Date.parse(v.endsWith('Z') ? v : `${v}Z`);
 
 /**
- * What React renders: a new object per flush, so it is the key for everything derived from the state. `laps` is a new
- * array only when the rows changed; `weather` a new pair only when the weather rows changed.
+ * What React renders: a new object per flush, so it is the key for everything derived from the state. `laps` and
+ * `stints` are new arrays only when the rows changed (a snapshot or a `laps` event); `weather` a new pair only when the
+ * weather rows changed.
  */
-export type Snap = { rev: number; feed: Feed | undefined; laps: Lap[]; weather: { rows: Weather; laps: Lap[] } };
+export type Snap = {
+  rev: number;
+  feed: Feed | undefined;
+  laps: Lap[];
+  stints: Stint[];
+  weather: { rows: Weather; laps: Lap[] };
+};
 
 /** Holds the latest feed and notifies at most every `everyMs`, so a burst of deltas is one render. */
 export function createStore(everyMs = 250) {
-  let snap: Snap = { rev: 0, feed: undefined, laps: [], weather: { rows: [], laps: [] } };
+  let snap: Snap = { rev: 0, feed: undefined, laps: [], stints: [], weather: { rows: [], laps: [] } };
   let pending: Feed | undefined;
   let lapsDirty = false;
   let timer: ReturnType<typeof setTimeout> | undefined;
@@ -220,11 +227,12 @@ export function createStore(everyMs = 250) {
   const flush = () => {
     timer = undefined;
     const laps = lapsDirty && pending ? [...pending.laps.values()] : snap.laps;
+    const stints = lapsDirty && pending ? [...pending.stints.values()] : snap.stints;
     // The Weather tab's chart option is rebuilt only when the rows change (about once a minute), not on every `laps`
     // event (up to one a second in a race): its lap rows are those as of the last row change.
     const rows = pending?.weather ?? snap.weather.rows;
     const weather = rows === snap.weather.rows ? snap.weather : { rows, laps };
-    snap = { rev: snap.rev + 1, feed: pending, laps, weather };
+    snap = { rev: snap.rev + 1, feed: pending, laps, stints, weather };
     lapsDirty = false;
     for (const f of subs) f();
   };

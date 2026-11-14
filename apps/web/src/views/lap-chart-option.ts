@@ -149,8 +149,14 @@ export function lapChartOption(
   const below = (ms: number | null) => bounded && ms !== null && ms < min;
 
   const styles = lineStyles(drivers, tokens);
-  // The own best: the lap coloured purple or green, as DeltaTable's bestOf.
-  const ownBest = drivers.map((d) => mine.find((l) => l.driver_number === d.number && valid(l)));
+  // The own best: the fastest lap coloured purple or green, as DeltaTable's bestOf (one under A§9, each improvement
+  // under the player's progressive colours, #112).
+  const ownBest = drivers.map(
+    (d) =>
+      mine
+        .filter((l) => l.driver_number === d.number && valid(l))
+        .toSorted((a, b) => (a.lap_ms ?? 0) - (b.lap_ms ?? 0))[0],
+  );
 
   // showAllSymbol true on every series: the default 'auto' keeps only the symbols on labelled laps once a lap is
   // narrower than 1.5 symbols, which on a phone hid most deleted laps of a race (A§13). Every series has symbol
