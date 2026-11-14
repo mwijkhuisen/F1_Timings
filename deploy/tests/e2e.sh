@@ -29,6 +29,9 @@
 #  3d. The jolpica job (profile jobs) on the empty /srv/f1/jolpica: exit 1 with jolpica_done error bad_dump.
 #  3e. F1_REVISION (#98): the f1-server:ci image's ENV equals its revision label, and the f1-web:ci build
 #      embeds it under /srv/www/assets.
+#  3f. The playback stream through the real Caddyfile (#40): deploy/tests/sse-check.sh (a stub api in
+#      f1-server:ci, f1-web:ci on a throw-away network): uncompressed and on cadence, the control route
+#      compressed; three negative cases fail.
 #   4. Egress from api to a non-Cloudflare host is blocked.
 #  4b. f1-measure 60s 2 in the background; after 8 s `docker restart f1-live-1`, then SIGTERM: exit 0
 #      and the summary (the signal path), stats rows for db, api, caddy and live, the disk rows
@@ -253,6 +256,12 @@ grep -qx "F1_REVISION=$rev" <<<"$env_lines" || fail "f1-server:ci has no ENV F1_
 docker run --rm --entrypoint grep f1-web:ci -rlF "$rev" /srv/www/assets >/dev/null \
   || fail "f1-web:ci embeds no $rev under /srv/www/assets"
 proof "F1_REVISION=$rev is the f1-server:ci ENV and sits in the f1-web:ci bundle (/srv/www/assets)"
+
+# ------------------------------------------------------------------ 3f
+step "3f. The playback stream passes Caddy uncompressed and unbuffered (#40)"
+run "$tmp/sse" bash "$repo/deploy/tests/sse-check.sh"
+((rc == 0)) || fail "sse-check exited $rc"
+proof "$(tail -n 1 "$tmp/sse")"
 
 # ------------------------------------------------------------------ 4
 step "4. Egress from api to a non-Cloudflare host is blocked"
