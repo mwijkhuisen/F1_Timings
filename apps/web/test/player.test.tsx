@@ -11,7 +11,7 @@ import { fmtClock } from '../src/lib/time.ts';
 import { OFFLINE } from '../src/ui/ErrorView.tsx';
 import { Live, Replay } from '../src/views/Live.tsx';
 import { Player, type PlayerRecording } from '../src/views/Player.tsx';
-import { practiceState, raceState } from './feed-state.ts';
+import { practiceState, qualifyingState, raceState } from './feed-state.ts';
 import { fetched } from './laps.ts';
 
 // `view` (a zod parse of a topic) counts what the tower, the pit wall and the status series derive from the state.
@@ -1042,6 +1042,102 @@ describe('the pit wall in the player', () => {
     act(() => driver('CCC')?.click());
     expect(focused()).toEqual([]);
     expect(host.querySelectorAll('.tower [aria-pressed="true"]')).toHaveLength(0);
+  });
+});
+
+// #113: the Laps tab in a qualifying session, on the stream's lap rows up to T (A§13); D1: the feed adds the part each
+// line that is not KnockedOut has reached.
+describe('qualifying by phase in the player', () => {
+  const T = S + 3_600_000;
+  const qdetail = SessionDetail.parse({
+    ...detail,
+    session: { ...detail.session, session_key: 9102, type: 'Qualifying', name: 'Qualifying' },
+  });
+  // Lap rows of the phase: lap_ms 80 s + `ms` of the driver's lap, so every time on the page is its own string.
+  const row = (driver: number, n: number, phase: number, ms: number) => ({
+    ...lap(driver, n),
+    lap_ms: ms,
+    quali_phase: phase,
+  });
+  const q1 = [row(1, 1, 1, 80_501), row(2, 1, 1, 80_702)];
+  const q2 = [row(1, 2, 2, 79_123), row(2, 2, 2, 79_456)];
+  // SessionPart `part`; `lines` are the TimingData lines of drivers 1 and 2.
+  const state = (part: number, lines: object = { '1': { Line: 1 }, '2': { Line: 2 } }) =>
+    qualifyingState({ extra: { TimingData: { SessionPart: part, Lines: lines } } });
+  const heads = () =>
+    [...host.querySelectorAll('table[aria-label="Qualifying by phase"] thead th')].map((x) => x.textContent);
+  const pressedButtons = () => [...host.querySelectorAll('button[aria-pressed="true"]')].map((b) => b.textContent);
+  const tiles = () => [...host.querySelectorAll('dl[aria-label="Qualifying"] dt')].map((x) => x.textContent);
+  const show = (st: object, laps: object[], props: Partial<Parameters<typeof Player>[0]> = { sessionKey: 9102 }) => {
+    render({ recording: ended, start: T, detail: qdetail, ...props });
+    last().emit('snapshot', { t: T, state: st, laps, stints: [] });
+    advance(250);
+    button('Laps');
+  };
+
+  it('shows the tiles and By phase on the stream rows, and a seek back drops the later phase', () => {
+    show(state(2), [...q1, ...q2]);
+    expect(pressedButtons()).toEqual(['Laps', 'By phase']);
+    expect(heads()).toEqual(['Driver', 'Q1', 'Q2', 'To fastest', 'Timed laps']);
+    expect(tiles()).toEqual(['Fastest in Q2', 'Q1 cut-off (P2)']);
+    expect(host.textContent).toContain('1:19.123');
+    expect(host.querySelector('.tiles[aria-label="Session"]')).toBeNull(); // no SessionTiles: the API holds the whole session
+
+    const earlier = T - 1_200_000;
+    slide('Position', earlier);
+    advance(400);
+    expect(atOf(last())).toBe(String(earlier));
+    last().emit('snapshot', { t: earlier, state: state(1), laps: q1, stints: [] });
+    advance(250);
+    expect(heads()).toEqual(['Driver', 'Q1', 'To fastest', 'Timed laps']);
+    expect(host.textContent).not.toContain('Q2');
+    expect(host.textContent).not.toMatch(/1:19\./);
+    expect(host.textContent).toContain('1:20.501');
+  });
+
+  it('counts a line that is not KnockedOut as through once SessionPart moved on; Every lap shows the lap table', () => {
+    const lines = { '1': { Line: 1 }, '2': { Line: 2, KnockedOut: true } };
+    show(state(2, lines), q1);
+    expect(tiles()).toEqual(['Fastest in Q2', 'Q1 cut-off (P1)']);
+    expect($('dl[aria-label="Qualifying"]').textContent).toContain('1:20.501AAA'); // the cut-off is car 1's best
+    const rowOf = (tla: string) =>
+      [...host.querySelectorAll('table.quali tbody tr')].find((tr) => tr.querySelector('th')?.textContent === tla);
+    expect(rowOf('AAA')?.textContent).not.toContain('Knocked out in Q1');
+    expect(rowOf('BBB')?.textContent).toContain('Knocked out in Q1'); // KnockedOut
+    expect(host.querySelector('table.laps')).toBeNull();
+    button('Every lap');
+    expect(host.querySelector('table[aria-label="Qualifying by phase"]')).toBeNull();
+    expect(host.querySelector('table.laps')).not.toBeNull();
+  });
+
+  it('a later TimingData switch and the next laps event update the table', () => {
+    show(state(1), q1);
+    expect(heads()).toEqual(['Driver', 'Q1', 'To fastest', 'Timed laps']);
+    last().emit('delta', {
+      t: T + 1_000,
+      topic: 'TimingData',
+      data: { SessionPart: 2, Lines: { '2': { KnockedOut: true } } },
+    });
+    last().emit('laps', { t: T + 1_500, laps: [...q1, row(1, 2, 2, 79_123)], stints: [] });
+    advance(250);
+    expect(heads()).toEqual(['Driver', 'Q1', 'Q2', 'To fastest', 'Timed laps']);
+    expect(tiles()).toEqual(['Fastest in Q2', 'Q1 cut-off (P1)']);
+  });
+
+  it('leaves the feed out while it shows another session', () => {
+    show(state(2, { '1': { Line: 1 }, '2': { Line: 2, KnockedOut: true } }), q1, { sessionKey: 9999 });
+    // The feed's SessionPart 2 would make Q2 a phase; the laps alone are Q1 only.
+    expect(heads()).toEqual(['Driver', 'Q1', 'To fastest', 'Timed laps']);
+  });
+
+  it('keeps the plain lap table in a race', () => {
+    render({ recording: ended, start: T, detail, sessionKey: 9100 });
+    last().emit('snapshot', { t: T, state: raceState(), laps: [lap(1, 1)], stints: [] });
+    advance(250);
+    button('Laps');
+    expect(host.querySelector('table.laps')).not.toBeNull();
+    expect(host.textContent).not.toContain('By phase');
+    expect(host.querySelector('dl[aria-label="Qualifying"]')).toBeNull();
   });
 });
 

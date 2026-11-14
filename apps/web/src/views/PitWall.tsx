@@ -1,5 +1,6 @@
 import { useEffect, useReducer, useState } from 'react';
 import {
+  type Best,
   type Clock,
   type Fastest,
   fmtLeft,
@@ -99,16 +100,18 @@ const FILTERS: [Kind | 'all', string][] = [
   ['limits', 'Track limits'],
 ];
 
-/** The side panel: race control with its filter, the cars within a second (races only) and the fastest lap so far. */
+/** The side panel: race control with its filter, the cars within a second (races only) and the bests so far. */
 export function Panel({
   rc,
   pairs,
   fastest,
+  bests,
   race,
 }: {
   rc: RaceControl;
   pairs: Pair[];
   fastest: Fastest | undefined;
+  bests: Best[];
   race: boolean;
 }) {
   const [filter, setFilter] = useState<Kind | 'all'>('all');
@@ -163,20 +166,41 @@ export function Panel({
         </section>
       )}
       <section className="card">
-        <h2>Fastest lap so far</h2>
-        {fastest ? (
-          <p className="rows">
-            <span>
-              <span className="t-purple">
-                {fastest.value}
-                <span className="vh">, overall best</span>
-              </span>{' '}
-              <b>{fastest.driver.acronym}</b>
-            </span>
-            {fastest.lap !== undefined && <span className="muted">L{fastest.lap}</span>}
-          </p>
+        <h2>Bests so far</h2>
+        {fastest || bests.length > 0 ? (
+          <ul className="rows">
+            {fastest && (
+              <li>
+                <span>
+                  Lap <b>{fastest.driver.acronym}</b>
+                </span>
+                <span>
+                  <span className="t-purple">
+                    {fastest.value}
+                    <span className="vh">, overall best</span>
+                  </span>
+                  {fastest.lap !== undefined && <span className="muted"> L{fastest.lap}</span>}
+                </span>
+              </li>
+            )}
+            {bests.map((b) => (
+              <li key={b.label}>
+                <span>
+                  {b.label} <b>{b.driver.acronym}</b>
+                </span>
+                {b.speed ? (
+                  <span>{b.value}</span>
+                ) : (
+                  <span className="t-purple">
+                    {b.value}
+                    <span className="vh">, overall best</span>
+                  </span>
+                )}
+              </li>
+            ))}
+          </ul>
         ) : (
-          <p className="muted">No lap time yet.</p>
+          <p className="muted">No times yet.</p>
         )}
       </section>
     </aside>

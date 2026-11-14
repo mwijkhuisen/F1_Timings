@@ -1,4 +1,4 @@
-import { type Obj, type SessionDetail, view } from '@f1/contracts';
+import { type Laps as LapRows, type Obj, type SessionDetail, view } from '@f1/contracts';
 import {
   type CSSProperties,
   memo,
@@ -14,6 +14,7 @@ import {
 import { markStale } from '../lib/api.ts';
 import { closingAt } from '../lib/crossings.ts';
 import {
+  bestsSoFar,
   fastestSoFar,
   fmtLeft,
   LIGHT,
@@ -24,6 +25,7 @@ import {
   stripOf,
   withinASecond,
 } from '../lib/pitwall.ts';
+import { feedReached, qualiPhases } from '../lib/quali.ts';
 import {
   lastStop,
   type Mark,
@@ -48,10 +50,12 @@ import {
 import { fmtClock, parseT } from '../lib/time.ts';
 import { KIND_LABEL, KIND_NAME, type Kind } from '../lib/track.ts';
 import { ErrorBoundary, ErrorView, OFFLINE } from '../ui/ErrorView.tsx';
+import { QualiSwitch } from './LapsTab.tsx';
 import { LapTable } from './LapTable.tsx';
 import { Order } from './Order.tsx';
 import { Panel, Strip, useTick } from './PitWall.tsx';
 import { RainMapCard } from './RainMap.tsx';
+import { QualiTiles } from './Tiles.tsx';
 import { driverOf, gridOf, Tower, towerRows } from './Tower.tsx';
 import { WeatherPanels } from './Weather.tsx';
 
@@ -62,9 +66,9 @@ import { WeatherPanels } from './Weather.tsx';
 // paused T and closes on its snapshot. Only the clock line, the seek bar, the Back to chips and the strip's LEFT cell
 // (and, on the Weather tab, the rain map) tick each second, from values derived per flush (no state parsing per tick);
 // the tower, the pit wall and everything else derived from the state render on a store flush. The tabs are Tower ·
-// Laps · Order (races) · Weather, each in its own error boundary, the replay's in the URL (`?tab=`, #100); the
-// Weather tab shows the feed's weather rows up to T (P5b), redrawn only when a row arrives, and the
-// rain map's frames up to T (P5c).
+// Laps (in qualifying By phase | Every lap, #113) · Order (races) · Weather, each in its own error boundary, the
+// replay's in the URL (`?tab=`, #100); the Weather tab shows the feed's weather rows up to T (P5b), redrawn only when a
+// row arrives, and the rain map's frames up to T (P5c).
 
 /** A SessionDetail whose drivers and results come from the stream: OpenF1 has no drivers during a live session. */
 function streamDetail(detail: SessionDetail, state: Obj): SessionDetail {
@@ -100,6 +104,29 @@ function streamDetail(detail: SessionDetail, state: Obj): SessionDetail {
 }
 
 const Laps = memo(LapTable);
+
+/**
+ * The Laps tab: the lap table, and in qualifying the session page's tiles and By phase | Every lap on the stream's rows
+ * (#113). No SessionTiles or race-control bands: the API holds the whole session, T does not bound it.
+ */
+function PlayerLaps({ detail, laps, reached }: { detail: SessionDetail; laps: LapRows; reached: Map<number, number> }) {
+  const qualifying = detail.session.type === 'Qualifying';
+  const quali = useMemo(
+    () => (qualifying ? qualiPhases(laps, detail.results, reached) : null),
+    [qualifying, laps, detail.results, reached],
+  );
+  const table = <Laps detail={detail} laps={laps} />;
+  return quali ? (
+    <>
+      <QualiTiles detail={detail} quali={quali} />
+      <QualiSwitch detail={detail} quali={quali}>
+        {table}
+      </QualiSwitch>
+    </>
+  ) : (
+    table
+  );
+}
 
 export const MAX_DELAY = 120;
 const DELAY_KEY = 'f1.delay';
@@ -769,8 +796,21 @@ export function Player({
   const state = feed?.state;
   // Rebuilt only when the lap rows change (a snapshot or a `laps` event), so the lap table skips deltas.
   const lapTable = useMemo(
-    () => detail && feed && <Laps detail={streamDetail(detail, feed.state)} laps={snap.laps} />,
-    [detail, feed, snap.laps],
+    () =>
+      detail &&
+      feed && (
+        <PlayerLaps
+          detail={streamDetail(detail, feed.state)}
+          laps={snap.laps}
+          // The feed's knock-outs count once it shows this recording's session (as `wall` waits).
+          reached={
+            sessionKey === undefined || view(feed.state, 'SessionInfo')?.Key === sessionKey
+              ? feedReached(feed.state)
+              : new Map()
+          }
+        />
+      ),
+    [detail, feed, snap.laps, sessionKey],
   );
   // The series is parsed once per flush; the ticking bar only filters it at T.
   const series = useMemo(() => (snap.feed ? statusSeries(snap.feed.state) : []), [snap]);
@@ -805,6 +845,7 @@ export function Player({
       rc: raceControl(s),
       pairs: withinASecond(s),
       fastest: fastestSoFar(s),
+      bests: bestsSoFar(s),
     };
   }, [snap, sessionKey]);
   // The tab shown: Order falls back to the Tower when the session is not (or no longer) a race.
@@ -967,7 +1008,7 @@ export function Player({
         ) : wall ? (
           <div className="pitwall">
             <div>{tower}</div>
-            <Panel rc={wall.rc} pairs={wall.pairs} fastest={wall.fastest} race={wall.race} />
+            <Panel rc={wall.rc} pairs={wall.pairs} fastest={wall.fastest} bests={wall.bests} race={wall.race} />
           </div>
         ) : (
           tower
