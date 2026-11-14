@@ -1,10 +1,11 @@
 #!/usr/bin/env bash
 # sse-check (CI: ci / deploy, e2e step 3f; #40, A§14.2). The real f1-web:ci Caddyfile in front of a stub
 # api (node from f1-server:ci) on a throw-away Docker network. Three assertions on a playback stream
-# of 6 events, 1 s apart: (1) 200, text/event-stream and no Content-Encoding; (2) each event arrives
-# within 500 ms of its send time (unbuffered); (3) the 2 KB JSON control route is still compressed.
-# Then three negative cases that must fail by their own assertion: encode without the @compress
-# matcher (1), the matcher widened to every route (3), and a stub that buffers the stream (2).
+# of 6 events, 1 s apart: (1) no Content-Encoding; (2) each event arrives within 500 ms of its send
+# time (unbuffered); (3) the 2 KB JSON control route is still compressed. Fail 0 is a route that is
+# not a 200 of its type: a run that proves nothing. Then three negative cases that must fail by their
+# own assertion, never by 0: encode without the @compress matcher (1), the exclusion widened to every
+# route so that nothing is compressed (3), and a stub that buffers the stream (2).
 # The stub sends Cache-Control: no-cache, never no-transform: Caddy 2.11's encode skips a response
 # with no-transform (the real api sends it), which would hide a missing matcher. So the check tests
 # the matcher alone. The stub's JSON route is over encode's 512 B minimum_length, with a Content-Length.
@@ -70,7 +71,7 @@ start() {
   docker rm -fv "$web" >/dev/null 2>&1 || true
   docker run -d --name "$web" --network "$net" --sysctl net.ipv4.ip_unprivileged_port_start=80 \
     -p 127.0.0.1::80 "${mount[@]}" f1-web:ci >/dev/null
-  port=$(docker port "$web" 80/tcp | head -n 1)
+  port=$(docker port "$web" 80/tcp | head -n 1) || true # a caddy that already exited: its logs below
   port=${port##*:}
   # The control route is a 502 until the stub listens.
   for _ in $(seq 20); do
@@ -78,12 +79,14 @@ start() {
     [[ $(docker inspect -f '{{.State.Running}}' "$web") == true ]] || break
     sleep 1
   done
-  docker logs "$web" >&2 || true
-  echo "sse-check: caddy did not start" >&2
+  docker logs "$web" 2>&1 | sed 's/^/caddy| /' >&2 || true
+  docker logs "$api" 2>&1 | sed 's/^/stub| /' >&2 || true
+  echo "sse-check: caddy did not start, or the stub does not answer" >&2
   exit 1
 }
 
-# check <stream path>: one "fail <n>: <reason>" line per failed assertion, else one "pass: <evidence>" line.
+# check <stream path>: one "fail <n>: <reason>" line per failed assertion (0: a route is not a 200 of
+# its type), else one "pass: <evidence>" line.
 check() {
   local url=http://127.0.0.1:$port head enc ev ctl fails=0
   rm -f "$tmp/stream.head" "$tmp/stream.lines"
@@ -91,9 +94,12 @@ check() {
   curl -sS -N --max-time 20 -H 'Accept-Encoding: gzip, zstd' -D "$tmp/stream.head" "$url$1" 2>/dev/null |
     while IFS= read -r line; do printf '%s %s\n' "$EPOCHREALTIME" "$line"; done >"$tmp/stream.lines" 2>/dev/null || true
   head=$(tr -d '\r' <"$tmp/stream.head" 2>/dev/null || true)
-  enc=$(grep -i '^content-encoding:' <<<"$head" || true)
-  if [[ ${head%%$'\n'*} != HTTP/*' 200'* ]] || ! grep -qi '^content-type: text/event-stream' <<<"$head" || [[ -n $enc ]]; then
-    echo "fail 1: the stream is not a plain 200 text/event-stream: '${head%%$'\n'*}', '${enc:-no Content-Encoding}'"
+  if [[ ${head%%$'\n'*} != HTTP/*' 200'* ]] || ! grep -qi '^content-type: text/event-stream' <<<"$head"; then
+    echo "fail 0: the stream is not a 200 text/event-stream: '${head%%$'\n'*}'"
+    fails=1
+  fi
+  if enc=$(grep -i '^content-encoding:' <<<"$head"); then
+    echo "fail 1: the stream has $enc"
     fails=1
   fi
   # A buffered event is at least 1 s late; 500 ms is slack for a loaded runner.
@@ -112,14 +118,18 @@ check() {
     fails=1
   fi
   ctl=$(curl -sS -o /dev/null -D - --max-time 5 -H 'Accept-Encoding: gzip, zstd' "$url/api/v1/control" | tr -d '\r' || true)
-  if [[ ${ctl%%$'\n'*} != HTTP/*' 200'* ]] || ! enc=$(grep -ioE '^content-encoding: (zstd|gzip)' <<<"$ctl"); then
-    echo "fail 3: the control route is not compressed: '${ctl%%$'\n'*}'"
+  if [[ ${ctl%%$'\n'*} != HTTP/*' 200'* ]]; then
+    echo "fail 0: the control route is not a 200: '${ctl%%$'\n'*}'"
+    fails=1
+  elif ! enc=$(grep -ioE '^content-encoding: (zstd|gzip)' <<<"$ctl"); then
+    echo "fail 3: the control route is not compressed"
     fails=1
   fi
   ((fails)) || echo "pass: the stream has no Content-Encoding, $ev; the control route has ${enc,,}"
 }
 
-# negative <label> <fail n> <Caddyfile|-> <stream path>: check must fail, naming that assertion.
+# negative <label> <fail n> <Caddyfile|-> <stream path>: check must fail on that assertion, with both
+# routes up (no fail 0: a 404 or a 502 would fail any assertion for the wrong reason).
 negative() {
   local label=$1 n=$2 out
   start "$3"
@@ -127,21 +137,14 @@ negative() {
     echo "sse-check: the negative case passed: the check does not catch $label" >&2
     exit 1
   fi
-  [[ $out == *"fail $n:"* ]] || {
+  [[ $out == *"fail $n:"* && $out != *"fail 0:"* ]] || {
     echo "sse-check: the negative case ($label) failed for another reason: $out" >&2
     exit 1
   }
   echo "sse-check: the negative case ($label) fails as expected: ${out//$'\n'/ | }"
 }
 
-# The mutants come from the image's own file, so they derive from exactly what runs.
-docker run --rm --entrypoint cat f1-web:ci /etc/caddy/Caddyfile >"$tmp/Caddyfile"
-if ! grep -qxF $'\t@compress not path_regexp ^/api/v1/playback/[0-9]+/stream$' "$tmp/Caddyfile" ||
-  ! grep -qxF $'\tencode @compress zstd gzip' "$tmp/Caddyfile"; then
-  echo "sse-check: the Caddyfile's @compress lines changed: update this script" >&2
-  exit 1
-fi
-# mutant <name> <sed expression>…
+# mutant <name> <sed expression>…: a copy of the image's own Caddyfile, so it derives from exactly what runs.
 mutant() {
   sed "${@:2}" "$tmp/Caddyfile" >"$tmp/$1"
   ! cmp -s "$tmp/Caddyfile" "$tmp/$1" || {
@@ -150,14 +153,16 @@ mutant() {
   }
   chmod 0644 "$tmp/$1" # uid 62532 reads the bind mount
 }
-mutant nomatcher -e '/^[[:space:]]*@compress /d' -e 's/encode @compress /encode /'
-mutant widened -e 's|@compress not path_regexp .*|@compress not path_regexp ^/|'
 
+# The real check first: a regression in the Caddyfile shows as its failed assertion, not as a mutation error.
 start -
 out=$(check /api/v1/playback/1/stream)
 echo "sse-check: $out"
 [[ $out == pass* ]] || exit 1
+docker run --rm --entrypoint cat f1-web:ci /etc/caddy/Caddyfile >"$tmp/Caddyfile"
+mutant nomatcher -e '/^[[:space:]]*@compress /d' -e 's/encode @compress /encode /'
+mutant widened -e 's|@compress not path_regexp .*|@compress not path_regexp ^/|'
 negative "encode without the matcher" 1 "$tmp/nomatcher" /api/v1/playback/1/stream
-negative "the matcher widened to every route" 3 "$tmp/widened" /api/v1/playback/1/stream
+negative "the exclusion widened to every route (nothing compressed)" 3 "$tmp/widened" /api/v1/playback/1/stream
 negative "a buffering upstream" 2 - /api/v1/playback/2/stream
 echo "sse-check: ${out}; 3 negative cases fail as expected"
