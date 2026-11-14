@@ -29,6 +29,9 @@
 #  3d. The jolpica job (profile jobs) on the empty /srv/f1/jolpica: exit 1 with jolpica_done error bad_dump.
 #  3e. F1_REVISION (#98): the f1-server:ci image's ENV equals its revision label, and the f1-web:ci build
 #      embeds it under /srv/www/assets.
+#  3f. The logs (#108): requests with a JWT-shaped Cf-Access-Jwt-Assertion (refused before any certs
+#      fetch) and a marked query leave neither, nor the path, in caddy's or the api's log; the api
+#      logs the 401's request line with its route pattern.
 #   4. Egress from api to a non-Cloudflare host is blocked.
 #  4b. f1-measure 60s 2 in the background; after 8 s `docker restart f1-live-1`, then SIGTERM: exit 0
 #      and the summary (the signal path), stats rows for db, api, caddy and live, the disk rows
@@ -253,6 +256,23 @@ grep -qx "F1_REVISION=$rev" <<<"$env_lines" || fail "f1-server:ci has no ENV F1_
 docker run --rm --entrypoint grep f1-web:ci -rlF "$rev" /srv/www/assets >/dev/null \
   || fail "f1-web:ci embeds no $rev under /srv/www/assets"
 proof "F1_REVISION=$rev is the f1-server:ci ENV and sits in the f1-web:ci bundle (/srv/www/assets)"
+
+# ------------------------------------------------------------------ 3f
+step "3f. The logs: the api's request line, and no Access JWT, query or path in caddy's or the api's log"
+# JWT-shaped, but no RS256 header: the api refuses it before any certs fetch, so nothing leaves the runner.
+jwt=eyJe2e108.marker.sig
+for path in /api/v1/sessions/1/laps /api/v1/e2e108path /healthz /assets/e2e108path.js; do
+  curl -s -o /dev/null --max-time 5 -H "Cf-Access-Jwt-Assertion: $jwt" "http://127.0.0.1:8180$path?q=e2e108query" \
+    || fail "curl $path"
+done
+docker logs f1-caddy-1 >"$tmp/caddy.log" 2>&1
+docker logs f1-api-1 >"$tmp/api.log" 2>&1
+for s in caddy api; do
+  ! grep -qF -e "$jwt" -e e2e108 "$tmp/$s.log" || fail "the $s log holds the request's JWT, query or path"
+done
+grep -qF '"method":"GET","route":"/api/v1/sessions/:key/laps","status":401' "$tmp/api.log" \
+  || fail "the api logged no request line for the 401 on /api/v1/sessions/:key/laps"
+proof "4 requests with a JWT-shaped Cf-Access-Jwt-Assertion and ?q=<marker>: neither the JWT nor the marked path or query is in caddy's or the api's log; the api's request line for the 401 names the route /api/v1/sessions/:key/laps"
 
 # ------------------------------------------------------------------ 4
 step "4. Egress from api to a non-Cloudflare host is blocked"
