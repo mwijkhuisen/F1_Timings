@@ -47,7 +47,7 @@ services:
   # volume and reads the three login passwords with pg_read_file, so db holds their gids too.
   db:
     <<: *hardening
-    image: postgres:18.6-trixie@sha256:5a5a84b19854a9ffaa54082c166ff4ec27473a361e496e5ea167f298f2da9722
+    image: postgres:18.6-trixie@sha256:e3d24f6906d0760bf4da0dae872415391ededefad23fd471c47dc53b0ddf3c42
     user: "62532:62532"
     group_add: ["62001", "62002", "62003", "62004"]
     environment:
