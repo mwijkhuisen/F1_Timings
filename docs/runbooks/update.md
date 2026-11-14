@@ -16,7 +16,9 @@ Both timers are enabled by the owner after install (`docs/runbooks/install.md`, 
 | `/srv/f1/state/failed.env` | the pair that last failed; never retried until you remove the file |
 | `/srv/f1/state/candidate.env` | the pair being deployed (only while a run is going) |
 | `/srv/f1/state/held-since` | while a hold lasts: the epoch of its first deferral (its mtime is the last one); removed when a deploy starts |
-| `/srv/f1/state/disk` | `<UTC time> <disk use % of /srv/f1>`, written by `f1-tick` |
+| `/srv/f1/state/disk` | `<UTC time> <free bytes of /srv/f1> <free bytes of Docker's data root>`, written by `f1-tick` |
+| `/srv/f1/state/restarts` | `<name> <rounds>` lines: the containers `f1-tick` restarted in its last round and in how many rounds in a row |
+| `/srv/f1/state/alert-<code>` | the token of the last host alert of that code (pair, held-since epoch, looping names, session key or `low`); remove it to alert again (below) |
 | `/srv/f1/state/live/` | the only part of the state directory the `live` container sees (as `/srv/f1/state`); `f1tv-token` lives here. `62532:62532 0700`; `/srv/f1/state` itself stays root `0700` |
 | `/srv/f1/live/<session_key>-<startedAt>/` | one recording: `feed.jsonl` (current segment), `feed-<ms>.jsonl.gz` (finished ones), `snapshots/<ms>.json.gz`. `62532:62532`, files `0600` |
 | `/srv/f1/state/measure-<UTC>.tsv` | the samples of one `f1-measure` run, root `0600` (`docs/runbooks/weekend.md`) |
@@ -39,15 +41,17 @@ sudo cat /srv/f1/state/current.env
 | `pulling … failed: trying again next run` | GHCR unreachable, or the packages are private | 0 |
 | `another f1-update or f1-install is running` | the lock is held | 0 |
 | `server revision <a> and web revision <b> differ; waiting for the release to finish` | the two `:main` images come from different commits (the release is half pushed); drills skip this check | 0 |
-| `skipping known-bad … ; rm /srv/f1/state/failed.env to retry` | this pair already failed | 0 |
+| `skipping known-bad … ; rm /srv/f1/state/failed.env to retry` | this pair already failed. Alerts `known_bad`, once per pair (not in a drill) | 0 |
 | `live is recording (session N): deploy deferred to a later run` | `recorder_status` is not `idle`, under 5 minutes old and not over 1 minute in the future, so a deploy would end the recording (`N` is `-` when it names no session); the next run retries. A drill is held too. It fails open: an unreachable db or a stale row does not hold. To deploy during a recording anyway: `sudo docker stop f1-live-1` (closes it, `complete = f`), then `sudo systemctl start f1-update` | 0 |
-| `error: deploys held for over 14 h (session N, since <UTC time>): deploying anyway; check recorder_status` | the hold lasted 14 h without a gap (a stuck row, or a recorder that is broken but still ticks); the deploy goes ahead. Look at `recorder_status` and `docker logs f1-live-1` | continues |
+| `error: deploys held for over 14 h (session N, since <UTC time>): deploying anyway; check recorder_status` | the hold lasted 14 h without a gap (a stuck row, or a recorder that is broken but still ticks); the deploy goes ahead. Alerts `hold_14h <session>`, once per hold (not in a drill). Look at `recorder_status` and `docker logs f1-live-1` | continues |
 | `warning: cannot read recorder_status: deploying without the hold` | the query failed (no db container, db down or wedged, a renamed column); the run deploys without the hold | continues |
 | `error: table inet f1 is not loaded: no deploy without the f1 firewall (systemctl restart f1-firewall)` | the firewall table is missing; nothing deployed | 1 |
 | `error: cannot resolve the images (--server …, --web …)` | a drill ref could not be pulled (a ref with a registry host is always pulled and recorded by digest) | 1 |
 | `smoke test failed: …` (two forms, below), `deploy of … failed: rolling back to …`, `rolled back to …` | the new pair failed migrate, `up` or the smoke test; the old pair runs again | 1 |
 | `first deploy failed: … (fix the cause, then rm …)` | no previous deploy to go back to; containers left as they are | 1 |
 | `error: the rollback to … failed its smoke test too: the site is down` | the old pair does not answer either | 1 |
+
+Every run that exits 1 also fails `f1-update.service`, which alerts `unit_failed f1-update.service` through `f1-ingest/fail` ("Alerts from the host", below). That holds when the timer or `systemctl start f1-update` runs it, not for `sudo f1-update …` typed in a shell (a drill).
 
 The smoke test is `curl http://127.0.0.1:8180/healthz` through caddy, api and db, then every f1 container must be healthy (none unhealthy, starting or restarting), for up to `F1_SMOKE_TIMEOUT` seconds (default 120). Two failure lines:
 
@@ -290,20 +294,58 @@ Every 10 minutes (`:05 :15 …`). It runs, in this order:
 
 1. `nft list table inet f1`; if it is missing: `error: the f1 firewall (table inet f1) is missing: loading /etc/f1/nftables-f1.conf`, then the table is loaded again. If loading fails, f1-tick fails closed: it stops every f1 container, writes the marker `/srv/f1/state/firewall-stopped`, logs `error: loading /etc/f1/nftables-f1.conf failed: the f1 stack is stopped until the firewall loads` and exits 1. Once the table loads again (fix the cause, `sudo systemctl restart f1-firewall`), the next `f1-tick` or `f1-update` logs `table inet f1 is loaded again: starting the f1 stack (/srv/f1/state/current.env)` and starts the stack.
 2. `f1-resolvers --quiet`: refreshes the DNS allowlist (`inet f1 resolvers4`) from `/etc/resolv.conf`.
-3. Under `f1-update`'s lock: `restarting unhealthy container f1-<service>-1` for every f1 container Docker reports unhealthy (Docker only restarts a container that exited).
-   While `f1-update` or `f1-install` holds the lock, f1-tick logs `f1-update or f1-install is running: no container restarts this round` and skips this step.
-4. `disk use of /srv/f1: N%` and the file `/srv/f1/state/disk`.
+3. Under `f1-update`'s lock: `restarting unhealthy container f1-<service>-1` for every f1 container Docker reports unhealthy (Docker only restarts a container that exited), and the file `/srv/f1/state/restarts`. A container restarted in 3 rounds in a row alerts `restart_loop <name>`.
+   While `f1-update` or `f1-install` holds the lock, f1-tick logs `f1-update or f1-install is running: no container restarts this round` and skips this step. `warning: cannot write /srv/f1/state/restarts` means the file could not be written (the streak count starts again).
+4. The recorder watch: `/etc/f1/recorder-watch.sql` in a read-only transaction in `f1-db-1`, as `f1_api` (20 s at most, and a 15 s `statement_timeout` in the server). It alerts `recorder_missing`, `recorder_stale` or `login_failed` with the session key. It fails open: `warning: cannot run the recorder watch: no recorder alert this round` (no db container, a db that does not answer in time, a missing file) does not fail the run.
+5. `free disk: /srv/f1 N GiB, Docker data root <dir> N GiB` and the file `/srv/f1/state/disk` (written only when both are readable). Under 20 GiB on either alerts `disk_low`, even when the other cannot be read.
+
+An alert that f1-tick sends shows in its journal as an `f1-alert:` line (`alert_sent <body>`, below). `warning: cannot write the alert state /srv/f1/state/alert-<code>` (any script) means the token was not saved, so the same alert is sent again on the next run.
 
 ```bash
 sudo journalctl -u f1-tick -n 20 --no-pager
 sudo cat /srv/f1/state/disk
+sudo cat /srv/f1/state/restarts
 sudo nft list set inet f1 resolvers4
 sudo f1-resolvers
 ```
 
-Expected: `disk` holds one line such as `2026-10-29T10:05:03Z 7`; `f1-resolvers` logs `f1 container DNS allowed to N IPv4 resolver(s) from /etc/resolv.conf` (or the systemd-resolved file when `/etc/resolv.conf` has only a loopback stub). A line `warning: no IPv4 resolver … f1 containers have no DNS until the next f1-tick` means the set is empty.
+Expected: `disk` holds one line such as `2026-11-14T10:05:03Z 412345678901 398765432109` (free bytes, not a percentage); `restarts` is empty or missing when nothing was restarted; `f1-resolvers` logs `f1 container DNS allowed to N IPv4 resolver(s) from /etc/resolv.conf` (or the systemd-resolved file when `/etc/resolv.conf` has only a loopback stub). A line `warning: no IPv4 resolver … f1 containers have no DNS until the next f1-tick` means the set is empty.
 
-`f1-tick` exits 1 when it could not load the firewall, could not start the stack again, or could not read the disk use; the unit then shows as failed in `systemctl --failed`.
+`f1-tick` exits 1 when it could not load the firewall, could not start the stack again, or could not read the free disk space (`error: cannot read the free disk space of /srv/f1 and the Docker data root`). The unit then shows as failed in `systemctl --failed` and alerts `unit_failed f1-tick.service` through `f1-ingest/fail`.
+
+## Alerts from the host (`f1-ingest/fail`)
+
+`f1-alert <code> [<detail>]` (#104, A§14.5) POSTs the body `<code>` or `<code> <detail>` to `https://hc-ping.com/<ping key>/f1-ingest/fail` with the key of `/etc/f1/secrets/hc_ping_key`. That turns the `f1-ingest` check red at once. The body is a fixed code, never a key, URL or value.
+
+**Reading one:** healthchecks.io, project F1, check `f1-ingest`: the ping log (events) lists the `/fail` ping with its body. **Clearing it:** the next daily success ping of `ingest` (00:30 UTC sync) turns the check green again; acting on the cause does not clear it earlier. Green does not mean fixed: the 00:30 UTC success ping turns `f1-ingest` green while `disk_low` or `restart_loop` still holds, and they do not alert again until they clear and come back (or `sudo rm /srv/f1/state/alert-<code>`). Every code but `unit_failed` is sent once per condition and not repeated while it lasts; `unit_failed` has no state and is sent on every failed run (pinging a check that is already red is harmless).
+
+| Body | Sent by | Meaning | What to do |
+|---|---|---|---|
+| `unit_failed <unit>` | `f1-alert@.service`, the `OnFailure=` of `f1-update.service` and `f1-tick.service` | the unit exited 1 | `sudo journalctl -u <unit> -n 60 --no-pager`. For `f1-update.service`: "A deploy failed" above (a failed deploy was rolled back; no firewall table; a failed rollback means the site is down). For `f1-tick.service`: the firewall could not load (the stack is stopped: fix the cause, `sudo systemctl restart f1-firewall`), the stack could not start again, or the free disk was unreadable |
+| `known_bad` | `f1-update` | the pair of the newest `:main` already failed and is skipped | "A deploy failed" above: fix it in a new PR, or `sudo rm /srv/f1/state/failed.env` for a transient failure. Once per pair; not sent by a drill |
+| `hold_14h [<session>]` | `f1-update` | deploys were held for 14 h by a recorder that kept reporting, and the deploy went ahead | look at `recorder_status` and `sudo docker logs f1-live-1` (a stuck row, or a broken recorder that still ticks). Once per hold; not sent by a drill |
+| `restart_loop <container>` | `f1-tick` | that container was restarted as unhealthy in 3 rounds in a row (the third round, about 20 minutes after the first restart); the name is the first of the looping ones | `sudo docker logs --tail 80 <container>` and `sudo docker inspect --format '{{json .State.Health}}' <container>`; fix the cause (a release rollback: "Manual rollback"). It alerts again when the set of looping containers changes and re-arms when none loops |
+| `recorder_missing <key>` | `f1-tick`, recorder watch | from 55 minutes before the session's start until its end, no recording of session `<key>` has started since 65 minutes before the start, and no other recording is open or ended under 3 minutes ago | `/status`, section Recorder; `sudo docker logs --since 30m f1-live-1`; `sudo docker compose -p f1 ps live`. A `login_*` or `token_*` error: "F1 TV token by hand" above. Never restart `live` while it records |
+| `recorder_stale <key>` | `f1-tick`, recorder watch | no `recorder_status` row is under 5 minutes old, and session `<key>` starts within 2 hours or is running: `live` is down or not reporting | `sudo docker ps -a --filter name=f1-live` and `sudo docker logs --tail 80 f1-live-1`; if it is down and nothing records, `sudo docker restart f1-live-1` |
+| `login_failed <key>` | `f1-tick`, recorder watch | the recorder's F1 TV login failed and a session `<key>` starts within 24 hours or is running | "F1 TV token by hand" above, and `docs/runbooks/weekend.md`, "Manual token fallback" |
+| `disk_low` | `f1-tick` | under 20 GiB free on `/srv/f1` or on Docker's data root | `df -h /srv/f1`, `sudo docker system df`, `sudo cat /srv/f1/state/disk`; free space (old images, logs, never a recording you still want: they are kept for good, ADR-0007) |
+| `test_alert` | `sudo f1-alert test_alert` | a drill (`docs/runbooks/install.md`, A6) | nothing |
+
+The three recorder codes are once per session (`<key>`) and again after the query stops returning that code, so a stale recorder that recovers and fails again in the same session alerts again. `disk_low` re-arms when both disks are readable and above 20 GiB again.
+
+**`f1-alert` journal lines** (prefix `f1-alert:`, in the journal of the unit that ran it: `-u f1-tick`, `-u f1-update`, or `-u 'f1-alert@*'` for an `OnFailure=` alert; `sudo f1-alert …` prints them on the terminal):
+
+| Log line | Meaning | Exit |
+|---|---|---|
+| `alert_sent <body>` | healthchecks.io answered 2xx | 0 |
+| `alert_no_key <body>` | `hc_ping_key` is missing, empty or only whitespace: no request was made. It counts as sent, so it is not retried | 0 |
+| `alert_key_invalid <body>` | the file is not 22 characters of `A-Za-z0-9_-` (a second line or a space fails this): no request. Like `alert_no_key`, it counts as sent: after fixing the key, a condition that still holds alerts again only once it clears and comes back (or `sudo rm /srv/f1/state/alert-<code>`) | 0 |
+| `alert_failed <body> (curl <rc>, http <status>)` | no 2xx (`http 000` is no answer: DNS, egress, timeout 10 s); retried by the next run | 1 |
+| `usage: f1-alert <code> [<detail>]` | a code or detail of the wrong shape | 64 |
+
+**Alert again:** the alert state is `/srv/f1/state/alert-<code>` (`alert-known_bad`, `alert-hold_14h`, `alert-restart_loop`, `alert-recorder_missing`, `alert-recorder_stale`, `alert-login_failed`, `alert-disk_low`). `sudo rm /srv/f1/state/alert-<code>` makes the next run send it again while its condition holds.
+
+**Not covered:** with Docker itself down, `f1-update.service` and `f1-tick.service` fail their `Requires=docker.service` as a dependency, not as failed, so no `unit_failed` is sent. The missed daily ping of `ingest` still turns `f1-ingest` red within 25 hours.
 
 ## Cloudflare ranges
 

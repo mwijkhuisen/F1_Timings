@@ -27,8 +27,8 @@ Do this by Thursday evening, outside a session.
    df -h /srv/f1
    ```
 
-   `disk` holds `<UTC time> <use %>` from the last `f1-tick`. Free space before the weekend if it is near 5 GiB.
-7. **The alarm.** The `f1-live` check on healthchecks.io exists (A6 is open: its ping got a 404 on 2026-11-06, so create it now). Without it a recording that ends incomplete rings nobody (`docs/runbooks/update.md`, "Check a recording [box]").
+   `disk` holds `<UTC time> <free bytes of /srv/f1> <free bytes of Docker's data root>` from the last `f1-tick`. `f1-tick` alerts `disk_low` on `f1-ingest/fail` under 20 GiB free on either (`docs/runbooks/update.md`, "Alerts from the host"), well before `live`'s 5 GiB warning. Free space before the weekend if either is near 20 GiB.
+7. **The alarm.** The `f1-live` check on healthchecks.io exists (A6 is open: its ping got a 404 on 2026-11-06, so create it now). Without it a recording that ends incomplete rings nobody (`docs/runbooks/update.md`, "Check a recording [box]"). `f1-ingest` must be green too: it turns red at once for a host alert, and a red one before the weekend wants its body read first (the check's ping log on healthchecks.io; `docs/runbooks/update.md`, "Alerts from the host"). From 55 minutes before a session's start (`recorder_missing <key>`), or when no recorder status is fresh within 2 hours of a start (`recorder_stale <key>`), or after a failed login within 24 hours of one (`login_failed <key>`), `f1-tick` alerts there with the session key. Act on it as in that table: look at `/status` and `sudo docker logs --since 30m f1-live-1`, and put a token in by hand for a `login_*` or `token_*` error ("Manual token fallback" below). A red `f1-ingest` clears with the next 00:30 UTC ping, not when you fix the cause.
 8. **A replay opens on the phone.** On `/replay`, tap the newest recording (the link is `/replay/<recording id>`, `id` being the `recording` row's id, also in the query of "Check a recording [box]"). Once a recording has ended, its session's name on the season page opens the same replay. The phone goes through the tunnel.
 
 ## The phone [owner]
@@ -49,6 +49,7 @@ Do this by Thursday evening, outside a session.
   A code that repeats for minutes (`feed_unauthorized`, `login_*`, `token_*`, `disk`) is not normal: see "Manual token fallback".
 - The live view (`/live`) on the phone, with the delay (the slider `Delay <n> s` in the playback controls, 0–120 s, A§13) set next to the F1 TV picture. A replay has no delay slider.
 - `deploy deferred` in `sudo journalctl -u f1-update --since '-1h' --no-pager` is expected while a recording runs: `live is recording (session N): deploy deferred to a later run`. The next run after the recording deploys it. A hold ends after 14 h at the latest (`error: deploys held for over 14 h …`, then the deploy runs). To deploy a fix during a recording at once, end it: `sudo docker stop f1-live-1` (the recording is closed with `complete = f`), then `sudo systemctl start f1-update`.
+- A red `f1-ingest` with a `recorder_missing`, `recorder_stale` or `login_failed` body in its ping log (about 55 minutes before a start, or when a recording is late) is the alarm for a recorder that is not recording: check "The alarm" above and "Manual token fallback". `f1-tick` runs every 10 minutes, so the alert comes up to 10 minutes late.
 - Never run `f1-install` during a recording, and do not restart `live`.
 
 ### The measurement [box]
@@ -79,7 +80,7 @@ The summary is a Markdown table per service (samples, CPU mean and max %, memory
 
 1. **Check the recording** about 30 minutes after the session ends: `docs/runbooks/update.md`, "Check a recording [box]". It must show `complete = t`, intact segments and a snapshot every 30 s.
 2. **Replay on the phone.** Tap the recording on `/replay` (`/replay/<recording id>`), or the session's name on the season page.
-3. **healthchecks.io.** `f1-live` is green. Red means the recording ended incomplete (`complete = f`); the `recording` row and `docker logs f1-live-1` say why.
+3. **healthchecks.io.** `f1-live` is green. Red means the recording ended incomplete (`complete = f`); the `recording` row and `docker logs f1-live-1` say why. `f1-ingest` is green too, or its ping log names the host alert (`docs/runbooks/update.md`, "Alerts from the host"); the next 00:30 UTC ping clears it.
 4. **The deploy.** `journalctl -u f1-update` shows the deferred deploy going through after the recording ended (`deployed …`).
 5. **The measurement** (if run): keep the summary for PR 2.
 

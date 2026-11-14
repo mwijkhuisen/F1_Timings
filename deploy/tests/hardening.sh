@@ -4,6 +4,10 @@
 # /etc/f1 needed: the secret files and f1.env are never read by `config`) and checks the
 # result with one jq program: every check is named, and a failure prints the names.
 # Then the negative cases: the same program over a broken copy must fail, naming the check.
+# Then the host files (#104): the GIDs in f1-lib.sh's F1_SECRETS match the program's $gid map; no
+# f1 unit runs as another user or adds a group (User=, Group=, DynamicUser=, SupplementaryGroups=);
+# and f1-alert@.service keeps its sandbox. Three negative cases on broken copies. The root:<gid>
+# 0440 modes come from f1-install and are asserted by e2e, not here.
 # Usage: bash deploy/tests/hardening.sh
 set -euo pipefail
 
@@ -16,11 +20,14 @@ printf 'F1_SERVER_IMAGE=f1-server:ci\nF1_WEB_IMAGE=f1-web:ci\n' >"$tmp/images.en
 docker compose -f "$repo/deploy/compose.yaml" --env-file "$tmp/images.env" --profile jobs \
   config --format json >"$tmp/config.json"
 
+# The secret GIDs (A§14.2, D5), as <name>:<gid>: the jq program's $gid map, and the pairs that
+# f1-lib.sh's F1_SECRETS must list (the host section).
+readonly SECRET_GIDS='db_postgres:62001 db_f1_migrator:62002 db_f1_ingest:62003 db_f1_api:62004
+  cf_tunnel_token:62005 hc_ping_key:62006 f1tv_username:62007 f1tv_password:62008'
+
 # shellcheck disable=SC2016 # a jq program, not shell
 program='
-# The secret GIDs (A§14.2, D5).
-{db_postgres: "62001", db_f1_migrator: "62002", db_f1_ingest: "62003", db_f1_api: "62004",
- cf_tunnel_token: "62005", hc_ping_key: "62006", f1tv_username: "62007", f1tv_password: "62008"} as $gid
+([$gids | splits("\\s+") | select(. != "") | split(":") | {(.[0]): .[1]}] | add) as $gid
 | . as $c
 | ($c.services | to_entries) as $s
 | ($c.networks // {}) as $n
@@ -87,7 +94,7 @@ program='
 | if $failed == [] then length else ("failed: " + ($failed | join(", ")) + "\n" | halt_error(1)) end
 '
 
-if ! n=$(jq -e "$program" "$tmp/config.json"); then
+if ! n=$(jq -e --arg gids "$SECRET_GIDS" "$program" "$tmp/config.json"); then
   echo "hardening: deploy/compose.yaml does not pass (the check names are above)" >&2
   exit 1
 fi
@@ -98,7 +105,7 @@ echo "hardening: deploy/compose.yaml passes $n checks"
 negative() {
   local label=$1 check=$2 filter=$3 err
   jq "$filter" "$tmp/config.json" >"$tmp/broken.json"
-  if err=$(jq -e "$program" "$tmp/broken.json" 2>&1 >/dev/null); then
+  if err=$(jq -e --arg gids "$SECRET_GIDS" "$program" "$tmp/broken.json" 2>&1 >/dev/null); then
     echo "hardening: the negative case passed: the check does not catch $label" >&2
     exit 1
   fi
@@ -127,3 +134,60 @@ negative "api with an extra bind" only_bind_allowlist \
   '.services.api.volumes += [{type: "bind", source: "/srv/f1/state/live", target: "/srv/f1/state", read_only: true}]'
 negative "cloudflared without --protocol http2" tunnel_http2 \
   '.services.cloudflared.command |= map(select(. != "--protocol" and . != "http2"))'
+
+# ------------------------------------------------------------------ the host (#104)
+# host_checks <f1-lib.sh> <unit…>: F1_SECRETS's name:gid pairs are SECRET_GIDS (f1-install applies
+# them as root:<gid> 0440; e2e checks the modes); no unit sets User=, Group=, DynamicUser= or
+# SupplementaryGroups= (anchored, so a comment cannot trip it; spaces around = allowed, as systemd
+# does); and the f1-alert@.service among the units keeps an empty CapabilityBoundingSet=,
+# ProtectSystem=strict, NoNewPrivileges=yes and its RestrictAddressFamilies= line.
+host_checks() {
+  local lib=$1 failed=() pairs
+  shift
+  # A bash of its own sources the file: f1-lib.sh sets readonly names and shell options.
+  pairs=$(bash -c '. "$1" && printf "%s\n" "${F1_SECRETS[@]}"' f1-lib "$lib" | sort)
+  [[ $pairs == "$(tr -s ' \n' '\n' <<<"$SECRET_GIDS" | sort)" ]] || failed+=(f1_secrets_gids)
+  if grep -qE '^[[:space:]]*(User|Group|DynamicUser|SupplementaryGroups)[[:space:]]*=' "$@"; then
+    failed+=(units_root)
+  fi
+  local unit alert=''
+  for unit; do [[ ${unit##*/} != f1-alert@.service ]] || alert=$unit; done
+  if [[ -z $alert ]] || ! grep -qxF 'CapabilityBoundingSet=' "$alert" ||
+    ! grep -qxF 'ProtectSystem=strict' "$alert" || ! grep -qxF 'NoNewPrivileges=yes' "$alert" ||
+    ! grep -qxF 'RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6 AF_NETLINK' "$alert"; then
+    failed+=(alert_unit_sandbox)
+  fi
+  if ((${#failed[@]})); then
+    echo "failed: ${failed[*]}"
+    return 1
+  fi
+}
+units=("$repo"/deploy/systemd/* "$repo"/deploy/host/*.service)
+if ! err=$(host_checks "$repo/deploy/bin/f1-lib.sh" "${units[@]}"); then
+  echo "hardening: the host files do not pass: $err" >&2
+  exit 1
+fi
+echo "hardening: the host files pass 3 checks (f1_secrets_gids, units_root over ${#units[@]} units, alert_unit_sandbox)"
+
+host_negative() {
+  local label=$1 check=$2 err
+  shift 2
+  if err=$(host_checks "$@"); then
+    echo "hardening: the negative case passed: the check does not catch $label" >&2
+    exit 1
+  fi
+  [[ $err == *"$check"* ]] || {
+    echo "hardening: the negative case ($label) failed for another reason: $err" >&2
+    exit 1
+  }
+  echo "hardening: the negative case ($label) fails as expected: $err"
+}
+mkdir "$tmp/host"
+cp "$repo/deploy/systemd/f1-alert@.service" "$tmp/host/"
+printf 'User = nobody\n' >>"$tmp/host/f1-alert@.service"
+host_negative "f1-alert@.service with User = nobody" units_root "$repo/deploy/bin/f1-lib.sh" "$tmp/host/f1-alert@.service"
+grep -vxF 'CapabilityBoundingSet=' "$repo/deploy/systemd/f1-alert@.service" >"$tmp/host/f1-alert@.service"
+host_negative "f1-alert@.service without CapabilityBoundingSet=" alert_unit_sandbox \
+  "$repo/deploy/bin/f1-lib.sh" "$tmp/host/f1-alert@.service"
+sed 's/hc_ping_key:62006/hc_ping_key:62099/' "$repo/deploy/bin/f1-lib.sh" >"$tmp/host/f1-lib.sh"
+host_negative "F1_SECRETS with hc_ping_key:62099" f1_secrets_gids "$tmp/host/f1-lib.sh" "${units[@]}"
