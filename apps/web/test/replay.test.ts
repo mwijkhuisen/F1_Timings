@@ -197,7 +197,7 @@ describe('lapPeriods', () => {
     expect(lapPeriods(s, laps, hm('20:12:00'), hm('19:59:00'), 'Race')).toEqual([]);
   });
 
-  it('a red flag runs from Aborted to the restart', () => {
+  it('a red flag runs from Aborted to the lap before the restart’s; open, to the leader’s lap at T', () => {
     const s = series([
       { Utc: '2026-10-25T20:00:00', SessionStatus: 'Started' },
       { Utc: '2026-10-25T20:04:00', SessionStatus: 'Aborted' },
@@ -205,7 +205,34 @@ describe('lapPeriods', () => {
       { Utc: '2026-10-25T20:05:00', TrackStatus: 'AllClear' },
       { Utc: '2026-10-25T20:08:00', SessionStatus: 'Started' },
     ]);
-    expect(lapPeriods(s, laps, hm('20:12:00'), T0, 'Race')).toEqual([{ kind: 'red', from: 3, to: 6 }]);
+    // The restart comes in the leader's lap 6, which is green (as trackPeriods closes red at n − 1).
+    expect(lapPeriods(s, laps, hm('20:12:00'), T0, 'Race')).toEqual([{ kind: 'red', from: 3, to: 5 }]);
+    // Still open at T, in the leader's lap 6: it runs to that lap.
+    expect(lapPeriods(s, laps, hm('20:07:40'), T0, 'Race')).toEqual([{ kind: 'red', from: 3, to: 6 }]);
+    // A restart in the red flag's own lap keeps that lap.
+    const short = series([
+      { Utc: '2026-10-25T20:03:10', SessionStatus: 'Aborted' },
+      { Utc: '2026-10-25T20:04:00', SessionStatus: 'Started' },
+    ]);
+    expect(lapPeriods(short, laps, hm('20:12:00'), T0, 'Race')).toEqual([{ kind: 'red', from: 3, to: 3 }]);
+  });
+
+  it('merges a band into the previous one of its kind when it starts by that one’s end, so no two share a start', () => {
+    const s = series([
+      { Utc: '2026-10-25T20:00:00', SessionStatus: 'Started' },
+      { Utc: '2026-10-25T20:03:10', TrackStatus: 'SCDeployed' },
+      { Utc: '2026-10-25T20:03:30', TrackStatus: 'VSCDeployed' },
+      { Utc: '2026-10-25T20:04:00', TrackStatus: 'SCDeployed' },
+      { Utc: '2026-10-25T20:07:00', TrackStatus: 'AllClear' },
+      { Utc: '2026-10-25T20:09:10', TrackStatus: 'SCDeployed' },
+      { Utc: '2026-10-25T20:10:00', TrackStatus: 'AllClear' },
+    ]);
+    // SC 3–3, VSC 3–3, SC 3–5 and SC 7–7: the second SC starts within the first, the third after it.
+    expect(lapPeriods(s, laps, hm('20:12:00'), T0, 'Race')).toEqual([
+      { kind: 'sc', from: 3, to: 5 },
+      { kind: 'vsc', from: 3, to: 3 },
+      { kind: 'sc', from: 7, to: 7 },
+    ]);
   });
 
   it('gives no band outside a race', () => {

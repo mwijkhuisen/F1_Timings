@@ -1,5 +1,6 @@
 import { type Lap, type SectorDelta, sectorDeltas } from '@f1/contracts';
 import type { CSSProperties } from 'react';
+import { colouredBests } from '../lib/bests.ts';
 import { type Driver, teamStyle } from '../lib/session.ts';
 import { fmtDelta, fmtLap } from '../lib/time.ts';
 import { Note } from '../ui/Note.tsx';
@@ -38,15 +39,6 @@ export function deltaReason(
   if (pair.some(([, l]) => l?.deleted)) return 'Deleted lap';
   return `No ${field === 'lap' ? 'lap' : field.toUpperCase()} time for ${who((l) => l?.[`${field}_ms` as const] === null)}`;
 }
-
-/**
- * The driver's own best lap: its fastest lap coloured purple or green. A§9 colours exactly that lap; the player's
- * progressive colours (A§11.3) colour each improvement, the last being the fastest (#112).
- */
-const bestOf = (laps: readonly DeltaLap[]) =>
-  laps
-    .filter((l) => l.colour.lap === 'purple' || l.colour.lap === 'green')
-    .toSorted((a, b) => (a.lap_ms ?? 0) - (b.lap_ms ?? 0))[0];
 
 /** Lap 0 pairs the two best laps whatever their own numbers (E3). */
 const bestDeltas = (ref: DeltaLap | undefined, other: DeltaLap | undefined) =>
@@ -98,12 +90,12 @@ const BestLap = ({ driver, lap }: { driver: Driver; lap: DeltaLap }) => (
 export function Duel({ drivers, laps }: { drivers: readonly Driver[]; laps: readonly DeltaLap[] }) {
   const [ref, ...others] = drivers;
   if (!ref) return null;
-  const bestOfDriver = (d: Driver) => bestOf(laps.filter((l) => l.driver_number === d.number));
-  const refBest = bestOfDriver(ref);
+  const bests = colouredBests(laps);
+  const refBest = bests.get(ref.number);
   return (
     <>
       {others.map((d) => {
-        const best = bestOfDriver(d);
+        const best = bests.get(d.number);
         if (!refBest || !best)
           return (
             <p key={d.number} className="muted">
@@ -173,12 +165,13 @@ export function DeltaTable({ drivers, laps }: { drivers: readonly Driver[]; laps
   if (!ref) return null;
   const lapsOf = (d: Driver) => laps.filter((l) => l.driver_number === d.number);
   const byNumber = (ls: readonly DeltaLap[]) => new Map(ls.map((l) => [l.lap_number, l]));
+  const bests = colouredBests(laps);
   const refLaps = lapsOf(ref);
-  const refBest = bestOf(refLaps);
+  const refBest = bests.get(ref.number);
   const refByLap = byNumber(refLaps);
   const groups = others.map((d) => {
     const mine = lapsOf(d);
-    const best = bestOf(mine);
+    const best = bests.get(d.number);
     const own = byNumber(mine);
     return {
       driver: d,

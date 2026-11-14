@@ -1,4 +1,7 @@
 // @vitest-environment happy-dom
+import { readFileSync } from 'node:fs';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { Lap, type Live as LiveData, type Recordings, SessionDetail, Stints, view, weatherRow } from '@f1/contracts';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { act } from 'react';
@@ -6,13 +9,13 @@ import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from 'vitest';
 import { HttpError, isStale, markStale } from '../src/lib/api.ts';
 import { useTitle } from '../src/lib/routes.ts';
-import { MAX_HELD, openStream, streamUrl } from '../src/lib/stream.ts';
+import { createStore, type Feed, MAX_HELD, openStream, streamUrl } from '../src/lib/stream.ts';
 import { fmtClock } from '../src/lib/time.ts';
 import { OFFLINE } from '../src/ui/ErrorView.tsx';
 import { Live, Replay } from '../src/views/Live.tsx';
 import { Player, type PlayerRecording } from '../src/views/Player.tsx';
 import { practiceState, raceState } from './feed-state.ts';
-import { fetched } from './laps.ts';
+import { fetched, result } from './laps.ts';
 
 // `view` (a zod parse of a topic) counts what the tower, the pit wall and the status series derive from the state.
 vi.mock('@f1/contracts', async (load) => {
@@ -26,12 +29,14 @@ vi.mock('../src/lib/api.ts', async (load) => {
   return { ...m, markStale: vi.fn(m.markStale) };
 });
 
-// The Weather tab's chart (P5b): a stub ECharts that keeps every option set, so a test sees each redraw.
+// The Weather tab's chart (P5b): a stub ECharts that keeps every option set, so a test sees each redraw, and every
+// chart's event handlers, so a test can toggle a legend (#112).
 type Option = { series: { data: [number, number | null][] }[] };
-const chart = vi.hoisted(() => ({ options: [] as Option[] }));
+const chart = vi.hoisted(() => ({ options: [] as Option[], on: [] as [string, (e: unknown) => void][] }));
 vi.mock('../src/lib/echarts.ts', () => ({
   init: () => ({
     setOption: (o: Option) => chart.options.push(o),
+    on: (name: string, f: (e: unknown) => void) => chart.on.push([name, f]),
     resize() {},
     dispose() {},
   }),
@@ -47,6 +52,20 @@ vi.mock('../src/views/Tower.tsx', async (load) => {
     Tower: (props: Parameters<typeof m.Tower>[0]) => {
       if (towerMock.fail) throw new Error('tower');
       return createElement(m.Tower, props);
+    },
+  };
+});
+
+// The lap table counts its renders (#112: a delta-only flush renders none); else it is the real one.
+const lapTable = vi.hoisted(() => ({ renders: 0 }));
+vi.mock('../src/views/LapTable.tsx', async (load) => {
+  const m = await load<typeof import('../src/views/LapTable.tsx')>();
+  const { createElement } = await import('react');
+  return {
+    ...m,
+    LapTable: (props: Parameters<typeof m.LapTable>[0]) => {
+      lapTable.renders++;
+      return createElement(m.LapTable, props);
     },
   };
 });
@@ -2599,6 +2618,7 @@ describe('Compare, Stints and the Laps tab in the player (#112)', () => {
 
   beforeEach(() => {
     chart.options = [];
+    chart.on = [];
   });
 
   it('shows only the rows at or before T on Stints and Compare: a laps event adds, a seek back takes away', async () => {
@@ -2717,5 +2737,212 @@ describe('Compare, Stints and the Laps tab in the player (#112)', () => {
     expect(cycles()?.querySelector('ul.cycles')?.textContent).toBe(
       'VER pitted L2, HAM L3: VER 1.0 s ahead before, 1.0 s ahead after',
     );
+  });
+
+  it('keeps Snap.laps and Snap.stints across a delta-only flush; a laps event brings new ones', () => {
+    const store = createStore();
+    const own = stints([1, 1, 1, 3, 'MEDIUM']);
+    const feed: Feed = {
+      t: T,
+      state: {},
+      laps: new Map(upTo(1).map((l) => [`${l.driver_number}:${l.lap_number}`, l])),
+      stints: new Map(own.map((s) => [`${s.driver_number}:${s.stint_number}`, s])),
+      weather: [],
+    };
+    store.update(feed, 'snapshot');
+    vi.advanceTimersByTime(250);
+    const first = store.get();
+    expect(first.stints).toEqual(own);
+    store.update(feed, 'delta');
+    vi.advanceTimersByTime(250);
+    expect(store.get().rev).toBe(first.rev + 1);
+    expect(store.get().laps).toBe(first.laps);
+    expect(store.get().stints).toBe(first.stints);
+    store.update(feed, 'laps');
+    vi.advanceTimersByTime(250);
+    expect(store.get().stints).not.toBe(first.stints);
+  });
+
+  it('bands a red flag on Laps and Compare, not on Stints', async () => {
+    // Aborted in the leader's lap 1, the restart in its lap 3 (green): red on laps 1–2.
+    begin(
+      state([T - 200_000, 'SessionStatus', 'Aborted'], [T - 50_000, 'SessionStatus', 'Started']),
+      upTo(3),
+      stints([1, 1, 1, 3, 'MEDIUM'], [44, 1, 1, 3, 'HARD']),
+    );
+    button('Laps');
+    expect([...host.querySelectorAll('table.laps thead th.band-red')].map((th) => th.textContent)).toEqual([
+      '1 RED',
+      '2 RED',
+    ]);
+    button('Stints');
+    expect(lanes()).toHaveLength(2);
+    expect([...host.querySelectorAll('ul.legend li')].filter((li) => li.textContent?.startsWith('RED'))).toEqual([]);
+    expect(host.querySelectorAll('.rules .vscline')).toHaveLength(0);
+    const reds = (o: Drawn) => o.series.flatMap((x) => x.markArea?.data ?? []).filter(([a]) => a.name === 'RED').length;
+    expect((await compare()).map(reds)).toEqual([1, 1]); // the lap chart and the gap chart
+  });
+
+  it('shows no Pit cycles card outside a race', async () => {
+    const practice = { ...detail, session: { ...detail.session, type: 'Practice', name: 'Practice 1' } };
+    render({ recording: ended, start: T, sessionKey: 9100, detail: practice });
+    snapshot(
+      T,
+      { ...state(), SessionInfo: { Key: 9100, Type: 'Practice', Name: 'Practice 1' } },
+      upTo(3),
+      stints([1, 1, 1, 3, 'MEDIUM'], [44, 1, 1, 3, 'HARD']),
+    );
+    await compare();
+    expect(host.querySelector('fieldset[aria-label="Reference"]')).not.toBeNull(); // the comparison is there
+    expect(cycles()).toBeUndefined();
+  });
+
+  it('orders the drivers by number without TimingData lines, never by the API’s final results', () => {
+    render({
+      recording: ended,
+      start: T,
+      sessionKey: 9100,
+      detail: { ...detail, results: [result(44, 1), result(1, 2)] },
+    });
+    snapshot(T, { ...state(), TimingData: {} }, upTo(3), stints([1, 1, 1, 3, 'MEDIUM'], [44, 1, 1, 3, 'HARD']));
+    button('Laps');
+    expect([...host.querySelectorAll('table.laps tbody th')].map((th) => th.textContent)).toEqual(['VER', 'HAM']);
+    button('Stints');
+    expect(lanes().map(([d]) => d)).toEqual(['VER', 'HAM']);
+  });
+
+  it('says on Stints what is missing: the laps, or the stint rows', () => {
+    begin(state(), [], stints([1, 1, 1, 3, 'MEDIUM']));
+    button('Stints');
+    expect(host.querySelector('ol.stints')).toBeNull();
+    expect(host.textContent).toContain('No laps in the feed yet.');
+    seekTo(T - 100_000);
+    snapshot(T - 100_000, state(), upTo(2), []);
+    expect(host.querySelector('ol.stints')).toBeNull();
+    expect(host.textContent).toContain('No stints in the feed yet.');
+  });
+
+  it('a delta-only flush leaves the Laps tab’s table and the Compare charts alone', async () => {
+    begin(state(), upTo(3), []);
+    button('Laps');
+    const table = $('table.laps');
+    const renders = lapTable.renders;
+    expect(renders).toBeGreaterThan(0);
+    const yellow = (t: number, Status: string) => last().emit('delta', { t, topic: 'TrackStatus', data: { Status } });
+    yellow(T + 1_000, '2');
+    advance(250);
+    expect(host.querySelector('.strip .lw')?.textContent).toBe('Yellow flag'); // the flush rendered the page
+    expect($('table.laps')).toBe(table);
+    expect(lapTable.renders).toBe(renders);
+    await compare();
+    const mark = chart.options.length;
+    yellow(T + 2_000, '1');
+    advance(250);
+    for (let i = 0; i < 3; i++) await act(async () => {});
+    expect(host.querySelector('.strip .lw')?.textContent).toBe('Track clear');
+    expect(chart.options.length).toBe(mark);
+  });
+
+  describe('the picks', () => {
+    /** HAM leads LEC and VER at T. */
+    const three = (order = ['44', '16', '1']) => ({
+      ...state(),
+      DriverList: { '1': { Tla: 'VER' }, '16': { Tla: 'LEC' }, '44': { Tla: 'HAM' } },
+      TimingData: { Lines: Object.fromEntries(order.map((n, i) => [n, { Line: i + 1, Position: String(i + 1) }])) },
+    });
+    const laps = [1, 16, 44].flatMap((d) => [1, 2, 3].map((n) => row(d, n)));
+    /** The Reference choice: the picks in pick order, the reference starred. */
+    const refs = () =>
+      [...host.querySelectorAll('fieldset[aria-label="Reference"] button')].map(
+        (b) => `${b.textContent}${b.getAttribute('aria-pressed') === 'true' ? '*' : ''}`,
+      );
+    const reference = (name: string) =>
+      act(() =>
+        [...host.querySelectorAll<HTMLButtonElement>('fieldset[aria-label="Reference"] button')]
+          .find((b) => b.textContent === name)
+          ?.click(),
+      );
+    const settle = async () => {
+      advance(250);
+      for (let i = 0; i < 3; i++) await act(async () => {});
+    };
+
+    it('are the top 2 of the order at T until the first pick', async () => {
+      begin(three(), laps, []);
+      await compare();
+      expect(refs()).toEqual(['HAM*', 'LEC']);
+      // Back to where VER led: the default follows the order there.
+      seekTo(T - 100_000);
+      snapshot(
+        T - 100_000,
+        three(['1', '16', '44']),
+        laps.filter((l) => l.lap_number <= 2),
+        [],
+      );
+      expect(refs()).toEqual(['VER*', 'LEC']);
+    });
+
+    it('take a toggle and the reference, survive a tab switch and never reach the URL', async () => {
+      history.replaceState(null, '', '/replay/7');
+      onTestFinished(() => history.replaceState(null, '', '/'));
+      render({ recording: ended, start: T, sessionKey: 9100, detail, keepT: true });
+      snapshot(T, three(), laps, []);
+      await compare();
+      button('VER'); // the picker's toggle
+      expect(refs()).toEqual(['HAM*', 'LEC', 'VER']);
+      reference('VER');
+      expect(refs()).toEqual(['VER*', 'HAM', 'LEC']);
+      click('Remove LEC');
+      expect(refs()).toEqual(['VER*', 'HAM']);
+      expect(location.pathname + location.search).toBe('/replay/7?tab=compare');
+      button('Laps');
+      expect(refs()).toEqual([]);
+      await compare();
+      expect(refs()).toEqual(['VER*', 'HAM']);
+      expect(location.pathname + location.search).toBe('/replay/7?tab=compare');
+    });
+
+    it('redraw the charts only when a picked driver’s rows change, keeping the legend’s toggles', async () => {
+      begin(three(), laps, []);
+      await compare(); // HAM and LEC
+      const mark = chart.options.length;
+      // VER is not picked: its new lap redraws nothing.
+      last().emit('laps', { t: T + 31_000, laps: [row(1, 4)], stints: [] });
+      await settle();
+      expect(chart.options.length).toBe(mark);
+      // HAM's line hidden in both charts' legends, then HAM's new lap: both redraw, HAM still hidden.
+      act(() => {
+        for (const [name, f] of chart.on)
+          if (name === 'legendselectchanged') f({ name: 'HAM', selected: { HAM: false, LEC: true } });
+      });
+      last().emit('laps', { t: T + 32_000, laps: [row(44, 4)], stints: [] });
+      await settle();
+      const drawn = chart.options.slice(mark) as unknown as { legend: { selected: object } }[];
+      expect(drawn).toHaveLength(2);
+      expect(drawn.map((o) => o.legend.selected)).toEqual([
+        { HAM: false, LEC: true },
+        { HAM: false, LEC: true },
+      ]);
+    });
+  });
+
+  describe('the View switch at phone width (styles.css, D2)', () => {
+    // happy-dom's URL is not Node's: the path is joined from this file's own.
+    const css = readFileSync(join(dirname(fileURLToPath(import.meta.url)), '../src/styles.css'), 'utf8');
+    /** The declarations of the rule whose selector list is exactly `selector`, from `from` (as order.test.tsx). */
+    const rule = (selector: string, from = 0) => {
+      const at = css.indexOf(`\n${selector} {`, from);
+      expect(at, selector).toBeGreaterThanOrEqual(0);
+      return css.slice(at, css.indexOf('}', at));
+    };
+
+    it('wraps under 640 px, with 6 px side padding on its buttons', () => {
+      const phone = css.indexOf('@media (max-width: 640px) {\n  .clockline time {');
+      expect(phone).toBeGreaterThanOrEqual(0);
+      expect(rule('  .views', phone)).toContain('flex-wrap: wrap;');
+      expect(rule('  .views button', phone)).toContain('padding: 0 6px;');
+      // Both inside that block: its own closing brace is the first unindented one.
+      expect(css.indexOf('\n  .views button {', phone)).toBeLessThan(css.indexOf('\n}', phone));
+    });
   });
 });

@@ -7,11 +7,13 @@ type EChart = ReturnType<typeof import('../lib/echarts.ts')['init']>;
 
 /**
  * An ECharts chart on a canvas, drawn from `option(tokens)`; pass a memoised builder, as each new one redraws.
- * The library is a lazy chunk, loaded on first render (D3), and the only importer of lib/echarts.ts.
+ * The library is a lazy chunk, loaded on first render (D3), and the only importer of lib/echarts.ts. A redraw replaces
+ * the whole option, so the legend's toggles are kept here and set on the next option's object `legend` (#112).
  */
 export function Chart({ label, option }: { label: string; option: (t: ChartTokens) => object }) {
   const box = useRef<HTMLDivElement>(null);
   const chart = useRef<EChart | null>(null);
+  const selected = useRef<Record<string, boolean>>({});
   const [state, setState] = useState<'loading' | 'failed' | ChartTokens>('loading');
 
   useEffect(() => {
@@ -26,6 +28,9 @@ export function Chart({ label, option }: { label: string; option: (t: ChartToken
         if (gone) return;
         const c = init(el, undefined, { renderer: 'canvas' });
         chart.current = c;
+        c.on('legendselectchanged', (e) => {
+          selected.current = (e as { selected: Record<string, boolean> }).selected;
+        });
         observer = new ResizeObserver(() => c.resize());
         observer.observe(el);
         // The tokens are read again whenever the header's moon switches the theme (data-theme on <html>).
@@ -59,8 +64,13 @@ export function Chart({ label, option }: { label: string; option: (t: ChartToken
   }, []);
 
   useEffect(() => {
-    if (typeof state === 'object')
-      chart.current?.setOption(option(state) as Parameters<EChart['setOption']>[0], { notMerge: true });
+    if (typeof state !== 'object') return;
+    const o: { legend?: unknown } = option(state);
+    const drawn =
+      typeof o.legend === 'object' && o.legend !== null
+        ? { ...o, legend: { ...o.legend, selected: selected.current } }
+        : o;
+    chart.current?.setOption(drawn as Parameters<EChart['setOption']>[0], { notMerge: true });
   }, [state, option]);
 
   return (

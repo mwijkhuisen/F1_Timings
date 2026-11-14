@@ -5,9 +5,9 @@ import { leaderLap } from './weather.ts';
 
 // The player's view of the state at T (A§13, P4e): the seek-bar marks, the "Back to" chips, the last stop and the
 // events a forward seek skipped; since #112 the bands as laps and the race-control texts for the session tabs. Pure:
-// `statusSeries` runs once per store flush and once more per `laps` event for the session tabs, `skipped` once per
-// seek and `feedRaceControl` once per `laps` event on Compare; everything else works on their results, so the 1 s
-// tick parses nothing.
+// `statusSeries` runs once per store flush and once more per `laps` event while Laps, Compare or Stints is shown,
+// `skipped` once per seek and `feedRaceControl` once per `laps` event on Compare; everything else works on their
+// results, so the 1 s tick parses nothing.
 
 /** One `SessionData.StatusSeries` entry. */
 export type Status = { t: number; track?: string | undefined; session?: string | undefined };
@@ -75,7 +75,9 @@ export function markersUpTo(series: readonly Status[], T: number, [lo, hi]: read
 /**
  * The SC, VSC and red bands at or before T (`markersUpTo` from `lo`) as the leader's laps (#112): a band runs from the
  * leader's lap at its start (lap 1 before the first lap) to the leader's lap at its end, an open band's end being T; a
- * band that ended before lap 1 started is dropped. `leaderLap` is null outside `Race`-type sessions, so there are none.
+ * closed red flag ends a lap before its restart's, which is green (as `trackPeriods`). A band that ended before lap 1
+ * started is dropped, and one that starts at or before the end of the previous band of its kind extends that band.
+ * `leaderLap` is null outside `Race`-type sessions, so there are none.
  */
 export function lapPeriods(
   series: readonly Status[],
@@ -84,11 +86,18 @@ export function lapPeriods(
   lo: number,
   type: string | null,
 ): Period[] {
-  return markersUpTo(series, T, [lo, Number.POSITIVE_INFINITY]).flatMap((m) => {
-    if (m.kind === 'start' || m.kind === 'chequered') return [];
-    const to = leaderLap(laps, m.end ?? T, type);
-    return to === null ? [] : [{ kind: m.kind, from: leaderLap(laps, m.t, type) ?? 1, to }];
-  });
+  const out: Period[] = [];
+  for (const m of markersUpTo(series, T, [lo, Number.POSITIVE_INFINITY])) {
+    if (m.kind === 'start' || m.kind === 'chequered') continue;
+    const end = leaderLap(laps, m.end ?? T, type);
+    if (end === null) continue;
+    const from = leaderLap(laps, m.t, type) ?? 1;
+    const to = m.kind === 'red' && !m.open ? Math.max(from, end - 1) : end;
+    const prev = out.findLast((p) => p.kind === m.kind);
+    if (prev && from <= prev.to) prev.to = Math.max(prev.to, to);
+    else out.push({ kind: m.kind, from, to });
+  }
+  return out;
 }
 
 /** The feed's race-control messages that have a text (#112, the player's pit cycles); `date` is null without a Utc. */

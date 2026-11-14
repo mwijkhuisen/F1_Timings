@@ -101,14 +101,17 @@ export function Comparison({
   children?: ReactNode;
 }) {
   const [yWindow, setWindow] = useState<'fit' | '107'>('fit');
+  // What the charts draw, by content: the player's lap rows are a new array on each `laps` event (about one a second
+  // in a race, mostly for other cars), and a redraw resets the tooltip (#112).
+  const picked = new Set(drivers.map((d) => d.number));
+  const drawn = JSON.stringify([drivers, laps.filter((l) => picked.has(l.driver_number)), periods]);
+  // biome-ignore lint/correctness/useExhaustiveDependencies: `drawn` stands for the drivers, their laps and the periods.
   const lapOption = useCallback(
     (t: ChartTokens) => lapChartOption(drivers, laps, t, { window: yWindow, periods, year: detail.meeting.year }),
-    [drivers, laps, yWindow, periods, detail.meeting.year],
+    [drawn, yWindow, detail.meeting.year],
   );
-  const gapOption = useCallback(
-    (t: ChartTokens) => gapChartOption(drivers, laps, t, periods),
-    [drivers, laps, periods],
-  );
+  // biome-ignore lint/correctness/useExhaustiveDependencies: as above.
+  const gapOption = useCallback((t: ChartTokens) => gapChartOption(drivers, laps, t, periods), [drawn]);
 
   const [ref, ...others] = drivers;
   if (!ref || others.length === 0) return <p>Pick at least 2 drivers.</p>;
