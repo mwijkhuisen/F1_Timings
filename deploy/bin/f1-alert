@@ -43,11 +43,11 @@ if [[ ! $key =~ ^[A-Za-z0-9_-]{22}$ ]]; then
   exit 0
 fi
 
-# -q (first) ignores any .curlrc; without -L curl follows no redirect. stderr goes nowhere: an
-# error text could quote the URL.
+# env -i: no proxy or SSLKEYLOGFILE variable of the caller applies. -q (first) ignores any
+# .curlrc; without -L curl follows no redirect. stderr goes nowhere: an error text could quote the URL.
 rc=0
 status=$(printf 'url = "https://hc-ping.com/%s/f1-ingest/fail"\ndata-binary = "%s"\n' "$key" "$body" |
-  curl -q --config - -s -o /dev/null -w '%{http_code}' --max-time 10 2>/dev/null) || rc=$?
+  env -i PATH=/usr/bin:/bin curl -q --config - -s -o /dev/null -w '%{http_code}' --max-time 10 2>/dev/null) || rc=$?
 [[ $status =~ ^[0-9]{3}$ ]] || status=000
 if ((rc == 0)) && [[ $status == 2* ]]; then
   log "alert_sent $body"

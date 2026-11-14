@@ -296,8 +296,8 @@ Every 10 minutes (`:05 :15 …`). It runs, in this order:
 2. `f1-resolvers --quiet`: refreshes the DNS allowlist (`inet f1 resolvers4`) from `/etc/resolv.conf`.
 3. Under `f1-update`'s lock: `restarting unhealthy container f1-<service>-1` for every f1 container Docker reports unhealthy (Docker only restarts a container that exited), and the file `/srv/f1/state/restarts`. A container restarted in 3 rounds in a row alerts `restart_loop <name>`.
    While `f1-update` or `f1-install` holds the lock, f1-tick logs `f1-update or f1-install is running: no container restarts this round` and skips this step. `warning: cannot write /srv/f1/state/restarts` means the file could not be written (the streak count starts again).
-4. The recorder watch: `/etc/f1/recorder-watch.sql` in a read-only transaction in `f1-db-1` (20 s at most). It alerts `recorder_missing`, `recorder_stale` or `login_failed` with the session key. It fails open: `warning: cannot run the recorder watch: no recorder alert this round` (no db container, a db that does not answer in time, a missing file) does not fail the run.
-5. `free disk: /srv/f1 N GiB, Docker data root <dir> N GiB` and the file `/srv/f1/state/disk`. Under 20 GiB on either alerts `disk_low`.
+4. The recorder watch: `/etc/f1/recorder-watch.sql` in a read-only transaction in `f1-db-1`, as `f1_api` (20 s at most, and a 15 s `statement_timeout` in the server). It alerts `recorder_missing`, `recorder_stale` or `login_failed` with the session key. It fails open: `warning: cannot run the recorder watch: no recorder alert this round` (no db container, a db that does not answer in time, a missing file) does not fail the run.
+5. `free disk: /srv/f1 N GiB, Docker data root <dir> N GiB` and the file `/srv/f1/state/disk` (written only when both are readable). Under 20 GiB on either alerts `disk_low`, even when the other cannot be read.
 
 An alert that f1-tick sends shows in its journal as an `f1-alert:` line (`alert_sent <body>`, below). `warning: cannot write the alert state /srv/f1/state/alert-<code>` (any script) means the token was not saved, so the same alert is sent again on the next run.
 
@@ -317,21 +317,21 @@ Expected: `disk` holds one line such as `2026-11-14T10:05:03Z 412345678901 39876
 
 `f1-alert <code> [<detail>]` (#104, A§14.5) POSTs the body `<code>` or `<code> <detail>` to `https://hc-ping.com/<ping key>/f1-ingest/fail` with the key of `/etc/f1/secrets/hc_ping_key`. That turns the `f1-ingest` check red at once. The body is a fixed code, never a key, URL or value.
 
-**Reading one:** healthchecks.io, project F1, check `f1-ingest`: the ping log (events) lists the `/fail` ping with its body. **Clearing it:** the next daily success ping of `ingest` (00:30 UTC sync) turns the check green again; acting on the cause does not clear it earlier. A host alert is sent once per condition and not repeated while it lasts.
+**Reading one:** healthchecks.io, project F1, check `f1-ingest`: the ping log (events) lists the `/fail` ping with its body. **Clearing it:** the next daily success ping of `ingest` (00:30 UTC sync) turns the check green again; acting on the cause does not clear it earlier. Green does not mean fixed: the 00:30 UTC success ping turns `f1-ingest` green while `disk_low` or `restart_loop` still holds, and they do not alert again until they clear and come back (or `sudo rm /srv/f1/state/alert-<code>`). Every code but `unit_failed` is sent once per condition and not repeated while it lasts; `unit_failed` has no state and is sent on every failed run (pinging a check that is already red is harmless).
 
 | Body | Sent by | Meaning | What to do |
 |---|---|---|---|
 | `unit_failed <unit>` | `f1-alert@.service`, the `OnFailure=` of `f1-update.service` and `f1-tick.service` | the unit exited 1 | `sudo journalctl -u <unit> -n 60 --no-pager`. For `f1-update.service`: "A deploy failed" above (a failed deploy was rolled back; no firewall table; a failed rollback means the site is down). For `f1-tick.service`: the firewall could not load (the stack is stopped: fix the cause, `sudo systemctl restart f1-firewall`), the stack could not start again, or the free disk was unreadable |
 | `known_bad` | `f1-update` | the pair of the newest `:main` already failed and is skipped | "A deploy failed" above: fix it in a new PR, or `sudo rm /srv/f1/state/failed.env` for a transient failure. Once per pair; not sent by a drill |
 | `hold_14h [<session>]` | `f1-update` | deploys were held for 14 h by a recorder that kept reporting, and the deploy went ahead | look at `recorder_status` and `sudo docker logs f1-live-1` (a stuck row, or a broken recorder that still ticks). Once per hold; not sent by a drill |
-| `restart_loop <container>` | `f1-tick` | that container was restarted as unhealthy in 3 rounds in a row (about 30 minutes); the name is the first of the looping ones | `sudo docker logs --tail 80 <container>` and `sudo docker inspect --format '{{json .State.Health}}' <container>`; fix the cause (a release rollback: "Manual rollback"). It alerts again when the set of looping containers changes and re-arms when none loops |
+| `restart_loop <container>` | `f1-tick` | that container was restarted as unhealthy in 3 rounds in a row (the third round, about 20 minutes after the first restart); the name is the first of the looping ones | `sudo docker logs --tail 80 <container>` and `sudo docker inspect --format '{{json .State.Health}}' <container>`; fix the cause (a release rollback: "Manual rollback"). It alerts again when the set of looping containers changes and re-arms when none loops |
 | `recorder_missing <key>` | `f1-tick`, recorder watch | from 55 minutes before the session's start until its end, no recording of session `<key>` has started since 65 minutes before the start, and no other recording is open or ended under 3 minutes ago | `/status`, section Recorder; `sudo docker logs --since 30m f1-live-1`; `sudo docker compose -p f1 ps live`. A `login_*` or `token_*` error: "F1 TV token by hand" above. Never restart `live` while it records |
 | `recorder_stale <key>` | `f1-tick`, recorder watch | no `recorder_status` row is under 5 minutes old, and session `<key>` starts within 2 hours or is running: `live` is down or not reporting | `sudo docker ps -a --filter name=f1-live` and `sudo docker logs --tail 80 f1-live-1`; if it is down and nothing records, `sudo docker restart f1-live-1` |
 | `login_failed <key>` | `f1-tick`, recorder watch | the recorder's F1 TV login failed and a session `<key>` starts within 24 hours or is running | "F1 TV token by hand" above, and `docs/runbooks/weekend.md`, "Manual token fallback" |
 | `disk_low` | `f1-tick` | under 20 GiB free on `/srv/f1` or on Docker's data root | `df -h /srv/f1`, `sudo docker system df`, `sudo cat /srv/f1/state/disk`; free space (old images, logs, never a recording you still want: they are kept for good, ADR-0007) |
 | `test_alert` | `sudo f1-alert test_alert` | a drill (`docs/runbooks/install.md`, A6) | nothing |
 
-The three recorder codes are once per session (`<key>`) and again after the query stops returning that code, so a stale recorder that recovers and fails again in the same session alerts again. `disk_low` re-arms when both disks are above 20 GiB again.
+The three recorder codes are once per session (`<key>`) and again after the query stops returning that code, so a stale recorder that recovers and fails again in the same session alerts again. `disk_low` re-arms when both disks are readable and above 20 GiB again.
 
 **`f1-alert` journal lines** (prefix `f1-alert:`, in the journal of the unit that ran it: `-u f1-tick`, `-u f1-update`, or `-u 'f1-alert@*'` for an `OnFailure=` alert; `sudo f1-alert …` prints them on the terminal):
 
@@ -339,7 +339,7 @@ The three recorder codes are once per session (`<key>`) and again after the quer
 |---|---|---|
 | `alert_sent <body>` | healthchecks.io answered 2xx | 0 |
 | `alert_no_key <body>` | `hc_ping_key` is missing, empty or only whitespace: no request was made. It counts as sent, so it is not retried | 0 |
-| `alert_key_invalid <body>` | the file is not 22 characters of `A-Za-z0-9_-` (a second line or a space fails this): no request | 0 |
+| `alert_key_invalid <body>` | the file is not 22 characters of `A-Za-z0-9_-` (a second line or a space fails this): no request. Like `alert_no_key`, it counts as sent: after fixing the key, a condition that still holds alerts again only once it clears and comes back (or `sudo rm /srv/f1/state/alert-<code>`) | 0 |
 | `alert_failed <body> (curl <rc>, http <status>)` | no 2xx (`http 000` is no answer: DNS, egress, timeout 10 s); retried by the next run | 1 |
 | `usage: f1-alert <code> [<detail>]` | a code or detail of the wrong shape | 64 |
 

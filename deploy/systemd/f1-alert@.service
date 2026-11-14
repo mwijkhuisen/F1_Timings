@@ -2,7 +2,10 @@
 # failed run alerts "unit_failed <unit>" through healthchecks.io's f1-ingest/fail (f1-alert).
 # Root, so that on the host only root reads /etc/f1/secrets/hc_ping_key, but without a single
 # capability: root reads that root:62006 0440 file through its owner bits, and f1-alert writes
-# nothing.
+# nothing. Capability-less root is no containment boundary by itself (UID 0 keeps its owner
+# rights, such as on the Docker socket), hence the limits below: only the socket families curl
+# needs, no devices, kernel tunables, modules or cgroups. f1-update and f1-tick run f1-alert (and
+# its curl) directly as full root (accepted, A§12.5).
 [Unit]
 Description=f1: alert that %i failed (f1-ingest/fail)
 Wants=network-online.target
@@ -14,7 +17,12 @@ ExecStart=/usr/local/bin/f1-alert unit_failed %i
 TimeoutStartSec=1min
 UMask=0077
 PrivateTmp=yes
+PrivateDevices=yes
 ProtectHome=yes
 ProtectSystem=strict
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6 AF_NETLINK
 NoNewPrivileges=yes
 CapabilityBoundingSet=

@@ -4,9 +4,10 @@
 # /etc/f1 needed: the secret files and f1.env are never read by `config`) and checks the
 # result with one jq program: every check is named, and a failure prints the names.
 # Then the negative cases: the same program over a broken copy must fail, naming the check.
-# Then the host (#104): f1-lib.sh's F1_SECRETS (the GIDs f1-install gives the secret files) is the
-# program's $gid map, and no f1 unit sets User=, Group=, DynamicUser= or SupplementaryGroups=, so on
-# the host only root reads a secret (hc_ping_key: f1-alert); two negative cases on broken copies.
+# Then the host files (#104): the GIDs in f1-lib.sh's F1_SECRETS match the program's $gid map; no
+# f1 unit runs as another user or adds a group (User=, Group=, DynamicUser=, SupplementaryGroups=);
+# and f1-alert@.service keeps its sandbox. Three negative cases on broken copies. The root:<gid>
+# 0440 modes come from f1-install and are asserted by e2e, not here.
 # Usage: bash deploy/tests/hardening.sh
 set -euo pipefail
 
@@ -135,16 +136,27 @@ negative "cloudflared without --protocol http2" tunnel_http2 \
   '.services.cloudflared.command |= map(select(. != "--protocol" and . != "http2"))'
 
 # ------------------------------------------------------------------ the host (#104)
-# host_checks <f1-lib.sh> <unit…>: f1-install gives each secret file root:<gid> 0440 from F1_SECRETS
-# (e2e checks the modes), so its pairs must be SECRET_GIDS; and no unit may run as another user or
-# group, so on the host only root reads a secret. Anchored, so a comment cannot trip it.
+# host_checks <f1-lib.sh> <unit…>: F1_SECRETS's name:gid pairs are SECRET_GIDS (f1-install applies
+# them as root:<gid> 0440; e2e checks the modes); no unit sets User=, Group=, DynamicUser= or
+# SupplementaryGroups= (anchored, so a comment cannot trip it; spaces around = allowed, as systemd
+# does); and the f1-alert@.service among the units keeps an empty CapabilityBoundingSet=,
+# ProtectSystem=strict, NoNewPrivileges=yes and its RestrictAddressFamilies= line.
 host_checks() {
   local lib=$1 failed=() pairs
   shift
   # A bash of its own sources the file: f1-lib.sh sets readonly names and shell options.
   pairs=$(bash -c '. "$1" && printf "%s\n" "${F1_SECRETS[@]}"' f1-lib "$lib" | sort)
   [[ $pairs == "$(tr -s ' \n' '\n' <<<"$SECRET_GIDS" | sort)" ]] || failed+=(f1_secrets_gids)
-  if grep -qE '^[[:space:]]*(User|Group|DynamicUser|SupplementaryGroups)=' "$@"; then failed+=(units_root); fi
+  if grep -qE '^[[:space:]]*(User|Group|DynamicUser|SupplementaryGroups)[[:space:]]*=' "$@"; then
+    failed+=(units_root)
+  fi
+  local unit alert=''
+  for unit; do [[ ${unit##*/} != f1-alert@.service ]] || alert=$unit; done
+  if [[ -z $alert ]] || ! grep -qxF 'CapabilityBoundingSet=' "$alert" ||
+    ! grep -qxF 'ProtectSystem=strict' "$alert" || ! grep -qxF 'NoNewPrivileges=yes' "$alert" ||
+    ! grep -qxF 'RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6 AF_NETLINK' "$alert"; then
+    failed+=(alert_unit_sandbox)
+  fi
   if ((${#failed[@]})); then
     echo "failed: ${failed[*]}"
     return 1
@@ -155,7 +167,7 @@ if ! err=$(host_checks "$repo/deploy/bin/f1-lib.sh" "${units[@]}"); then
   echo "hardening: the host files do not pass: $err" >&2
   exit 1
 fi
-echo "hardening: the host files pass 2 checks (f1_secrets_gids, units_root over ${#units[@]} units)"
+echo "hardening: the host files pass 3 checks (f1_secrets_gids, units_root over ${#units[@]} units, alert_unit_sandbox)"
 
 host_negative() {
   local label=$1 check=$2 err
@@ -172,7 +184,10 @@ host_negative() {
 }
 mkdir "$tmp/host"
 cp "$repo/deploy/systemd/f1-alert@.service" "$tmp/host/"
-printf 'User=nobody\n' >>"$tmp/host/f1-alert@.service"
-host_negative "f1-alert@.service with User=nobody" units_root "$repo/deploy/bin/f1-lib.sh" "$tmp/host/f1-alert@.service"
+printf 'User = nobody\n' >>"$tmp/host/f1-alert@.service"
+host_negative "f1-alert@.service with User = nobody" units_root "$repo/deploy/bin/f1-lib.sh" "$tmp/host/f1-alert@.service"
+grep -vxF 'CapabilityBoundingSet=' "$repo/deploy/systemd/f1-alert@.service" >"$tmp/host/f1-alert@.service"
+host_negative "f1-alert@.service without CapabilityBoundingSet=" alert_unit_sandbox \
+  "$repo/deploy/bin/f1-lib.sh" "$tmp/host/f1-alert@.service"
 sed 's/hc_ping_key:62006/hc_ping_key:62099/' "$repo/deploy/bin/f1-lib.sh" >"$tmp/host/f1-lib.sh"
 host_negative "F1_SECRETS with hc_ping_key:62099" f1_secrets_gids "$tmp/host/f1-lib.sh" "${units[@]}"

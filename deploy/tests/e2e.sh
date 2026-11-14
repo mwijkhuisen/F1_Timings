@@ -3,7 +3,8 @@
 # box: the real f1-install, f1-update and f1-tick on the runner's Docker, with the f1 table loaded.
 # CI never calls OpenF1, F1, Cloudflare or healthchecks.io (invariant 4): deploy/tests/ci.override.yaml
 # keeps ingest and cloudflared out (profile "off"), nothing here enables a timer, and live runs only
-# because without ingest the session table is empty, so it idles and calls nothing (asserted here).
+# because without ingest the session table is empty, so it idles and calls nothing (asserted here);
+# step 11a's synthetic session exists only while live is stopped.
 # hc-ping.com is pinned to 127.0.0.1 in /etc/hosts and the dummy ping key is malformed, so every alert
 # logs alert_key_invalid (or alert_no_key) and sends nothing; the one request, in step 12, goes to
 # loopback (asserted at the end). It needs the images f1-server:ci and f1-web:ci (built by the job)
@@ -55,10 +56,16 @@
 #      refuses to deploy; with the conf back, f1-tick reloads the table and starts the stack.
 #  11. The restart loop: a throw-away unhealthy f1-e2e-sick-1 (label project f1) restarted in 4 ticks
 #      in a row alerts restart_loop on the third only; once it is gone, a tick clears the alert.
+# 11a. The recorder watch's positive path through the real f1-tick: live stopped first (invariant 4),
+#      then a synthetic session starting in 30 min and recorder_status 10 min old with login_failed:
+#      the first tick alerts recorder_missing, recorder_stale and login_failed once each with the
+#      session key and writes their state files, the second alerts none (dedupe); with a recording
+#      and a fresh status a third clears the three. The rows are deleted before live starts again.
 #  12. OnFailure: with an empty key and F1_SMOKE_TIMEOUT=bad (a runtime drop-in) f1-update.service
 #      fails, and f1-alert@f1-update.service.service logs alert_no_key unit_failed f1-update.service;
 #      with the malformed key the sandboxed f1-alert@e2e.service logs alert_key_invalid; with a
-#      22-character fake key f1-alert test_alert exits 1, curl 7 on the pinned loopback.
+#      22-character fake key f1-alert test_alert exits 1, curl 7 on the pinned loopback; with the
+#      key file moved away it exits 0 with alert_no_key.
 # Invariant 4 at the end: no alert_sent anywhere, the only alert_failed is step 12's, and at least one
 # alert_key_invalid or alert_no_key (so the check is not vacuous).
 # Not here: f1-update's revision check (server and web :main from different commits) runs on the
@@ -70,6 +77,9 @@ repo=$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/../.." && pwd)
 export F1_COMPOSE_OVERRIDE=$repo/deploy/tests/ci.override.yaml
 readonly STATE=/srv/f1/state URL=http://127.0.0.1:8180/healthz BIN=/usr/local/bin
 readonly DROPIN=/run/systemd/system/f1-update.service.d/e2e.conf
+readonly KEY_AWAY=/etc/f1/secrets/hc_ping_key.e2e # step 12's absent key (a rename keeps owner and mode)
+readonly WATCH_KEY=99104 # step 11a's synthetic meeting and session
+watch_rows=0             # 1 while step 11a's rows may exist: on_exit deletes them before live starts
 umask 022
 
 proofs=()
@@ -99,6 +109,11 @@ on_exit() {
     echo "::endgroup::"
   fi
   docker rm -f f1-e2e-sick-1 >/dev/null 2>&1 || true
+  # Invariant 4: live starts again only once step 11a's session is gone.
+  if ((watch_rows)) && docker exec f1-db-1 psql -U postgres -d f1 -v ON_ERROR_STOP=1 -tAc "DELETE FROM recording WHERE session_key = $WATCH_KEY; DELETE FROM session WHERE session_key = $WATCH_KEY; DELETE FROM meeting WHERE meeting_key = $WATCH_KEY" >/dev/null 2>&1; then
+    docker start f1-live-1 >/dev/null 2>&1 || true
+  fi
+  [[ ! -f $KEY_AWAY ]] || mv -f -- "$KEY_AWAY" /etc/f1/secrets/hc_ping_key
   if [[ -e $DROPIN ]]; then
     rm -f -- "$DROPIN"
     systemctl daemon-reload || true
@@ -452,6 +467,53 @@ run "$tmp/tick-healed" "$BIN/f1-tick"
 [[ ! -s $STATE/restarts ]] || fail "restarts after the loop ended: $(cat "$STATE/restarts")"
 proof "f1-e2e-sick-1 (always unhealthy) restarted by 4 ticks in a row: only the third alerted, '$(grep -o 'alert_key_invalid restart_loop.*' "$tmp/tick-sick3")', restarts then 'f1-e2e-sick-1 4'; removed, the next tick cleared alert-restart_loop and emptied restarts"
 
+# ------------------------------------------------------------------ 11a
+step "11a. The recorder watch through f1-tick: a due session alerts its three codes once, then clears"
+# psql_e2e <sql>: as postgres, the test's own writes (f1-tick reads as f1_api).
+psql_e2e() { docker exec f1-db-1 psql -U postgres -d f1 -v ON_ERROR_STOP=1 -tAc "$1" >/dev/null; }
+# Invariant 4: live stops before the session exists (SIGTERM writes idle), and starts only once it is gone.
+watch_rows=1
+docker stop f1-live-1 >/dev/null
+[[ $(docker inspect -f '{{.State.Running}}' f1-live-1) == false ]] || fail "f1-live-1 still runs"
+psql_e2e "INSERT INTO meeting (meeting_key, source, year) VALUES ($WATCH_KEY, 'openf1', 2026);
+  INSERT INTO session (session_key, source, meeting_key, date_start, date_end)
+    VALUES ($WATCH_KEY, 'openf1', $WATCH_KEY, now() + interval '30 minutes', now() + interval '90 minutes');
+  UPDATE recorder_status SET updated_at = now() - interval '10 minutes', warning = 'login_failed'"
+for round in 1 2 3; do
+  if ((round == 3)); then
+    psql_e2e "INSERT INTO recording (session_key, path, started_at) VALUES ($WATCH_KEY, '$WATCH_KEY-$(date +%s%3N)', now());
+      UPDATE recorder_status SET updated_at = now(), warning = NULL"
+  fi
+  run "$tmp/tick-watch$round" "$BIN/f1-tick"
+  ((rc == 0)) || fail "f1-tick exited $rc in watch round $round"
+  grep -q 'cannot run the recorder watch' "$tmp/tick-watch$round" && fail "f1-tick could not run the recorder watch in round $round"
+  for code in recorder_missing recorder_stale login_failed; do
+    n=$(grep -c "f1-alert: alert_key_invalid $code $WATCH_KEY\$" "$tmp/tick-watch$round") || true
+    if ((round == 1)); then
+      ((n == 1)) || fail "watch round 1 logged alert_key_invalid $code $WATCH_KEY $n times, not once"
+      [[ $(cat "$STATE/alert-$code" 2>&1) == "$WATCH_KEY" ]] || fail "alert-$code after round 1: $(cat "$STATE/alert-$code" 2>&1)"
+    else
+      grep -q "f1-alert: [a-z_]* $code " "$tmp/tick-watch$round" && fail "watch round $round alerted $code again"
+    fi
+    if ((round == 3)); then [[ ! -e $STATE/alert-$code ]] || fail "$STATE/alert-$code is left after round 3"; fi
+  done
+done
+# ON DELETE RESTRICT: the recording before its session.
+psql_e2e "DELETE FROM recording WHERE session_key = $WATCH_KEY; DELETE FROM session WHERE session_key = $WATCH_KEY;
+  DELETE FROM meeting WHERE meeting_key = $WATCH_KEY"
+[[ $(docker exec f1-db-1 psql -U postgres -d f1 -tAc "SELECT count(*) FROM session") == 0 ]] || fail "step 11a left a session"
+watch_rows=0
+docker start f1-live-1 >/dev/null
+live_state=''
+for _ in $(seq 40); do
+  live_state=$(docker exec f1-db-1 psql -U postgres -d f1 -tAc "SELECT state FROM recorder_status" 2>/dev/null || true)
+  [[ $live_state == idle && $(docker inspect -f '{{.State.Health.Status}}' f1-live-1 2>/dev/null || true) == healthy ]] && break
+  sleep 3
+done
+[[ $(docker inspect -f '{{.State.Health.Status}}' f1-live-1) == healthy ]] || fail "f1-live-1 is not healthy after step 11a"
+[[ $live_state == idle ]] || fail "recorder_status.state is '$live_state' after step 11a, not 'idle'"
+proof "live stopped, a synthetic session $WATCH_KEY starting in 30 min, recorder_status 10 min old with login_failed: tick 1 logged '$(grep -o "alert_key_invalid recorder_missing $WATCH_KEY" "$tmp/tick-watch1")', '$(grep -o "alert_key_invalid recorder_stale $WATCH_KEY" "$tmp/tick-watch1")' and '$(grep -o "alert_key_invalid login_failed $WATCH_KEY" "$tmp/tick-watch1")' once each and wrote alert-recorder_missing, alert-recorder_stale and alert-login_failed ($WATCH_KEY); tick 2 none (dedupe); with a recording and a fresh status, tick 3 cleared all three; the rows deleted, f1-live-1 healthy and idle again"
+
 # ------------------------------------------------------------------ 12
 step "12. OnFailure: a failed f1-update.service alerts through the sandboxed f1-alert@; one request, to loopback"
 # journal_has <unit> <text>: the unit's journal shows the text within 30 s (OnFailure is asynchronous).
@@ -486,9 +548,14 @@ printf 'ci-fake-ping-key-00000\n' >/etc/f1/secrets/hc_ping_key
 run "$tmp/alert-loopback" "$BIN/f1-alert" test_alert
 ((rc == 1)) || fail "f1-alert test_alert exited $rc on loopback, not 1"
 grep -q 'f1-alert: alert_failed test_alert (curl 7, http 000)$' "$tmp/alert-loopback" || fail "f1-alert did not log curl 7 on loopback"
+mv -- /etc/f1/secrets/hc_ping_key "$KEY_AWAY"
+run "$tmp/alert-nokey" "$BIN/f1-alert" test_alert
+((rc == 0)) || fail "f1-alert test_alert exited $rc without a key file, not 0"
+grep -q 'f1-alert: alert_no_key test_alert$' "$tmp/alert-nokey" || fail "f1-alert did not log alert_no_key without a key file"
+mv -- "$KEY_AWAY" /etc/f1/secrets/hc_ping_key
 printf 'ci.dummy.not.a.ping.key\n' >/etc/f1/secrets/hc_ping_key
 [[ $(stat -c '%a %u %g' /etc/f1/secrets/hc_ping_key) == '440 0 62006' ]] || fail "hc_ping_key lost root:62006 0440"
-proof "F1_SMOKE_TIMEOUT=bad (runtime drop-in): f1-update.service failed and its OnFailure logged '$(journalctl -u f1-alert@f1-update.service.service --no-pager -o cat | grep -o 'alert_no_key.*' | head -n 1)'; the sandboxed f1-alert@e2e.service read the malformed key: '$(journalctl -u f1-alert@e2e.service --no-pager -o cat | grep -o 'alert_key_invalid.*' | head -n 1)'; a 22-character fake key: exit 1, '$(grep -o 'alert_failed.*' "$tmp/alert-loopback")' (hc-ping.com -> $hc_ip); hc_ping_key root:62006 0440 again"
+proof "F1_SMOKE_TIMEOUT=bad (runtime drop-in): f1-update.service failed and its OnFailure logged '$(journalctl -u f1-alert@f1-update.service.service --no-pager -o cat | grep -o 'alert_no_key.*' | head -n 1)'; the sandboxed f1-alert@e2e.service read the malformed key: '$(journalctl -u f1-alert@e2e.service --no-pager -o cat | grep -o 'alert_key_invalid.*' | head -n 1)'; a 22-character fake key: exit 1, '$(grep -o 'alert_failed.*' "$tmp/alert-loopback")' (hc-ping.com -> $hc_ip); the key file moved away: exit 0, '$(grep -o 'alert_no_key.*' "$tmp/alert-nokey")'; hc_ping_key root:62006 0440 again"
 
 # ------------------------------------------------------------------ invariant 4
 journalctl -u 'f1-alert@*' --no-pager -o cat >"$tmp/journal-alert" 2>&1 || true
@@ -507,4 +574,4 @@ for s in ingest cloudflared; do
 done
 sessions=$(docker exec f1-db-1 psql -U postgres -d f1 -tAc "SELECT count(*) FROM session")
 [[ $sessions == 0 ]] || fail "the session table has $sessions rows: live was not idle"
-proof "no f1 timer is enabled; ingest and cloudflared never ran (no container of them exists); the session table stayed empty, so live never had a session to log in for; no alert_sent in the logs or the f1-alert@ journal, the only alert_failed is step 12's loopback one, and the alerts not sent: $not_sent"
+proof "no f1 timer is enabled; ingest and cloudflared never ran (no container of them exists); the session table is empty (step 11a's session existed only while live was stopped), so live never had a session to log in for; no alert_sent in the logs or the f1-alert@ journal, the only alert_failed is step 12's loopback one, and the alerts not sent: $not_sent"

@@ -28,9 +28,9 @@ die() {
 }
 
 # alert_once <code> <token> [<detail>] (#104): f1-alert <code> [<detail>], once per token:
-# $F1_STATE/alert-<code> keeps the token of the last alert that f1-alert took (sent, or no key to
-# send it with), so a failed request is tried again next run. Always returns 0, even on a full disk:
-# an alert never stops the script that raised it.
+# $F1_STATE/alert-<code> keeps the token of the last alert that f1-alert took (sent, or no key or a
+# malformed one to send it with), so a failed request is tried again next run. Always returns 0,
+# even on a full disk: an alert never stops the script that raised it.
 alert_once() {
   local file=$F1_STATE/alert-$1
   if [[ -f $file && $(<"$file") == "$2" ]]; then return 0; fi

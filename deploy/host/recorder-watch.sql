@@ -1,4 +1,4 @@
--- The recorder watch (#104, A§14.5). f1-tick runs it every 10 minutes as postgres in f1-db-1, in a READ ONLY
+-- The recorder watch (#104, A§14.5). f1-tick runs it every 10 minutes as f1_api in f1-db-1, in a READ ONLY
 -- transaction, and alerts each row's code through f1-ingest/fail once per session. One row per code at most, the
 -- earliest session's; root validates both fields. One SELECT, relative to now(), no parameters.
 --   recorder_missing  from date_start - 55 min until date_end, no recording of the session started since

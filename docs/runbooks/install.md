@@ -233,9 +233,10 @@ Invariant 5: F1 shares no healthchecks group with Waterheight.
 ```bash
 curl -sS -o /dev/null -w '%{http_code}\n' --max-time 10 https://hc-ping.com/
 sudo f1-alert test_alert; echo "exit $?"
+sudo systemctl start f1-alert@drill.service; sudo journalctl -u f1-alert@drill.service --no-pager
 ```
 
-Expected: `200` first (the [U] that the host itself reaches hc-ping.com: `table inet f1` has no output hook, but the host shares Waterheight's network, A§12.5), then `f1-alert: alert_sent test_alert` and `exit 0`. `f1-ingest` turns red with the body `test_alert` in its ping log, and the 00:30 UTC ping clears it. `alert_no_key test_alert` means the key file is empty, `alert_key_invalid test_alert` that it is not 22 characters of `A-Za-z0-9_-`, `alert_failed test_alert (curl <rc>, http <status>)` (exit 1) that the request failed: check the first command.
+Expected: an HTTP status first, not `000` (the [U] that the host itself reaches hc-ping.com: `table inet f1` has no output hook, but the host shares Waterheight's network, A§12.5; if it cannot, the fix stays out of Waterheight's firewall, invariant 5), then `f1-alert: alert_sent test_alert` and `exit 0`, then `f1-alert: alert_sent unit_failed drill` in the unit's journal: the sandboxed `f1-alert@` reaches hc-ping.com too, which CI cannot test. `f1-ingest` turns red with the body `test_alert` in its ping log, and the 00:30 UTC ping clears it. `alert_no_key test_alert` means the key file is empty, `alert_key_invalid test_alert` that it is not 22 characters of `A-Za-z0-9_-`, `alert_failed test_alert (curl <rc>, http <status>)` (exit 1) that the request failed: check the first command.
 
 `f1-live` (P2c): create a second check in the same project with slug `f1-live`. `live` pings `https://hc-ping.com/<ping key>/f1-live` only when a recording ends complete (a normal stop, the session seen to start, a token throughout, no disconnect over 60 s inside the session), so it is quiet between race weekends. It pings `https://hc-ping.com/<ping key>/f1-live/fail` when a recording ends incomplete at a normal stop or on a disk failure, which alerts at once, so a failed weekend does not wait for the period; a cancelled or moved session and a SIGTERM (a deploy) ping neither. Pick a period and grace to suit that (the owner's choice; a long period such as 30 days keeps the summer break from alerting).
 

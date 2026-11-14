@@ -11,11 +11,13 @@
 #    Docker reports unhealthy: Docker itself restarts only a container that exited.
 #    /srv/f1/state/restarts keeps "<name> <rounds>" for the containers this step restarted in its
 #    last round, so a container restarted in 3 rounds in a row alerts "restart_loop <name>".
-# 4. The recorder watch (#104): /etc/f1/recorder-watch.sql in a read-only transaction in f1-db-1
-#    alerts "recorder_missing", "recorder_stale" or "login_failed" with the session key, once per
-#    session until the condition ends. It fails open: no database, no recorder alert this round.
+# 4. The recorder watch (#104): /etc/f1/recorder-watch.sql in a read-only transaction in f1-db-1,
+#    as f1_api with a 15 s statement_timeout, alerts "recorder_missing", "recorder_stale" or
+#    "login_failed" with the session key, once per session until the condition ends. It fails
+#    open: no database, no recorder alert this round.
 # 5. Writes "<UTC time> <free bytes of /srv/f1> <free bytes of the Docker data root>" to
-#    /srv/f1/state/disk; under 20 GiB on either alerts "disk_low", once until both are above again.
+#    /srv/f1/state/disk when both are readable; under 20 GiB on either (each read alone) alerts
+#    "disk_low", once until both are readable and above again.
 # The alerts go to f1-ingest/fail through alert_once (f1-lib.sh), each only once per condition;
 # /srv/f1/state/alert-<code> holds what alerted last. A failed run (exit 1) fails f1-tick.service,
 # whose OnFailure= sends "unit_failed f1-tick.service".
@@ -85,7 +87,9 @@ fi
 
 # Not under the lock: it only reads. Each line is "<code>|<session key>", from rows that containers
 # write (f1_ingest), so root takes only the three codes and a numeric key, and nothing else from it.
-if watch=$(timeout 20 docker exec -i f1-db-1 psql -X -q -tA -v ON_ERROR_STOP=1 -U postgres -d f1 -1 \
+# As f1_api (SELECT only), with 15 s in the server: timeout kills only the docker CLI.
+if watch=$(timeout 20 docker exec -i -e PGOPTIONS='-c statement_timeout=15s' f1-db-1 \
+  psql -X -q -tA -v ON_ERROR_STOP=1 -U f1_api -d f1 -1 \
   -c 'SET TRANSACTION READ ONLY' -f - <"$F1_ETC/recorder-watch.sql" 2>/dev/null); then
   seen=' '
   while IFS='|' read -r code key; do
@@ -106,14 +110,24 @@ docker_root=$(docker info -f '{{.DockerRootDir}}' 2>/dev/null) || docker_root=''
 free_f1=$(avail /srv/f1) || free_f1=''
 free_docker=''
 [[ $docker_root != /* ]] || free_docker=$(avail "$docker_root") || free_docker=''
-if [[ $free_f1 =~ ^[0-9]{1,18}$ && $free_docker =~ ^[0-9]{1,18}$ ]]; then
+# Each one alone: a readable disk under 20 GiB alerts even when the other cannot be read.
+ok_f1=0 ok_docker=0 low=0
+if [[ $free_f1 =~ ^[0-9]{1,18}$ ]]; then
+  ok_f1=1
+  ((10#$free_f1 >= DISK_LOW)) || low=1
+fi
+if [[ $free_docker =~ ^[0-9]{1,18}$ ]]; then
+  ok_docker=1
+  ((10#$free_docker >= DISK_LOW)) || low=1
+fi
+if ((low)); then
+  alert_once disk_low low
+elif ((ok_f1 && ok_docker)); then
+  alert_clear disk_low
+fi
+if ((ok_f1 && ok_docker)); then
   printf '%s %s %s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$free_f1" "$free_docker" | write_atomic "$F1_STATE/disk" 0600
   log "free disk: /srv/f1 $((10#$free_f1 / 1024 ** 3)) GiB, Docker data root $docker_root $((10#$free_docker / 1024 ** 3)) GiB"
-  if ((10#$free_f1 < DISK_LOW || 10#$free_docker < DISK_LOW)); then
-    alert_once disk_low low
-  else
-    alert_clear disk_low
-  fi
 else
   log "error: cannot read the free disk space of /srv/f1 and the Docker data root"
   rc=1

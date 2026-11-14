@@ -161,8 +161,9 @@ fi
 
 # A deploy recreates live and ends its recording (complete = f): hold while it records. Not only
 # 'recording': the recorder writes 'connecting' during a reconnect inside a recording. Fails open
-# (no db container on a first deploy, db down or wedged: the query gets 20 s) and on a row older
-# than 5 min or newer than 1 min from now (live is down), so a fix can deploy. A drill is held too.
+# (no db container on a first deploy, db down or wedged: the query gets 20 s, and 15 s in the
+# server) and on a row older than 5 min or newer than 1 min from now (live is down), so a fix can
+# deploy. A drill is held too. It reads as f1_api (SELECT only) over the container's local socket.
 # A container writes that row (f1_ingest is shared), so root caps the hold: held-since holds the
 # epoch of the first deferral of an unbroken chain (its mtime is the last one; a run every 10 min),
 # and after 14 h (a testing day + the 60 min lead + the 3 h stop) the deploy goes ahead. A live that
@@ -170,7 +171,7 @@ fi
 # `docker stop f1-live-1` (SIGTERM closes the row, complete = f, and writes idle; if live does not
 # exit within its 60 s grace, the row goes stale after 5 min), then run f1-update.
 HELD_SINCE=$F1_STATE/held-since
-held=$(timeout 20 docker exec f1-db-1 psql -U postgres -d f1 -tAc "SELECT coalesce(session_key::text, '-') FROM recorder_status WHERE state <> 'idle' AND updated_at > now() - interval '5 minutes' AND updated_at <= now() + interval '1 minute'" 2>/dev/null) || {
+held=$(timeout 20 docker exec -e PGOPTIONS='-c statement_timeout=15s' f1-db-1 psql -U f1_api -d f1 -tAc "SELECT coalesce(session_key::text, '-') FROM recorder_status WHERE state <> 'idle' AND updated_at > now() - interval '5 minutes' AND updated_at <= now() + interval '1 minute'" 2>/dev/null) || {
   log "warning: cannot read recorder_status: deploying without the hold"
   held=''
 }
