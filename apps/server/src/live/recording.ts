@@ -11,7 +11,7 @@ import {
   statSync,
   writeSync,
 } from 'node:fs';
-import { open, readdir, rename, rm, writeFile } from 'node:fs/promises';
+import { type FileHandle, open, readdir, rename, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { pipeline } from 'node:stream';
 import { pipeline as pipelineAsync } from 'node:stream/promises';
@@ -29,9 +29,10 @@ import { parseFeedLine } from './read.ts';
 // succeeds. Nothing here logs or throws into the socket handler: the recorder reads `failed`.
 
 const PLAIN = /^feed(-\d+)?\.jsonl$/;
-// Files from `live`, which parses the untrusted feed (A§12.1): no file is read through a symlink (ELOOP), and no line
-// grows without bound.
-export const NOFOLLOW = constants.O_RDONLY | constants.O_NOFOLLOW;
+// Files from `live`, which parses the untrusted feed (A§12.1): no file is read through a symlink (ELOOP) or unless it is
+// a regular file (`not_file`: O_NONBLOCK keeps a FIFO from blocking the open, and does nothing to a regular file), and
+// no line grows without bound.
+export const NOFOLLOW = constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK;
 const MAX_LINE = 8 * 2 ** 20; // a feed line is a few kB
 export const SEGMENT = /^feed-(\d+)\.jsonl(\.gz)?$/;
 
@@ -40,6 +41,15 @@ export const missing = (err: unknown): undefined => {
   if (codeOf(err) !== 'ENOENT') throw err;
 };
 const tooLarge = () => Object.assign(new Error('playback_too_large'), { code: 'playback_too_large' });
+export const notFile = () => Object.assign(new Error('not_file'), { code: 'not_file' });
+
+/** `path` opened with NOFOLLOW, if it is a regular file; else the handle is closed and it throws `not_file`. */
+export async function openFile(path: string): Promise<FileHandle> {
+  const fh = await open(path, NOFOLLOW);
+  if ((await fh.stat().catch(() => undefined))?.isFile()) return fh;
+  await fh.close();
+  throw notFile();
+}
 
 export type RecordingOptions = {
   dir: string;
@@ -262,8 +272,8 @@ export function splitter(): (chunk: Buffer) => Line[] {
 
 /** A sealed segment: the plain file while it is there (it is complete once renamed), else its gzip. */
 export async function* segment(dir: string, base: string, plain: boolean): AsyncGenerator<Line> {
-  const fh = plain ? await open(join(dir, base), NOFOLLOW).catch(missing) : undefined;
-  const file = (fh ?? (await open(join(dir, `${base}.gz`), NOFOLLOW))).createReadStream(); // closes its handle
+  const fh = plain ? await openFile(join(dir, base)).catch(missing) : undefined;
+  const file = (fh ?? (await openFile(join(dir, `${base}.gz`)))).createReadStream(); // closes its handle
   const source = fh ? file : pipeline(file, createGunzip(), () => {}); // an error surfaces in the loop below
   const split = splitter();
   try {

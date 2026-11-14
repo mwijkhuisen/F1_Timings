@@ -153,7 +153,7 @@ async function quiet(s = srv) {
 /** Until the sample is back at the baseline; on failure the diff shows what is still open. */
 async function backTo(baseline: Awaited<ReturnType<typeof sample>>, s = srv) {
   let now = await sample(s);
-  for (let i = 0; i < 100 && !(now.conns === 0 && now.fds <= baseline.fds && now.timeouts <= baseline.timeouts); i++) {
+  for (let i = 0; i < 600 && !(now.conns === 0 && now.fds <= baseline.fds && now.timeouts <= baseline.timeouts); i++) {
     await pause(50);
     now = await sample(s);
   }
@@ -322,7 +322,9 @@ describe('playback routes (f1_api login, Access JWT, real socket)', { timeout: 6
     expect(again).toBe(200);
   });
 
-  it('a stalled client is ended by the write timeout and frees its slot', async () => {
+  // Each wait below is a poll of up to ~30 s, for a slow runner (the 42 MB seek alone can take 10 s): the test's own
+  // timeout covers all of them.
+  it('a stalled client is ended by the write timeout and frees its slot', { timeout: 240_000 }, async () => {
     // A finished recording whose snapshot (6 topics of 7 MiB, each line under MAX_LINE) is far more than the socket
     // buffers of both ends hold, then 3 small lines. Seeked to the last big line, the stream is the snapshot, 3 deltas
     // and `end`: the snapshot fills the socket, the first delta waits in the response stream's own queue, and the next
@@ -374,6 +376,7 @@ describe('playback routes (f1_api login, Access JWT, real socket)', { timeout: 6
 
       lines.length = 0;
       const raw = connect({ host: '127.0.0.1', port });
+      raw.on('error', () => {}); // only a FIN counts below
       client = raw;
       await new Promise((resolve) => raw.once('connect', resolve));
       const head = new Promise<Buffer>((resolve) =>
@@ -389,7 +392,7 @@ describe('playback routes (f1_api login, Access JWT, real socket)', { timeout: 6
       expect((await sample(srv2)).conns).toBe(8); // the 7 and the raw client
 
       const logged = () => lines.map((l) => JSON.parse(l) as Record<string, unknown>);
-      for (let i = 0; i < 200 && !logged().some((l) => l.cause === 'write_timeout'); i++) await pause(50);
+      for (let i = 0; i < 600 && !logged().some((l) => l.cause === 'write_timeout'); i++) await pause(50);
       expect(logged()).toEqual([
         expect.objectContaining({ msg: 'playback open', snapshot_bytes: expect.any(Number) }),
         expect.objectContaining({ msg: 'playback', cause: 'write_timeout' }),
@@ -401,14 +404,14 @@ describe('playback routes (f1_api login, Access JWT, real socket)', { timeout: 6
       // slot is free: an 8th stream next to the 7 is a 200.
       expect(raw.destroyed).toBe(false);
       let conns = 8;
-      for (let i = 0; i < 100 && conns !== 7; i++) {
+      for (let i = 0; i < 600 && conns !== 7; i++) {
         await pause(50);
         conns = (await sample(srv2)).conns;
       }
       expect(conns).toBe(7);
       expect(raw.destroyed).toBe(false);
       let again = 503;
-      for (let i = 0; i < 100 && again === 503; i++) {
+      for (let i = 0; i < 600 && again === 503; i++) {
         const next = await call(open, base2);
         again = next.res.status;
         if (again === 503) await next.res.body?.cancel();
@@ -420,14 +423,13 @@ describe('playback routes (f1_api login, Access JWT, real socket)', { timeout: 6
 
       // Resumed, the raw client reads what the kernel still held and then the server's FIN.
       let ended = false;
-      raw.on('error', () => {}); // only a FIN counts below
       raw.once('end', () => {
         ended = true;
       });
       let deadline: NodeJS.Timeout | undefined;
       const closed = new Promise<string>((resolve) => {
         raw.once('close', () => resolve('close'));
-        deadline = setTimeout(() => resolve('deadline'), 10_000);
+        deadline = setTimeout(() => resolve('deadline'), 30_000);
       });
       raw.resume();
       expect(await closed).toBe('close');

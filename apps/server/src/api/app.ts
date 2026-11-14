@@ -683,7 +683,7 @@ export function createApp({
         if (codeOf(err) === 'write_timeout') {
           stream.abort();
           // abort() alone leaves the socket and its buffer open under @hono/node-server (#109); `close` cancels its reader.
-          (c.env as HttpBindings | undefined)?.outgoing.destroy(); // undefined under app.request()
+          (c.env as HttpBindings | undefined)?.outgoing?.destroy(); // undefined under app.request()
         }
       } finally {
         abort.abort();

@@ -1,3 +1,4 @@
+import { execFileSync } from 'node:child_process';
 import {
   existsSync,
   mkdirSync,
@@ -658,5 +659,12 @@ describe('recordingLines', () => {
       symlinkSync(join(root, 'elsewhere'), join(at, name));
       await expect(read(at)).rejects.toMatchObject({ code: 'ELOOP' });
     }
+  });
+
+  it('refuses a FIFO without blocking on it', async () => {
+    const at = join(root, 'fifo');
+    mkdirSync(at);
+    execFileSync('mkfifo', [join(at, 'feed-1.jsonl')]);
+    await expect(read(at)).rejects.toMatchObject({ code: 'not_file' });
   });
 });

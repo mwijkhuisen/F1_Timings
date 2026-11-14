@@ -6,7 +6,7 @@ import { markLaps } from '../timing/rules.ts';
 import { createLaps, type LapRow, qualifyingParts, type StintRow } from './laps.ts';
 import { createFeed } from './merge.ts';
 import { isObj, parseFeedLine, utc } from './read.ts';
-import { type Line, missing, NOFOLLOW, segment, segments, splitter } from './recording.ts';
+import { type Line, missing, NOFOLLOW, notFile, segment, segments, splitter } from './recording.ts';
 
 // State at T over one recording's files (A§11.3, ADR-0007): a replay from the first line up to T, then a delta per
 // change, paced by the live clock (T = now − delay) or the replay clock (T = at + elapsed × speed). The time axis is
@@ -127,7 +127,9 @@ async function* lines(dir: string, from: number): AsyncGenerator<Line | null | u
         continue;
       }
       gone = false;
-      const { ino } = await fh.stat();
+      const st = await fh.stat();
+      if (!st.isFile()) throw notFile(); // NOFOLLOW opened a FIFO without blocking
+      const { ino } = st;
       const buffer = Buffer.allocUnsafe(CHUNK);
       const split = splitter();
       let first: number | undefined;
