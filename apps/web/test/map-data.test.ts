@@ -73,8 +73,10 @@ describe('the outline files', () => {
       const at = cross([a, b], [p, q]);
       return at ? [{ at, seg: [q[0] - p[0], q[1] - p[1]] as Pt }] : [];
     });
-    const near = hits.filter(({ at }) => Math.hypot(at[0] - mid[0], at[1] - mid[1]) <= 0.05);
-    expect(near).toHaveLength(1);
+    // A bar through a vertex crosses both of its segments at one point: the nearest crossing counts.
+    const dist = ({ at }: { at: Pt }) => Math.hypot(at[0] - mid[0], at[1] - mid[1]);
+    const near = hits.filter((hit) => dist(hit) <= 0.05).sort((x, y) => dist(x) - dist(y));
+    expect(near.length).toBeGreaterThan(0);
     // Within 15° of perpendicular to the segment it crosses.
     const { seg } = near[0] as { seg: Pt };
     const cos =

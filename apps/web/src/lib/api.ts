@@ -193,7 +193,10 @@ export async function loadCircuitMap(id: string) {
   return { outline: outline?.outline ?? null, osm: osm && { water: osm.water, coast: osm.coast, roads: osm.roads } };
 }
 
-/** The outline files of `ids` by map id, each in once its chunk is (the season page, #91). */
+/**
+ * The outline files of `ids` by map id, each in once its chunk is (the season page, #91). A circuit without a file, or
+ * whose chunk fails to load, is missing from the map: its box stays empty, the circuit line still shows.
+ */
 export const useOutlines = (ids: readonly string[]): ReadonlyMap<string, Outline> =>
   useQueries({
     queries: ids.map((id) => ({

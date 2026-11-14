@@ -21,7 +21,7 @@ export const MAX_BYTES = 40_960;
 const BAR = 0.12;
 const PAD = 0.04;
 /** A START point farther than this from the drawn outline is refused, km: a typo, not a position. */
-const SNAP_KM = 0.1;
+const SNAP_KM = 0.04;
 
 /**
  * OpenF1 circuit_short_name → [bacinger id, native15]. native15 is true where Open-Meteo has a native 15-minute model
@@ -90,9 +90,9 @@ export const START: Readonly<Record<string, readonly [lat: number, lon: number]>
   // along the outline from this point (its first point).
   'es-2026': [40.46518, -3.61689],
   // formula1.com/en/latest/article/explained-how-every-silverstone-corner-got-its-name.idMlxFC2gfN2ApcPmifxN: "The
-  // drivers line up on the grid along the Hamilton Straight before embarking on the 239m run down to Abbey": 239 m
-  // before Abbey on the outline.
-  'gb-1948': [52.07879, -1.01535],
+  // drivers line up on the grid along the Hamilton Straight before embarking on the 239m run down to Abbey": the point
+  // of the outline 239 m before Abbey's apex.
+  'gb-1948': [52.0788, -1.01523],
 };
 
 type Pt = [number, number];
@@ -187,19 +187,30 @@ const side = (pts: readonly Pt[]) =>
  * across the segment there, its ends rounded. `off` is the snap distance; undefined past SNAP_KM (a typo in START).
  */
 export function startBar(pts: readonly Pt[], at: Pt, len: number): { bar: [Pt, Pt]; off: number } | undefined {
-  let best: { off: number; p: Pt; dx: number; dy: number } | undefined;
+  const n = pts.length;
+  /** The unit direction of segment i (from point i to the next). */
+  const dir = (i: number): Pt => {
+    const [a, b] = [pts[(i + n) % n] as Pt, pts[(i + n + 1) % n] as Pt];
+    const d = Math.hypot(b[0] - a[0], b[1] - a[1]);
+    return d === 0 ? [0, 0] : [(b[0] - a[0]) / d, (b[1] - a[1]) / d];
+  };
+  let best: { off: number; p: Pt; i: number; t: number } | undefined;
   pts.forEach((a, i) => {
-    const b = pts[(i + 1) % pts.length] as Pt;
+    const b = pts[(i + 1) % n] as Pt;
     const [dx, dy] = [b[0] - a[0], b[1] - a[1]];
     const len2 = dx * dx + dy * dy;
     if (len2 === 0) return;
     const t = Math.max(0, Math.min(1, ((at[0] - a[0]) * dx + (at[1] - a[1]) * dy) / len2));
     const p: Pt = [a[0] + t * dx, a[1] + t * dy];
     const off = Math.hypot(at[0] - p[0], at[1] - p[1]);
-    if (!best || off < best.off) best = { off, p, dx, dy };
+    if (!best || off < best.off) best = { off, p, i, t };
   });
   if (!best || best.off > SNAP_KM) return undefined;
-  const { p, dx, dy, off } = best;
+  const { p, i, t, off } = best;
+  // On a vertex the track's direction there is the bisector of its two segments, not either one alone.
+  const v = t < 1e-9 ? i : t > 1 - 1e-9 ? i + 1 : undefined;
+  const [ux, uy] = v === undefined ? dir(i) : [dir(v - 1)[0] + dir(v)[0], dir(v - 1)[1] + dir(v)[1]];
+  const [dx, dy] = Math.hypot(ux, uy) === 0 ? dir(i) : [ux, uy];
   const k = len / 2 / Math.hypot(dx, dy);
   return {
     bar: [
@@ -249,7 +260,11 @@ export function extract(
       log(`map-extract: ${name}: no outline ${id}`);
       return 1;
     }
-    if (/['\\]/.test(m.name)) throw new Error(`${id}: a quote or backslash in the name`);
+    // The values are written into TypeScript source: a string without a quote or backslash, and integers only.
+    if (typeof m.name !== 'string' || /['\\\n]/.test(m.name))
+      throw new Error(`${id}: a quote, backslash or newline in the name`);
+    if (!Number.isInteger(m.length_m) || !Number.isInteger(m.first_gp))
+      throw new Error(`${id}: a length or first GP that is not an integer`);
     const [lat, lon] = centre(lonLat);
     const pts = outlinePoints(lonLat);
     const out: { outline: string; viewBox?: string; start?: string } = {

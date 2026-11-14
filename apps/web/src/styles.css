@@ -1979,11 +1979,6 @@ header .theme[aria-pressed="true"] {
   stroke-width: 3px;
 }
 
-.thumb .sf,
-.big .sf {
-  stroke-linecap: butt;
-}
-
 .thumb.off path {
   stroke: var(--muted);
 }

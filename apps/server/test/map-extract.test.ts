@@ -254,7 +254,7 @@ describe('the outline run of map-extract', () => {
     // 150 m north of Silverstone's sourced point: 0.15 km / 110.57 km per degree of latitude.
     const off = { 'gb-1948': [52.07879 + 0.15 / 110.57, -1.01535] as const };
     expect(extract([], {}, (l) => lines.push(l), tmp(), off)).toBe(1);
-    expect(lines.at(-1)).toBe('map-extract: gb-1948: the start/finish point is more than 100 m off the outline');
+    expect(lines.at(-1)).toBe('map-extract: gb-1948: the start/finish point is more than 40 m off the outline');
   });
 
   test('a bar is perpendicular to the segment it snaps to, its length centred on the snapped point', () => {
@@ -272,5 +272,10 @@ describe('the outline run of map-extract', () => {
       off: expect.closeTo(0.03, 9),
     });
     expect(startBar(square, [0.5, 0.5], 0.2)).toBeUndefined();
+    // On a vertex (the corner at 1, 0): across the bisector of its two segments, not across either one.
+    expect(startBar(square, [1.01, -0.01], 0.2 * Math.SQRT2)?.bar).toEqual([
+      [0.9, 0.1],
+      [1.1, -0.1],
+    ]);
   });
 });
