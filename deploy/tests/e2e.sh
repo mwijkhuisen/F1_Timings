@@ -8,14 +8,21 @@
 # hc-ping.com is pinned to 127.0.0.1 in /etc/hosts and the dummy ping key is malformed, so every alert
 # logs alert_key_invalid (or alert_no_key) and sends nothing; the one request, in step 12, goes to
 # loopback (asserted at the end). It needs the images f1-server:ci and f1-web:ci (built by the job)
-# and nft, curl, flock, getent, journalctl and systemd-analyze.
+# and nft, curl, flock, getent, journalctl, systemd-analyze, ip netns, python3, groupadd and useradd.
+# The edge checks (1b, 3f, 3g, 3h) log every miss as an ::error:: line and go on, so one run shows
+# them all; the run fails at the end of 3h if any was missed. Their set-up failures fail at once.
 #   1. f1-install twice: the second run makes 0 changes; systemd-analyze verify on the units (the
 #      template f1-alert@.service too); f1-update.service and f1-tick.service have OnFailure=
 #      f1-alert@<unit>.service; /srv/f1/live, /srv/f1/archive and /srv/f1/state/live are 62532:62532 0700,
 #      /srv/f1/jolpica is root:62532 0750 and /srv/f1/state stays root 0700.
-#   2. Dummy cf_tunnel_token, hc_ping_key (malformed on purpose), f1tv_username and f1tv_password
-#      (f1-update says "not configured" while one is empty), and f1.env with CF_ACCESS_TEAM=ci and a
-#      64-hex AUD; 127.0.0.1 hc-ping.com in /etc/hosts, and getent resolves it to 127.0.0.1 only.
+#  1b. f1-install's guards, before any deploy: a Docker network on 10.62.3.0/24, a blackhole route
+#      10.62.5.0/24 (table 62999, which no rule uses), a host group 62005 and a host user 62532 each
+#      make it exit 1 with its conflict line and leave /etc/f1/compose.yaml as it was; then a clean
+#      run installs the checkout's file again.
+#   2. Dummy cf_tunnel_token, f1tv_username and f1tv_password, and f1.env with CF_ACCESS_TEAM=ci and a
+#      64-hex AUD. With hc_ping_key still empty, f1-update --server f1-server:ci --web f1-web:ci
+#      exits 0 with "not configured": no f1 container, no current.env. Then hc_ping_key (malformed on
+#      purpose); 127.0.0.1 hc-ping.com in /etc/hosts, and getent resolves it to 127.0.0.1 only.
 #   3. f1-update --server f1-server:ci --web f1-web:ci: exit 0, current.env, /healthz 200 on
 #      127.0.0.1:8180 (caddy, api and db as 62532; the publish through f1-publish; local tags),
 #      every container healthy when it returns (the smoke test waits for that); live is idle on an
@@ -29,6 +36,22 @@
 #  3d. The jolpica job (profile jobs) on the empty /srv/f1/jolpica: exit 1 with jolpica_done error bad_dump.
 #  3e. F1_REVISION (#98): the f1-server:ci image's ENV equals its revision label, and the f1-web:ci build
 #      embeds it under /srv/www/assets.
+#  3f. What Caddy serves on 127.0.0.1:8180 (deploy/web/Caddyfile): 10 requests (the SPA, /healthz, a
+#      missing file, POST, a 2 KB body to the api and to /healthz, a dotfile, a missing asset, an
+#      unknown /api path, the api's own 401); each has its status, the 8 site headers exactly and no
+#      Server or Via; GET / has Cache-Control no-cache, the 405 Allow GET, HEAD, the asset miss no
+#      immutable Cache-Control.
+#  3g. The firewall (A§14.3), with table inet f1 and without it: a veth into the netns e2e-fw holds a
+#      /30 in each private range (10/8, 172.16/12, 192.168/16, 100.64/10, 169.254/16; not 127/8) and in
+#      TEST-NET-3 (203.0.113.0/24, the public stand-in), with python3 listeners there and on the
+#      gateways of f1-egress and f1-publish. `ip route get` puts every target on e2e-fw0 or on the host
+#      before any probe. A node probe (f1-server:ci in the container's network namespace) from live:
+#      every private :443 and the f1-egress gateway dropped, 203.0.113.2:443 open (the positive
+#      control); from caddy: 203.0.113.2:443 and the f1-publish gateway dropped. Without the table all
+#      9 are open, so the drops are the table's. f1-firewall.service loads it again.
+#  3h. The recreate path: caddy labelled through an extra compose file, then f1-install with a changed
+#      /etc/f1/compose.yaml recreates the stack and smoke-tests it (caddy has a new Id and no label);
+#      a second run makes 0 changes. The edge checks fail here if any was missed.
 #   4. Egress from api to a non-Cloudflare host is blocked.
 #  4b. f1-measure 60s 2 in the background; after 8 s `docker restart f1-live-1`, then SIGTERM: exit 0
 #      and the summary (the signal path), stats rows for db, api, caddy and live, the disk rows
@@ -97,6 +120,12 @@ fail() {
   echo "::error::e2e: $*"
   exit 1
 }
+missed=() # misses of the edge checks (1b, 3f, 3g, 3h): logged at once; the run fails at the end of 3h
+miss() {
+  missed+=("$*")
+  echo "::error::e2e: $*"
+}
+fw_pids=() # step 3g's listeners
 on_exit() {
   local rc=$?
   ((group == 0)) || echo "::endgroup::"
@@ -109,6 +138,8 @@ on_exit() {
     echo "::endgroup::"
   fi
   docker rm -f f1-e2e-sick-1 >/dev/null 2>&1 || true
+  ((${#fw_pids[@]} == 0)) || kill "${fw_pids[@]}" 2>/dev/null || true
+  ip netns del e2e-fw 2>/dev/null || true
   # Invariant 4: live starts again only once step 11a's session is gone.
   if ((watch_rows)) && docker exec f1-db-1 psql -U postgres -d f1 -v ON_ERROR_STOP=1 -tAc "DELETE FROM recording WHERE session_key = $WATCH_KEY; DELETE FROM session WHERE session_key = $WATCH_KEY; DELETE FROM meeting WHERE meeting_key = $WATCH_KEY" >/dev/null 2>&1; then
     docker start f1-live-1 >/dev/null 2>&1 || true
@@ -138,6 +169,8 @@ run() {
   "$@" >"$out" 2>&1 || rc=$?
   cat "$out"
 }
+# must <command…>: a set-up step of an edge check; its failure fails the run at once.
+must() { "$@" || fail "set-up failed: $*"; }
 
 # ------------------------------------------------------------------ 1
 step "1. f1-install twice (the second makes no change), systemd-analyze verify"
@@ -163,9 +196,54 @@ done
 [[ $(stat -c '%a %u:%g' /srv/f1/state) == '700 0:0' ]] || fail "/srv/f1/state is not root 0700: $(stat -c '%a %u:%g' /srv/f1/state)"
 proof "f1-install ran twice, the second: '$(tail -n 1 "$tmp/install2")'; f1-firewall.service active, table inet f1 loaded (resolvers4 $(nft list set inet f1 resolvers4 | grep -o 'elements = {[^}]*}' || echo empty)); systemd-analyze verify passes: $(echo /etc/systemd/system/f1-*); OnFailure: f1-update.service -> $(systemctl show -p OnFailure --value f1-update.service), f1-tick.service -> $(systemctl show -p OnFailure --value f1-tick.service); /srv/f1/live, /srv/f1/archive and /srv/f1/state/live are 62532:62532 0700, /srv/f1/state is still root 0700"
 
+# ------------------------------------------------------------------ 1b
+step "1b. f1-install's guards: an overlapping subnet, a used GID or UID stops it before it installs anything"
+n=${#missed[@]}
+# refused <case> <text>: f1-install exits 1 with <text> and leaves /etc/f1/compose.yaml alone (it
+# differs from the checkout here, so a guard that did not stop would install the file again).
+refused() {
+  local sha
+  printf '# e2e: differs from the checkout\n' >>/etc/f1/compose.yaml
+  sha=$(sha256sum </etc/f1/compose.yaml)
+  run "$tmp/guard-$1" "$repo/deploy/bin/f1-install"
+  ((rc == 1)) || miss "1b $1: f1-install exited $rc, not 1"
+  grep -qF -- "$2" "$tmp/guard-$1" || miss "1b $1: f1-install did not log '$2'"
+  [[ $(sha256sum </etc/f1/compose.yaml) == "$sha" ]] || miss "1b $1: f1-install changed /etc/f1/compose.yaml"
+}
+# Not f1-*: the guard skips f1's own networks and routes.
+must docker network create --subnet 10.62.3.0/24 e2e-overlap
+refused subnet 'conflict: 10.62.3.0/24 overlaps the Docker network e2e-overlap'
+must docker network rm e2e-overlap
+must ip route add blackhole 10.62.5.0/24 table 62999
+refused route 'conflict: 10.62.5.0/24 overlaps the route 10.62.5.0/24 dev none'
+must ip route del blackhole 10.62.5.0/24 table 62999
+must groupadd -g 62005 e2e-gid
+refused gid 'gid 62005 is already the host group e2e-gid'
+must groupdel e2e-gid
+must useradd -M -N -u 62532 -s /usr/sbin/nologin e2e-uid
+refused uid 'uid 62532 is already the host user e2e-uid'
+must userdel e2e-uid
+run "$tmp/install3" "$repo/deploy/bin/f1-install"
+((rc == 0)) || miss "1b: the clean f1-install after the guards exited $rc"
+cmp -s "$repo/deploy/compose.yaml" /etc/f1/compose.yaml || miss "1b: the clean f1-install did not install the checkout's compose.yaml"
+if ((${#missed[@]} == n)); then
+  proof "f1-install refused 4 times with exit 1 and /etc/f1/compose.yaml unchanged: '$(grep -ohF 'conflict: 10.62.3.0/24 overlaps the Docker network e2e-overlap' "$tmp/guard-subnet")', '$(grep -ohF 'conflict: 10.62.5.0/24 overlaps the route 10.62.5.0/24 dev none' "$tmp/guard-route")', '$(grep -oh 'gid 62005 is already.*' "$tmp/guard-gid")', '$(grep -oh 'uid 62532 is already.*' "$tmp/guard-uid")'; then a clean run: exit 0, '$(tail -n 1 "$tmp/install3")', the checkout's compose.yaml installed (no current.env, so nothing recreated)"
+fi
+
 # ------------------------------------------------------------------ 2
-step "2. Dummy secrets (live reads the F1 TV ones only for a login, and none is due here), f1.env, the hc-ping.com pin"
+step "2. Dummy secrets (live reads the F1 TV ones only for a login, and none is due here), f1.env, 'not configured', the hc-ping.com pin"
 printf 'ci-dummy-tunnel-token\n' >/etc/f1/secrets/cf_tunnel_token
+printf 'ci-dummy-f1tv-user\n' >/etc/f1/secrets/f1tv_username
+printf 'ci-dummy-f1tv-pass\n' >/etc/f1/secrets/f1tv_password
+printf 'CF_ACCESS_TEAM=ci\nCF_ACCESS_AUD=%064d\n' 0 >/etc/f1/f1.env
+# Every setting but one: f1-update must stop at its readiness check. The drill flags name local images,
+# so a broken check deploys f1-server:ci and never pulls :main.
+[[ -f /etc/f1/secrets/hc_ping_key && ! -s /etc/f1/secrets/hc_ping_key ]] || fail "hc_ping_key is not the empty file f1-install leaves"
+run "$tmp/update0" "$BIN/f1-update" --server f1-server:ci --web f1-web:ci
+((rc == 0)) || fail "f1-update with an empty hc_ping_key exited $rc, not 0"
+grep -q 'not configured' "$tmp/update0" || fail "f1-update with an empty hc_ping_key did not log 'not configured'"
+[[ -z $(docker ps -aq --filter label=com.docker.compose.project=f1) ]] || fail "f1-update with an empty hc_ping_key created f1 containers"
+[[ ! -e $STATE/current.env ]] || fail "f1-update with an empty hc_ping_key wrote current.env"
 # Invariant 4, belt and braces: a ping key that fails healthchecks.ts's and f1-alert's 22-character
 # check, so no alert and no ping of live sends a request; and hc-ping.com on loopback only.
 printf 'ci.dummy.not.a.ping.key\n' >/etc/f1/secrets/hc_ping_key
@@ -173,14 +251,11 @@ cp /etc/hosts "$tmp/hosts"
 printf '127.0.0.1 hc-ping.com\n' >>/etc/hosts
 hc_ip=$(getent ahosts hc-ping.com | awk '{print $1}' | sort -u) || true
 [[ $hc_ip == 127.0.0.1 ]] || fail "hc-ping.com resolves to '$hc_ip', not 127.0.0.1 only"
-printf 'ci-dummy-f1tv-user\n' >/etc/f1/secrets/f1tv_username
-printf 'ci-dummy-f1tv-pass\n' >/etc/f1/secrets/f1tv_password
-printf 'CF_ACCESS_TEAM=ci\nCF_ACCESS_AUD=%064d\n' 0 >/etc/f1/f1.env
 [[ $(stat -c '%a %u %g' /etc/f1/secrets/cf_tunnel_token) == '440 0 62005' ]] || fail "cf_tunnel_token lost root:62005 0440"
 [[ $(stat -c '%a %u %g' /etc/f1/secrets/hc_ping_key) == '440 0 62006' ]] || fail "hc_ping_key lost root:62006 0440"
 [[ $(stat -c '%a %u %g' /etc/f1/secrets/f1tv_username) == '440 0 62007' ]] || fail "f1tv_username lost root:62007 0440"
 [[ $(stat -c '%a %u %g' /etc/f1/secrets/f1tv_password) == '440 0 62008' ]] || fail "f1tv_password lost root:62008 0440"
-proof "cf_tunnel_token, hc_ping_key (malformed: ci.dummy.not.a.ping.key), f1tv_username and f1tv_password hold dummies (root:<gid> 0440 kept), f1.env has CF_ACCESS_TEAM=ci and a 64-hex AUD; /etc/hosts pins hc-ping.com, getent ahosts: $hc_ip"
+proof "with only hc_ping_key empty, f1-update --server f1-server:ci --web f1-web:ci: exit 0, '$(grep -o 'not configured.*' "$tmp/update0")', no f1 container, no current.env; cf_tunnel_token, hc_ping_key (malformed: ci.dummy.not.a.ping.key), f1tv_username and f1tv_password hold dummies (root:<gid> 0440 kept), f1.env has CF_ACCESS_TEAM=ci and a 64-hex AUD; /etc/hosts pins hc-ping.com, getent ahosts: $hc_ip"
 
 # ------------------------------------------------------------------ 3
 step "3. First deploy: f1-update --server f1-server:ci --web f1-web:ci"
@@ -253,6 +328,182 @@ grep -qx "F1_REVISION=$rev" <<<"$env_lines" || fail "f1-server:ci has no ENV F1_
 docker run --rm --entrypoint grep f1-web:ci -rlF "$rev" /srv/www/assets >/dev/null \
   || fail "f1-web:ci embeds no $rev under /srv/www/assets"
 proof "F1_REVISION=$rev is the f1-server:ci ENV and sits in the f1-web:ci bundle (/srv/www/assets)"
+
+# ------------------------------------------------------------------ 3f
+step "3f. What Caddy serves: each status with the 8 site headers and no Server or Via"
+n=${#missed[@]}
+# deploy/web/Caddyfile's (site_headers), exactly.
+readonly SITE_HEADERS=(
+  "content-security-policy: default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self' data:; font-src 'self'; connect-src 'self'; manifest-src 'self'; worker-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'; object-src 'none'"
+  'strict-transport-security: max-age=31536000; includeSubDomains'
+  'x-content-type-options: nosniff'
+  'referrer-policy: strict-origin-when-cross-origin'
+  'permissions-policy: geolocation=(), camera=(), microphone=()'
+  'cross-origin-opener-policy: same-origin'
+  'cross-origin-resource-policy: same-origin'
+  'x-robots-tag: noindex'
+)
+head -c 2048 /dev/zero | tr '\0' x >"$tmp/2k" # over the api's 1 KB request_body limit
+edge_seen=()
+# edge <status> <path> [<curl args…>]: one request to 127.0.0.1:8180; its headers stay in $tmp/edge.h.
+edge() {
+  local want=$1 path=$2 what status h got
+  shift 2
+  what="$path${*:+ ${*//"$tmp/"/}}"
+  : >"$tmp/edge.h"
+  if ! curl -sS --max-time 5 -o "$tmp/edge.b" -D "$tmp/edge.raw" "$@" "http://127.0.0.1:8180$path"; then
+    miss "3f $what: curl failed"
+    return 0
+  fi
+  tr -d '\r' <"$tmp/edge.raw" >"$tmp/edge.h"
+  status=$(head -n 1 "$tmp/edge.h")
+  edge_seen+=("$what ${status#HTTP/* }")
+  [[ $status =~ ^HTTP/[0-9.]+\ $want(\ |$) ]] || miss "3f $what: '$status', not $want"
+  for h in "${SITE_HEADERS[@]}"; do
+    grep -qixF -- "$h" "$tmp/edge.h" && continue
+    got=$(grep -i "^${h%%:*}:" "$tmp/edge.h" || echo 'none')
+    miss "3f $what ($want): ${h%%:*} is '$got'"
+  done
+  got=$(grep -iE '^(server|via):' "$tmp/edge.h" || true)
+  [[ -z $got ]] || miss "3f $what ($want): names the software: ${got//$'\n'/; }"
+}
+edge 200 /
+grep -qix 'cache-control: no-cache' "$tmp/edge.h" || miss "3f / (200): $(grep -i '^cache-control:' "$tmp/edge.h" || echo 'no Cache-Control'), not no-cache"
+edge 200 /healthz
+edge 404 /nope.txt # @missing_file, not the app
+edge 405 / -X POST
+grep -qix 'allow: GET, HEAD' "$tmp/edge.h" || miss "3f POST / (405): $(grep -i '^allow:' "$tmp/edge.h" || echo 'no Allow'), not GET, HEAD"
+# GET with a body (a POST is the 405). The 413 is Caddy's, through handle_errors; the second is /healthz,
+# the other route that imports to_api.
+edge 413 /api/v1/seasons -X GET -H 'Expect:' --data-binary @"$tmp/2k"
+edge 413 /healthz -X GET -H 'Expect:' --data-binary @"$tmp/2k"
+edge 404 /.git/config
+edge 404 /assets/nope.js
+if grep -qiE '^cache-control:.*immutable' "$tmp/edge.h"; then miss "3f /assets/nope.js (404): $(grep -i '^cache-control:' "$tmp/edge.h")"; fi
+# The api answers any /api/* without an Access JWT with 401, so this 404 is Caddy's own.
+edge 404 /api/x
+# Caddy never builds a 401: this is the api, through the proxy.
+edge 401 /api/v1/seasons
+if ((${#missed[@]} == n)); then
+  printf -v seen '%s; ' "${edge_seen[@]}"
+  proof "127.0.0.1:8180, ${#edge_seen[@]} requests, each with the 8 site headers exactly and no Server or Via: ${seen%; }; GET / Cache-Control no-cache, the 405 Allow GET, HEAD, the asset miss without immutable"
+fi
+
+# ------------------------------------------------------------------ 3g
+step "3g. The firewall, with table inet f1 and without it: no private range, no host, no egress from f1-publish"
+n=${#missed[@]}
+# A /30 in each private range that from_f1 drops (127/8 cannot be routed off the host) and in TEST-NET-3,
+# the public stand-in: <p>.1 on the host's e2e-fw0, <p>.2 in the netns. Not f1-*: no f1 rule names them.
+readonly FW_PRIVATE=(10.255.62 172.31.62 192.168.62 100.127.62 169.254.62) FW_PUBLIC=203.0.113
+must mkdir -p "$tmp/www"
+must ip netns add e2e-fw
+must ip link add e2e-fw0 type veth peer name e2e-fw1 netns e2e-fw
+for p in "${FW_PRIVATE[@]}" "$FW_PUBLIC"; do
+  must ip addr add "$p.1/30" dev e2e-fw0
+  must ip -n e2e-fw addr add "$p.2/30" dev e2e-fw1
+done
+must ip link set e2e-fw0 up
+must ip -n e2e-fw link set e2e-fw1 up
+must ip -n e2e-fw link set lo up
+must ip -n e2e-fw route add default via "$FW_PUBLIC.1"
+gw_egress=$(docker network inspect -f '{{(index .IPAM.Config 0).Gateway}}' f1-egress)
+gw_publish=$(docker network inspect -f '{{(index .IPAM.Config 0).Gateway}}' f1-publish)
+# Safety (invariant 4): every target is the netns behind e2e-fw0 or an address of an f1 bridge on this host.
+for p in "${FW_PRIVATE[@]}" "$FW_PUBLIC"; do
+  route=$(ip -o route get "$p.2") || fail "3g: no route to $p.2"
+  [[ $route == "$p.2 dev e2e-fw0 "* ]] || fail "3g: $p.2 does not go to e2e-fw0: $route"
+done
+for b in f1-egress f1-publish; do
+  gw=$gw_egress
+  [[ $b == f1-egress ]] || gw=$gw_publish
+  ip -o -4 addr show dev "$b" | grep -qF " inet $gw/" || fail "3g: the gateway '$gw' is not an address of the bridge $b"
+  [[ $(ip -o route get "$gw") == "local $gw dev lo "* ]] || fail "3g: $gw is not local: $(ip -o route get "$gw")"
+done
+ip netns exec e2e-fw python3 -I -m http.server 443 --bind 0.0.0.0 --directory "$tmp/www" >"$tmp/fw-ns.log" 2>&1 &
+fw_pids+=("$!")
+for gw in "$gw_egress" "$gw_publish"; do
+  python3 -I -m http.server 18080 --bind "$gw" --directory "$tmp/www" >"$tmp/fw-$gw.log" 2>&1 &
+  fw_pids+=("$!")
+done
+fw_targets=("${FW_PRIVATE[@]/%/.2:443}" "$FW_PUBLIC.2:443" "$gw_egress:18080" "$gw_publish:18080")
+# The host's own output is not filtered (the table has no output hook): every listener answers it.
+for t in "${fw_targets[@]}"; do
+  for i in $(seq 10); do
+    curl -fsS --max-time 2 -o /dev/null "http://$t/" 2>/dev/null && break
+    ((i < 10)) || fail "3g: http://$t/ does not answer the host"
+    sleep 1
+  done
+done
+# One node process connects to every target at once: open, dropped (no answer in 3 s) or the error code.
+readonly FW_PROBE="const net = require('node:net');
+for (const t of process.argv.slice(1)) {
+  const i = t.lastIndexOf(':');
+  const s = net.connect({ host: t.slice(0, i), port: Number(t.slice(i + 1)), timeout: 3000 });
+  s.on('connect', () => { console.log(t, 'open'); s.destroy(); });
+  s.on('timeout', () => { console.log(t, 'dropped'); s.destroy(); });
+  s.on('error', (e) => console.log(t, e.code));
+}"
+fw_seen=()
+# fw_expect <container> <want> <target…>: the probe in <container>'s network namespace, so its packets
+# leave on that container's own bridges; a miss for each target that is not <want>.
+fw_expect() {
+  local c=$1 want=$2 out line
+  shift 2
+  out=$(docker run --rm --pull never --network "container:$c" --entrypoint /nodejs/bin/node f1-server:ci \
+    -e "$FW_PROBE" "$@" 2>"$tmp/fw-probe.err") || miss "3g $c ($fw_state): the probe failed: $(cat "$tmp/fw-probe.err")"
+  printf '%s\n' "$out" | sed "s/^/$c ($fw_state)| /"
+  [[ $(grep -c . <<<"$out") == "$#" ]] || miss "3g $c ($fw_state): $(grep -c . <<<"$out") results for $# targets"
+  while read -r line; do
+    [[ -n $line ]] || continue
+    fw_seen+=("$fw_state: ${c%-1} -> $line")
+    [[ $line == *" $want" ]] || miss "3g $c ($fw_state): $line, not $want"
+  done <<<"$out"
+}
+fw_state='table loaded'
+fw_expect f1-live-1 dropped "${FW_PRIVATE[@]/%/.2:443}" "$gw_egress:18080"
+fw_expect f1-live-1 open "$FW_PUBLIC.2:443" # the positive control: the drops above are the rules'
+fw_expect f1-caddy-1 dropped "$FW_PUBLIC.2:443" "$gw_publish:18080"
+must nft delete table inet f1
+fw_state='no table'
+fw_expect f1-live-1 open "${FW_PRIVATE[@]/%/.2:443}" "$gw_egress:18080" "$FW_PUBLIC.2:443"
+fw_expect f1-caddy-1 open "$FW_PUBLIC.2:443" "$gw_publish:18080"
+must systemctl restart f1-firewall.service
+nft list table inet f1 >/dev/null || fail "3g: f1-firewall.service did not load table inet f1 again"
+kill "${fw_pids[@]}" 2>/dev/null || true
+wait "${fw_pids[@]}" 2>/dev/null || true
+fw_pids=()
+must ip netns del e2e-fw
+if ((${#missed[@]} == n)); then
+  printf -v seen '%s; ' "${fw_seen[@]}"
+  proof "the f1 firewall, probed by node in live's and caddy's network namespaces (targets behind e2e-fw0 or on the f1-egress and f1-publish bridges, by ip route get): ${seen%; }; f1-firewall.service loaded the table again"
+fi
+
+# ------------------------------------------------------------------ 3h
+step "3h. f1-install recreates a running stack whose compose.yaml changed, and smoke-tests it"
+n=${#missed[@]}
+printf '%s\n' 'services:' '  caddy:' '    labels: ["f1.e2e=stale"]' >"$tmp/label.yaml"
+run "$tmp/label" docker compose -p f1 -f /etc/f1/compose.yaml -f "$F1_COMPOSE_OVERRIDE" -f "$tmp/label.yaml" \
+  --env-file "$STATE/current.env" up -d caddy
+((rc == 0)) || fail "3h: compose up -d caddy with the label exited $rc"
+caddy_label() { docker inspect -f '{{with index .Config.Labels "f1.e2e"}}{{.}}{{end}}' f1-caddy-1; }
+[[ $(caddy_label) == stale ]] || fail "3h: caddy has no label f1.e2e=stale: '$(caddy_label)'"
+caddy_id=$(docker inspect -f '{{.Id}}' f1-caddy-1)
+printf '# e2e: differs from the checkout\n' >>/etc/f1/compose.yaml
+run "$tmp/install-recreate" "$repo/deploy/bin/f1-install"
+((rc == 0)) || miss "3h: f1-install with a changed compose.yaml exited $rc"
+grep -qx 'changed  the f1 stack recreated with the new compose.yaml' "$tmp/install-recreate" || miss "3h: f1-install did not recreate the stack"
+grep -q 'smoke test passed' "$tmp/install-recreate" || miss "3h: f1-install did not pass its smoke test"
+new_id=$(docker inspect -f '{{.Id}}' f1-caddy-1 2>&1) || true
+[[ $new_id != "$caddy_id" ]] || miss "3h: caddy was not recreated (Id ${caddy_id:0:12})"
+label=$(caddy_label 2>&1) || true
+[[ -z $label ]] || miss "3h: caddy still has the label f1.e2e: '$label'"
+run "$tmp/install-again" "$repo/deploy/bin/f1-install"
+[[ $(tail -n 1 "$tmp/install-again") == 'f1-install: 0 change(s)' ]] || miss "3h: the next f1-install: '$(tail -n 1 "$tmp/install-again")'"
+curl -fsS --max-time 5 -o /dev/null "$URL" || miss "3h: $URL is not 200 after the recreate"
+if ((${#missed[@]} == n)); then
+  proof "caddy labelled f1.e2e=stale (Id ${caddy_id:0:12}), compose.yaml changed: f1-install exit 0, 'changed  the f1 stack recreated with the new compose.yaml', '$(grep -o 'smoke test passed.*' "$tmp/install-recreate")', caddy now Id ${new_id:0:12} without the label; the next run '$(tail -n 1 "$tmp/install-again")'; $URL 200"
+fi
+((${#missed[@]} == 0)) || fail "${#missed[@]} edge check(s) failed (steps 1b, 3f, 3g, 3h): see the ::error:: lines above"
 
 # ------------------------------------------------------------------ 4
 step "4. Egress from api to a non-Cloudflare host is blocked"
