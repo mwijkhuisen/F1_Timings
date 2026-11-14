@@ -124,15 +124,15 @@ for want in "${subnets[@]}"; do
     fi
   done
 done
-((conflict == 0)) || echo "f1's subnets overlap the host's routes or Docker networks (O1): nothing installed; pick other subnets in a PR"
+((conflict == 0)) || die "f1's subnets overlap the host's routes or Docker networks (O1): nothing installed; pick other subnets in a PR"
 ok "subnets ${subnets[*]} (no overlap with ${#taken[@]} routes and Docker networks)"
 
 # The GID guard: F1's secret GIDs and its container uid/gid are its own (invariant 5). A host
 # group with one of them could read the secrets; a host user 62532 could read the database files.
 for entry in "${F1_SECRETS[@]}" container:62532; do
-  if grp=$(getent group "${entry##*:}"); then echo "gid ${entry##*:} is already the host group ${grp%%:*}: nothing installed"; fi
+  if grp=$(getent group "${entry##*:}"); then die "gid ${entry##*:} is already the host group ${grp%%:*}: nothing installed"; fi
 done
-if usr=$(getent passwd 62532); then echo "uid 62532 is already the host user ${usr%%:*}: nothing installed"; fi
+if usr=$(getent passwd 62532); then die "uid 62532 is already the host user ${usr%%:*}: nothing installed"; fi
 ok "gids 62001-62008 and uid/gid 62532 are not used on the host"
 
 # ------------------------------------------------------------------ directories
@@ -241,7 +241,7 @@ apply_compose() {
     die "the stack did not come back with the new compose.yaml: check 'docker compose -p f1 ps' and the update runbook"
   fi
 }
-if false; then
+if ((compose_changed)) && [[ -f $F1_STATE/current.env ]]; then
   fix "the f1 stack recreated with the new compose.yaml" apply_compose
 fi
 

@@ -34,6 +34,7 @@
 		max_size 1KB
 	}
 	# Deferred like the site block: nothing names the upstream software.
+	header -Via
 	reverse_proxy api:8080 {
 		header_up -Forwarded
 		header_up -X-Real-IP
@@ -42,9 +43,8 @@
 }
 
 :80 {
-	import site_headers
-
 	handle_errors {
+		import site_headers
 		respond "{err.status_code} {err.status_text}"
 	}
 
@@ -60,6 +60,7 @@
 	# site headers (file_server's own 405 would carry none and name the server).
 	@write not method GET HEAD
 	handle @write {
+		header Allow "GET, HEAD"
 		respond 405
 	}
 
@@ -73,12 +74,12 @@
 	# would fold case, merge slashes and resolve dot segments), and no dot
 	# segment is passed on. Any other /api path is a 404 from Caddy. The two
 	# matchers exclude each other, so their order does not matter.
-	@api_v1 expression `{path}.startsWith('/api/v2/') && !{path}.contains('/.')`
+	@api_v1 expression `{path}.startsWith('/api/v1/') && !{path}.contains('/.')`
 	handle @api_v1 {
 		import to_api
 	}
 	@api_other {
-		path /api
+		path /api /api/*
 		not expression `{path}.startsWith('/api/v1/') && !{path}.contains('/.')`
 	}
 	handle @api_other {
@@ -87,7 +88,7 @@
 
 	# No dotfile anywhere. A regexp, not a path matcher: Caddy re-sorts
 	# path-only matchers but keeps the order of the others.
-	@dotfiles path_regexp /\.env
+	@dotfiles path_regexp /\.
 	handle @dotfiles {
 		respond 404
 	}
@@ -100,6 +101,10 @@
 	@assets {
 		path /assets/*
 		not path */
+		file {
+			root /srv/www
+			try_files {path}
+		}
 	}
 	handle @assets {
 		header Cache-Control "public, max-age=31536000, immutable"
@@ -114,7 +119,7 @@
 	# A missing file with an extension (favicon.ico, robots.txt) is a 404, not
 	# the app. Answered here so that it keeps the site headers.
 	@missing_file {
-		path_regexp \.ico$
+		path_regexp \.[^/]*$
 		not {
 			file {
 				root /srv/www
@@ -131,7 +136,7 @@
 	# hashed, so a page a browser kept past a deploy would ask for files the new
 	# image no longer has.
 	handle {
-		header /sw.js Cache-Control "no-cache"
+		header Cache-Control "no-cache"
 		root * /srv/www
 		try_files {path} /index.html
 		file_server
