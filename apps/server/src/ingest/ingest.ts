@@ -1,6 +1,7 @@
 import { isUnmatched } from '@f1/contracts';
 import { Cron } from 'croner';
 import { type Insertable, type Kysely, sql, type Transaction } from 'kysely';
+import pg from 'pg';
 import type { Logger } from 'pino';
 import { codeOf, type DB } from '../db/db.ts';
 import type { MergeCounts } from '../merge/merge.ts';
@@ -24,10 +25,20 @@ import {
 // counts and fixed codes only: never a URL, a password or a response body.
 
 const FIRST_YEAR = 2023;
-const SESSION_ENDPOINTS = ['drivers', 'laps', 'stints', 'pit', 'race_control', 'session_result', 'weather'] as const;
+export const SESSION_ENDPOINTS = [
+  'drivers',
+  'laps',
+  'stints',
+  'pit',
+  'race_control',
+  'session_result',
+  'weather',
+] as const;
 // Laps are not among them: writeLaps replaces OpenF1's candidates only and rebuilds `lap` (P3b). raw_response
 // goes on its own, for the grid (O1).
 const REPLACED = ['driver', 'stint', 'pit', 'race_control', 'result', 'weather'] as const;
+/** The ingest lock (#103): the daemon holds it, so a `backfill` next to it refuses (two limiters, A§8). */
+export const INGEST_LOCK = 0x4631_494e; // 'F1IN'
 
 export type Deps = {
   db: Kysely<DB>;
@@ -47,6 +58,8 @@ export type Deps = {
   report?: () => Promise<void>;
   /** The daemon's rain step (P5c, `createRainStep`), after the tick every minute; it never rejects. */
   rainStep?: (stopping: () => boolean) => Promise<void>;
+  /** The daemon's hold on the ingest lock (`ingestLock`, D1): without it the minute job skips the sync and the tick. */
+  held?: () => Promise<boolean>;
 };
 export type Outcome = Result<IngestState, ErrorCode | 'unknown_session' | 'live_session' | 'not_openf1'>;
 
@@ -59,7 +72,7 @@ type GridLog =
   | 'no_quali';
 
 /** One OpenF1 call, parsed. The heartbeat follows each call, so slow but progressing work never goes stale. */
-async function fetchRows<E extends Endpoint>(
+export async function fetchRows<E extends Endpoint>(
   { client, beat }: Deps,
   endpoint: E,
   query: Query,
@@ -175,6 +188,21 @@ const lockSession = (trx: Transaction<DB>, key: number) =>
 const setProgress = (trx: Transaction<DB>, key: number, p: Progress) =>
   trx.updateTable('session').set(p).where('session_key', '=', key).execute();
 
+/** Replaces the session's child rows inside the caller's transaction: the REPLACED tables, then the laps (P3b). */
+export async function replaceRows(trx: Transaction<DB>, key: number, rows: SessionRows): Promise<MergeCounts> {
+  const { lap, ...children } = rows;
+  for (const table of REPLACED) await trx.deleteFrom(table).where('session_key', '=', key).execute();
+  // The cast: Kysely cannot relate a table name from a loop to its row type.
+  for (const [table, list] of Object.entries(children) as [keyof SessionRows, object[]][]) {
+    for (const chunk of chunks(list))
+      await trx
+        .insertInto(table)
+        .values(chunk as never)
+        .execute();
+  }
+  return writeLaps(trx, key, 'openf1', lap);
+}
+
 /**
  * D6: fetch all seven endpoints (no write on any error), then one transaction: lock the
  * session row, decide from the locked row, replace raw responses and child rows (the laps
@@ -288,7 +316,13 @@ export async function processSession(deps: Deps, key: number, refetch = false): 
   }
   const { rows, skipped, rules } = normalised;
 
-  let done: { next: Progress; empty: boolean; merge?: MergeCounts; grid?: GridLog | undefined };
+  let done: {
+    next: Progress;
+    empty: boolean;
+    endpoints?: string[];
+    merge?: MergeCounts;
+    grid?: GridLog | undefined;
+  };
   try {
     done = await db.transaction().execute(async (trx) => {
       const row = await lockSession(trx, key);
@@ -299,14 +333,15 @@ export async function processSession(deps: Deps, key: number, refetch = false): 
         .where('session_key', '=', key)
         .where(sql<boolean>`jsonb_array_length(body) > 0`)
         .execute();
-      if (had.some((r) => data[r.endpoint as keyof typeof data]?.length === 0)) {
+      const emptied = had.filter((r) => data[r.endpoint as keyof typeof data]?.length === 0).map((r) => r.endpoint);
+      if (emptied.length > 0) {
         const next = afterFailure(row, 'empty', now());
         if (!refetch) await setProgress(trx, key, next);
-        return { next, empty: true };
+        return { next, empty: true, endpoints: emptied };
       }
       // O1 (A§8): the grid fails on its own. A keep leaves the stored grid raw row untouched and carries the old
       // grids over by driver (never its body, never a re-parse); only a fresh grid replaces both.
-      const { lap, ...children } = rows;
+      let result = rows.result;
       let gridLog: GridLog | undefined;
       let keep: { error: ErrorCode | 'no_quali'; issues?: ShapeError['issues'] } | undefined;
       let fresh: { graded: ReturnType<typeof withGrid>; raw: Insertable<DB['raw_response']> } | undefined;
@@ -331,7 +366,7 @@ export async function processSession(deps: Deps, key: number, refetch = false): 
         } else if (!grid.ok) {
           keep = { error: grid.error.last_error, ...(grid.error.issues && { issues: grid.error.issues }) };
         } else {
-          const graded = withGrid(children.result, grid.value.rows, quali);
+          const graded = withGrid(result, grid.value.rows, quali);
           if (graded.usable === 0 && stored) keep = { error: 'empty' };
           else
             fresh = {
@@ -347,7 +382,6 @@ export async function processSession(deps: Deps, key: number, refetch = false): 
             };
         }
       }
-      for (const table of REPLACED) await trx.deleteFrom(table).where('session_key', '=', key).execute();
       // The grid raw row goes with the rest only when there is none to keep or replace.
       await trx
         .deleteFrom('raw_response')
@@ -365,7 +399,7 @@ export async function processSession(deps: Deps, key: number, refetch = false): 
             .where('endpoint', '=', 'starting_grid')
             .execute();
           await trx.insertInto('raw_response').values(fresh.raw).execute();
-          children.result = fresh.graded.results;
+          result = fresh.graded.results;
           gridLog = { rows: fresh.graded.rows, skipped: fresh.graded.skipped };
         } catch {
           await sql`ROLLBACK TO SAVEPOINT grid`.execute(trx);
@@ -373,18 +407,10 @@ export async function processSession(deps: Deps, key: number, refetch = false): 
         }
       }
       if (keep) {
-        children.result = children.result.map((r) => ({ ...r, grid: old.get(r.driver_number) ?? null }));
-        gridLog = { ...keep, kept: children.result.filter((r) => r.grid !== null).length };
+        result = result.map((r) => ({ ...r, grid: old.get(r.driver_number) ?? null }));
+        gridLog = { ...keep, kept: result.filter((r) => r.grid !== null).length };
       }
-      // The cast: Kysely cannot relate a table name from a loop to its row type.
-      for (const [table, list] of Object.entries(children) as [keyof SessionRows, object[]][]) {
-        for (const chunk of chunks(list))
-          await trx
-            .insertInto(table)
-            .values(chunk as never)
-            .execute();
-      }
-      const merge = await writeLaps(trx, key, 'openf1', lap);
+      const merge = await replaceRows(trx, key, { ...rows, result });
       const next = afterSuccess(row, now());
       await setProgress(trx, key, next);
       return { next, empty: false, merge, grid: gridLog };
@@ -393,7 +419,9 @@ export async function processSession(deps: Deps, key: number, refetch = false): 
     return fail('db', { cause: codeOf(err) });
   }
   if (done.empty) {
-    log.error(line({ state: refetch ? 'unchanged' : done.next.ingest_state, last_error: 'empty' }), 'session');
+    // The emptied endpoints (fixed names), for `accept-empty` (#103).
+    const state = refetch ? 'unchanged' : done.next.ingest_state;
+    log.error(line({ state, last_error: 'empty', endpoints: done.endpoints }), 'session');
     if (!refetch && done.next.ingest_state === 'failed') await deps.ping?.('f1-ingest/fail', 'session_failed empty');
     return { ok: false, error: 'empty' };
   }
@@ -533,9 +561,25 @@ const yearRange = (from: number, to: number) => Array.from({ length: to - from +
 /**
  * Every year from 2023, then each past session that is neither final nor cancelled, newest
  * first, once. Resumable: the state is in the database. True when nothing failed. A live
- * window stops it (run it again afterwards).
+ * window stops it (run it again afterwards), and so does a running daemon (`daemon_running`, #103).
  */
 export async function backfill(deps: Deps): Promise<boolean> {
+  // Never next to the daemon: two limiters. A session-level lock on a connection held for the run (as archive's).
+  return deps.db.connection().execute(async (conn) => {
+    const { rows } = await sql<{ ok: boolean }>`SELECT pg_try_advisory_lock(${INGEST_LOCK}) AS ok`.execute(conn);
+    if (rows[0]?.ok !== true) {
+      deps.log.error({ error: 'daemon_running' }, 'backfill');
+      return false;
+    }
+    try {
+      return await backfillJob(deps);
+    } finally {
+      await sql`SELECT pg_advisory_unlock(${INGEST_LOCK})`.execute(conn);
+    }
+  });
+}
+
+async function backfillJob(deps: Deps): Promise<boolean> {
   const stopped = async (done: number, failed: number) => {
     if (!(await live(deps))) return false;
     deps.log.error({ done, failed }, 'backfill: live session, stopping');
@@ -603,18 +647,26 @@ export function scheduleSync(deps: Deps, onSynced?: (at: Date) => void) {
 }
 
 /**
- * The minute job inside the busy guard: the schedule sync when due, the tick, then the rain step, which also runs
- * when the sync or the tick throws. Never rejects, as long as the rain step never does.
+ * The minute job inside the busy guard: the schedule sync when due and the tick, only while the daemon holds the
+ * ingest lock (D1, #103), then the rain step, which also runs without the lock or when the sync or the tick throws.
+ * Never rejects, as long as the rain step never does.
  */
 export async function minuteWork(
-  job: { sync: () => Promise<void>; tick: () => Promise<unknown>; rain?: Deps['rainStep'] | undefined },
+  job: {
+    sync: () => Promise<void>;
+    tick: () => Promise<unknown>;
+    rain?: Deps['rainStep'] | undefined;
+    held?: Deps['held'] | undefined;
+  },
   log: Pick<Logger, 'error'>,
   stopping: () => boolean,
 ): Promise<void> {
   if (stopping()) return;
   try {
-    await job.sync();
-    await job.tick();
+    if ((await job.held?.()) ?? true) {
+      await job.sync();
+      await job.tick();
+    }
   } catch (err) {
     log.error({ cause: codeOf(err) }, 'tick failed'); // the code only: busyGuard needs fn not to reject
   }
@@ -627,7 +679,78 @@ export function daemon(deps: Deps, stopped: () => boolean) {
   const health = ingestHealth(deps);
   const sync = scheduleSync(deps, health.synced);
   const ticking = { ...deps, report: health.report };
-  return { sync: sync.run, tick: () => tick(ticking, stopped), rain: deps.rainStep, request: sync.request };
+  return {
+    sync: sync.run,
+    tick: () => tick(ticking, stopped),
+    rain: deps.rainStep,
+    held: deps.held,
+    request: sync.request,
+  };
+}
+
+/**
+ * The daemon's hold on INGEST_LOCK (#103): a pg client of its own, outside the pool, so the lock lives as long as that
+ * session. `held()` probes a held client with `SELECT 1` (a dead one is dropped), then, without one, connects and tries
+ * the lock once: it keeps the client on success and ends it otherwise. A lost connection drops the lock, and that same
+ * call takes it again. Logs `ingest lock` on transitions only (error level when not held); never throws, an error is
+ * logged as a code.
+ */
+export function ingestLock(url: URL | string, log: Pick<Logger, 'info' | 'error'>) {
+  let client: pg.Client | undefined;
+  let logged: boolean | undefined;
+  const report = (held: boolean, cause?: string) => {
+    if (held === logged) return;
+    logged = held;
+    if (held) log.info({ held }, 'ingest lock');
+    else log.error({ held, cause }, 'ingest lock');
+  };
+  const drop = (c: pg.Client, err?: unknown) => {
+    if (client !== c) return; // released, or never held
+    client = undefined;
+    report(false, err === undefined ? undefined : codeOf(err));
+    void c.end().catch(() => {});
+  };
+  return {
+    async held(): Promise<boolean> {
+      if (client) {
+        try {
+          await client.query('SELECT 1');
+          return true;
+        } catch (err) {
+          drop(client, err);
+        }
+      }
+      const c = new pg.Client({
+        connectionString: String(url),
+        connectionTimeoutMillis: 10_000,
+        query_timeout: 70_000,
+        keepAlive: true,
+      });
+      // Without an 'error' listener a dropped connection would crash the process.
+      c.on('error', (err) => drop(c, err));
+      c.on('end', () => drop(c));
+      try {
+        await c.connect();
+        const { rows } = await c.query<{ ok: boolean }>('SELECT pg_try_advisory_lock($1) AS ok', [INGEST_LOCK]);
+        if (rows[0]?.ok === true) {
+          client = c;
+          report(true);
+          return true;
+        }
+        report(false);
+      } catch (err) {
+        report(false, codeOf(err));
+      }
+      await c.end().catch(() => {});
+      return false;
+    },
+    /** Ends the lock's session, and the lock with it. */
+    async release(): Promise<void> {
+      const c = client;
+      client = undefined;
+      await c?.end().catch(() => {});
+    },
+  };
 }
 
 /**

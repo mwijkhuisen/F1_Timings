@@ -1,6 +1,7 @@
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { setTimeout as sleep } from 'node:timers/promises';
 import { type Kysely, sql } from 'kysely';
 import { HttpResponse, http } from 'msw';
 import pino from 'pino';
@@ -13,13 +14,16 @@ import {
   backfill,
   type Deps,
   daemon,
+  INGEST_LOCK,
   ingestHealth,
+  ingestLock,
   processSession,
   SYNC_RETRY_MS,
   scheduleSync,
   syncSchedule,
   tick,
 } from '../src/ingest/ingest.ts';
+import { acceptEmpty, rederive, refetch } from '../src/ingest/recovery.ts';
 import { ERROR_CODES } from '../src/ingest/state.ts';
 import { run } from '../src/main.ts';
 import { type Clock, createClient, OPENF1 } from '../src/openf1/client.ts';
@@ -1092,6 +1096,11 @@ describe('ingest (fixtures through msw, f1_ingest login)', { timeout: 120_000 },
     expect(typeof job.request).toBe('function');
   });
 
+  it('daemon() wires the ingest lock: held is the dependency itself', () => {
+    const held = async () => true;
+    expect(daemon({ ...deps, held }, () => false).held).toBe(held);
+  });
+
   it('report() upserts the one ingest_status row as f1_ingest; a restart keeps last_sync_at; tick reports', async () => {
     const row = () => db.selectFrom('ingest_status').selectAll().executeTakeFirstOrThrow();
     const synced = new Date('2026-11-02T00:30:00Z');
@@ -1113,9 +1122,427 @@ describe('ingest (fixtures through msw, f1_ingest login)', { timeout: 120_000 },
     expect(logged('report failed')).toBe(0);
   });
 
+  // #103: the recovery tools and the ingest lock, on the sessions above. Each test restores what it changes.
+  describe('recovery (#103)', () => {
+    const KEYS = [11388, 11392, 11383];
+    const parsed = () => lines.map((l) => JSON.parse(l));
+    const lastLine = () => JSON.parse(lines.at(-1) ?? '{}');
+    const lastOf = (msg: string, key?: number) =>
+      parsed().findLast((l) => l.msg === msg && (key === undefined || l.session_key === key));
+    const keyOf = (r: string) => Number(new URLSearchParams(r.split('?')[1]).get('session_key'));
+    const keysOf = (asked: string[]) => [...new Set(asked.map(keyOf))];
+    const isGrid = (r: string) => r.startsWith('starting_grid?');
+    const rawHashes = (key: number) =>
+      db
+        .selectFrom('raw_response')
+        .select(['endpoint', sql<string>`md5(body::text)`.as('h')])
+        .where('session_key', '=', key)
+        .orderBy('endpoint')
+        .execute();
+    const setBody = (key: number, endpoint: string, body: unknown) =>
+      db
+        .updateTable('raw_response')
+        .set({ body: JSON.stringify(body) })
+        .where('session_key', '=', key)
+        .where('endpoint', '=', endpoint)
+        .execute();
+    /** Per key: [deleted laps, laps with a qualifying phase], the rules' marks. */
+    const marks = () =>
+      Promise.all(
+        KEYS.map(async (key) => [
+          await countWhere('lap', key, 'deleted'),
+          await countWhere('lap', key, 'quali_phase IS NOT NULL'),
+        ]),
+      );
+    /** As an older rule or normaliser would have left the rows (the pre-P1c lap defaults). */
+    const stale = async () => {
+      await db
+        .updateTable('lap')
+        .set({ deleted: false, deleted_reason: null, quali_phase: null })
+        .where('session_key', 'in', KEYS)
+        .execute();
+      await db.deleteFrom('pit').where('session_key', '=', 11388).execute();
+      await db.updateTable('driver').set({ acronym: 'OLD' }).where('session_key', 'in', KEYS).execute();
+    };
+    // No client: rederive cannot reach OpenF1.
+    const rederiving = () => ({ db, log: deps.log, beat: deps.beat });
+
+    it('rederive derives the stored rows again from raw_response, with no OpenF1 request (A§2)', async () => {
+      at = new Date('2026-11-02T12:00:00Z');
+      openf1();
+      for (const key of KEYS) expect(await processSession(deps, key, true)).toEqual({ ok: true, value: 'final' });
+      const ingested = KEYS.map((key) => lastOf('session', key));
+      const before = await hashes();
+      const marked = await marks();
+      // The race has one deleted lap, the qualifying 49 laps with a phase (the fixtures; the sprint has neither).
+      expect(marked).toEqual([
+        [1, 0],
+        [0, 49],
+        [0, 0],
+      ]);
+      await stale();
+      expect(await marks()).toEqual(KEYS.map(() => [0, 0]));
+      expect(await hashes()).not.toEqual(before);
+
+      server.resetHandlers(); // any request would fail from here on
+      const sent = { requests: requests.length, beats };
+      expect(await rederive(rederiving(), KEYS)).toBe(true);
+      expect(await hashes()).toEqual(before); // race_control.id aside (the helper drops every id)
+      expect(await marks()).toEqual(marked);
+      expect(requests.length).toBe(sent.requests);
+      expect(beats - sent.beats).toBe(3); // after each session
+      // D2: the race's grid comes over by driver from the stored results.
+      expect(
+        await db
+          .selectFrom('result')
+          .select(['driver_number', 'grid'])
+          .where('session_key', '=', 11388)
+          .where('grid', '<=', 2)
+          .orderBy('grid')
+          .execute(),
+      ).toEqual([
+        { driver_number: 3, grid: 1 },
+        { driver_number: 16, grid: 2 },
+      ]);
+      // Each line counts what a fresh ingest counted.
+      KEYS.forEach((key, i) => {
+        const { rows, skipped, rules, merge } = ingested[i] ?? {};
+        expect(lastOf('rederive', key)).toMatchObject({ level: 30, rows, skipped, rules, merge });
+      });
+      expect(lastLine()).toMatchObject({ msg: 'rederive_done', sessions: 3, rederived: 3, skipped: 0, failed: 0 });
+
+      // --all: every OpenF1 session, newest first; those without raw rows (future, cancelled) are skipped.
+      await stale();
+      const { rows } = await sql<{ n: string; raw: string }>`
+        SELECT count(*) AS n, count(*) FILTER (WHERE EXISTS (SELECT 1 FROM raw_response r WHERE r.session_key = s.session_key)) AS raw
+        FROM session s WHERE source = 'openf1'`.execute(db);
+      const [n, raw] = [Number(rows[0]?.n), Number(rows[0]?.raw)];
+      expect(await rederive(rederiving(), 'all')).toBe(true);
+      expect(await hashes()).toEqual(before);
+      expect(requests.length).toBe(sent.requests);
+      expect(lastLine()).toMatchObject({
+        msg: 'rederive_done',
+        sessions: n,
+        rederived: raw,
+        skipped: n - raw,
+        failed: 0,
+      });
+      const all = parsed().slice(-n - 1, -1);
+      expect(all.filter((l) => l.skipped === 'no_raw')).toHaveLength(n - raw);
+      expect(all.find((l) => l.session_key === 5001)).toBeUndefined(); // the archive session is not OpenF1's
+    });
+
+    it('rederive skips a session without raw rows; a body that no longer parses, an archive or unknown key fails', async () => {
+      server.resetHandlers();
+      expect(await rederive(rederiving(), [11405])).toBe(true); // a future session: nothing fetched yet
+      expect(lastOf('rederive')).toMatchObject({ level: 30, session_key: 11405, skipped: 'no_raw' });
+
+      const pit = await db
+        .selectFrom('raw_response')
+        .selectAll()
+        .where('session_key', '=', EMPTY)
+        .where('endpoint', '=', 'pit')
+        .executeTakeFirstOrThrow();
+      await db.deleteFrom('raw_response').where('session_key', '=', EMPTY).where('endpoint', '=', 'pit').execute();
+      expect(await rederive(rederiving(), [EMPTY])).toBe(true);
+      expect(lastOf('rederive')).toMatchObject({ session_key: EMPTY, skipped: 'incomplete' });
+      expect(lastLine()).toMatchObject({ msg: 'rederive_done', sessions: 1, rederived: 0, skipped: 1, failed: 0 });
+      await db
+        .insertInto('raw_response')
+        .values({ ...pit, body: JSON.stringify(pit.body) })
+        .execute();
+
+      // A schema failure names the endpoint and zod's paths and codes, never the value, and writes nothing.
+      const { body } = await db
+        .selectFrom('raw_response')
+        .select('body')
+        .where('session_key', '=', 11392)
+        .where('endpoint', '=', 'laps')
+        .executeTakeFirstOrThrow();
+      const laps = body as Record<string, unknown>[];
+      await setBody(11392, 'laps', [{ ...laps[0], lap_duration: 'SECRET-VALUE' }, ...laps.slice(1)]);
+      const before = await hashes();
+      expect(await rederive(rederiving(), [11392])).toBe(false);
+      expect(await hashes()).toEqual(before);
+      expect(lastOf('rederive')).toMatchObject({
+        level: 50,
+        session_key: 11392,
+        error: 'schema',
+        endpoint: 'laps',
+        issues: [{ path: '[0].lap_duration', code: 'invalid_type' }],
+      });
+      expect(lines.join('')).not.toContain('SECRET-VALUE');
+      await setBody(11392, 'laps', laps);
+
+      expect(await rederive(rederiving(), [5001, 999_999, 11405])).toBe(false);
+      expect(parsed().slice(-4)).toMatchObject([
+        { msg: 'rederive', session_key: 5001, error: 'not_openf1' },
+        { msg: 'rederive', session_key: 999_999, error: 'unknown_session' },
+        { msg: 'rederive', session_key: 11405, skipped: 'no_raw' },
+        { msg: 'rederive_done', level: 50, sessions: 3, rederived: 0, skipped: 1, failed: 2 },
+      ]);
+    });
+
+    it('refetch --failed takes the failed sessions, newest first, on one limiter: at most 25 requests in any 60 s', async () => {
+      const failed = [11388, 11392, 11383, EMPTY];
+      await db
+        .updateTable('session')
+        .set({ ingest_state: 'failed', next_fetch_at: null, fail_count: 9, last_error: 'http_500' })
+        .where('session_key', 'in', failed)
+        .execute();
+      expect(await count('session', "ingest_state = 'failed'")).toBe(4);
+      const starts: number[] = []; // the virtual clock at each request
+      openf1(() => void starts.push(virtual));
+      const sent = requests.length;
+      expect(await refetch(deps, 'failed')).toBe(true);
+      const asked = requests.slice(sent);
+      expect(asked).toHaveLength(30); // 4 × 7, and the race's and the sprint's grid: above 25 a minute
+      expect(keysOf(asked.filter((r) => !isGrid(r)))).toEqual([11392, 11388, 11383, EMPTY]);
+      expect(keysOf(asked.filter(isGrid))).toEqual([11384, 11379]);
+      for (const key of failed)
+        expect(await session(key)).toMatchObject({ ingest_state: 'final', fail_count: 0, last_error: null });
+      const inWindow = (t: number) => starts.filter((u) => u >= t && u < t + 60_000).length;
+      expect(Math.max(...starts.map(inWindow))).toBeLessThanOrEqual(25);
+      expect((starts.at(-1) ?? 0) - (starts[0] ?? 0)).toBeGreaterThanOrEqual(60_000);
+      expect(lastLine()).toMatchObject({ level: 30, msg: 'refetch_done', sessions: 4, done: 4, failed: 0 });
+
+      expect(await refetch(deps, 'failed')).toBe(true); // none left
+      expect(lastLine()).toMatchObject({ msg: 'refetch_done', sessions: 0, done: 0, failed: 0 });
+      expect(requests.length).toBe(sent + 30);
+    });
+
+    it('refetch --meeting takes its ended, not cancelled sessions, and the race and sprint grids', async () => {
+      // Marina Bay (1296): 11378 cancelled, 11379 ended 10 min ago (the backfill waits 35 min).
+      const sprintQuali = await session(11379);
+      await db.updateTable('session').set({ is_cancelled: true }).where('session_key', '=', 11378).execute();
+      await db
+        .updateTable('session')
+        .set({ date_end: new Date(at.getTime() - 10 * 60_000) })
+        .where('session_key', '=', 11379)
+        .execute();
+      openf1();
+      const sent = requests.length;
+      expect(await refetch(deps, { meeting: 1296 })).toBe(true);
+      const asked = requests.slice(sent);
+      expect(keysOf(asked.filter((r) => !isGrid(r)))).toEqual([11388, 11384, 11383]);
+      expect(asked.filter(isGrid)).toEqual(['starting_grid?session_key=11384', 'starting_grid?session_key=11379']);
+      expect(lastLine()).toMatchObject({ msg: 'refetch_done', sessions: 3, done: 3, failed: 0 });
+      await db.updateTable('session').set({ is_cancelled: false }).where('session_key', '=', 11378).execute();
+      await db
+        .updateTable('session')
+        .set({ date_end: sprintQuali.date_end })
+        .where('session_key', '=', 11379)
+        .execute();
+      expect(await session(11379)).toEqual(sprintQuali);
+
+      expect(await refetch(deps, { meeting: 999 })).toBe(false);
+      expect(lastLine()).toMatchObject({ level: 50, msg: 'refetch_done', sessions: 0, error: 'no_sessions' });
+      expect(requests.length).toBe(sent + asked.length);
+    });
+
+    it('a batch refetch stops at a live window: the first session is refused, the rest are not tried', async () => {
+      const keys = [11388, 11383];
+      const saved = await Promise.all(keys.map(session));
+      await db
+        .updateTable('session')
+        .set({ ingest_state: 'failed', next_fetch_at: null, fail_count: 9, last_error: 'http_500' })
+        .where('session_key', 'in', keys)
+        .execute();
+      const sent = requests.length;
+      const was = at;
+      at = new Date('2026-10-24T21:30:00Z'); // 11392 qualifying is live, 21:00–22:00
+      expect(await refetch(deps, 'failed')).toBe(false);
+      at = was;
+      expect(requests.length).toBe(sent);
+      expect(lastLine()).toMatchObject({ level: 50, msg: 'refetch_done', sessions: 2, done: 1, failed: 1 });
+      for (const row of saved)
+        await db
+          .updateTable('session')
+          .set({
+            ingest_state: row.ingest_state,
+            next_fetch_at: row.next_fetch_at,
+            fail_count: row.fail_count,
+            last_error: row.last_error,
+          })
+          .where('session_key', '=', row.session_key)
+          .execute();
+      expect(await Promise.all(keys.map(session))).toEqual(saved);
+    });
+
+    it('accept-empty deletes only the emptied raw row, once OpenF1 answers [] now; the next fetch takes the []', async () => {
+      const emptyPit = (endpoint: string, key: number) =>
+        endpoint === 'pit' && key === 11388 ? fixture('pit-empty') : undefined;
+      openf1(emptyPit);
+      expect(await processSession(deps, 11388, true)).toEqual({ ok: false, error: 'empty' });
+      expect(lastLine()).toMatchObject({
+        msg: 'session',
+        session_key: 11388,
+        state: 'unchanged',
+        last_error: 'empty',
+        endpoints: ['pit'],
+      });
+      const before = await rawHashes(11388);
+      const sent = requests.length;
+      expect(await acceptEmpty(deps, 11388, 'pit')).toBe(true);
+      expect(requests.slice(sent)).toEqual(['pit?session_key=11388']); // D4: one request
+      expect(lastLine()).toMatchObject({
+        level: 30,
+        msg: 'accept_empty',
+        session_key: 11388,
+        endpoint: 'pit',
+        rows: 5,
+      });
+      expect(await rawHashes(11388)).toEqual(before.filter((r) => r.endpoint !== 'pit'));
+      expect((await rowCounts(11388)).pit).toBe(5); // the data rows stay until the next fetch
+      expect(await processSession(deps, 11388, true)).toEqual({ ok: true, value: 'final' });
+      expect(await rowCounts(11388)).toMatchObject({ pit: 0, raw_response: 8 });
+
+      openf1();
+      expect(await processSession(deps, 11388, true)).toEqual({ ok: true, value: 'final' });
+      expect(await rowCounts(11388)).toMatchObject({ pit: 5, raw_response: 8 });
+    });
+
+    it('accept-empty refuses while OpenF1 has rows, for a stored [] (no request), in a live window, off OpenF1', async () => {
+      const before = { race: await rawHashes(11388), empty: await rawHashes(EMPTY) };
+      openf1();
+      let sent = requests.length;
+      expect(await acceptEmpty(deps, 11388, 'pit')).toBe(false);
+      expect(requests.length - sent).toBe(1);
+      expect(lastLine()).toMatchObject({
+        level: 50,
+        msg: 'accept_empty',
+        session_key: 11388,
+        endpoint: 'pit',
+        error: 'not_empty',
+      });
+      sent = requests.length;
+      expect(await acceptEmpty(deps, EMPTY, 'pit')).toBe(false);
+      expect(lastLine()).toMatchObject({ session_key: EMPTY, error: 'no_rows' });
+      const saved = at;
+      at = new Date('2026-10-30T22:30:00Z'); // Mexico practice 2 is live
+      expect(await acceptEmpty(deps, 11388, 'pit')).toBe(false);
+      expect(lastLine()).toMatchObject({ session_key: 11388, error: 'live_session' });
+      at = saved;
+      expect(await acceptEmpty(deps, 5001, 'pit')).toBe(false);
+      expect(lastLine()).toMatchObject({ session_key: 5001, error: 'not_openf1' });
+      expect(await acceptEmpty(deps, 999_999, 'pit')).toBe(false);
+      expect(lastLine()).toMatchObject({ session_key: 999_999, error: 'unknown_session' });
+      expect(requests.length).toBe(sent);
+      expect({ race: await rawHashes(11388), empty: await rawHashes(EMPTY) }).toEqual(before);
+    });
+
+    it('accept-empty deletes only the row it checked: one replaced while the request ran is `changed`', async () => {
+      const replaced = new Date(at.getTime() + 1000);
+      server.use(
+        http.get(
+          `${OPENF1}/pit`,
+          async ({ request }) => {
+            requests.push(`pit?${new URL(request.url).searchParams}`);
+            await db
+              .updateTable('raw_response')
+              .set({ fetched_at: replaced })
+              .where('session_key', '=', 11388)
+              .where('endpoint', '=', 'pit')
+              .execute(); // a fetch that stored a fresh row meanwhile
+            return fixture('pit-empty');
+          },
+          { once: true },
+        ),
+      );
+      const before = await rawHashes(11388);
+      expect(await acceptEmpty(deps, 11388, 'pit')).toBe(false);
+      expect(lastLine()).toMatchObject({ level: 50, msg: 'accept_empty', session_key: 11388, error: 'changed' });
+      expect(await rawHashes(11388)).toEqual(before);
+      expect(
+        (
+          await db
+            .selectFrom('raw_response')
+            .select('fetched_at')
+            .where('session_key', '=', 11388)
+            .where('endpoint', '=', 'pit')
+            .executeTakeFirstOrThrow()
+        ).fetched_at,
+      ).toEqual(replaced);
+    });
+
+    it('the recovery roles exit 0 or 1 through run(), without an OpenF1 request', async () => {
+      const env = { PATH: process.env.PATH, DATABASE_URL: testDb.urls.f1_ingest };
+      const exit = (...argv: string[]) => run(argv, env, () => {});
+      expect(await count('session', "ingest_state = 'failed'")).toBe(0);
+      const sent = requests.length;
+      const before = await hashes();
+      expect(await exit('rederive', '11388')).toBe(0);
+      expect(await hashes()).toEqual(before);
+      expect(await exit('rederive', '999999')).toBe(1);
+      expect(await exit('refetch', '--failed')).toBe(0);
+      expect(await exit('refetch', '--meeting', '999')).toBe(1);
+      expect(await exit('accept-empty', String(EMPTY), 'pit')).toBe(1); // its stored raw is []: no_rows
+      expect(await exit('rain-refetch', '11388')).toBe(1); // no_grid
+      expect(requests.length).toBe(sent);
+    });
+
+    it('the ingest lock: one holder; backfill refuses with daemon_running while it is held, refetch runs', async () => {
+      const a = ingestLock(testDb.urls.f1_ingest, deps.log);
+      const b = ingestLock(testDb.urls.f1_ingest, deps.log);
+      const admin = createDb(testDb.urls.admin);
+      const holder = async () =>
+        (
+          await sql<{ pid: number }>`
+            SELECT pid FROM pg_locks WHERE locktype = 'advisory' AND objid = ${INGEST_LOCK}
+            AND database = (SELECT oid FROM pg_database WHERE datname = current_database())`.execute(admin)
+        ).rows.map((r) => r.pid);
+      try {
+        expect(await a.held()).toBe(true);
+        expect(await b.held()).toBe(false);
+        expect(await a.held()).toBe(true);
+        expect(await b.held()).toBe(false);
+        // On transitions only: the error level when not held.
+        expect(parsed().filter((l) => l.msg === 'ingest lock')).toMatchObject([
+          { level: 30, held: true },
+          { level: 50, held: false },
+        ]);
+        expect(await holder()).toHaveLength(1);
+
+        openf1();
+        const sent = requests.length;
+        expect(await backfill(deps)).toBe(false);
+        expect(requests.length).toBe(sent);
+        expect(lastLine()).toMatchObject({ level: 50, msg: 'backfill', error: 'daemon_running' });
+        expect(await refetch(deps, [11388])).toBe(true); // no lock: the row lock serialises it
+        await a.release();
+        expect(await holder()).toEqual([]);
+        expect(await backfill(deps)).toBe(true);
+        expect(lastLine()).toMatchObject({ level: 30, msg: 'backfill', failed: 0 });
+        expect(await holder()).toEqual([]); // the backfill unlocked
+
+        // A lost connection (a database restart) loses the lock; the next call takes it again.
+        expect(await a.held()).toBe(true);
+        const [pid] = await holder();
+        await sql`SELECT pg_terminate_backend(${pid}, 5000)`.execute(admin);
+        const lost = () => parsed().filter((l) => l.msg === 'ingest lock').length === 3;
+        for (let i = 0; i < 100 && !lost(); i++) await sleep(20);
+        expect(lastOf('ingest lock')).toMatchObject({ level: 50, held: false, cause: '57P01' });
+        expect(await a.held()).toBe(true);
+        expect(lastOf('ingest lock')).toMatchObject({ level: 30, held: true });
+        const [again] = await holder();
+        expect(again).toBeDefined();
+        expect(again).not.toBe(pid);
+        expect(await b.held()).toBe(false);
+      } finally {
+        await a.release();
+        await b.release();
+        await admin.destroy();
+      }
+    });
+  });
+
   it('logs one line per session with fixed codes: no URL, password or response body', () => {
     const text = lines.join('');
     expect(text).not.toMatch(/openf1\.org|https?:|TRACK LIMITS|No results/);
+    // Nor a team name from the fixtures (the driver rows), the recovery lines (#103) included.
+    for (const c of ['normal', 'quali', 'sprint'])
+      for (const d of raw(`drivers-${c}`) as { team_name: string }[]) expect(text).not.toContain(d.team_name);
+    expect(lines.some((l) => l.includes('"msg":"rederive_done"'))).toBe(true);
     expect(text).not.toContain(new URL(testDb.urls.f1_ingest).password);
     const failure = lines.map((l) => JSON.parse(l)).find((l) => l.session_key === 11388 && l.last_error === 'http_500');
     expect(failure).toMatchObject({ msg: 'session', state: 'due', last_error: 'http_500' });

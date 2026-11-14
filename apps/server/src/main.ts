@@ -12,7 +12,8 @@ import { codeOf, createDb } from './db/db.ts';
 import { dbUrl, EXIT_CONFIG, runMigrate } from './db/migrate.ts';
 import { pingHealthchecks } from './healthchecks.ts';
 import { healthy, startHeartbeat, touch } from './heartbeat.ts';
-import { backfill, processSession, startIngest } from './ingest/ingest.ts';
+import { backfill, ingestLock, SESSION_ENDPOINTS, startIngest } from './ingest/ingest.ts';
+import { acceptEmpty, rainRefetch, rederive, refetch } from './ingest/recovery.ts';
 import { JOLPICA_DIR, jolpica } from './jolpica/job.ts';
 import { LIVE_DIR, startRecorder } from './live/recorder.ts';
 import { fill } from './merge/fill.ts';
@@ -29,6 +30,9 @@ export const ROLES = [
   'healthcheck',
   'refetch',
   'backfill',
+  'rederive',
+  'rain-refetch',
+  'accept-empty',
   'archive',
   'fill',
   'jolpica',
@@ -42,7 +46,9 @@ export const API_PORT = 8080;
 type Env = Readonly<Record<string, string | undefined>>;
 
 const USAGE =
-  `usage: main.js <${ROLES.join('|')}> (refetch takes a session_key; ` +
+  `usage: main.js <${ROLES.join('|')}> (refetch <session_key>|--failed|--meeting <meeting_key>; ` +
+  'rederive <session_key>...|--all; rain-refetch <session_key>; ' +
+  `accept-empty <session_key> <${SESSION_ENDPOINTS.join('|')}>; ` +
   'archive <year 2018-2022> [<session_key>...] [--token-file <path>] [--dir <path>]; ' +
   'fill <session_key>...|--all [--archive-dir <path>] [--live-dir <path>]; ' +
   'jolpica [<year 1950->...] [--dir <path>])';
@@ -65,13 +71,21 @@ export async function run(
   if (role === 'archive') return runArchive(rest, env, log);
   if (role === 'fill') return runFill(rest, env, log);
   if (role === 'jolpica') return runJolpica(rest, env, log);
-  if (rest.length !== (role === 'refetch' ? 1 : 0) || (role === 'refetch' && !/^\d{1,9}$/.test(rest[0] ?? ''))) {
-    return usage();
+  if (
+    role === 'ingest' ||
+    role === 'backfill' ||
+    role === 'refetch' ||
+    role === 'rederive' ||
+    role === 'rain-refetch' ||
+    role === 'accept-empty'
+  ) {
+    const job = parseIngest(role, rest);
+    return job === undefined ? usage() : runIngest(job, env, log);
   }
+  if (rest.length !== 0) return usage();
   if (role === 'healthcheck') return healthy() ? 0 : 1;
   if (role === 'migrate') return runMigrate(env, log);
   if (role === 'api') return runApi(env, log, apiPort);
-  if (role === 'ingest' || role === 'backfill' || role === 'refetch') return runIngest(role, Number(rest[0]), env, log);
   if (role === 'live') return runLive(env, log);
   role satisfies never; // a new role fails to compile until it is dispatched above
   return usage();
@@ -79,8 +93,65 @@ export async function run(
 
 const isRole = (role: string | undefined): role is Role => (ROLES as readonly string[]).includes(role ?? '');
 
-/** The f1_ingest roles (A§8): the daemon, the backfill job and `refetch <session_key>`. */
-async function runIngest(role: 'ingest' | 'backfill' | 'refetch', key: number, env: Env, log: (line: string) => void) {
+type IngestJob =
+  | { role: 'ingest' }
+  | { role: 'backfill' }
+  | { role: 'refetch'; which: number[] | 'failed' | { meeting: number } }
+  | { role: 'rederive'; keys: number[] | 'all' }
+  | { role: 'rain-refetch'; key: number }
+  | { role: 'accept-empty'; key: number; endpoint: (typeof SESSION_ENDPOINTS)[number] };
+
+const isKey = (k: string | undefined): k is string => k !== undefined && /^\d{1,9}$/.test(k);
+
+/**
+ * The f1_ingest roles' arguments (#103), or undefined: `refetch <key>|--failed|--meeting <key>`,
+ * `rederive <key>…|--all`, `rain-refetch <key>`, `accept-empty <key> <endpoint>`; the daemon and backfill take none.
+ * parseArgs throws on an unknown flag.
+ */
+function parseIngest(role: IngestJob['role'], argv: readonly string[]): IngestJob | undefined {
+  try {
+    if (role === 'refetch') {
+      const { values, positionals } = parseArgs({
+        args: [...argv],
+        allowPositionals: true,
+        options: { failed: { type: 'boolean', default: false }, meeting: { type: 'string' } },
+      });
+      // Exactly one of <key>, --failed and --meeting <key>.
+      if (positionals.length + Number(values.failed) + Number(values.meeting !== undefined) !== 1) return undefined;
+      if (values.failed) return { role, which: 'failed' };
+      const key = values.meeting ?? positionals[0];
+      if (!isKey(key)) return undefined;
+      return { role, which: values.meeting === undefined ? [Number(key)] : { meeting: Number(key) } };
+    }
+    if (role === 'rederive') {
+      const { values, positionals } = parseArgs({
+        args: [...argv],
+        allowPositionals: true,
+        options: { all: { type: 'boolean', default: false } },
+      });
+      const keys = values.all ? positionals.length === 0 : positionals.length > 0; // keys xor --all
+      if (!keys || !positionals.every(isKey)) return undefined;
+      return { role, keys: values.all ? 'all' : positionals.map(Number) };
+    }
+    if (role === 'rain-refetch')
+      return argv.length === 1 && isKey(argv[0]) ? { role, key: Number(argv[0]) } : undefined;
+    if (role === 'accept-empty') {
+      const [key, endpoint] = argv;
+      const known = SESSION_ENDPOINTS.find((e) => e === endpoint);
+      return argv.length === 2 && isKey(key) && known ? { role, key: Number(key), endpoint: known } : undefined;
+    }
+    return argv.length === 0 ? { role } : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * The f1_ingest roles (A§8): the daemon, the backfill job and the recovery tools (#103): `refetch`, `rederive`,
+ * `rain-refetch` and `accept-empty`.
+ */
+async function runIngest(job: IngestJob, env: Env, log: (line: string) => void) {
+  const { role } = job;
   const url = dbUrl('f1_ingest', env);
   if (typeof url === 'string') {
     log(`${role}: ${url}`);
@@ -91,22 +162,28 @@ async function runIngest(role: 'ingest' | 'backfill' | 'refetch', key: number, e
   const db = createDb(url, (err) => logger.error({ cause: codeOf(err) }, 'database pool error'));
   const beat = () => touch();
   const deps = { db, client: createClient({ onAttempt: beat }), now: () => new Date(), log: logger, beat };
+  let lock: ReturnType<typeof ingestLock> | undefined;
   try {
-    if (role === 'ingest') {
+    if (job.role === 'ingest') {
       // Only the daemon pings (the daily sync, and `/fail` for a session or grid that fails for good or a stalled
-      // backlog, #105) and has a rain step (P5c); the backfill and refetch jobs get neither.
+      // backlog, #105), has a rain step (P5c) and holds the ingest lock (#103); the jobs get none of them.
       const ping = (slug: string, body?: string) => pingHealthchecks(slug, logger, { body });
       const rain = { client: createRainClient({ onAttempt: beat }), budget: createBudget(systemClock) };
-      const daemon = { ...deps, ping };
+      lock = ingestLock(url, logger);
+      const daemon = { ...deps, ping, held: lock.held };
       await startIngest({ ...daemon, rainStep: createRainStep({ ...daemon, ...rain }) });
       return 0;
     }
-    if (role === 'backfill') return (await backfill(deps)) ? 0 : 1;
-    return (await processSession(deps, key, true)).ok ? 0 : 1;
+    if (job.role === 'backfill') return (await backfill(deps)) ? 0 : 1;
+    if (job.role === 'refetch') return (await refetch(deps, job.which)) ? 0 : 1;
+    if (job.role === 'rederive') return (await rederive(deps, job.keys)) ? 0 : 1;
+    if (job.role === 'rain-refetch') return (await rainRefetch(deps, job.key)) ? 0 : 1;
+    return (await acceptEmpty(deps, job.key, job.endpoint)) ? 0 : 1;
   } catch (err) {
     logger.error({ cause: codeOf(err) }, `${role} failed`); // the code only: a message could quote a value
     return 1;
   } finally {
+    await lock?.release();
     await db.destroy();
   }
 }

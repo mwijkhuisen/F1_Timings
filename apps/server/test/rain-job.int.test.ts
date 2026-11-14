@@ -9,6 +9,7 @@ import { server } from '../../../test/msw.setup.ts';
 import { createDb, type DB } from '../src/db/db.ts';
 import { pingHealthchecks } from '../src/healthchecks.ts';
 import { tick } from '../src/ingest/ingest.ts';
+import { rainRefetch } from '../src/ingest/recovery.ts';
 import { run } from '../src/main.ts';
 import { type Clock, createClient, OPENF1 } from '../src/openf1/client.ts';
 import { createBudget, createRainClient, FORECAST, HISTORICAL, MAX_PAUSE_MS } from '../src/rain/client.ts';
@@ -578,5 +579,70 @@ describe('rain job (Open-Meteo through msw, f1_ingest login)', { timeout: 120_00
     expect(logged('live session: waiting')).toHaveLength(1);
     expect(seen.map((s) => s.host)).toEqual(['forecast']);
     expect(await grid(100)).toMatchObject({ state: 'live', fetch_count: 1 });
+  });
+
+  it('rain-refetch makes a failed grid live and due now; the next step makes it final; else not_failed or no_grid', async () => {
+    await meeting(MC, 'Monte Carlo');
+    await session(100, MC, LIVE);
+    await admin
+      .insertInto('rain_grid')
+      .values({
+        session_key: 100,
+        source: 'open-meteo',
+        map_id: 'mc-1929',
+        centre_lat: 43.7367,
+        centre_lon: 7.4258,
+        size: 7,
+        step_m: 1500,
+        state: 'failed',
+        next_fetch_at: null,
+        fetch_count: 1,
+        fail_count: 9,
+        attempt_count: 10,
+        last_error: 'http_500',
+        updated_at: '2026-11-16T18:00:00Z',
+      })
+      .execute();
+    at = new Date('2026-11-17T00:00:00Z'); // past date_end + 24 h: the Historical host
+    const job = { db, now: () => at, log };
+    // Through the role (exit 0 and the state change): it logs to its own logger and reads the real clock.
+    const before = Date.now();
+    const env = { PATH: process.env.PATH, DATABASE_URL: testDb.urls.f1_ingest };
+    expect(await run(['rain-refetch', '100'], env, () => {})).toBe(0);
+    const requeued = await grid(100);
+    expect(requeued).toMatchObject({
+      state: 'live',
+      fetch_count: 1,
+      fail_count: 0,
+      attempt_count: 10,
+      last_error: null,
+    });
+    expect(requeued?.next_fetch_at?.getTime()).toBeGreaterThanOrEqual(before);
+    expect(requeued?.updated_at).toEqual(requeued?.next_fetch_at);
+    expect(logged('rain_refetch')).toEqual([]);
+    expect(seen).toEqual([]);
+    // The steps below run on the test's clock.
+    await admin
+      .updateTable('rain_grid')
+      .set({ next_fetch_at: at, updated_at: at })
+      .where('session_key', '=', 100)
+      .execute();
+
+    await daemon().run();
+    expect(seen.map((s) => s.host)).toEqual(['historical']);
+    expect(await grid(100)).toMatchObject({ state: 'final', next_fetch_at: null, fetch_count: 2, fail_count: 0 });
+    expect(await frames(100)).toHaveLength(15);
+
+    const final = await grid(100);
+    expect(await rainRefetch(job, 100)).toBe(false);
+    expect(await rainRefetch(job, 101)).toBe(false);
+    expect(await grid(100)).toEqual(final);
+    expect(await grid(101)).toBeUndefined();
+    expect(logged('rain_refetch')).toEqual([
+      expect.objectContaining({ level: 50, session_key: 100, error: 'not_failed' }),
+      expect.objectContaining({ level: 50, session_key: 101, error: 'no_grid' }),
+    ]);
+    expect(seen).toHaveLength(1);
+    expectClean();
   });
 });
