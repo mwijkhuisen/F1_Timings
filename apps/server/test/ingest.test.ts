@@ -263,6 +263,15 @@ describe('minuteWork (the daemon job inside the busy guard)', () => {
     },
   );
 
+  it('skips the sync and the tick while the ingest lock is not held (D1); the rain step still runs', async () => {
+    const { order, log, job } = setup();
+    await minuteWork({ ...job, held: async () => false }, log, () => false);
+    expect(order).toEqual(['rain']);
+    await minuteWork({ ...job, held: async () => true }, log, () => false);
+    expect(order).toEqual(['rain', 'sync', 'tick', 'rain']);
+    expect(log.error).not.toHaveBeenCalled();
+  });
+
   it('runs without a rain step (backfill and refetch have none), and runs nothing once stopping', async () => {
     const { order, log, job } = setup();
     await minuteWork({ sync: job.sync, tick: job.tick }, log, () => false);
