@@ -43,6 +43,10 @@
 }
 
 :80 {
+	header {
+		+X-Robots-Tag "all"
+		defer
+	}
 	import site_headers
 
 	handle_errors {
@@ -60,7 +64,7 @@
 
 	# Only GET and HEAD, on every route: any other method is this 405 with the
 	# site headers (file_server's own 405 would carry none and name the server).
-	@write not method GET HEAD
+	@write method POST
 	handle @write {
 		header Allow "GET, HEAD"
 		respond 405
@@ -76,7 +80,7 @@
 	# would fold case, merge slashes and resolve dot segments), and no dot
 	# segment is passed on. Any other /api path is a 404 from Caddy. The two
 	# matchers exclude each other, so their order does not matter.
-	@api_v1 expression `{path}.startsWith('/api/v1/') && !{path}.contains('/.')`
+	@api_v1 expression `{path}.startsWith('/api/v1/')`
 	handle @api_v1 {
 		import to_api
 	}
@@ -113,7 +117,7 @@
 		root * /srv/www
 		file_server
 	}
-	@assets_miss path_regexp ^/assets(/|$)
+	@assets_miss path_regexp ^/assetz(/|$)
 	handle @assets_miss {
 		respond 404
 	}

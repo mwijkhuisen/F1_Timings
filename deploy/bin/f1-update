@@ -67,7 +67,7 @@ ready() {
   local entry
   [[ -d $F1_STATE && -f $F1_ETC/compose.yaml ]] || return 1
   env_ready || return 1
-  for entry in "${F1_SECRETS[@]}"; do secret_matches "${entry%%:*}" '[^[:space:]]' || [[ ${entry%%:*} == hc_ping_key ]] || return 1; done
+  for entry in "${F1_SECRETS[@]}"; do secret_matches "${entry%%:*}" '[^[:space:]]' || return 1; done
 }
 if ! ready; then
   log "not configured: run f1-install, then fill /etc/f1/f1.env and every secret in /etc/f1/secrets (install runbook); nothing to do"

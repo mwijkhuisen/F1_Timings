@@ -115,14 +115,20 @@ Expected: the changed files as `changed  <path>`, `ok` for the rest, and `f1-ins
 
 - A migration must be expand-only for one release: add a table, column or view; never drop or rename what the previous release still reads. The old image then runs on the new schema, which is exactly what a rollback runs.
 - The contract step (drop, rename, tighten) goes into a later release, once no release you could roll back to needs the old shape.
-- `test/migrations.test.ts` enforces this (#107). It fails on an up section with `DROP`, `RENAME`, a column `TYPE` change or `SET NOT NULL` (comments and string literals do not count). The contract migration says why it is safe on a line of its own, and then passes:
+- `test/migrations.test.ts` enforces this (#107). It fails on an up section with `DROP`, `RENAME`, a column `TYPE` change, `SET NOT NULL`, `REVOKE`, an `ADD CONSTRAINT` that replaces nothing (a new constraint tightens an existing table) or an `ADD COLUMN ... NOT NULL` without a `DEFAULT` (the previous image's `INSERT`s fail). Comments and string literals do not count: they are lexed in one pass, left to right, so a `--` inside a string hides nothing. The contract migration says why it is safe on a line of its own above `-- migrate:down` (a marker in the down section does not count), and then passes:
 
   ```sql
   -- contract: <why no release you could roll back to still needs the old shape>
   ```
 
-- The replace idiom needs no marker: `DROP CONSTRAINT x` with `ADD CONSTRAINT x` in the same up section, which is how a CHECK widens. `DROP NOT NULL` passes too.
-- The test does not see a replaced CHECK that narrows, or dynamic SQL in a `DO` or function body. The reviewer looks for those.
+- The replace idiom needs no marker: `DROP CONSTRAINT x` with `ADD CONSTRAINT x` in the same statement, which is how a CHECK widens. Another table's `ADD CONSTRAINT x` does not excuse it. `DROP NOT NULL` passes too.
+- The test does not see these, so the reviewer looks for them:
+  - a widened CHECK whose new value the previous image cannot read (its contracts' enums, such as a new `source`): ship the reader in an earlier release;
+  - a `CREATE UNIQUE INDEX` on an existing table;
+  - data rewrites (`UPDATE`, `DELETE`, `TRUNCATE`);
+  - `SET SCHEMA`;
+  - a replaced CHECK that narrows;
+  - dynamic SQL in a `DO` or function body.
 - An applied migration never changes. A mistake is fixed forward in a new migration.
 - A failed migration is not retried by hand; dbmate runs each file in a transaction, so it leaves nothing behind. Fix it forward in a new PR.
 

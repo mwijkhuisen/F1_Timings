@@ -129,7 +129,7 @@ ok "subnets ${subnets[*]} (no overlap with ${#taken[@]} routes and Docker networ
 
 # The GID guard: F1's secret GIDs and its container uid/gid are its own (invariant 5). A host
 # group with one of them could read the secrets; a host user 62532 could read the database files.
-for entry in "${F1_SECRETS[@]}" container:62532; do
+for entry in "${F1_SECRETS[@]}"; do
   if grp=$(getent group "${entry##*:}"); then die "gid ${entry##*:} is already the host group ${grp%%:*}: nothing installed"; fi
 done
 if usr=$(getent passwd 62532); then die "uid 62532 is already the host user ${usr%%:*}: nothing installed"; fi

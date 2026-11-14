@@ -16,9 +16,9 @@
 #      f1-alert@<unit>.service; /srv/f1/live, /srv/f1/archive and /srv/f1/state/live are 62532:62532 0700,
 #      /srv/f1/jolpica is root:62532 0750 and /srv/f1/state stays root 0700.
 #  1b. f1-install's guards, before any deploy: a Docker network on 10.62.3.0/24, a blackhole route
-#      10.62.5.0/24 (table 62999, which no rule uses), a host group 62005 and a host user 62532 each
-#      make it exit 1 with its conflict line and leave /etc/f1/compose.yaml as it was; then a clean
-#      run installs the checkout's file again.
+#      10.62.5.0/24 (table 62999, which no rule uses), a host group 62005, a host group 62532 (the
+#      container gid) and a host user 62532 each make it exit 1 with its conflict line and leave
+#      /etc/f1/compose.yaml as it was; then a clean run installs the checkout's file again.
 #   2. Dummy cf_tunnel_token, f1tv_username and f1tv_password, and f1.env with CF_ACCESS_TEAM=ci and a
 #      64-hex AUD. With hc_ping_key still empty, f1-update --server f1-server:ci --web f1-web:ci
 #      exits 0 with "not configured": no f1 container, no current.env. Then hc_ping_key (malformed on
@@ -36,23 +36,27 @@
 #  3d. The jolpica job (profile jobs) on the empty /srv/f1/jolpica: exit 1 with jolpica_done error bad_dump.
 #  3e. F1_REVISION (#98): the f1-server:ci image's ENV equals its revision label, and the f1-web:ci build
 #      embeds it under /srv/www/assets.
-#  3f. What Caddy serves on 127.0.0.1:8180 (deploy/web/Caddyfile): 10 requests (the SPA, /healthz, a
-#      missing file, POST, a 2 KB body to the api and to /healthz, a dotfile, a missing asset, an
-#      unknown /api path, the api's own 401); each has its status, the 8 site headers exactly and no
-#      Server or Via; GET / has Cache-Control no-cache, the 405 Allow GET, HEAD, the asset miss no
-#      immutable Cache-Control.
+#  3f. What Caddy serves on 127.0.0.1:8180 (deploy/web/Caddyfile): 13 requests (the SPA, /healthz, a
+#      missing file, POST, a 2 KB body to the api and to /healthz, a dotfile, two missing assets (one
+#      with an extension, one without), an unknown /api path, a dot segment under /api (--path-as-is),
+#      OPTIONS on the api, the api's own 401); each has its status, each of the 8 site headers exactly
+#      once and no Server or Via; GET / has Cache-Control no-cache, the 405 Allow GET, HEAD, the asset
+#      miss no immutable Cache-Control.
 #  3g. The firewall (A§14.3), with table inet f1 and without it: a veth into the netns e2e-fw holds a
 #      /30 in each private range (10/8, 172.16/12, 192.168/16, 100.64/10, 169.254/16; not 127/8) and in
-#      TEST-NET-3 (203.0.113.0/24, the public stand-in), with python3 listeners there and on the
-#      gateways of f1-egress and f1-publish. `ip route get` puts every target on e2e-fw0 or on the host
-#      before any probe. A node probe (f1-server:ci in the container's network namespace) from live:
-#      every private :443 and the f1-egress gateway dropped, 203.0.113.2:443 open (the positive
-#      control); from caddy: 203.0.113.2:443 and the f1-publish gateway dropped. Without the table all
-#      9 are open, so the drops are the table's. f1-firewall.service loads it again.
+#      TEST-NET-3 (203.0.113.0/24, the public stand-in), with python3 listeners there (:443 and :53)
+#      and on the gateways of f1-egress and f1-publish. `ip route get` puts every target on e2e-fw0 or
+#      on the host before any probe. Two test addresses go into the resolvers4 set. A node probe
+#      (f1-server:ci in the container's network namespace, read-only, no capabilities) from live: every
+#      private :443 and the f1-egress gateway dropped, 203.0.113.2:443 open (the positive control),
+#      203.0.113.2:53 and 10.255.62.2:53 open (the DNS accept comes before the private drop; f1-egress
+#      otherwise allows 443 only); from caddy: 203.0.113.2:443, 203.0.113.2:53 and the f1-publish
+#      gateway dropped; from api: 203.0.113.2:443 dropped (not in cf4). Without the table all 13 are
+#      open, so the drops are the table's. f1-firewall.service loads it again and the restart empties
+#      resolvers4 of the test address.
 #  3h. The recreate path: caddy labelled through an extra compose file, then f1-install with a changed
 #      /etc/f1/compose.yaml recreates the stack and smoke-tests it (caddy has a new Id and no label);
 #      a second run makes 0 changes. The edge checks fail here if any was missed.
-#   4. Egress from api to a non-Cloudflare host is blocked.
 #  4b. f1-measure 60s 2 in the background; after 8 s `docker restart f1-live-1`, then SIGTERM: exit 0
 #      and the summary (the signal path), stats rows for db, api, caddy and live, the disk rows
 #      live-recordings and db-volume, a die and a restart event row for live, the TSV root 0600.
@@ -140,6 +144,13 @@ on_exit() {
   docker rm -f f1-e2e-sick-1 >/dev/null 2>&1 || true
   ((${#fw_pids[@]} == 0)) || kill "${fw_pids[@]}" 2>/dev/null || true
   ip netns del e2e-fw 2>/dev/null || true
+  # Best effort, for a run that failed inside an edge check: never leave the stack unfiltered or the host changed.
+  nft list table inet f1 >/dev/null 2>&1 || systemctl restart f1-firewall.service >/dev/null 2>&1 || true
+  docker network rm e2e-overlap >/dev/null 2>&1 || true
+  ip route del blackhole 10.62.5.0/24 table 62999 >/dev/null 2>&1 || true
+  groupdel e2e-gid >/dev/null 2>&1 || true
+  groupdel e2e-cgid >/dev/null 2>&1 || true
+  userdel e2e-uid >/dev/null 2>&1 || true
   # Invariant 4: live starts again only once step 11a's session is gone.
   if ((watch_rows)) && docker exec f1-db-1 psql -U postgres -d f1 -v ON_ERROR_STOP=1 -tAc "DELETE FROM recording WHERE session_key = $WATCH_KEY; DELETE FROM session WHERE session_key = $WATCH_KEY; DELETE FROM meeting WHERE meeting_key = $WATCH_KEY" >/dev/null 2>&1; then
     docker start f1-live-1 >/dev/null 2>&1 || true
@@ -220,6 +231,10 @@ must ip route del blackhole 10.62.5.0/24 table 62999
 must groupadd -g 62005 e2e-gid
 refused gid 'gid 62005 is already the host group e2e-gid'
 must groupdel e2e-gid
+# The container gid, which f1-install's loop checks too (useradd -N below makes no group of its own).
+must groupadd -g 62532 e2e-cgid
+refused cgid 'gid 62532 is already the host group e2e-cgid'
+must groupdel e2e-cgid
 must useradd -M -N -u 62532 -s /usr/sbin/nologin e2e-uid
 refused uid 'uid 62532 is already the host user e2e-uid'
 must userdel e2e-uid
@@ -227,7 +242,7 @@ run "$tmp/install3" "$repo/deploy/bin/f1-install"
 ((rc == 0)) || miss "1b: the clean f1-install after the guards exited $rc"
 cmp -s "$repo/deploy/compose.yaml" /etc/f1/compose.yaml || miss "1b: the clean f1-install did not install the checkout's compose.yaml"
 if ((${#missed[@]} == n)); then
-  proof "f1-install refused 4 times with exit 1 and /etc/f1/compose.yaml unchanged: '$(grep -ohF 'conflict: 10.62.3.0/24 overlaps the Docker network e2e-overlap' "$tmp/guard-subnet")', '$(grep -ohF 'conflict: 10.62.5.0/24 overlaps the route 10.62.5.0/24 dev none' "$tmp/guard-route")', '$(grep -oh 'gid 62005 is already.*' "$tmp/guard-gid")', '$(grep -oh 'uid 62532 is already.*' "$tmp/guard-uid")'; then a clean run: exit 0, '$(tail -n 1 "$tmp/install3")', the checkout's compose.yaml installed (no current.env, so nothing recreated)"
+  proof "f1-install refused 5 times with exit 1 and /etc/f1/compose.yaml unchanged: '$(grep -ohF 'conflict: 10.62.3.0/24 overlaps the Docker network e2e-overlap' "$tmp/guard-subnet")', '$(grep -ohF 'conflict: 10.62.5.0/24 overlaps the route 10.62.5.0/24 dev none' "$tmp/guard-route")', '$(grep -oh 'gid 62005 is already.*' "$tmp/guard-gid")', '$(grep -oh 'gid 62532 is already.*' "$tmp/guard-cgid")', '$(grep -oh 'uid 62532 is already.*' "$tmp/guard-uid")'; then a clean run: exit 0, '$(tail -n 1 "$tmp/install3")', the checkout's compose.yaml installed (no current.env, so nothing recreated)"
 fi
 
 # ------------------------------------------------------------------ 2
@@ -330,7 +345,7 @@ docker run --rm --entrypoint grep f1-web:ci -rlF "$rev" /srv/www/assets >/dev/nu
 proof "F1_REVISION=$rev is the f1-server:ci ENV and sits in the f1-web:ci bundle (/srv/www/assets)"
 
 # ------------------------------------------------------------------ 3f
-step "3f. What Caddy serves: each status with the 8 site headers and no Server or Via"
+step "3f. What Caddy serves: each status with the 8 site headers, each once, and no Server or Via"
 n=${#missed[@]}
 # deploy/web/Caddyfile's (site_headers), exactly.
 readonly SITE_HEADERS=(
@@ -364,6 +379,10 @@ edge() {
     got=$(grep -i "^${h%%:*}:" "$tmp/edge.h" || echo 'none')
     miss "3f $what ($want): ${h%%:*} is '$got'"
   done
+  for h in "${SITE_HEADERS[@]}"; do
+    got=$(grep -ci "^${h%%:*}:" "$tmp/edge.h" || true)
+    ((got == 1)) || miss "3f $what ($want): ${h%%:*} occurs $got times, not once"
+  done
   got=$(grep -iE '^(server|via):' "$tmp/edge.h" || true)
   [[ -z $got ]] || miss "3f $what ($want): names the software: ${got//$'\n'/; }"
 }
@@ -380,13 +399,20 @@ edge 413 /healthz -X GET -H 'Expect:' --data-binary @"$tmp/2k"
 edge 404 /.git/config
 edge 404 /assets/nope.js
 if grep -qiE '^cache-control:.*immutable' "$tmp/edge.h"; then miss "3f /assets/nope.js (404): $(grep -i '^cache-control:' "$tmp/edge.h")"; fi
+# No extension: it reaches @assets_miss (/assets/nope.js is also answered by @missing_file).
+edge 404 /assets/nope
+if grep -qiE '^cache-control:.*immutable' "$tmp/edge.h"; then miss "3f /assets/nope (404): $(grep -i '^cache-control:' "$tmp/edge.h")"; fi
 # The api answers any /api/* without an Access JWT with 401, so this 404 is Caddy's own.
 edge 404 /api/x
+# Pins the !{path}.contains('/.') clause: curl keeps the dot segment.
+edge 404 /api/v1/./seasons --path-as-is
+# A method other than GET or HEAD never reaches the api.
+edge 405 /api/v1/seasons -X OPTIONS
 # Caddy never builds a 401: this is the api, through the proxy.
 edge 401 /api/v1/seasons
 if ((${#missed[@]} == n)); then
   printf -v seen '%s; ' "${edge_seen[@]}"
-  proof "127.0.0.1:8180, ${#edge_seen[@]} requests, each with the 8 site headers exactly and no Server or Via: ${seen%; }; GET / Cache-Control no-cache, the 405 Allow GET, HEAD, the asset miss without immutable"
+  proof "127.0.0.1:8180, ${#edge_seen[@]} requests, each with the 8 site headers exactly once and no Server or Via: ${seen%; }; GET / Cache-Control no-cache, the 405 Allow GET, HEAD, the asset miss without immutable"
 fi
 
 # ------------------------------------------------------------------ 3g
@@ -420,13 +446,25 @@ done
 for gw in "$gw_egress" "$gw_publish"; do
   [[ $(ip -o route get "$gw") == "local $gw dev lo "* ]] || fail "3g: $gw is not local: $(ip -o route get "$gw")"
 done
-ip netns exec e2e-fw python3 -I -m http.server 443 --bind 0.0.0.0 --directory "$tmp/www" >"$tmp/fw-ns.log" 2>&1 &
+# The test addresses join the DNS accept (resolvers4): one public, one private (DNS comes before the private
+# drop). Never the real resolver. The restart below empties the set again.
+fw_dns_priv=${FW_PRIVATE[0]}.2
+must nft add element inet f1 resolvers4 "{ $FW_PUBLIC.2, $fw_dns_priv }"
+# fw_serve <addr> <port> <log>: a static file server, one process per (addr, port). Not http.server: its
+# HTTPServer.server_bind calls socket.getfqdn, a PTR lookup of the bridge gateways.
+readonly FW_SERVE='import functools, http.server, socketserver, sys
+socketserver.TCPServer.allow_reuse_address = True
+a, p, d = sys.argv[1], int(sys.argv[2]), sys.argv[3]
+socketserver.TCPServer((a, p), functools.partial(http.server.SimpleHTTPRequestHandler, directory=d)).serve_forever()'
+ip netns exec e2e-fw python3 -I -c "$FW_SERVE" 0.0.0.0 443 "$tmp/www" >"$tmp/fw-ns-443.log" 2>&1 &
+fw_pids+=("$!")
+ip netns exec e2e-fw python3 -I -c "$FW_SERVE" 0.0.0.0 53 "$tmp/www" >"$tmp/fw-ns-53.log" 2>&1 &
 fw_pids+=("$!")
 for gw in "$gw_egress" "$gw_publish"; do
-  python3 -I -m http.server 18080 --bind "$gw" --directory "$tmp/www" >"$tmp/fw-$gw.log" 2>&1 &
+  python3 -I -c "$FW_SERVE" "$gw" 18080 "$tmp/www" >"$tmp/fw-$gw.log" 2>&1 &
   fw_pids+=("$!")
 done
-fw_targets=("${FW_PRIVATE[@]/%/.2:443}" "$FW_PUBLIC.2:443" "$gw_egress:18080" "$gw_publish:18080")
+fw_targets=("${FW_PRIVATE[@]/%/.2:443}" "$FW_PUBLIC.2:443" "$FW_PUBLIC.2:53" "$fw_dns_priv:53" "$gw_egress:18080" "$gw_publish:18080")
 # The host's own output is not filtered (the table has no output hook): every listener answers it.
 for t in "${fw_targets[@]}"; do
   for i in $(seq 10); do
@@ -448,35 +486,41 @@ fw_seen=()
 # fw_expect <container> <want> <target…>: the probe in <container>'s network namespace, so its packets
 # leave on that container's own bridges; a miss for each target that is not <want>.
 fw_expect() {
-  local c=$1 want=$2 out line
+  local c=$1 want=$2 out t
   shift 2
-  out=$(docker run --rm --pull never --network "container:$c" --entrypoint /nodejs/bin/node f1-server:ci \
+  out=$(docker run --rm --pull never --read-only --cap-drop ALL --security-opt no-new-privileges \
+    --network "container:$c" --entrypoint /nodejs/bin/node f1-server:ci \
     -e "$FW_PROBE" "$@" 2>"$tmp/fw-probe.err") || miss "3g $c ($fw_state): the probe failed: $(cat "$tmp/fw-probe.err")"
   printf '%s\n' "$out" | sed "s/^/$c ($fw_state)| /"
-  [[ $(grep -c . <<<"$out") == "$#" ]] || miss "3g $c ($fw_state): $(grep -c . <<<"$out") results for $# targets"
-  while read -r line; do
-    [[ -n $line ]] || continue
-    fw_seen+=("$fw_state: ${c%-1} -> $line")
-    [[ $line == *" $want" ]] || miss "3g $c ($fw_state): $line, not $want"
-  done <<<"$out"
+  for t in "$@"; do
+    fw_seen+=("$fw_state: ${c%-1} -> $t $want")
+    grep -qxF "$t $want" <<<"$out" || miss "3g $c ($fw_state): $t is not $want: '$(grep -F "$t " <<<"$out" || echo 'no result')'"
+  done
 }
+live_open=("$FW_PUBLIC.2:443" "$FW_PUBLIC.2:53" "$fw_dns_priv:53")
 fw_state='table loaded'
+# live: the drops, then the positive controls: 443 to the public stand-in, and the DNS accept, which
+# f1-egress allows for the resolvers only and which comes before the private drop.
 fw_expect f1-live-1 dropped "${FW_PRIVATE[@]/%/.2:443}" "$gw_egress:18080"
-fw_expect f1-live-1 open "$FW_PUBLIC.2:443" # the positive control: the drops above are the rules'
-fw_expect f1-caddy-1 dropped "$FW_PUBLIC.2:443" "$gw_publish:18080"
+fw_expect f1-live-1 open "${live_open[@]}"
+fw_expect f1-caddy-1 dropped "$FW_PUBLIC.2:443" "$FW_PUBLIC.2:53" "$gw_publish:18080"
+fw_expect f1-api-1 dropped "$FW_PUBLIC.2:443" # not in cf4
 must nft delete table inet f1
 fw_state='no table'
-fw_expect f1-live-1 open "${FW_PRIVATE[@]/%/.2:443}" "$gw_egress:18080" "$FW_PUBLIC.2:443"
-fw_expect f1-caddy-1 open "$FW_PUBLIC.2:443" "$gw_publish:18080"
+fw_expect f1-live-1 open "${FW_PRIVATE[@]/%/.2:443}" "$gw_egress:18080" "${live_open[@]}"
+fw_expect f1-caddy-1 open "$FW_PUBLIC.2:443" "$FW_PUBLIC.2:53" "$gw_publish:18080"
+fw_expect f1-api-1 open "$FW_PUBLIC.2:443"
 must systemctl restart f1-firewall.service
 nft list table inet f1 >/dev/null || fail "3g: f1-firewall.service did not load table inet f1 again"
+# The restart resets the set and f1-resolvers refills it with the real resolver.
+if nft list set inet f1 resolvers4 | grep -qwF "$FW_PUBLIC.2"; then miss "3g: resolvers4 still holds $FW_PUBLIC.2 after the restart"; fi
 kill "${fw_pids[@]}" 2>/dev/null || true
 wait "${fw_pids[@]}" 2>/dev/null || true
 fw_pids=()
 must ip netns del e2e-fw
 if ((${#missed[@]} == n)); then
   printf -v seen '%s; ' "${fw_seen[@]}"
-  proof "the f1 firewall, probed by node in live's and caddy's network namespaces (targets behind e2e-fw0 or on the f1-egress and f1-publish bridges, by ip route get): ${seen%; }; f1-firewall.service loaded the table again"
+  proof "the f1 firewall, ${#fw_seen[@]} probes by node (read-only, no capabilities) in live's, caddy's and api's network namespaces, 13 targets per table state (targets behind e2e-fw0 or on the f1-egress and f1-publish bridges, by ip route get; $FW_PUBLIC.2 and $fw_dns_priv in resolvers4): ${seen%; }; f1-firewall.service loaded the table again and resolvers4 no longer held $FW_PUBLIC.2"
 fi
 
 # ------------------------------------------------------------------ 3h
@@ -494,9 +538,9 @@ run "$tmp/install-recreate" "$repo/deploy/bin/f1-install"
 ((rc == 0)) || miss "3h: f1-install with a changed compose.yaml exited $rc"
 grep -qx 'changed  the f1 stack recreated with the new compose.yaml' "$tmp/install-recreate" || miss "3h: f1-install did not recreate the stack"
 grep -q 'smoke test passed' "$tmp/install-recreate" || miss "3h: f1-install did not pass its smoke test"
-new_id=$(docker inspect -f '{{.Id}}' f1-caddy-1 2>&1) || true
+new_id=$(docker inspect -f '{{.Id}}' f1-caddy-1) || miss "3h: caddy is gone after the recreate"
 [[ $new_id != "$caddy_id" ]] || miss "3h: caddy was not recreated (Id ${caddy_id:0:12})"
-label=$(caddy_label 2>&1) || true
+label=$(caddy_label) || miss "3h: caddy is gone after the recreate (no label to read)"
 [[ -z $label ]] || miss "3h: caddy still has the label f1.e2e: '$label'"
 run "$tmp/install-again" "$repo/deploy/bin/f1-install"
 [[ $(tail -n 1 "$tmp/install-again") == 'f1-install: 0 change(s)' ]] || miss "3h: the next f1-install: '$(tail -n 1 "$tmp/install-again")'"
@@ -505,13 +549,6 @@ if ((${#missed[@]} == n)); then
   proof "caddy labelled f1.e2e=stale (Id ${caddy_id:0:12}), compose.yaml changed: f1-install exit 0, 'changed  the f1 stack recreated with the new compose.yaml', '$(grep -o 'smoke test passed.*' "$tmp/install-recreate")', caddy now Id ${new_id:0:12} without the label; the next run '$(tail -n 1 "$tmp/install-again")'; $URL 200"
 fi
 ((${#missed[@]} == 0)) || fail "${#missed[@]} edge check(s) failed (steps 1b, 3f, 3g, 3h): see the ::error:: lines above"
-
-# ------------------------------------------------------------------ 4
-step "4. Egress from api to a non-Cloudflare host is blocked"
-probe="fetch('https://www.google.com',{signal:AbortSignal.timeout(5000)}).then(r=>console.log('open',r.status),e=>console.log('blocked',e.name))"
-result=$(docker exec f1-api-1 /nodejs/bin/node -e "$probe")
-[[ $result == blocked* ]] || fail "api reached https://www.google.com: $result"
-proof "api -> https://www.google.com: $result"
 
 # ------------------------------------------------------------------ 4b
 step "4b. f1-measure 60s 2 on the running stack: docker restart of live, then SIGTERM"
