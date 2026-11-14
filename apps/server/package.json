@@ -12,11 +12,11 @@
     "@f1/contracts": "workspace:*",
     "@hono/node-server": "2.1.6",
     "croner": "11.0.0",
-    "hono": "4.13.16",
+    "hono": "4.13.17",
     "kysely": "0.29.8",
     "pg": "8.23.1",
     "pino": "10.4.0",
-    "undici": "8.12.3",
+    "undici": "8.12.4",
     "zod": "4.6.7"
   },
   "devDependencies": {
