@@ -1,0 +1,57 @@
+#!/usr/bin/env bash
+# f1-alert (#104, A§14.5): POSTs the body "<code>" or "<code> <detail>" to healthchecks.io's
+# f1-ingest/fail, which marks the check f1-ingest down until its next success ping (the ingest
+# daemon's daily one). Run by f1-update and f1-tick through alert_once (f1-lib.sh), and by
+# f1-alert@.service, the OnFailure= of f1-update.service and f1-tick.service.
+#
+# The key is /etc/f1/secrets/hc_ping_key, read as apps/server/src/healthchecks.ts reads it: the
+# whole file, trimmed, and 22 characters of A-Z a-z 0-9 _ -. It reaches curl through a pipe
+# (`--config -`, written by the printf builtin), so it is never in argv, the environment, a file
+# or a log, and neither is the URL that holds it. The log has fixed codes only, each with the body:
+# alert_sent, alert_failed (with curl's exit code and the HTTP status), alert_no_key, alert_key_invalid.
+#
+# Exit: 0 sent, or not sent for want of a key (missing, empty or malformed: no request); 1 the
+# request failed (no 2xx); 64 usage.
+#
+# Usage: f1-alert <code> [<detail>]
+set -euo pipefail
+# shellcheck source=deploy/bin/f1-lib.sh
+. "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/f1-lib.sh"
+
+usage() {
+  echo "usage: f1-alert <code> [<detail>]" >&2
+  exit 64
+}
+# The body goes into curl's config between double quotes: no quote, backslash or space inside a
+# field, and a code starts with a letter, so the body never starts with curl's @file.
+(($# == 1 || $# == 2)) && [[ $1 =~ ^[a-z][a-z0-9_]{0,31}$ ]] || usage
+(($# == 1)) || [[ $2 =~ ^[A-Za-z0-9_.@-]{1,64}$ ]] || usage
+body=$*
+
+# Never a bare `read`: it returns 1 on an empty file or one without a final newline.
+file=$F1_ETC/secrets/hc_ping_key key=''
+if [[ -f $file ]]; then key=$(<"$file"); fi
+key=${key#"${key%%[![:space:]]*}"}
+key=${key%"${key##*[![:space:]]}"}
+if [[ -z $key ]]; then
+  log "alert_no_key $body"
+  exit 0
+fi
+# A second line or a space inside fails this too.
+if [[ ! $key =~ ^[A-Za-z0-9_-]{22}$ ]]; then
+  log "alert_key_invalid $body"
+  exit 0
+fi
+
+# -q (first) ignores any .curlrc; without -L curl follows no redirect. stderr goes nowhere: an
+# error text could quote the URL.
+rc=0
+status=$(printf 'url = "https://hc-ping.com/%s/f1-ingest/fail"\ndata-binary = "%s"\n' "$key" "$body" |
+  curl -q --config - -s -o /dev/null -w '%{http_code}' --max-time 10 2>/dev/null) || rc=$?
+[[ $status =~ ^[0-9]{3}$ ]] || status=000
+if ((rc == 0)) && [[ $status == 2* ]]; then
+  log "alert_sent $body"
+  exit 0
+fi
+log "alert_failed $body (curl $rc, http $status)"
+exit 1

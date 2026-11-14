@@ -12,7 +12,12 @@
 #
 # State (/srv/f1/state, root only): current.env, the pair that last passed its smoke test;
 # failed.env, the pair that last failed (rm it to retry); candidate.env, while a deploy runs;
-# held-since, while a hold lasts (the epoch of its first deferral).
+# held-since, while a hold lasts (the epoch of its first deferral); alert-known_bad and
+# alert-hold_14h, the last pair and hold that alerted.
+#
+# Alerts (#104, f1-ingest/fail through f1-alert): every exit 1 fails f1-update.service, whose
+# OnFailure= sends "unit_failed f1-update.service"; a known-bad skip sends "known_bad" once per pair,
+# and the 14 h cap "hold_14h <session>" once per hold. A drill sends neither: the owner is watching.
 #
 # --server/--web deploy the given reference instead (a drill, or CI with f1-server:ci), without
 # the revision check. A local image without a registry host (f1-server:ci) is recorded as given;
@@ -150,6 +155,7 @@ fi
 if [[ -f $FAILED ]] && cmp -s "$CANDIDATE" "$FAILED"; then
   rm -f -- "$CANDIDATE"
   log "skipping known-bad $pair; rm $FAILED to retry"
+  ((drill)) || alert_once known_bad "$pair"
   exit 0
 fi
 
@@ -183,6 +189,9 @@ if [[ -n $held ]]; then
     exit 0
   fi
   log "error: deploys held for over 14 h (session $held, since $(date -u -d "@$since" +%Y-%m-%dT%H:%M:%SZ)): deploying anyway; check recorder_status"
+  detail=()
+  [[ ! $held =~ ^[0-9]{1,10}$ ]] || detail=("$held") # the session key, when the row has one
+  ((drill)) || alert_once hold_14h "$since" "${detail[@]}"
 fi
 rm -f -- "$HELD_SINCE"
 

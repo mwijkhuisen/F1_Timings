@@ -5,6 +5,8 @@ Description=f1: deploy the newest f1-server and f1-web images
 Wants=network-online.target
 After=network-online.target docker.service f1-firewall.service
 Requires=docker.service
+# A failed run alerts "unit_failed <this unit>" through f1-ingest/fail (#104).
+OnFailure=f1-alert@%n.service
 
 [Service]
 Type=oneshot

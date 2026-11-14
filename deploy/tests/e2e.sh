@@ -1,15 +1,20 @@
 #!/usr/bin/env bash
 # e2e (CI only, as root: ci / deploy, step `e2e`; D13). The only run of the deploy path before the
 # box: the real f1-install, f1-update and f1-tick on the runner's Docker, with the f1 table loaded.
-# CI never calls OpenF1, F1 or Cloudflare (invariant 4): deploy/tests/ci.override.yaml keeps ingest
-# and cloudflared out (profile "off"), nothing here enables a timer, and live runs only because
-# without ingest the session table is empty, so it idles and calls nothing (asserted here). It needs
-# the images f1-server:ci and f1-web:ci (built by the job) and nft, curl, flock and systemd-analyze.
-#   1. f1-install twice: the second run makes 0 changes; systemd-analyze verify on the units;
-#      /srv/f1/live, /srv/f1/archive and /srv/f1/state/live are 62532:62532 0700, /srv/f1/jolpica is root:62532 0750
-#      and /srv/f1/state stays root 0700.
-#   2. Dummy cf_tunnel_token, hc_ping_key, f1tv_username and f1tv_password (f1-update says "not
-#      configured" while one is empty), and f1.env with CF_ACCESS_TEAM=ci and a 64-hex AUD.
+# CI never calls OpenF1, F1, Cloudflare or healthchecks.io (invariant 4): deploy/tests/ci.override.yaml
+# keeps ingest and cloudflared out (profile "off"), nothing here enables a timer, and live runs only
+# because without ingest the session table is empty, so it idles and calls nothing (asserted here).
+# hc-ping.com is pinned to 127.0.0.1 in /etc/hosts and the dummy ping key is malformed, so every alert
+# logs alert_key_invalid (or alert_no_key) and sends nothing; the one request, in step 12, goes to
+# loopback (asserted at the end). It needs the images f1-server:ci and f1-web:ci (built by the job)
+# and nft, curl, flock, getent, journalctl and systemd-analyze.
+#   1. f1-install twice: the second run makes 0 changes; systemd-analyze verify on the units (the
+#      template f1-alert@.service too); f1-update.service and f1-tick.service have OnFailure=
+#      f1-alert@<unit>.service; /srv/f1/live, /srv/f1/archive and /srv/f1/state/live are 62532:62532 0700,
+#      /srv/f1/jolpica is root:62532 0750 and /srv/f1/state stays root 0700.
+#   2. Dummy cf_tunnel_token, hc_ping_key (malformed on purpose), f1tv_username and f1tv_password
+#      (f1-update says "not configured" while one is empty), and f1.env with CF_ACCESS_TEAM=ci and a
+#      64-hex AUD; 127.0.0.1 hc-ping.com in /etc/hosts, and getent resolves it to 127.0.0.1 only.
 #   3. f1-update --server f1-server:ci --web f1-web:ci: exit 0, current.env, /healthz 200 on
 #      127.0.0.1:8180 (caddy, api and db as 62532; the publish through f1-publish; local tags),
 #      every container healthy when it returns (the smoke test waits for that); live is idle on an
@@ -33,18 +38,29 @@
 #      no hold).
 #   5. f1-update --server f1-server:broken (migrate passes, api and live exit): exit 1, "rolled back",
 #      current.env unchanged, failed.env written, /healthz 200 again; the same pair again is
-#      skipped as known-bad. The stale row of 4c did not hold this deploy.
+#      skipped as known-bad, with no alert (a drill). The stale row of 4c did not hold this deploy.
 #  5a. The 14 h cap: live stopped, recorder_status recording and fresh, held-since 15 h old (fresh
-#      mtime): f1-update --server f1-server:broken deploys anyway (the "held for over 14 h" error),
-#      fails, rolls back (exit 1, current.env unchanged, failed.env written) and removes held-since.
+#      mtime): f1-update --server f1-server:broken deploys anyway (the "held for over 14 h" error, no
+#      alert: a drill), fails, rolls back (exit 1, current.env unchanged, failed.env written) and
+#      removes held-since.
 #  5b. After the rollback live runs, is healthy and writes recorder_status idle again.
 #   6. docker inspect of db, api, caddy and live: read-only root, CapDrop ALL, user 62532:62532,
 #      no-new-privileges, core size 0; caddy's 127.0.0.1:8180 is the only published port.
-#   7. f1-tick restores a deleted table inet f1 and writes the disk file.
+#   7. f1-tick restores a deleted table inet f1, runs the recorder watch on the migrated schema and
+#      writes the disk file (free bytes of /srv/f1 and of the Docker data root).
 #   8. A local tag with a registry host (localhost/f1-server:ci) is pulled, never recorded as given.
-#   9. f1-tick skips the container restarts while the update lock is held.
+#   9. f1-tick skips the container restarts while the update lock is held (the recorder watch and
+#      the disk file still run).
 #  10. Without its firewall (table deleted, conf moved away) f1-tick stops the stack and f1-update
 #      refuses to deploy; with the conf back, f1-tick reloads the table and starts the stack.
+#  11. The restart loop: a throw-away unhealthy f1-e2e-sick-1 (label project f1) restarted in 4 ticks
+#      in a row alerts restart_loop on the third only; once it is gone, a tick clears the alert.
+#  12. OnFailure: with an empty key and F1_SMOKE_TIMEOUT=bad (a runtime drop-in) f1-update.service
+#      fails, and f1-alert@f1-update.service.service logs alert_no_key unit_failed f1-update.service;
+#      with the malformed key the sandboxed f1-alert@e2e.service logs alert_key_invalid; with a
+#      22-character fake key f1-alert test_alert exits 1, curl 7 on the pinned loopback.
+# Invariant 4 at the end: no alert_sent anywhere, the only alert_failed is step 12's, and at least one
+# alert_key_invalid or alert_no_key (so the check is not vacuous).
 # Not here: f1-update's revision check (server and web :main from different commits) runs on the
 # default ghcr.io refs only, which CI cannot pull.
 # Usage: sudo bash deploy/tests/e2e.sh
@@ -53,6 +69,7 @@ set -euo pipefail
 repo=$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/../.." && pwd)
 export F1_COMPOSE_OVERRIDE=$repo/deploy/tests/ci.override.yaml
 readonly STATE=/srv/f1/state URL=http://127.0.0.1:8180/healthz BIN=/usr/local/bin
+readonly DROPIN=/run/systemd/system/f1-update.service.d/e2e.conf
 umask 022
 
 proofs=()
@@ -78,8 +95,15 @@ on_exit() {
     docker compose -p f1 ps -a 2>&1 || true
     for s in db api caddy live; do docker logs --tail 60 "f1-$s-1" 2>&1 | sed "s/^/$s| /" || true; done
     nft list table inet f1 2>&1 | head -n 80 || true
+    journalctl -u 'f1-alert@*' --no-pager -n 40 2>&1 || true
     echo "::endgroup::"
   fi
+  docker rm -f f1-e2e-sick-1 >/dev/null 2>&1 || true
+  if [[ -e $DROPIN ]]; then
+    rm -f -- "$DROPIN"
+    systemctl daemon-reload || true
+  fi
+  [[ ! -f ${tmp:-}/hosts ]] || cp "$tmp/hosts" /etc/hosts
   printf '\n%s\n' "== e2e evidence (${#proofs[@]} proofs, exit $rc) =="
   printf -- '- %s\n' "${proofs[@]}"
 }
@@ -110,6 +134,10 @@ run "$tmp/install2" "$repo/deploy/bin/f1-install"
 nft list table inet f1 >/dev/null || fail "f1-install did not load table inet f1"
 systemctl is-active --quiet f1-firewall.service || fail "f1-firewall.service is not active"
 systemd-analyze verify /etc/systemd/system/f1-* || fail "systemd-analyze verify rejects an f1 unit"
+for u in f1-update f1-tick; do
+  on_failure=$(systemctl show -p OnFailure --value "$u.service")
+  [[ $on_failure == "f1-alert@$u.service.service" ]] || fail "$u.service has OnFailure '$on_failure'"
+done
 # O1: the recorder's two directories belong to the container user; the state directory itself, which holds
 # current.env, stays root-only.
 for d in /srv/f1/live /srv/f1/state/live; do
@@ -118,19 +146,26 @@ done
 [[ $(stat -c '%a %u:%g' /srv/f1/archive) == '700 62532:62532' ]] || fail "/srv/f1/archive is not 62532:62532 0700: $(stat -c '%a %u:%g' /srv/f1/archive)"
 [[ $(stat -c '%a %u:%g' /srv/f1/jolpica) == '750 0:62532' ]] || fail "/srv/f1/jolpica is not root:62532 0750: $(stat -c '%a %u:%g' /srv/f1/jolpica)"
 [[ $(stat -c '%a %u:%g' /srv/f1/state) == '700 0:0' ]] || fail "/srv/f1/state is not root 0700: $(stat -c '%a %u:%g' /srv/f1/state)"
-proof "f1-install ran twice, the second: '$(tail -n 1 "$tmp/install2")'; f1-firewall.service active, table inet f1 loaded (resolvers4 $(nft list set inet f1 resolvers4 | grep -o 'elements = {[^}]*}' || echo empty)); systemd-analyze verify passes: $(echo /etc/systemd/system/f1-*); /srv/f1/live, /srv/f1/archive and /srv/f1/state/live are 62532:62532 0700, /srv/f1/state is still root 0700"
+proof "f1-install ran twice, the second: '$(tail -n 1 "$tmp/install2")'; f1-firewall.service active, table inet f1 loaded (resolvers4 $(nft list set inet f1 resolvers4 | grep -o 'elements = {[^}]*}' || echo empty)); systemd-analyze verify passes: $(echo /etc/systemd/system/f1-*); OnFailure: f1-update.service -> $(systemctl show -p OnFailure --value f1-update.service), f1-tick.service -> $(systemctl show -p OnFailure --value f1-tick.service); /srv/f1/live, /srv/f1/archive and /srv/f1/state/live are 62532:62532 0700, /srv/f1/state is still root 0700"
 
 # ------------------------------------------------------------------ 2
-step "2. Dummy secrets (live reads the F1 TV ones only for a login, and none is due here), and f1.env"
+step "2. Dummy secrets (live reads the F1 TV ones only for a login, and none is due here), f1.env, the hc-ping.com pin"
 printf 'ci-dummy-tunnel-token\n' >/etc/f1/secrets/cf_tunnel_token
-printf 'ci-dummy-ping-key-0000\n' >/etc/f1/secrets/hc_ping_key
+# Invariant 4, belt and braces: a ping key that fails healthchecks.ts's and f1-alert's 22-character
+# check, so no alert and no ping of live sends a request; and hc-ping.com on loopback only.
+printf 'ci.dummy.not.a.ping.key\n' >/etc/f1/secrets/hc_ping_key
+cp /etc/hosts "$tmp/hosts"
+printf '127.0.0.1 hc-ping.com\n' >>/etc/hosts
+hc_ip=$(getent ahosts hc-ping.com | awk '{print $1}' | sort -u) || true
+[[ $hc_ip == 127.0.0.1 ]] || fail "hc-ping.com resolves to '$hc_ip', not 127.0.0.1 only"
 printf 'ci-dummy-f1tv-user\n' >/etc/f1/secrets/f1tv_username
 printf 'ci-dummy-f1tv-pass\n' >/etc/f1/secrets/f1tv_password
 printf 'CF_ACCESS_TEAM=ci\nCF_ACCESS_AUD=%064d\n' 0 >/etc/f1/f1.env
 [[ $(stat -c '%a %u %g' /etc/f1/secrets/cf_tunnel_token) == '440 0 62005' ]] || fail "cf_tunnel_token lost root:62005 0440"
+[[ $(stat -c '%a %u %g' /etc/f1/secrets/hc_ping_key) == '440 0 62006' ]] || fail "hc_ping_key lost root:62006 0440"
 [[ $(stat -c '%a %u %g' /etc/f1/secrets/f1tv_username) == '440 0 62007' ]] || fail "f1tv_username lost root:62007 0440"
 [[ $(stat -c '%a %u %g' /etc/f1/secrets/f1tv_password) == '440 0 62008' ]] || fail "f1tv_password lost root:62008 0440"
-proof "cf_tunnel_token, hc_ping_key, f1tv_username and f1tv_password hold dummies (root:<gid> 0440 kept), f1.env has CF_ACCESS_TEAM=ci and a 64-hex AUD"
+proof "cf_tunnel_token, hc_ping_key (malformed: ci.dummy.not.a.ping.key), f1tv_username and f1tv_password hold dummies (root:<gid> 0440 kept), f1.env has CF_ACCESS_TEAM=ci and a 64-hex AUD; /etc/hosts pins hc-ping.com, getent ahosts: $hc_ip"
 
 # ------------------------------------------------------------------ 3
 step "3. First deploy: f1-update --server f1-server:ci --web f1-web:ci"
@@ -277,8 +312,11 @@ cmp -s "$tmp/current.before" "$STATE/current.env" || fail "current.env changed"
 curl -fsS --max-time 5 -o /dev/null "$URL" || fail "$URL is not 200 after the rollback"
 run "$tmp/update3" "$BIN/f1-update" --server f1-server:broken
 if ((rc != 0)) || ! grep -q 'skipping known-bad' "$tmp/update3"; then fail "the known-bad pair was not skipped (exit $rc)"; fi
+# D1: a drill's known-bad skip sends no alert.
+grep -q 'f1-alert:' "$tmp/update3" && fail "the drill's known-bad skip ran f1-alert"
+[[ ! -e $STATE/alert-known_bad ]] || fail "the drill's known-bad skip left $STATE/alert-known_bad"
 rm -f "$STATE/failed.env"
-proof "f1-update --server f1-server:broken: exit $broken_rc, '$(grep -o 'rolled back.*' "$tmp/update2" | head -n 1)', current.env unchanged, failed.env = the broken pair, $URL 200 again; run again: exit 0, '$(grep -o 'skipping known-bad.*' "$tmp/update3")'; the row of 4c, 10 minutes old, did not hold this deploy"
+proof "f1-update --server f1-server:broken: exit $broken_rc, '$(grep -o 'rolled back.*' "$tmp/update2" | head -n 1)', current.env unchanged, failed.env = the broken pair, $URL 200 again; run again: exit 0, '$(grep -o 'skipping known-bad.*' "$tmp/update3")', no f1-alert line and no alert-known_bad (a drill); the row of 4c, 10 minutes old, did not hold this deploy"
 
 # ------------------------------------------------------------------ 5a
 step "5a. The 14 h cap: a hold that began 15 h ago does not hold the deploy"
@@ -294,8 +332,10 @@ cmp -s "$tmp/current.before" "$STATE/current.env" || fail "current.env changed"
 [[ $(cat "$STATE/failed.env" 2>&1) == $'F1_SERVER_IMAGE=f1-server:broken\nF1_WEB_IMAGE=f1-web:ci' ]] ||
   fail "failed.env: $(cat "$STATE/failed.env" 2>&1)"
 [[ ! -e $STATE/held-since ]] || fail "$STATE/held-since is left after the deploy started"
+grep -q 'f1-alert:' "$tmp/update-cap" && fail "the drill's 14 h cap ran f1-alert"
+[[ ! -e $STATE/alert-hold_14h ]] || fail "the drill's 14 h cap left $STATE/alert-hold_14h"
 rm -f "$STATE/failed.env"
-proof "live stopped, recorder_status recording and fresh, held-since 15 h old: f1-update --server f1-server:broken exit $cap_rc, '$(grep -o 'error: deploys held for over 14 h.*' "$tmp/update-cap")', then the deploy ran and '$(grep -o 'rolled back.*' "$tmp/update-cap" | head -n 1)', current.env unchanged, held-since removed"
+proof "live stopped, recorder_status recording and fresh, held-since 15 h old: f1-update --server f1-server:broken exit $cap_rc, '$(grep -o 'error: deploys held for over 14 h.*' "$tmp/update-cap")', no f1-alert line and no alert-hold_14h (a drill), then the deploy ran and '$(grep -o 'rolled back.*' "$tmp/update-cap" | head -n 1)', current.env unchanged, held-since removed"
 
 # ------------------------------------------------------------------ 5b
 step "5b. live runs again after the rollback and writes idle (it ticks every 30 s)"
@@ -325,14 +365,17 @@ ports=$(docker inspect -f '{{.Name}} {{json .HostConfig.PortBindings}}' "${ids[@
 proof "db, api, caddy and live: ReadonlyRootfs true, CapDrop [ALL], User 62532:62532, no-new-privileges:true, core size 0; the only port binding: $ports"
 
 # ------------------------------------------------------------------ 7
-step "7. f1-tick restores a deleted table inet f1"
+step "7. f1-tick restores a deleted table inet f1, runs the recorder watch, writes the disk file"
 nft delete table inet f1
 run "$tmp/tick" "$BIN/f1-tick"
 ((rc == 0)) || fail "f1-tick exited $rc"
 nft list table inet f1 >/dev/null || fail "f1-tick did not restore table inet f1"
-[[ $(cat "$STATE/disk") =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9:]{8}Z\ [0-9]{1,3}$ ]] || fail "disk: $(cat "$STATE/disk")"
+# The watch ran: recorder-watch.sql passed on the real migrated schema in f1-db-1.
+grep -q 'cannot run the recorder watch' "$tmp/tick" && fail "f1-tick could not run the recorder watch"
+[[ $(cat "$STATE/disk") =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9:]{8}Z\ [0-9]{1,18}\ [0-9]{1,18}$ ]] || fail "disk: $(cat "$STATE/disk")"
+grep -q 'free disk: /srv/f1 [0-9]* GiB, Docker data root /[^ ]* [0-9]* GiB' "$tmp/tick" || fail "f1-tick did not log the free disk space"
 curl -fsS --max-time 5 -o /dev/null "$URL" || fail "$URL is not 200 after the reload"
-proof "f1-tick reloaded the deleted table inet f1 and wrote $STATE/disk ($(cat "$STATE/disk")); $URL still 200"
+proof "f1-tick reloaded the deleted table inet f1, ran the recorder watch (no 'cannot run the recorder watch') and wrote $STATE/disk ($(cat "$STATE/disk")), '$(grep -o 'free disk: .*' "$tmp/tick")'; $URL still 200"
 
 # ------------------------------------------------------------------ 8
 step "8. A local tag with a registry host is pulled and recorded by digest, never as given"
@@ -351,8 +394,9 @@ run "$tmp/tick-busy" "$BIN/f1-tick"
 exec 8>&-
 ((rc == 0)) || fail "f1-tick exited $rc while the lock was held"
 grep -q 'no container restarts this round' "$tmp/tick-busy" || fail "f1-tick did not skip the restarts"
-grep -q 'disk use of /srv/f1' "$tmp/tick-busy" || fail "f1-tick skipped the disk record"
-proof "f1-tick with /run/f1/update.lock held: exit 0, '$(grep -o 'f1-update or f1-install is running.*' "$tmp/tick-busy")', disk still recorded"
+grep -q 'free disk: /srv/f1' "$tmp/tick-busy" || fail "f1-tick skipped the disk record"
+grep -q 'cannot run the recorder watch' "$tmp/tick-busy" && fail "f1-tick could not run the recorder watch"
+proof "f1-tick with /run/f1/update.lock held: exit 0, '$(grep -o 'f1-update or f1-install is running.*' "$tmp/tick-busy")', the recorder watch ran and the disk was still recorded"
 
 # ------------------------------------------------------------------ 10
 step "10. Fail closed: no f1 container runs, and no deploy starts, without table inet f1"
@@ -379,7 +423,81 @@ curl -fsS --max-time 5 -o /dev/null "$URL" || fail "$URL is not 200 after the st
 [[ ! -e $STATE/firewall-stopped ]] || fail "$STATE/firewall-stopped is left"
 proof "table deleted and conf moved away: f1-tick exit 1, '$(grep -o 'error: loading.*' "$tmp/tick-closed")', no f1 container runs; f1-update exit 1, '$(grep -o 'table inet f1 is not loaded.*' "$tmp/update-closed")'; conf back: f1-tick exit 0, table reloaded, '$(grep -o 'table inet f1 is loaded again.*' "$tmp/tick-open")', $URL 200"
 
+# ------------------------------------------------------------------ 11
+step "11. The restart loop: 3 rounds of restarts in a row alert restart_loop once; gone, the alert clears"
+# f1-web:ci (busybox) for the health command's /bin/sh; --stop-timeout 1, as sleep ignores SIGTERM.
+docker run -d --name f1-e2e-sick-1 --label com.docker.compose.project=f1 --network none --stop-timeout 1 \
+  --health-cmd false --health-interval 1s --health-retries 1 --entrypoint sleep f1-web:ci 3600 >/dev/null
+for round in 1 2 3 4; do
+  # A restart resets the health to starting, which f1-tick does not restart: wait for unhealthy.
+  for _ in $(seq 30); do
+    [[ $(docker inspect -f '{{.State.Health.Status}}' f1-e2e-sick-1) == unhealthy ]] && break
+    sleep 1
+  done
+  [[ $(docker inspect -f '{{.State.Health.Status}}' f1-e2e-sick-1) == unhealthy ]] || fail "f1-e2e-sick-1 is not unhealthy before round $round"
+  run "$tmp/tick-sick$round" "$BIN/f1-tick"
+  ((rc == 0)) || fail "f1-tick exited $rc in round $round"
+  grep -q 'restarting unhealthy container f1-e2e-sick-1' "$tmp/tick-sick$round" || fail "round $round did not restart f1-e2e-sick-1"
+done
+for round in 1 2 4; do
+  if grep -q 'restart_loop' "$tmp/tick-sick$round"; then fail "round $round alerted restart_loop"; fi
+done
+grep -q 'f1-alert: alert_key_invalid restart_loop f1-e2e-sick-1$' "$tmp/tick-sick3" || fail "round 3 did not alert restart_loop f1-e2e-sick-1"
+[[ $(cat "$STATE/restarts") == 'f1-e2e-sick-1 4' ]] || fail "restarts after round 4: $(cat "$STATE/restarts")"
+[[ $(cat "$STATE/alert-restart_loop") == f1-e2e-sick-1 ]] || fail "alert-restart_loop: $(cat "$STATE/alert-restart_loop" 2>&1)"
+docker rm -f f1-e2e-sick-1 >/dev/null
+run "$tmp/tick-healed" "$BIN/f1-tick"
+((rc == 0)) || fail "f1-tick exited $rc after f1-e2e-sick-1 was removed"
+[[ ! -e $STATE/alert-restart_loop ]] || fail "$STATE/alert-restart_loop is left after the loop ended"
+[[ ! -s $STATE/restarts ]] || fail "restarts after the loop ended: $(cat "$STATE/restarts")"
+proof "f1-e2e-sick-1 (always unhealthy) restarted by 4 ticks in a row: only the third alerted, '$(grep -o 'alert_key_invalid restart_loop.*' "$tmp/tick-sick3")', restarts then 'f1-e2e-sick-1 4'; removed, the next tick cleared alert-restart_loop and emptied restarts"
+
+# ------------------------------------------------------------------ 12
+step "12. OnFailure: a failed f1-update.service alerts through the sandboxed f1-alert@; one request, to loopback"
+# journal_has <unit> <text>: the unit's journal shows the text within 30 s (OnFailure is asynchronous).
+journal_has() {
+  local _ out
+  for _ in $(seq 30); do
+    out=$(journalctl -u "$1" --no-pager -o cat 2>/dev/null) || true
+    [[ $out == *"$2"* ]] && return 0
+    sleep 1
+  done
+  return 1
+}
+: >/etc/f1/secrets/hc_ping_key # keeps root:62006 0440; f1-update also says "not configured" with it
+mkdir -p "${DROPIN%/*}"
+printf '[Service]\nEnvironment=F1_SMOKE_TIMEOUT=bad\n' >"$DROPIN"
+systemctl daemon-reload
+[[ $(systemctl show -p Environment --value f1-update.service) == *F1_SMOKE_TIMEOUT=bad* ]] || fail "the drop-in did not take"
+# f1-update exits 64 on the bad timeout, before its lock, readiness or any pull.
+systemctl start f1-update.service && fail "f1-update.service did not fail with F1_SMOKE_TIMEOUT=bad"
+journal_has f1-alert@f1-update.service.service 'alert_no_key unit_failed f1-update.service' ||
+  fail "f1-alert@f1-update.service.service did not log alert_no_key unit_failed f1-update.service"
+rm -f -- "$DROPIN"
+systemctl daemon-reload
+systemctl reset-failed f1-update.service
+printf 'ci.dummy.not.a.ping.key\n' >/etc/f1/secrets/hc_ping_key
+systemctl start f1-alert@e2e.service || fail "f1-alert@e2e.service failed"
+journal_has f1-alert@e2e.service 'alert_key_invalid unit_failed e2e' || fail "f1-alert@e2e.service did not log alert_key_invalid unit_failed e2e"
+# The one request of this run: a well-formed fake key, to hc-ping.com pinned on 127.0.0.1 (refused).
+hc_ip=$(getent ahosts hc-ping.com | awk '{print $1}' | sort -u) || true
+[[ $hc_ip == 127.0.0.1 ]] || fail "hc-ping.com resolves to '$hc_ip', not 127.0.0.1 only"
+printf 'ci-fake-ping-key-00000\n' >/etc/f1/secrets/hc_ping_key
+run "$tmp/alert-loopback" "$BIN/f1-alert" test_alert
+((rc == 1)) || fail "f1-alert test_alert exited $rc on loopback, not 1"
+grep -q 'f1-alert: alert_failed test_alert (curl 7, http 000)$' "$tmp/alert-loopback" || fail "f1-alert did not log curl 7 on loopback"
+printf 'ci.dummy.not.a.ping.key\n' >/etc/f1/secrets/hc_ping_key
+[[ $(stat -c '%a %u %g' /etc/f1/secrets/hc_ping_key) == '440 0 62006' ]] || fail "hc_ping_key lost root:62006 0440"
+proof "F1_SMOKE_TIMEOUT=bad (runtime drop-in): f1-update.service failed and its OnFailure logged '$(journalctl -u f1-alert@f1-update.service.service --no-pager -o cat | grep -o 'alert_no_key.*' | head -n 1)'; the sandboxed f1-alert@e2e.service read the malformed key: '$(journalctl -u f1-alert@e2e.service --no-pager -o cat | grep -o 'alert_key_invalid.*' | head -n 1)'; a 22-character fake key: exit 1, '$(grep -o 'alert_failed.*' "$tmp/alert-loopback")' (hc-ping.com -> $hc_ip); hc_ping_key root:62006 0440 again"
+
 # ------------------------------------------------------------------ invariant 4
+journalctl -u 'f1-alert@*' --no-pager -o cat >"$tmp/journal-alert" 2>&1 || true
+grep -rq 'alert_sent' "$tmp" && fail "an alert was sent: $(grep -rh 'alert_sent' "$tmp")"
+alert_failed=$(grep -rho 'alert_failed.*' "$tmp" | sort -u) || true
+[[ $alert_failed == 'alert_failed test_alert (curl 7, http 000)' ]] || fail "alert_failed lines other than step 12's: $alert_failed"
+not_sent=$(grep -rhoE 'alert_(key_invalid|no_key) [a-z_]+' "$tmp" | sort | uniq -c |
+  awk '{ printf "%s%s %s x%s", sep, $2, $3, $1; sep = ", " }') || true
+[[ -n $not_sent ]] || fail "no alert_key_invalid or alert_no_key line: the alert checks prove nothing"
 for t in f1-update.timer f1-tick.timer; do
   if systemctl is-enabled --quiet "$t" 2>/dev/null; then fail "$t is enabled"; fi
 done
@@ -389,4 +507,4 @@ for s in ingest cloudflared; do
 done
 sessions=$(docker exec f1-db-1 psql -U postgres -d f1 -tAc "SELECT count(*) FROM session")
 [[ $sessions == 0 ]] || fail "the session table has $sessions rows: live was not idle"
-proof "no f1 timer is enabled; ingest and cloudflared never ran (no container of them exists); the session table stayed empty, so live never had a session to log in for"
+proof "no f1 timer is enabled; ingest and cloudflared never ran (no container of them exists); the session table stayed empty, so live never had a session to log in for; no alert_sent in the logs or the f1-alert@ journal, the only alert_failed is step 12's loopback one, and the alerts not sent: $not_sent"

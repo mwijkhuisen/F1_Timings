@@ -1,0 +1,20 @@
+# f1-alert@<unit>.service (#104): the OnFailure= of f1-update.service and f1-tick.service, so a
+# failed run alerts "unit_failed <unit>" through healthchecks.io's f1-ingest/fail (f1-alert).
+# Root, so that on the host only root reads /etc/f1/secrets/hc_ping_key, but without a single
+# capability: root reads that root:62006 0440 file through its owner bits, and f1-alert writes
+# nothing.
+[Unit]
+Description=f1: alert that %i failed (f1-ingest/fail)
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/f1-alert unit_failed %i
+TimeoutStartSec=1min
+UMask=0077
+PrivateTmp=yes
+ProtectHome=yes
+ProtectSystem=strict
+NoNewPrivileges=yes
+CapabilityBoundingSet=

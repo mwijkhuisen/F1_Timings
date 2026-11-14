@@ -9,6 +9,9 @@ export LC_ALL=C
 
 readonly F1_ETC=/etc/f1
 readonly F1_STATE=/srv/f1/state
+# This file's directory, where the other f1-* scripts sit (/usr/local/bin once installed).
+F1_BIN=$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")
+readonly F1_BIN
 readonly F1_LOCK_DIR=/run/f1
 readonly F1_SMOKE_URL=http://127.0.0.1:8180/healthz
 # Each secret file and its GID (A§14.2, D5): /etc/f1/secrets/<name>, root:<gid> 0440, and only
@@ -24,6 +27,21 @@ die() {
   exit 1
 }
 
+# alert_once <code> <token> [<detail>] (#104): f1-alert <code> [<detail>], once per token:
+# $F1_STATE/alert-<code> keeps the token of the last alert that f1-alert took (sent, or no key to
+# send it with), so a failed request is tried again next run. Always returns 0, even on a full disk:
+# an alert never stops the script that raised it.
+alert_once() {
+  local file=$F1_STATE/alert-$1
+  if [[ -f $file && $(<"$file") == "$2" ]]; then return 0; fi
+  if "$F1_BIN/f1-alert" "$1" "${@:3}"; then
+    printf '%s\n' "$2" | write_atomic "$file" 0600 || log "warning: cannot write the alert state $file"
+  fi
+  return 0
+}
+# alert_clear <code>: the condition is over, so the next one alerts again.
+alert_clear() { rm -f -- "$F1_STATE/alert-$1"; }
+
 # lockfile <name>: a lock in the root-only /run/f1, never a shared 1777 directory such as
 # /run/lock, where another user could pre-create the file.
 lockfile() {
@@ -31,13 +49,14 @@ lockfile() {
   printf '%s/%s.lock' "$F1_LOCK_DIR" "$1"
 }
 
-# stdin -> a temporary file in the destination's directory -> rename (atomic).
+# stdin -> a temporary file in the destination's directory -> rename (atomic). Fails without a
+# partial file in place also where set -e is off (alert_once's `write_atomic … || log`).
 write_atomic() {
   local dest=$1 mode=$2 tmp
-  tmp=$(mktemp "${dest%/*}/.${dest##*/}.XXXXXX")
-  cat >"$tmp"
-  chmod "$mode" "$tmp"
-  mv -f "$tmp" "$dest"
+  tmp=$(mktemp "${dest%/*}/.${dest##*/}.XXXXXX") || return 1
+  if cat >"$tmp" && chmod "$mode" "$tmp" && mv -f "$tmp" "$dest"; then return 0; fi
+  rm -f -- "$tmp"
+  return 1
 }
 
 # The owner's settings (A§12.2): /etc/f1/f1.env, read as KEY=VALUE lines, never sourced. Only

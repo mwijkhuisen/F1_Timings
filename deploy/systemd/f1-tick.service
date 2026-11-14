@@ -1,10 +1,13 @@
 # f1-tick (A§14.5): restores the f1 firewall table, refreshes the DNS allowlist, restarts
-# unhealthy f1 containers and records the disk use. Runs as root: it drives docker and nft.
+# unhealthy f1 containers, watches the recorder and records the free disk space, alerting through
+# f1-alert. Runs as root: it drives docker and nft.
 [Unit]
-Description=f1: firewall table, DNS allowlist, unhealthy containers, disk use
+Description=f1: firewall table, DNS allowlist, unhealthy containers, recorder watch, free disk
 Wants=network-online.target
 After=network-online.target docker.service f1-firewall.service
 Requires=docker.service
+# A failed run alerts "unit_failed <this unit>" through f1-ingest/fail (#104).
+OnFailure=f1-alert@%n.service
 
 [Service]
 Type=oneshot
