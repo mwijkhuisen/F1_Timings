@@ -1,12 +1,16 @@
-import type { Laps, Live, SessionDetail, Stints } from '@f1/contracts';
+import type { Laps, Live, Pits, SessionDetail, Stints } from '@f1/contracts';
 import type { CSSProperties } from 'react';
 import { useMemo } from 'react';
-import { useRaceControl, useStints } from '../lib/api.ts';
+import { usePits, useRaceControl, useStints } from '../lib/api.ts';
 import { type Compound, compoundOf, compoundsOf, UNKNOWN_COMPOUND } from '../lib/compound.ts';
-import { type Driver, orderDrivers, teamStyle } from '../lib/session.ts';
-import { KIND_LABEL, type Period, trackPeriods } from '../lib/track.ts';
+import { startsStint } from '../lib/crossings.ts';
+import { type Driver, orderDrivers, sourceWords, teamStyle } from '../lib/session.ts';
+import { fmtClock } from '../lib/time.ts';
+import { KIND_LABEL, kindsAt, type Period, trackPeriods } from '../lib/track.ts';
 import { Pending } from '../ui/ErrorView.tsx';
 import { NoData } from '../ui/NoData.tsx';
+import { Note } from '../ui/Note.tsx';
+import { Scroll } from '../ui/Scroll.tsx';
 
 // Stints on a real lap scale (P4f, A§13): a lane per driver, a stint at (lap_start − 1) / total and
 // (laps) / total wide, so a hole in the data shows as a gap and no row is stretched to fit. Each row is a
@@ -108,20 +112,90 @@ const letterClass = (letter: string) => (letter.length > 1 ? 'two' : undefined);
 
 const lapsText = (p: Period) => (p.from === p.to ? `lap ${p.from}` : `laps ${p.from}–${p.to}`);
 
+export type PitStop = {
+  driver: Driver;
+  /** The in-lap (A§9). */
+  n: number;
+  time: string;
+  laneMs: number | null;
+  stopMs: number | null;
+  /** The stint that starts after the in-lap, and the one before it; none on a pit-lane pass. */
+  after: Stints[number] | undefined;
+  before: Stints[number] | undefined;
+  pass: boolean;
+  under: 'sc' | 'vsc' | undefined;
+  fastest: boolean;
+};
+
+/**
+ * One row per pit row, in API order (#111, A§6.1). A stop has a stint starting after its in-lap (`startsStint`, as
+ * `stops()` reads it); a row without one is a pit-lane pass. The fastest is the lowest lane time among the stops.
+ */
+export function pitStops(
+  drivers: readonly Driver[],
+  pits: Pits,
+  stints: Stints,
+  periods: readonly Period[],
+): PitStop[] {
+  const rows = pits.map((p): PitStop => {
+    const own = stints.filter((s) => s.driver_number === p.driver_number);
+    const n = p.lap_number;
+    const starts = new Set(own.flatMap((s) => (s.lap_start === null ? [] : [s.lap_start])));
+    const after = startsStint(starts, n)
+      ? (own.find((s) => s.lap_start === n + 1) ?? own.find((s) => s.lap_start === n))
+      : undefined;
+    return {
+      driver: drivers.find((d) => d.number === p.driver_number) ?? {
+        number: p.driver_number,
+        acronym: String(p.driver_number),
+        name: null,
+        team: null,
+      },
+      n,
+      time: p.date === null ? '—' : fmtClock(Date.parse(p.date)),
+      laneMs: p.lane_ms ?? p.pit_ms,
+      stopMs: p.stop_ms,
+      after,
+      before: after && own.find((s) => s.stint_number === after.stint_number - 1),
+      pass: !after,
+      under: kindsAt(periods, n).find((k) => k !== 'red'),
+      fastest: false,
+    };
+  });
+  const best = rows
+    .filter((r) => !r.pass && r.laneMs !== null)
+    .reduce<PitStop | undefined>((a, r) => (a && (a.laneMs as number) <= (r.laneMs as number) ? a : r), undefined);
+  if (best) best.fastest = true;
+  return rows;
+}
+
+const seconds = (ms: number) => `${(ms / 1000).toFixed(1)} s`;
+
+/** A pit row in words for a stint popover. */
+function pitLine(r: PitStop): string {
+  const head = `${r.pass ? 'Pit-lane pass' : 'Stop'} after lap ${r.n}`;
+  if (r.laneMs === null) return `${head}: no pit-lane time in the OpenF1 data`;
+  return `${head}: ${seconds(r.laneMs)} in the pit lane${r.pass ? ', no tyre change in the stints data' : ''}`;
+}
+
 export function StintBars({
   detail,
   laps,
   stints,
   periods = [],
+  pits = [],
 }: {
   detail: SessionDetail;
   laps: Laps;
   stints: Stints;
   /** SC and VSC periods (C6); red flags are not drawn here. */
   periods?: readonly Period[];
+  /** A race's pit rows, one popover line each (#111). */
+  pits?: Pits;
 }) {
   const year = detail.meeting.year;
   const drivers = orderDrivers(detail, laps);
+  const pitRows = pitStops(drivers, pits, stints, periods);
   const { total, ticks, rows } = stintLayout(drivers, laps, stints, year);
   const used = new Set(rows.flatMap((r) => inOrder(r).map((s) => s.compound)));
   // The season's compounds in use, softest first, then an unknown one.
@@ -174,6 +248,7 @@ export function StintBars({
             {rows.map(({ driver: d, track, segs, unplaced, stops }) => {
               const own = inOrder({ driver: d, track, segs, unplaced, stops });
               const id = `stints-${d.number}`;
+              const ownPits = pitRows.filter((r) => r.driver.number === d.number);
               return (
                 <li key={d.number}>
                   <button
@@ -204,12 +279,16 @@ export function StintBars({
                     <span className="stop">{plural(stops, 'stop')}</span>
                   </button>
                   <div popover="auto" id={id} className="pop">
-                    {own.length === 0 ? (
+                    {own.length === 0 && ownPits.length === 0 ? (
                       <p>No stints.</p>
                     ) : (
                       <ul>
                         {own.map((s) => (
                           <li key={s.stint}>{describe(s)}</li>
+                        ))}
+                        {ownPits.map((r, i) => (
+                          // biome-ignore lint/suspicious/noArrayIndexKey: a driver's pit rows have no id; the list is static.
+                          <li key={i}>{pitLine(r)}</li>
                         ))}
                       </ul>
                     )}
@@ -220,6 +299,91 @@ export function StintBars({
           </ol>
         </div>
       </div>
+    </>
+  );
+}
+
+/** The tyre change of a stop in words (the wording of `describe`); a pass has none. */
+function Tyres({ r, year, id }: { r: PitStop; year: number | null; id: string }) {
+  const { after, before } = r;
+  if (!after) return <>Pit-lane pass: no tyre change in the stints data</>;
+  const name = (s: Stints[number]) => fields(compoundOf(s.compound, year)).name;
+  const used = (after.tyre_age_at_start ?? 0) > 0;
+  return (
+    <>
+      {before && `${name(before)} → `}
+      {name(after)}
+      {after.tyre_age_at_start === null ? '' : used ? ', used set, ' : ', new set'}
+      {used && (
+        <Note id={id} text="May be wrong for a used set (OpenF1 #473)">
+          {`${plural(after.tyre_age_at_start ?? 0, 'lap')} old`}
+        </Note>
+      )}
+    </>
+  );
+}
+
+/** The race's pit stops (#111, A§13): the OpenF1 pit rows with the lane time, the stop time and the tyre change. */
+export function PitStops({ detail, rows }: { detail: SessionDetail; rows: readonly PitStop[] }) {
+  const year = detail.meeting.year;
+  return (
+    <>
+      <h2>Pit stops</h2>
+      <ul className="legend" aria-label="Pit stops legend">
+        <li>boxed: the fastest time in the pit lane</li>
+      </ul>
+      <Scroll label="Pit stops">
+        <table className="pits" aria-label="Pit stops">
+          <thead>
+            <tr>
+              <th scope="col">Driver</th>
+              <th scope="col">Lap</th>
+              <th scope="col">Time</th>
+              <th scope="col">Pit lane</th>
+              <th scope="col">Stop</th>
+              <th scope="col">Tyres</th>
+              <th scope="col">Track</th>
+            </tr>
+          </thead>
+          <tbody>
+            {rows.map((r, i) => (
+              // biome-ignore lint/suspicious/noArrayIndexKey: pit rows have no id; the table is static.
+              <tr key={i}>
+                <td className="drv" style={teamStyle(r.driver)}>
+                  {r.driver.acronym}
+                </td>
+                <td>{r.n}</td>
+                <td>{r.time}</td>
+                <td>
+                  {r.laneMs === null ? (
+                    '—'
+                  ) : r.fastest ? (
+                    <span className="t-purple">
+                      {seconds(r.laneMs)}
+                      <span className="vh">, fastest</span>
+                    </span>
+                  ) : (
+                    seconds(r.laneMs)
+                  )}
+                </td>
+                <td>
+                  {r.stopMs === null ? (
+                    <Note id={`pit-stop-${i}`} text="No stop time in the OpenF1 data (OpenF1 #484)">
+                      —
+                    </Note>
+                  ) : (
+                    seconds(r.stopMs)
+                  )}
+                </td>
+                <td>
+                  <Tyres r={r} year={year} id={`pit-age-${i}`} />
+                </td>
+                <td>{r.under && `under ${KIND_LABEL[r.under]}`}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </Scroll>
     </>
   );
 }
@@ -239,7 +403,9 @@ export function StintsTab({
   now: number;
 }) {
   const stints = useStints(session);
-  const rc = useRaceControl(session, detail.session.type === 'Race' && laps.length > 0);
+  const pits = usePits(session);
+  const race = detail.session.type === 'Race';
+  const rc = useRaceControl(session, race && laps.length > 0);
   const periods = useMemo(
     () => (rc.data ? trackPeriods(rc.data).periods.filter((p) => p.kind !== 'red') : []),
     [rc.data],
@@ -249,7 +415,22 @@ export function StintsTab({
   return (
     <>
       {rc.error && <p className="muted">Race control did not load: no SC or VSC lines.</p>}
-      <StintBars detail={detail} laps={laps} stints={stints.data} periods={periods} />
+      <StintBars
+        detail={detail}
+        laps={laps}
+        stints={stints.data}
+        periods={periods}
+        pits={race ? (pits.data ?? []) : []}
+      />
+      {pits.data &&
+        (pits.data.length === 0 ? (
+          <p className="muted">{`No pit rows in ${sourceWords(detail.session.source)} for this session.`}</p>
+        ) : race ? (
+          <PitStops detail={detail} rows={pitStops(orderDrivers(detail, laps), pits.data, stints.data, periods)} />
+        ) : (
+          <p className="muted">Pit stops are listed for races and sprints.</p>
+        ))}
+      {pits.error && <p className="muted">Pit stops did not load.</p>}
     </>
   );
 }

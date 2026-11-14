@@ -8,8 +8,8 @@ import { server } from '../../../test/msw.setup.ts';
 import { LapsTab } from '../src/views/LapsTab.tsx';
 import { field, lap, rc, sessionDetail } from './laps.ts';
 
-// The Laps tab (P4b) in a real React tree: race control only for races and sprints, the bands once it
-// arrives, the muted line when it fails, and By phase | Every lap for qualifying only.
+// The Laps tab (P4b) in a real React tree: race control for every type (#111), the bands for races and sprints
+// only, once it arrives, the muted line when it fails, and By phase | Every lap for qualifying only.
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -65,13 +65,26 @@ describe('LapsTab', () => {
     expect(button('By phase')).toBeUndefined();
   });
 
-  it('never fetches race control for a practice session', async () => {
-    answer();
+  it('fetches race control once for practice and qualifying, shows the log, and draws no band', async () => {
+    server.use(
+      http.get(URL_RC, () => {
+        calls++;
+        return HttpResponse.json([rc(2, 'SAFETY CAR DEPLOYED', { category: 'SafetyCar' })]);
+      }),
+    );
     render('Practice', 'Practice 1');
-    await act(() => new Promise((r) => setTimeout(r, 50)));
-    expect(calls).toBe(0);
+    await vi.waitFor(() => expect(host.querySelector('.rclog')).not.toBeNull());
+    expect(host.querySelector('.rclog')?.textContent).toContain('SAFETY CAR DEPLOYED');
+    expect(host.querySelector('.band')).toBeNull();
+    expect(calls).toBe(1);
     expect(host.querySelector('table.laps')).not.toBeNull();
     expect(button('By phase')).toBeUndefined();
+    act(() => root.unmount());
+    root = createRoot(host);
+    render('Qualifying', 'Qualifying', field([3, 2, 1]));
+    await vi.waitFor(() => expect(host.querySelector('.rclog')).not.toBeNull());
+    expect(host.querySelector('.band')).toBeNull();
+    expect(calls).toBe(2);
   });
 
   it('says so when race control fails, and keeps the table', async () => {
@@ -97,11 +110,11 @@ describe('LapsTab', () => {
     act(() => button('Every lap')?.click());
     expect(host.querySelector('table.quali')).toBeNull();
     expect(host.querySelector('table.laps')).not.toBeNull();
-    await act(() => new Promise((r) => setTimeout(r, 50)));
-    expect(calls).toBe(0);
+    await vi.waitFor(() => expect(calls).toBe(1));
   });
 
   it('shows the Δ legend when switched', () => {
+    answer();
     render('Practice', 'Practice 2');
     act(() => button('Δ to own best')?.click());
     expect(host.querySelector('ul.legend')?.textContent).toBe('< 0.5 %< 1 %< 2 %≥ 2 % slower than own best');

@@ -1,4 +1,4 @@
-import { useEffect, useReducer, useState } from 'react';
+import { type ReactNode, useEffect, useReducer, useState } from 'react';
 import {
   type Clock,
   type Fastest,
@@ -91,13 +91,64 @@ export function Strip({ strip, now, playing }: { strip: StripData; now: () => nu
   );
 }
 
-const FILTERS: [Kind | 'all', string][] = [
+export const FILTERS: [Kind | 'all', string][] = [
   ['all', 'All'],
   ['flags', 'Flags'],
   ['sc', 'SC/VSC'],
   ['incidents', 'Incidents'],
   ['limits', 'Track limits'],
 ];
+
+/**
+ * The race-control card: the kind chips with their counts, `filters` (the log's own, #111), then the messages as text.
+ * `yet`: the live panel's empty texts say "yet" (A§13).
+ */
+export function RaceControlCard({
+  rc,
+  yet = false,
+  className = 'card',
+  filters,
+}: {
+  rc: RaceControl;
+  yet?: boolean;
+  className?: string;
+  filters?: ReactNode;
+}) {
+  const [filter, setFilter] = useState<Kind | 'all'>('all');
+  const items = filter === 'all' ? rc.items : rc.items.filter((i) => i.kind === filter);
+  const y = yet ? ' yet' : '';
+  return (
+    <section className={className}>
+      <h2>Race control</h2>
+      <fieldset className="chips" aria-label="Filter">
+        {FILTERS.map(([kind, label]) => (
+          <button key={kind} type="button" aria-pressed={filter === kind} onClick={() => setFilter(kind)}>
+            {label} {rc.counts[kind]}
+          </button>
+        ))}
+      </fieldset>
+      {filters}
+      {items.length === 0 ? (
+        <p className="muted">{rc.items.length === 0 ? `No messages${y}.` : `No messages of this kind${y}.`}</p>
+      ) : (
+        <Scroll label="Race control messages">
+          <ol className="feed">
+            {items.map((i) => (
+              <li key={i.key}>
+                {i.time !== undefined && <span className="time">{i.time}</span>}
+                <span className="lap">{i.lap !== undefined && `L${i.lap}`}</span>
+                <span>
+                  {i.tag && <span className="cat">{i.tag}</span>}
+                  {i.text}
+                </span>
+              </li>
+            ))}
+          </ol>
+        </Scroll>
+      )}
+    </section>
+  );
+}
 
 /** The side panel: race control with its filter, the cars within a second (races only) and the fastest lap so far. */
 export function Panel({
@@ -111,37 +162,9 @@ export function Panel({
   fastest: Fastest | undefined;
   race: boolean;
 }) {
-  const [filter, setFilter] = useState<Kind | 'all'>('all');
-  const items = filter === 'all' ? rc.items : rc.items.filter((i) => i.kind === filter);
   return (
     <aside className="side" aria-label="Session details">
-      <section className="card">
-        <h2>Race control</h2>
-        <fieldset className="chips" aria-label="Filter">
-          {FILTERS.map(([kind, label]) => (
-            <button key={kind} type="button" aria-pressed={filter === kind} onClick={() => setFilter(kind)}>
-              {label} {rc.counts[kind]}
-            </button>
-          ))}
-        </fieldset>
-        {items.length === 0 ? (
-          <p className="muted">{rc.items.length === 0 ? 'No messages yet.' : 'No messages of this kind yet.'}</p>
-        ) : (
-          <Scroll label="Race control messages">
-            <ol className="feed">
-              {items.map((i) => (
-                <li key={i.key}>
-                  <span className="lap">{i.lap !== undefined && `L${i.lap}`}</span>
-                  <span>
-                    {i.tag && <span className="cat">{i.tag}</span>}
-                    {i.text}
-                  </span>
-                </li>
-              ))}
-            </ol>
-          </Scroll>
-        )}
-      </section>
+      <RaceControlCard rc={rc} yet />
       {race && (
         <section className="card">
           <h2>Within a second</h2>

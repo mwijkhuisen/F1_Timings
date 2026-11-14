@@ -105,6 +105,10 @@ export function lapOneGains(row1: OrderRow | undefined, grid: ReadonlyMap<number
   return out;
 }
 
+/** Whether a stint starts after in-lap n: from n + 1, or from n itself (lap > 1; see `stops`). A pit-lane pass has none. */
+export const startsStint = (starts: ReadonlySet<number>, n: number): boolean =>
+  starts.has(n + 1) || (n > 1 && starts.has(n));
+
 /**
  * The driver's stops, as in-lap numbers: an in-lap n with a new stint from lap n + 1, or from n itself (lap > 1).
  * Dev DB, 2026-11-13, OpenF1 races 2023–2026, 3,533 race in-laps: 2,998 have the stint from n + 1; 374 in 12 sessions
@@ -118,7 +122,7 @@ export function stops(driver: number, laps: readonly PitLap[], stints: Stints): 
   return laps
     .filter((l) => l.driver_number === driver && l.is_pit_in)
     .map((l) => l.lap_number)
-    .filter((n) => starts.has(n + 1) || (n > 1 && starts.has(n)))
+    .filter((n) => startsStint(starts, n))
     .sort((x, y) => x - y);
 }
 
