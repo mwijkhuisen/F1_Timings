@@ -42,6 +42,7 @@ sudo docker compose -p f1 -f /etc/f1/compose.yaml --env-file /srv/f1/state/curre
 - `<session_key>`: one session, newest data from OpenF1. A failure changes nothing (a `final` session stays `final`).
 - `--failed`: every OpenF1 session in `failed` that is not cancelled, newest first. Use it after an outage, once the cause is gone. No failed session is exit 0.
 - `--meeting <meeting_key>`: the meeting's not cancelled OpenF1 sessions that ended more than 35 min ago, newest first. A meeting with no such session logs `no_sessions` and exits 1.
+- Sessions failing with `empty` fail again in a `--failed` run until `accept-empty` has cleared them, and each costs 7 requests. `--failed` is for after the cause of the failures (an outage) is gone.
 - It stops at a live window: the first session refused with `live_session` ends the batch (exit 1). Run it again after the window.
 - The last line is `refetch_done {sessions, done, failed}`. Per-session codes: the `last_error` codes (`rate_limited`, `http_<status>`, `timeout`, `network`, `schema`, `db`, `unknown`), `empty` (see `accept-empty`), `unknown_session`, `not_openf1`.
 
@@ -57,7 +58,7 @@ time sudo docker compose -p f1 -f /etc/f1/compose.yaml --env-file /srv/f1/state/
 
 - Per session one transaction. It changes the child rows only: state, counters and the raw rows stay. `result.grid` is kept by driver number (D2).
 - Skips (counted in `rederive_done`, no failure): `no_raw` (no stored raw rows: a session that was never fetched) and `incomplete` (one of the seven endpoints is missing).
-- Failures (exit 1): `unknown_session`, `not_openf1` (an archive session), `schema` (a stored body no longer parses: the line names the endpoint and zod's paths and codes, and nothing is written for that session), `db`, `unknown`.
+- Failures (exit 1): `unknown_session`, `not_openf1` (an archive session), `schema` (a stored body no longer parses: the line names the endpoint and zod's paths and codes, and nothing is written for that session), or a thrown error's code (a SQLSTATE, else `unknown`).
 - The last line is `rederive_done {sessions, rederived, skipped, failed, ms}`. Expect 0 `failed`; the skipped sessions are the future and cancelled ones.
 
 ## Accept an emptied endpoint [owner]
@@ -81,7 +82,9 @@ The empty guard (A§8) fails a session with `empty` when an endpoint answers `[]
    It makes one OpenF1 request for that endpoint and deletes the stored row only when OpenF1 answers `[]` now and the stored row has rows (D4). Nothing else is deleted: the other raw rows and the child rows stay.
 3. Refetch, or wait. The daemon's next tick fetches the session; for a `failed` or `final` session run `refetch <key>` (above).
 
-Refusals (exit 1, nothing deleted): `unknown_session`, `not_openf1`, `live_session`, `no_rows` (the stored row is already empty: no request is made), `not_empty` (OpenF1 still has rows: it is a transient gap, not a removal; wait), or the code of the failed fetch (`rate_limited`, `timeout`, `http_<status>`, `schema`, …). The endpoint is one of `drivers`, `laps`, `stints`, `pit`, `race_control`, `session_result`, `weather`; a race's `starting_grid` has its own keep path (A§8).
+Refusals (exit 1, nothing deleted): `unknown_session`, `not_openf1`, `live_session`, `no_rows` (the stored row is already empty: no request is made), `not_empty` (OpenF1 still has rows: it is a transient gap, not a removal; wait), `changed` (a fetch replaced the stored row while the request ran: nothing deleted, look again), the code of the failed fetch (`rate_limited`, `timeout`, `http_<status>`, `schema`, …), or a thrown error's code (a SQLSTATE, else `unknown`). The endpoint is one of `drivers`, `laps`, `stints`, `pit`, `race_control`, `session_result`, `weather`; a race's `starting_grid` has its own keep path (A§8).
+
+Do not run the hand form below: use `accept-empty`. It is kept only as the record of the 2026-11-09 fix.
 
 The hand form, superseded by `accept-empty` and kept for reference (the owner's 2026-11-09 fix, `DELETE 72`; it skips the OpenF1 check and takes every non-race session at once):
 

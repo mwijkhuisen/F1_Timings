@@ -605,18 +605,28 @@ describe('rain job (Open-Meteo through msw, f1_ingest login)', { timeout: 120_00
       .execute();
     at = new Date('2026-11-17T00:00:00Z'); // past date_end + 24 h: the Historical host
     const job = { db, now: () => at, log };
-    expect(await rainRefetch(job, 100)).toBe(true);
-    expect(await grid(100)).toMatchObject({
+    // Through the role (exit 0 and the state change): it logs to its own logger and reads the real clock.
+    const before = Date.now();
+    const env = { PATH: process.env.PATH, DATABASE_URL: testDb.urls.f1_ingest };
+    expect(await run(['rain-refetch', '100'], env, () => {})).toBe(0);
+    const requeued = await grid(100);
+    expect(requeued).toMatchObject({
       state: 'live',
-      next_fetch_at: at,
       fetch_count: 1,
       fail_count: 0,
       attempt_count: 10,
       last_error: null,
-      updated_at: at,
     });
-    expect(logged('rain_refetch')).toEqual([expect.objectContaining({ level: 30, session_key: 100 })]);
+    expect(requeued?.next_fetch_at?.getTime()).toBeGreaterThanOrEqual(before);
+    expect(requeued?.updated_at).toEqual(requeued?.next_fetch_at);
+    expect(logged('rain_refetch')).toEqual([]);
     expect(seen).toEqual([]);
+    // The steps below run on the test's clock.
+    await admin
+      .updateTable('rain_grid')
+      .set({ next_fetch_at: at, updated_at: at })
+      .where('session_key', '=', 100)
+      .execute();
 
     await daemon().run();
     expect(seen.map((s) => s.host)).toEqual(['historical']);
@@ -628,7 +638,7 @@ describe('rain job (Open-Meteo through msw, f1_ingest login)', { timeout: 120_00
     expect(await rainRefetch(job, 101)).toBe(false);
     expect(await grid(100)).toEqual(final);
     expect(await grid(101)).toBeUndefined();
-    expect(logged('rain_refetch').slice(1)).toEqual([
+    expect(logged('rain_refetch')).toEqual([
       expect.objectContaining({ level: 50, session_key: 100, error: 'not_failed' }),
       expect.objectContaining({ level: 50, session_key: 101, error: 'no_grid' }),
     ]);

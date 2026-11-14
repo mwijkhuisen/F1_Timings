@@ -690,10 +690,10 @@ export function daemon(deps: Deps, stopped: () => boolean) {
 
 /**
  * The daemon's hold on INGEST_LOCK (#103): a pg client of its own, outside the pool, so the lock lives as long as that
- * session. `held()` is true while it holds the lock, else it connects and tries once: it keeps the client on success
- * and ends it otherwise. A lost connection drops the lock, and the next call takes it again. Logs `ingest lock` on
- * transitions only (error level when not held); never throws, an error is logged as a code.
- * ponytail: a half-open TCP connection is noticed only by keepalive; until then the daemon believes it holds the lock.
+ * session. `held()` probes a held client with `SELECT 1` (a dead one is dropped), then, without one, connects and tries
+ * the lock once: it keeps the client on success and ends it otherwise. A lost connection drops the lock, and that same
+ * call takes it again. Logs `ingest lock` on transitions only (error level when not held); never throws, an error is
+ * logged as a code.
  */
 export function ingestLock(url: URL | string, log: Pick<Logger, 'info' | 'error'>) {
   let client: pg.Client | undefined;
@@ -704,9 +704,22 @@ export function ingestLock(url: URL | string, log: Pick<Logger, 'info' | 'error'
     if (held) log.info({ held }, 'ingest lock');
     else log.error({ held, cause }, 'ingest lock');
   };
+  const drop = (c: pg.Client, err?: unknown) => {
+    if (client !== c) return; // released, or never held
+    client = undefined;
+    report(false, err === undefined ? undefined : codeOf(err));
+    void c.end().catch(() => {});
+  };
   return {
     async held(): Promise<boolean> {
-      if (client) return true;
+      if (client) {
+        try {
+          await client.query('SELECT 1');
+          return true;
+        } catch (err) {
+          drop(client, err);
+        }
+      }
       const c = new pg.Client({
         connectionString: String(url),
         connectionTimeoutMillis: 10_000,
@@ -714,14 +727,8 @@ export function ingestLock(url: URL | string, log: Pick<Logger, 'info' | 'error'
         keepAlive: true,
       });
       // Without an 'error' listener a dropped connection would crash the process.
-      const drop = (err?: unknown) => {
-        if (client !== c) return; // released, or never held
-        client = undefined;
-        report(false, err === undefined ? undefined : codeOf(err));
-        void c.end().catch(() => {});
-      };
-      c.on('error', drop);
-      c.on('end', () => drop());
+      c.on('error', (err) => drop(c, err));
+      c.on('end', () => drop(c));
       try {
         await c.connect();
         const { rows } = await c.query<{ ok: boolean }>('SELECT pg_try_advisory_lock($1) AS ok', [INGEST_LOCK]);

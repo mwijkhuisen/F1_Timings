@@ -129,14 +129,13 @@ export async function rederive(deps: Pick<Deps, 'db' | 'log' | 'beat'>, keys: nu
   return ok;
 }
 
-const storedRows = (db: Kysely<DB>, key: number, endpoint: string) =>
+const storedRow = (db: Kysely<DB>, key: number, endpoint: string) =>
   db
     .selectFrom('raw_response')
-    .select(sql<number>`jsonb_array_length(body)`.as('n'))
+    .select(['fetched_at', sql<number>`jsonb_array_length(body)`.as('n')])
     .where('session_key', '=', key)
     .where('endpoint', '=', endpoint)
-    .executeTakeFirst()
-    .then((r) => r?.n ?? 0);
+    .executeTakeFirst();
 
 /**
  * D4: OpenF1 emptied one endpoint of a session for good. Deletes that stored raw row, and only it, when it has rows
@@ -158,18 +157,24 @@ export async function acceptEmpty(
     if (!s) return refuse('unknown_session');
     if (s.source !== 'openf1') return refuse('not_openf1');
     if (await live(deps)) return refuse('live_session');
-    if ((await storedRows(db, key, endpoint)) === 0) return refuse('no_rows'); // before any request
+    const stored = await storedRow(db, key, endpoint);
+    if (!stored || stored.n === 0) return refuse('no_rows'); // before any request
     const fetched = await fetchRows(deps, endpoint, { session_key: key });
     if (!fetched.ok) return refuse(fetched.error.last_error);
     if (fetched.value.rows.length > 0) return refuse('not_empty');
-    const rows = await db.transaction().execute(async (trx) => {
+    const deleted = await db.transaction().execute(async (trx) => {
       await trx.selectFrom('session').select('session_key').where('session_key', '=', key).forUpdate().execute();
-      const n = await storedRows(trx, key, endpoint); // again, under the lock
-      if (n > 0)
-        await trx.deleteFrom('raw_response').where('session_key', '=', key).where('endpoint', '=', endpoint).execute();
-      return n;
+      // Only the row that was checked: a fetch may have replaced it while the request ran (its fetched_at differs).
+      const gone = await trx
+        .deleteFrom('raw_response')
+        .where('session_key', '=', key)
+        .where('endpoint', '=', endpoint)
+        .where('fetched_at', '=', stored.fetched_at)
+        .executeTakeFirst();
+      return gone.numDeletedRows > 0n ? undefined : (await storedRow(trx, key, endpoint)) ? 'changed' : 'no_rows';
     });
-    if (rows === 0) return refuse('no_rows');
+    if (deleted) return refuse(deleted);
+    const rows = stored.n;
     log.info({ session_key: key, endpoint, rows }, 'accept_empty'); // rows: the deleted body's row count
     return true;
   } catch (err) {

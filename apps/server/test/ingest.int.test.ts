@@ -1096,6 +1096,11 @@ describe('ingest (fixtures through msw, f1_ingest login)', { timeout: 120_000 },
     expect(typeof job.request).toBe('function');
   });
 
+  it('daemon() wires the ingest lock: held is the dependency itself', () => {
+    const held = async () => true;
+    expect(daemon({ ...deps, held }, () => false).held).toBe(held);
+  });
+
   it('report() upserts the one ingest_status row as f1_ingest; a restart keeps last_sync_at; tick reports', async () => {
     const row = () => db.selectFrom('ingest_status').selectAll().executeTakeFirstOrThrow();
     const synced = new Date('2026-11-02T00:30:00Z');
@@ -1252,10 +1257,10 @@ describe('ingest (fixtures through msw, f1_ingest login)', { timeout: 120_000 },
         .selectFrom('raw_response')
         .select('body')
         .where('session_key', '=', 11392)
-        .where('endpoint', '=', 'stints')
+        .where('endpoint', '=', 'laps')
         .executeTakeFirstOrThrow();
-      const stints = body as Record<string, unknown>[];
-      await setBody(11392, 'stints', [{ ...stints[0], compound: 'SECRET-VALUE'.length }, ...stints.slice(1)]);
+      const laps = body as Record<string, unknown>[];
+      await setBody(11392, 'laps', [{ ...laps[0], lap_duration: 'SECRET-VALUE' }, ...laps.slice(1)]);
       const before = await hashes();
       expect(await rederive(rederiving(), [11392])).toBe(false);
       expect(await hashes()).toEqual(before);
@@ -1263,10 +1268,11 @@ describe('ingest (fixtures through msw, f1_ingest login)', { timeout: 120_000 },
         level: 50,
         session_key: 11392,
         error: 'schema',
-        endpoint: 'stints',
-        issues: [{ path: '[0].compound', code: 'invalid_type' }],
+        endpoint: 'laps',
+        issues: [{ path: '[0].lap_duration', code: 'invalid_type' }],
       });
-      await setBody(11392, 'stints', stints);
+      expect(lines.join('')).not.toContain('SECRET-VALUE');
+      await setBody(11392, 'laps', laps);
 
       expect(await rederive(rederiving(), [5001, 999_999, 11405])).toBe(false);
       expect(parsed().slice(-4)).toMatchObject([
@@ -1334,6 +1340,35 @@ describe('ingest (fixtures through msw, f1_ingest login)', { timeout: 120_000 },
       expect(requests.length).toBe(sent + asked.length);
     });
 
+    it('a batch refetch stops at a live window: the first session is refused, the rest are not tried', async () => {
+      const keys = [11388, 11383];
+      const saved = await Promise.all(keys.map(session));
+      await db
+        .updateTable('session')
+        .set({ ingest_state: 'failed', next_fetch_at: null, fail_count: 9, last_error: 'http_500' })
+        .where('session_key', 'in', keys)
+        .execute();
+      const sent = requests.length;
+      const was = at;
+      at = new Date('2026-10-24T21:30:00Z'); // 11392 qualifying is live, 21:00–22:00
+      expect(await refetch(deps, 'failed')).toBe(false);
+      at = was;
+      expect(requests.length).toBe(sent);
+      expect(lastLine()).toMatchObject({ level: 50, msg: 'refetch_done', sessions: 2, done: 1, failed: 1 });
+      for (const row of saved)
+        await db
+          .updateTable('session')
+          .set({
+            ingest_state: row.ingest_state,
+            next_fetch_at: row.next_fetch_at,
+            fail_count: row.fail_count,
+            last_error: row.last_error,
+          })
+          .where('session_key', '=', row.session_key)
+          .execute();
+      expect(await Promise.all(keys.map(session))).toEqual(saved);
+    });
+
     it('accept-empty deletes only the emptied raw row, once OpenF1 answers [] now; the next fetch takes the []', async () => {
       const emptyPit = (endpoint: string, key: number) =>
         endpoint === 'pit' && key === 11388 ? fixture('pit-empty') : undefined;
@@ -1394,6 +1429,56 @@ describe('ingest (fixtures through msw, f1_ingest login)', { timeout: 120_000 },
       expect(lastLine()).toMatchObject({ session_key: 999_999, error: 'unknown_session' });
       expect(requests.length).toBe(sent);
       expect({ race: await rawHashes(11388), empty: await rawHashes(EMPTY) }).toEqual(before);
+    });
+
+    it('accept-empty deletes only the row it checked: one replaced while the request ran is `changed`', async () => {
+      const replaced = new Date(at.getTime() + 1000);
+      server.use(
+        http.get(
+          `${OPENF1}/pit`,
+          async ({ request }) => {
+            requests.push(`pit?${new URL(request.url).searchParams}`);
+            await db
+              .updateTable('raw_response')
+              .set({ fetched_at: replaced })
+              .where('session_key', '=', 11388)
+              .where('endpoint', '=', 'pit')
+              .execute(); // a fetch that stored a fresh row meanwhile
+            return fixture('pit-empty');
+          },
+          { once: true },
+        ),
+      );
+      const before = await rawHashes(11388);
+      expect(await acceptEmpty(deps, 11388, 'pit')).toBe(false);
+      expect(lastLine()).toMatchObject({ level: 50, msg: 'accept_empty', session_key: 11388, error: 'changed' });
+      expect(await rawHashes(11388)).toEqual(before);
+      expect(
+        (
+          await db
+            .selectFrom('raw_response')
+            .select('fetched_at')
+            .where('session_key', '=', 11388)
+            .where('endpoint', '=', 'pit')
+            .executeTakeFirstOrThrow()
+        ).fetched_at,
+      ).toEqual(replaced);
+    });
+
+    it('the recovery roles exit 0 or 1 through run(), without an OpenF1 request', async () => {
+      const env = { PATH: process.env.PATH, DATABASE_URL: testDb.urls.f1_ingest };
+      const exit = (...argv: string[]) => run(argv, env, () => {});
+      expect(await count('session', "ingest_state = 'failed'")).toBe(0);
+      const sent = requests.length;
+      const before = await hashes();
+      expect(await exit('rederive', '11388')).toBe(0);
+      expect(await hashes()).toEqual(before);
+      expect(await exit('rederive', '999999')).toBe(1);
+      expect(await exit('refetch', '--failed')).toBe(0);
+      expect(await exit('refetch', '--meeting', '999')).toBe(1);
+      expect(await exit('accept-empty', String(EMPTY), 'pit')).toBe(1); // its stored raw is []: no_rows
+      expect(await exit('rain-refetch', '11388')).toBe(1); // no_grid
+      expect(requests.length).toBe(sent);
     });
 
     it('the ingest lock: one holder; backfill refuses with daemon_running while it is held, refetch runs', async () => {
