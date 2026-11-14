@@ -219,7 +219,8 @@ header {
 
 .tabs {
   display: flex;
-  gap: 16px;
+  flex-wrap: wrap;
+  gap: 4px 16px;
   border-bottom: 1px solid var(--line);
   margin-bottom: 12px;
 }
@@ -1365,20 +1366,36 @@ header .links {
   margin: 2px 0 0;
 }
 
-/* Qualifying by phase: the margin under each time, and a 2 px --fg knock-out line with its label (owner D4). */
-.quali td {
+/* Qualifying by phase: the margin under each time, and a 2 px --fg knock-out line with its label (owner D4).
+   The Result tab (#110) shares the right-aligned cells, the gap under each Q time and the two-line notes; the lap
+   table's driver cell its small second line (RET, DSQ or DNS under the acronym, O3). */
+.quali td,
+.result td {
   text-align: right;
 }
 
-.quali .margin {
+.result td.team {
+  text-align: left;
+}
+
+/* The result scrolls whole: Pos comes before the driver, so neither column sticks to the left (this beats
+   `thead th:first-child` by coming later at the same specificity). */
+.result tr > th {
+  left: auto;
+}
+
+.quali .margin,
+.result .margin,
+.lap-grid .drv .margin {
   display: block;
   color: var(--muted);
   font-size: 11px;
   line-height: 1.1;
 }
 
-/* A note in a two-line cell (DEL) keeps its 44 px target without pushing the margin line down. */
-.quali td .note {
+/* A note in a two-line cell (DEL, NO LAP) keeps its 44 px target without pushing the margin line down. */
+.quali td .note,
+.result td .note {
   margin-block: -12px;
   vertical-align: middle;
 }

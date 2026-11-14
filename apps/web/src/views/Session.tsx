@@ -10,6 +10,7 @@ import { DriverPicker } from './DriverPicker.tsx';
 import { LapsTab } from './LapsTab.tsx';
 import { MiniSectors } from './MiniSectors.tsx';
 import { Order } from './Order.tsx';
+import { ResultTab } from './Result.tsx';
 import { SessionHeadLoader } from './SessionHead.tsx';
 import { StintsTab } from './Stints.tsx';
 import { WeatherTab } from './Weather.tsx';
@@ -26,7 +27,7 @@ const pathOf = (d: SessionDetail, view: View) =>
 const gridOf = (d: SessionDetail) =>
   new Map(d.results.flatMap((r) => (r.grid !== null && r.grid >= 1 ? [[r.driver_number, r.grid] as const] : [])));
 
-// One session: its header, the tabs Laps | Order (races and sprints) | Compare | Mini-sectors | Stints | Weather, and the view (D1, D11).
+// One session: its header, the tabs Laps | Order (races and sprints) | Compare | Mini-sectors | Stints | Weather | Result, and the view (D1, D11).
 export function Session({ session, view }: { session: number; view: View }) {
   const detail = useSession(session);
   const d = detail.data;
@@ -95,6 +96,9 @@ export function Session({ session, view }: { session: number; view: View }) {
       {view === 'weather' ? (
         // The weather needs no laps; a race's laps add the leader's lap once they arrive.
         <WeatherTab session={session} detail={d} laps={laps.data ?? null} live={live} now={now} />
+      ) : view === 'result' ? (
+        // The result needs no laps (9900 has official times and none); once they load, an official time without one is marked.
+        <ResultTab detail={d} laps={laps.data ?? null} live={live} now={now} />
       ) : !laps.data ? (
         <Pending error={laps.error} />
       ) : laps.data.length === 0 ? (

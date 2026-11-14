@@ -114,7 +114,7 @@ describe('Session: the picks in ?d=', () => {
 describe('Session: the Order tab (races and sprints only)', () => {
   it('lists Order right after Laps in a race, and shows the running order', () => {
     render(`${PATH}/order`, 'Race', 'order');
-    expect(tabs()).toEqual(['Laps', 'Order', 'Compare', 'Mini-sectors', 'Stints', 'Weather']);
+    expect(tabs()).toEqual(['Laps', 'Order', 'Compare', 'Mini-sectors', 'Stints', 'Weather', 'Result']);
     expect(href('Order')).toBe(`${PATH}/order`);
     expect(host.textContent).toContain('No line crossings in this session');
   });
@@ -134,8 +134,24 @@ describe('Session: the Order tab (races and sprints only)', () => {
 
   it('hides the tab outside races, and the route says why', () => {
     render('/2026/1300-mexico-city/11000-practice/order', 'Practice', 'order');
-    expect(tabs()).toEqual(['Laps', 'Compare', 'Mini-sectors', 'Stints', 'Weather']);
+    expect(tabs()).toEqual(['Laps', 'Compare', 'Mini-sectors', 'Stints', 'Weather', 'Result']);
     expect(host.textContent).toContain('The running order is for races and sprints.');
+  });
+});
+
+describe('Session: the Result tab (#110)', () => {
+  it('is the last tab, keeps its own URL, and shows the result without laps (9900)', () => {
+    const won = { ...result(1, 1), laps: 62, durations_ms: [6_120_785], gaps_ms: [0] };
+    render(`${PATH}/result`, 'Race', 'result', [won, result(3, 2)], []);
+    expect(tabs().at(-1)).toBe('Result');
+    expect(href('Result')).toBe(`${PATH}/result`);
+    expect(location.pathname).toBe(`${PATH}/result`);
+    expect(host.querySelector('table.result')?.textContent).toContain('1:42:00.785');
+  });
+
+  it('says why when the session has no result', () => {
+    render(`${PATH}/result`, 'Race', 'result', []);
+    expect(host.textContent).toContain('No results in the OpenF1 data.');
   });
 });
 

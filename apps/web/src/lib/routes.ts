@@ -5,7 +5,7 @@ import { type ComponentProps, createElement, type MouseEvent, useEffect, useMemo
 // canonicalised once the session is loaded). Importable in Node: `window` is
 // touched only inside functions.
 
-export type View = 'laps' | 'order' | 'compare' | 'minisectors' | 'stints' | 'weather';
+export type View = 'laps' | 'order' | 'compare' | 'minisectors' | 'stints' | 'weather' | 'result';
 
 /** A view's name on its tab and in the title. */
 export const VIEW_LABEL: Record<View, string> = {
@@ -15,7 +15,11 @@ export const VIEW_LABEL: Record<View, string> = {
   minisectors: 'Mini-sectors',
   stints: 'Stints',
   weather: 'Weather',
+  result: 'Result',
 };
+
+/** The view a switcher keeps (A§13): Result is never carried to another session, so it falls back to Laps. */
+export const switchView = (view: View): View => (view === 'result' ? 'laps' : view);
 
 export type Route =
   | { id: 'latest' }
@@ -59,9 +63,7 @@ export function routeOf(pathname: string): Route | null {
   const session = c === undefined ? null : keyOf(c);
   if (meeting === null || session === null) return null;
   if (d === undefined) return { id: 'session', year, meeting, session, view: null };
-  return d === 'laps' || d === 'order' || d === 'compare' || d === 'minisectors' || d === 'stints' || d === 'weather'
-    ? { id: 'session', year, meeting, session, view: d }
-    : null;
+  return Object.hasOwn(VIEW_LABEL, d) ? { id: 'session', year, meeting, session, view: d as View } : null;
 }
 
 type Names = { meeting: string | null; session: string | null };

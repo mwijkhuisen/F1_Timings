@@ -8,7 +8,10 @@ import {
   routeOf,
   sessionPath,
   slug,
+  switchView,
   titleOf,
+  VIEW_LABEL,
+  type View,
   withWord,
 } from '../src/lib/routes.ts';
 
@@ -43,6 +46,10 @@ describe('routeOf', () => {
       '/2026/1290-singapore/9965-race/weather',
       { id: 'session', year: 2026, meeting: 1290, session: 9965, view: 'weather' },
     ],
+    [
+      '/2026/1310-mexico-city/11400-qualifying/result',
+      { id: 'session', year: 2026, meeting: 1310, session: 11400, view: 'result' },
+    ],
     // The key decides; the name is decoration.
     ['/2026/1290-wrong-name/9965-/laps', { id: 'session', year: 2026, meeting: 1290, session: 9965, view: 'laps' }],
     ['/2026/%31290-singapore/9965/laps', { id: 'session', year: 2026, meeting: 1290, session: 9965, view: 'laps' }],
@@ -59,6 +66,7 @@ describe('routeOf', () => {
     '/2026/1290/9965/laps/extra',
     '/2026/1290/9965/weather/extra',
     '/2026/1290/9965/Weather',
+    '/2026/1290/9965/results',
     '/2026/1290/9965/rain',
     '/2026/1290/9965/toString',
     '/2026/1290/9965/',
@@ -128,6 +136,7 @@ describe('titleOf: the title for every route', () => {
     ],
     [{ ...session, view: 'stints' }, '2026 · F1 Timings', 'Mexico City Grand Prix · Race · Stints · F1 Timings'],
     [{ ...session, view: 'weather' }, '2026 · F1 Timings', 'Mexico City Grand Prix · Race · Weather · F1 Timings'],
+    [{ ...session, view: 'result' }, '2026 · F1 Timings', 'Mexico City Grand Prix · Race · Result · F1 Timings'],
     [{ id: 'status' }, 'Status · F1 Timings', 'Status · F1 Timings'],
     [{ id: 'live' }, 'Live · F1 Timings', 'Live · F1 Timings'],
     [{ id: 'replays' }, 'Replays · F1 Timings', 'Replays · F1 Timings'],
@@ -145,6 +154,13 @@ describe('titleOf: the title for every route', () => {
     expect(titleOf({ id: 'replay', recording: 7 }, { meeting: 'Mexico City Grand Prix', session: null })).toBe(
       'Replay: Mexico City Grand Prix · — · F1 Timings',
     );
+  });
+});
+
+describe('switchView: what a switcher keeps (#110)', () => {
+  it('never carries Result to another session: it falls back to Laps, and every other view is kept', () => {
+    expect(switchView('result')).toBe('laps');
+    for (const v of Object.keys(VIEW_LABEL) as View[]) if (v !== 'result') expect(switchView(v)).toBe(v);
   });
 });
 
