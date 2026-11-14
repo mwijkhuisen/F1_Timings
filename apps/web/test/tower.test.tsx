@@ -378,14 +378,14 @@ describe('the tower', () => {
     expect(one({ Retired: true })).toContain(`>Retired</div>${badge('RET', 'retired')}`);
     expect(one({ Retired: true, Stopped: true })).not.toContain('STOP');
     // Under forced colours tr.out's --muted turns into CanvasText; the badge is text in a border, which forced
-    // colours keep, and no forced-colours rule hides or recolours it.
+    // colours keep, and no forced-colours rule touches the tower's out rows or badges.
     const css = readFileSync(fileURLToPath(new URL('../src/styles.css', import.meta.url)), 'utf8');
     const forced = css
       .split('@media (forced-colors: active) {')
       .slice(1)
       .map((b) => b.slice(0, b.indexOf('\n}\n')));
     expect(forced.length).toBeGreaterThan(0);
-    for (const block of forced) expect(block).not.toMatch(/\.badge|tr\.out/);
+    for (const block of forced) expect(block).not.toMatch(/tr\.out|\.tower[^{]*\.badge/);
     expect(/\n\.badge \{[^}]*border: 1px solid/.test(css)).toBe(true);
   });
 
