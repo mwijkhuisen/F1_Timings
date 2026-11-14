@@ -2,7 +2,8 @@ import type { Laps, Live, SessionDetail, Stints } from '@f1/contracts';
 import type { CSSProperties } from 'react';
 import { useMemo } from 'react';
 import { useRaceControl, useStints } from '../lib/api.ts';
-import { compoundOf, type Driver, orderDrivers, teamStyle } from '../lib/session.ts';
+import { type Compound, compoundOf, compoundsOf, UNKNOWN_COMPOUND } from '../lib/compound.ts';
+import { type Driver, orderDrivers, teamStyle } from '../lib/session.ts';
 import { KIND_LABEL, type Period, trackPeriods } from '../lib/track.ts';
 import { Pending } from '../ui/ErrorView.tsx';
 import { NoData } from '../ui/NoData.tsx';
@@ -19,22 +20,28 @@ export type Seg = {
   from: number;
   to: number;
   laps: number;
-  /** Lower case, or null for a compound we do not know. */
+  /** The compound's key (`cmp-<key>`, lib/compound.ts), or null for a compound the season does not know. */
   compound: string | null;
-  /** S, M, H, I, W or ?. */
+  /** Its letters: S, M, H, I, W or T, in 2018 also HS, US, SS or SH; ? when unknown. */
   letter: string;
+  /** "Ultrasoft", or "Unknown compound". */
+  name: string;
   /** `tyre_age_at_start > 0`; an unknown age is not used. */
   used: boolean;
   age: number | null;
 };
 /** A stint without a lap bound: listed, not drawn. */
-export type Unplaced = { stint: number; compound: string | null; letter: string; age: number | null };
+export type Unplaced = { stint: number; compound: string | null; letter: string; name: string; age: number | null };
 export type StintRow = { driver: Driver; track: number; segs: Seg[]; unplaced: Unplaced[]; stops: number };
 export type StintLayout = { total: number; ticks: number[]; rows: StintRow[] };
 
-const letterOf = (compound: string | null) => compound?.[0]?.toUpperCase() ?? '?';
+const fields = (c: Compound | null) => {
+  const { key, letter, name } = c ?? UNKNOWN_COMPOUND;
+  return { compound: c && key, letter, name };
+};
 
-export function stintLayout(drivers: readonly Driver[], laps: Laps, stints: Stints): StintLayout {
+/** `year` is the session's `meeting.year`, which picks the season's compounds (lib/compound.ts). */
+export function stintLayout(drivers: readonly Driver[], laps: Laps, stints: Stints, year: number | null): StintLayout {
   // The session's highest lap number; a stint that runs past it still fits.
   const total = Math.max(...laps.map((l) => l.lap_number), ...stints.map((s) => s.lap_end ?? 0));
   // Every 10 laps, but none within 3 laps of the total, whose label would crowd it (51: …, 40, 51).
@@ -48,8 +55,7 @@ export function stintLayout(drivers: readonly Driver[], laps: Laps, stints: Stin
     const segs: Seg[] = [];
     const unplaced: Unplaced[] = [];
     for (const s of own) {
-      const compound = compoundOf(s.compound);
-      const base = { stint: s.stint_number, compound, letter: letterOf(compound), age: s.tyre_age_at_start };
+      const base = { stint: s.stint_number, ...fields(compoundOf(s.compound, year)), age: s.tyre_age_at_start };
       if (s.lap_start === null || s.lap_end === null) unplaced.push(base);
       else {
         const laps = s.lap_end - s.lap_start + 1;
@@ -78,28 +84,27 @@ export function stintLayout(drivers: readonly Driver[], laps: Laps, stints: Stin
 const pct = (x: number) => `${(x * 100).toFixed(3)}%`;
 const vars = (o: Record<string, string>) => o as CSSProperties;
 const plural = (n: number, word: string) => `${n} ${word}${n === 1 ? '' : 's'}`;
-const named = (compound: string | null) =>
-  compound === null ? 'Unknown compound' : `${compound[0]?.toUpperCase()}${compound.slice(1)}`;
 const range = (s: Seg) => `${s.from}–${s.to}`;
 
 const inOrder = (row: StintRow) => [...row.segs, ...row.unplaced].sort((a, b) => a.stint - b.stint);
 
 /** "Medium, laps 1–24 (24 laps), new set", or "Hard, laps unknown". */
 function describe(s: Seg | Unplaced): string {
-  if (!('from' in s)) return `${named(s.compound)}, laps unknown`;
+  if (!('from' in s)) return `${s.name}, laps unknown`;
   const set =
     s.age === null
       ? ''
       : s.used
         ? `, used set, ${plural(s.age, 'lap')} old at the start (may be wrong for a used set)`
         : ', new set';
-  return `${named(s.compound)}, laps ${range(s)} (${plural(s.laps, 'lap')})${set}`;
+  return `${s.name}, laps ${range(s)} (${plural(s.laps, 'lap')})${set}`;
 }
 
 const spoken = (s: Seg | Unplaced) =>
-  `${named(s.compound).toLowerCase()} ${'from' in s ? `laps ${s.from} to ${s.to}` : 'laps unknown'}`;
+  `${s.name.toLowerCase()} ${'from' in s ? `laps ${s.from} to ${s.to}` : 'laps unknown'}`;
 
-const COMPOUND_ORDER = ['soft', 'medium', 'hard', 'intermediate', 'wet'];
+/** Two letters need a wider bar before they show (styles.css). */
+const letterClass = (letter: string) => (letter.length > 1 ? 'two' : undefined);
 
 const lapsText = (p: Period) => (p.from === p.to ? `lap ${p.from}` : `laps ${p.from}–${p.to}`);
 
@@ -115,19 +120,21 @@ export function StintBars({
   /** SC and VSC periods (C6); red flags are not drawn here. */
   periods?: readonly Period[];
 }) {
+  const year = detail.meeting.year;
   const drivers = orderDrivers(detail, laps);
-  const { total, ticks, rows } = stintLayout(drivers, laps, stints);
+  const { total, ticks, rows } = stintLayout(drivers, laps, stints, year);
   const used = new Set(rows.flatMap((r) => inOrder(r).map((s) => s.compound)));
-  const compounds = [...COMPOUND_ORDER.filter((c) => used.has(c)), ...(used.has(null) ? [null] : [])];
+  // The season's compounds in use, softest first, then an unknown one.
+  const compounds = [...compoundsOf(year).filter((c) => used.has(c.key)), ...(used.has(null) ? [null] : [])];
   return (
     <>
       <ul className="legend" aria-label="Legend">
         {compounds.map((c) => (
-          <li key={c ?? 'unknown'}>
-            <span className={`cmp cmp-${c ?? 'unknown'}`} aria-hidden="true">
-              {letterOf(c)}
+          <li key={c?.key ?? 'unknown'}>
+            <span className={`cmp cmp-${c?.key ?? 'unknown'}`} aria-hidden="true">
+              {(c ?? UNKNOWN_COMPOUND).letter}
             </span>
-            {c ?? 'unknown'}
+            {c?.name.toLowerCase() ?? 'unknown'}
           </li>
         ))}
         {periods.map((p) => (
@@ -186,7 +193,7 @@ export function StintBars({
                           className={`seg cmp-${s.compound ?? 'unknown'}`}
                           style={vars({ '--x': pct(s.x), '--w': pct(s.w) })}
                         >
-                          <b>{s.letter}</b>
+                          <b className={letterClass(s.letter)}>{s.letter}</b>
                           <small>
                             {s.laps}
                             {s.used && <span className="used"> · used</span>}

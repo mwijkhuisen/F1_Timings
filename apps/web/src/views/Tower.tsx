@@ -1,6 +1,7 @@
 import { type Obj, type Views, view } from '@f1/contracts';
+import { compoundOf, tyresWords, UNKNOWN_COMPOUND } from '../lib/compound.ts';
 import type { Trend } from '../lib/crossings.ts';
-import { compoundOf, type Driver, teamColour, teamStyle } from '../lib/session.ts';
+import { type Driver, teamColour, teamStyle } from '../lib/session.ts';
 import { Note } from '../ui/Note.tsx';
 import { Scroll } from '../ui/Scroll.tsx';
 import { MsLegend, segClass } from './MiniSectors.tsx';
@@ -273,16 +274,11 @@ function TrendCell({ trend, id }: { trend: Trend | undefined; id: string }) {
   );
 }
 
-const COMPOUND_NAME: Record<string, string> = {
-  soft: 'Soft',
-  medium: 'Medium',
-  hard: 'Hard',
-  intermediate: 'Intermediate',
-  wet: 'Wet',
-};
-
-/** The latest stint: the compound dot (a dashed outline on a used set), its words, and its age in laps. */
-function TyreCell({ tyre, number }: { tyre: Stint | undefined; number: string }) {
+/**
+ * The latest stint: the compound dot (a dashed outline on a used set), its words, and its age in laps. `year` picks
+ * the season's compounds (lib/compound.ts); an unknown one is grey with `?`, its title the feed's own name.
+ */
+function TyreCell({ tyre, number, year }: { tyre: Stint | undefined; number: string; year: number | null }) {
   if (!tyre)
     return (
       <td>
@@ -291,21 +287,22 @@ function TyreCell({ tyre, number }: { tyre: Stint | undefined; number: string })
         </Note>
       </td>
     );
-  const compound = compoundOf(tyre.Compound ?? null) ?? 'unknown';
+  const known = compoundOf(tyre.Compound ?? null, year);
+  const compound = known ?? UNKNOWN_COMPOUND;
   // The feed sends New as a string: "true" a new set, "false" a used one; anything else says neither.
   const set = tyre.New === 'true' ? 'new set' : tyre.New === 'false' ? 'used set' : undefined;
-  const name = COMPOUND_NAME[compound] ?? tyre.Compound;
+  const name = known?.name ?? tyre.Compound;
   return (
     <td>
       <span
-        className={`cmp cmp-${compound}${set === 'used set' ? ' used' : ''}`}
+        className={`cmp cmp-${compound.key}${set === 'used set' ? ' used' : ''}`}
         title={[name, set].filter(Boolean).join(', ') || undefined}
         aria-hidden="true"
       >
-        {compound[0]?.toUpperCase()}
+        {compound.letter}
       </span>
       <span className="vh">
-        {compound} tyres, {set && `${set}, `}
+        {tyresWords(known)}, {set && `${set}, `}
       </span>
       {tyre.TotalLaps}
     </td>
@@ -318,6 +315,7 @@ export function Tower({
   focus = null,
   onFocus,
   trend,
+  year = null,
 }: {
   state: Obj;
   sessionKey?: number | undefined;
@@ -327,6 +325,8 @@ export function Tower({
   onFocus?: ((n: string) => void) | undefined;
   /** The interval's change at the line over 1 and 3 laps per driver number (race only; the columns show with it). */
   trend?: ReadonlyMap<number, { one: Trend; three: Trend }> | undefined;
+  /** The session's `meeting.year`, for its compounds; null (no session detail yet) is today's map. */
+  year?: number | null | undefined;
 }) {
   // After a session switch the feed shows the previous session until the new one's SessionInfo arrives.
   if (sessionKey !== undefined && view(state, 'SessionInfo')?.Key !== sessionKey)
@@ -427,7 +427,7 @@ export function Tower({
                   {SECTORS.map((i) => (
                     <Sector key={i} s={line.Sectors?.[i]} />
                   ))}
-                  <TyreCell tyre={r.tyre} number={n} />
+                  <TyreCell tyre={r.tyre} number={n} year={year} />
                   <td>
                     {line.NumberOfPitStops}
                     {line.InPit ? (

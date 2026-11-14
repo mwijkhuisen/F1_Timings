@@ -399,6 +399,7 @@ function TowerTab({
   series,
   lo,
   sessionKey,
+  year,
   focus,
   onFocus,
 }: {
@@ -406,6 +407,8 @@ function TowerTab({
   series: Status[];
   lo: number;
   sessionKey: number | undefined;
+  /** The session's `meeting.year`, for the tyre compounds; null until the detail arrives. */
+  year: number | null;
   focus: string | null;
   onFocus(n: string): void;
 }) {
@@ -421,7 +424,9 @@ function TowerTab({
       bands,
     );
   }, [snap, series, lo]);
-  return state && <Tower state={state} sessionKey={sessionKey} focus={focus} onFocus={onFocus} trend={trend} />;
+  return (
+    state && <Tower state={state} sessionKey={sessionKey} focus={focus} onFocus={onFocus} trend={trend} year={year} />
+  );
 }
 
 /** `delay` is the open live stream's own (s): the page shows more by holding its events (#101). */
@@ -769,6 +774,7 @@ export function Player({
   );
   // The series is parsed once per flush; the ticking bar only filters it at T.
   const series = useMemo(() => (snap.feed ? statusSeries(snap.feed.state) : []), [snap]);
+  const year = detail?.meeting.year ?? null;
   // The state is mutated in place: what is derived from it is keyed on the snapshot, a new object per store flush.
   const tower = useMemo(
     () =>
@@ -778,11 +784,12 @@ export function Player({
           series={series}
           lo={lo}
           sessionKey={sessionKey}
+          year={year}
           focus={focus}
           onFocus={(n) => setFocus((f) => (f === n ? null : n))}
         />
       ),
-    [snap, series, lo, sessionKey, focus],
+    [snap, series, lo, sessionKey, year, focus],
   );
   // The pit wall, once the feed shows this session (as the tower waits): the previous session's chequered flag would
   // otherwise light up.

@@ -57,6 +57,15 @@
   --hard: #ececec;
   --intermediate: #4cd964;
   --wet: #4da6ff;
+  /* 2018's seven dry compounds (#126), one fixed colour per name: Supersoft, Soft and Medium wear today's soft,
+     medium and hard colours, and Hard is ice blue. */
+  --hypersoft: #ff8ad8;
+  --ultrasoft: #c08cff;
+  --supersoft: #ff5050;
+  --soft-2018: #ffd23f;
+  --medium-2018: #ececec;
+  --hard-2018: #8fe3ff;
+  --superhard: #ff9a3c;
   --unknown: #b4b4bc;
   --cmp-ring: transparent;
   /* Installed fonts only, for titles and the clock: no font file. */
@@ -490,10 +499,12 @@ td.deleted {
 .cmp {
   display: inline-grid;
   place-items: center;
-  width: 18px;
+  /* A circle for one letter; two letters (2018's HS, US, SS, SH, #126) widen it to a pill at the same 11 px. */
+  min-width: 18px;
   height: 18px;
+  padding: 0 3px;
   margin-right: 4px;
-  border-radius: 50%;
+  border-radius: 9px;
   outline: 1px solid var(--cmp-ring);
   outline-offset: -1px;
   font-size: 11px;
@@ -519,6 +530,34 @@ td.deleted {
 
 .cmp-wet {
   --cmp: var(--wet);
+}
+
+.cmp-hypersoft {
+  --cmp: var(--hypersoft);
+}
+
+.cmp-ultrasoft {
+  --cmp: var(--ultrasoft);
+}
+
+.cmp-supersoft {
+  --cmp: var(--supersoft);
+}
+
+.cmp-soft-2018 {
+  --cmp: var(--soft-2018);
+}
+
+.cmp-medium-2018 {
+  --cmp: var(--medium-2018);
+}
+
+.cmp-hard-2018 {
+  --cmp: var(--hard-2018);
+}
+
+.cmp-superhard {
+  --cmp: var(--superhard);
 }
 
 /* Stints on a lap scale (P4f, A§13): a stint at --x, --w of the lanes; the left column is the driver, the right one the stops. */
@@ -670,6 +709,13 @@ td.deleted {
 
 @container (max-width: 16px) {
   .seg b {
+    display: none;
+  }
+}
+
+/* Two letters (2018's HS, US, SS, SH) need 24 px. */
+@container (max-width: 24px) {
+  .seg b.two {
     display: none;
   }
 }

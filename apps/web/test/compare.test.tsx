@@ -82,7 +82,7 @@ const tokens: ChartTokens = {
   rain: '#4da6ff',
   light: false,
 };
-const fit = { window: 'fit', periods: [] } as const;
+const fit = { window: 'fit', periods: [], year: 2026 } as const;
 
 describe('lapChartOption', () => {
   const option = lapChartOption([VER, NOR, PER], laps, tokens, fit);
@@ -154,7 +154,7 @@ describe('lapChartOption', () => {
       expect(tri).toMatchObject({ name: line?.name, color: line?.color, lineStyle: { width: 0 }, clip: false });
     expect(verUp).not.toHaveProperty('endLabel');
     // No laps above the 107 % window (1:19–1:27) but the two out-laps either; none without a window.
-    const wide = lapChartOption([VER, NOR], laps, tokens, { window: '107', periods: [] });
+    const wide = lapChartOption([VER, NOR], laps, tokens, { window: '107', periods: [], year: 2026 });
     expect(wide.series[2]?.data[0]).toMatchObject({ value: [1, 87000] });
     expect(wide.series[3]?.data.slice(1).every((d) => Array.isArray(d) && d[1] === null)).toBe(true);
     const none = lapChartOption([VER], [laps[0] as Lap], tokens, fit);
@@ -171,7 +171,7 @@ describe('lapChartOption', () => {
 
   it('windows 107 % from the same floor to 107 % of the best lap, ceiled to a second', () => {
     // 80.5 × 1.07 = 86.135.
-    const wide = lapChartOption([VER, NOR, PER], laps, tokens, { window: '107', periods: [] });
+    const wide = lapChartOption([VER, NOR, PER], laps, tokens, { window: '107', periods: [], year: 2026 });
     expect(wide.yAxis).toMatchObject({ min: 79000, max: 87000, interval: 1000 });
   });
 
@@ -193,7 +193,7 @@ describe('lapChartOption', () => {
       { kind: 'vsc', from: 4, to: 4 },
       { kind: 'red', from: 5, to: 5 },
     ] as const;
-    const banded = lapChartOption([VER, NOR], laps, tokens, { window: 'fit', periods });
+    const banded = lapChartOption([VER, NOR], laps, tokens, { window: 'fit', periods, year: 2026 });
     const area = (c: string) => ({ color: c, opacity: 0.15 });
     // On a series of their own after the lines and triangles: no data, silent, no tooltip, not in the legend, so
     // hiding the reference in the legend keeps the bands.
@@ -292,6 +292,12 @@ describe('lapChartOption', () => {
     // An unknown compound is left out.
     const odd = lapChartOption([PER], [{ ...(laps.at(-1) as Lap), compound: 'UNKNOWN' }], tokens, fit);
     expect(odd.tooltip.formatter([{ dataIndex: 1 }])).toBe('Lap 2\nPER 1:21.500');
+    // #126: the season names the compound; a 2018-only name is unknown from 2019.
+    const ultra = [{ ...(laps.at(-1) as Lap), compound: 'ULTRASOFT' }];
+    expect(lapChartOption([PER], ultra, tokens, { ...fit, year: 2018 }).tooltip.formatter({ dataIndex: 1 })).toBe(
+      'Lap 2\nPER 1:21.500 · Ultrasoft',
+    );
+    expect(lapChartOption([PER], ultra, tokens, fit).tooltip.formatter({ dataIndex: 1 })).toBe('Lap 2\nPER 1:21.500');
     expect(JSON.stringify(option)).not.toMatch(/[<>]/);
   });
 
@@ -490,7 +496,7 @@ describe('the lap chart at 390 px', () => {
 
   it('keeps the bands when the reference is hidden in the legend, as they sit on their own series', () => {
     const periods = [{ kind: 'sc', from: 34, to: 35 }] as const;
-    const banded = lapChartOption(pick, race, tokens, { window: 'fit', periods });
+    const banded = lapChartOption(pick, race, tokens, { window: 'fit', periods, year: 2026 });
     const hideVer = (o: { legend: object }) => ({ ...o, legend: { ...o.legend, selected: { VER: false } } });
     const bandsDrawn = (o: object) => draw(o).filter(({ el }) => el.style.fill === tokens.amber).length;
     expect(bandsDrawn(banded)).toBe(1);

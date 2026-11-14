@@ -70,7 +70,7 @@ describe('the stints bars', () => {
   ) => ({ driver_number, stint_number, lap_start, lap_end, compound, tyre_age_at_start });
   const nor = { number: 4, acronym: 'NOR', name: null, team: null };
   const layout = (n: number, rows: ReturnType<typeof stint>[], lapN = n) =>
-    stintLayout([nor], Laps.parse(lapsOf(4, lapN)), Stints.parse(rows)).rows[0];
+    stintLayout([nor], Laps.parse(lapsOf(4, lapN)), Stints.parse(rows), 2026).rows[0];
 
   describe('stintLayout', () => {
     it('puts a stint at its first lap over the total, and a used set apart from a new or unknown one', () => {
@@ -123,8 +123,27 @@ describe('the stints bars', () => {
       expect(row?.segs.map((s) => s.letter)).toEqual(['I', 'W', '?']);
     });
 
+    // #126: the year picks the season's compounds; a 2018-only name is unknown from 2019.
+    it("names each stint in its season's words and letters", () => {
+      const rows = [stint(4, 1, 1, 10, 'ULTRASOFT'), stint(4, 2, 11, 20, 'SOFT'), stint(4, 3, 21, 30, 'TEST')];
+      const segs = (year: number) =>
+        stintLayout([nor], Laps.parse(lapsOf(4, 30)), Stints.parse(rows), year).rows[0]?.segs.map(
+          ({ compound, letter, name }) => [compound, letter, name],
+        );
+      expect(segs(2018)).toEqual([
+        ['ultrasoft', 'US', 'Ultrasoft'],
+        ['soft-2018', 'S', 'Soft'],
+        ['test', 'T', 'Test tyre'],
+      ]);
+      expect(segs(2019)).toEqual([
+        [null, '?', 'Unknown compound'],
+        ['soft', 'S', 'Soft'],
+        ['test', 'T', 'Test tyre'],
+      ]);
+    });
+
     it('ticks every 10 laps below the total, and the total, dropping one within 3 laps of it', () => {
-      const ticks = (n: number) => stintLayout([nor], Laps.parse(lapsOf(4, n)), Stints.parse([])).ticks;
+      const ticks = (n: number) => stintLayout([nor], Laps.parse(lapsOf(4, n)), Stints.parse([]), 2026).ticks;
       expect(ticks(57)).toEqual([10, 20, 30, 40, 50, 57]);
       expect(ticks(60)).toEqual([10, 20, 30, 40, 50, 60]);
       // A tick within 3 laps of the total goes: its label would crowd the total's.
@@ -202,6 +221,39 @@ describe('the stints bars', () => {
     expect(html).not.toContain('RED');
     expect(html).toContain('number: laps in the stint');
     expect(html).toContain('<span class="cmp cmp-medium" aria-hidden="true">M</span>medium');
+  });
+
+  // #126: a 2018 race (the French GP's three: Ultrasoft, Supersoft, Soft) at its own colours, with no unknown dry tyre.
+  it("draws a 2018 session's compounds in its season's colours, letters and words", () => {
+    const html2018 = renderToStaticMarkup(
+      <StintBars
+        detail={{ ...detail, meeting: { ...detail.meeting, year: 2018 } }}
+        laps={Laps.parse(lapsOf(4, 40))}
+        stints={Stints.parse([
+          stint(4, 1, 1, 10, 'SOFT', 0),
+          stint(4, 2, 11, 25, 'ULTRASOFT', 0),
+          stint(4, 3, 26, 40, 'SUPERSOFT', 2),
+        ])}
+      />,
+    );
+    expect(html2018).toContain('<span class="seg cmp-soft-2018" style="--x:0.000%;--w:25.000%"><b>S</b>');
+    expect(html2018).toContain('<span class="seg cmp-ultrasoft" style="--x:25.000%;--w:37.500%"><b class="two">US</b>');
+    expect(html2018).toContain('<span class="seg cmp-supersoft" style="--x:62.500%;--w:37.500%"><b class="two">SS</b>');
+    // The legend: softest first, in words.
+    expect(
+      [...html2018.matchAll(/<li><span class="cmp (cmp-[\w-]+)" aria-hidden="true">(\w+)<\/span>([\w ]+)<\/li>/g)].map(
+        (m) => m.slice(1),
+      ),
+    ).toEqual([
+      ['cmp-ultrasoft', 'US', 'ultrasoft'],
+      ['cmp-supersoft', 'SS', 'supersoft'],
+      ['cmp-soft-2018', 'S', 'soft'],
+    ]);
+    expect(html2018).toContain(
+      'aria-label="NOR, 2 stops: soft laps 1 to 10, ultrasoft laps 11 to 25, supersoft laps 26 to 40"',
+    );
+    expect(html2018).toContain('<li>Ultrasoft, laps 11–25 (15 laps), new set</li>');
+    expect(html2018).not.toMatch(/unknown/i);
   });
 });
 

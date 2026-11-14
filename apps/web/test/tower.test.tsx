@@ -320,7 +320,7 @@ describe('the tower', () => {
       '<span class="cmp cmp-soft used" title="Soft, used set" aria-hidden="true">S</span><span class="vh">soft tyres, used set, </span>12',
     );
     expect(row('BBB')).toContain(
-      '<span class="cmp cmp-unknown" title="MYSTERY" aria-hidden="true">U</span><span class="vh">unknown tyres, </span>3',
+      '<span class="cmp cmp-unknown" title="MYSTERY" aria-hidden="true">?</span><span class="vh">unknown tyres, </span>3',
     );
   });
 
@@ -340,6 +340,28 @@ describe('the tower', () => {
       expect(stint(New)).toContain(
         '<span class="cmp cmp-hard" title="Hard" aria-hidden="true">H</span><span class="vh">hard tyres, </span>4',
       );
+  });
+
+  // #126: the session's year picks the compounds; without one (no session detail yet) it is today's map.
+  it("names a tyre in its season's words: 2018's Ultrasoft, unknown from 2019", () => {
+    const tyre = (Compound: string, year?: number) =>
+      renderToStaticMarkup(
+        <Tower
+          state={{ ...state, TimingAppData: { Lines: { '1': { Stints: { '0': { Compound, TotalLaps: 4 } } } } } }}
+          year={year}
+        />,
+      );
+    expect(tyre('ULTRASOFT', 2018)).toContain(
+      '<span class="cmp cmp-ultrasoft" title="Ultrasoft" aria-hidden="true">US</span><span class="vh">ultrasoft tyres, </span>4',
+    );
+    expect(tyre('HARD', 2018)).toContain('<span class="cmp cmp-hard-2018" title="Hard" aria-hidden="true">H</span>');
+    for (const year of [2019, undefined])
+      expect(tyre('ULTRASOFT', year)).toContain(
+        '<span class="cmp cmp-unknown" title="ULTRASOFT" aria-hidden="true">?</span><span class="vh">unknown tyres, </span>4',
+      );
+    expect(tyre('TEST_UNKNOWN', 2020)).toContain(
+      '<span class="cmp cmp-test" title="Test tyre" aria-hidden="true">T</span><span class="vh">test tyres, </span>4',
+    );
   });
 
   it('shows the pit stops with the IN PIT and OUT badges', () => {
