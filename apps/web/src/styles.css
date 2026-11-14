@@ -458,6 +458,8 @@ td.deleted {
   border-radius: 6px;
   white-space: normal;
   text-align: left;
+  /* A popover inside a th (Mini-sectors' deleted lap, Order) would inherit its bold. */
+  font-weight: 400;
 }
 
 /* A popover opens at what opened it (owner, 2026-11-08, #72): its popovertarget button is the implicit anchor.
