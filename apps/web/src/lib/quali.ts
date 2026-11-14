@@ -50,7 +50,7 @@ export function qualiPhases(
   }
   const rows = [...byDriver].map(([driver, own]) => rowOf(driver, own, count, feed.get(driver) ?? 0));
 
-  // ponytail: owner D1, a driver went through phase p if they have any lap row
+  // ponytail: #113 D1, a driver went through phase p if they have any lap row
   // in phase p + 1, timed or not. One who goes through but never leaves the
   // garage shows as knocked out; the upgrade is the official classification.
   // The player also passes the feed's knock-outs (`feed`): a line not KnockedOut has reached the current part.
@@ -93,13 +93,14 @@ export const phaseName = (sessionName: string | null, p: number): string =>
 
 /**
  * The part each TimingData line has reached, per the feed: SessionPart for every line that is not `KnockedOut`
- * (SessionPart advances in the message that sets it on the cars out). Empty outside qualifying and at SessionPart 0.
+ * (SessionPart advances in the message that sets it on the cars out). Empty outside qualifying and outside SessionPart 1–3.
  */
 export function feedReached(state: Obj): Map<number, number> {
   if (view(state, 'SessionInfo')?.Type !== 'Qualifying') return new Map();
   const timing = view(state, 'TimingData');
   const part = timing?.SessionPart;
-  if (part === undefined || part < 1) return new Map();
+  // Qualifying has three parts: a hostile recording's huge SessionPart would size every row's cells.
+  if (part === undefined || part < 1 || part > 3) return new Map();
   const lines = Object.entries(timing?.Lines ?? {});
   return new Map(
     lines.flatMap(([n, l]) => (l && /^\d{1,3}$/.test(n) && l.KnockedOut !== true ? [[Number(n), part]] : [])),

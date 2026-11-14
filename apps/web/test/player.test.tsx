@@ -1110,15 +1110,15 @@ describe('qualifying by phase in the player', () => {
     expect(host.querySelector('table.laps')).not.toBeNull();
   });
 
-  it('a later TimingData switch and the next laps event update the table', () => {
+  it('a TimingData switch alone moves By phase, with no laps event', () => {
     show(state(1), q1);
     expect(heads()).toEqual(['Driver', 'Q1', 'To fastest', 'Timed laps']);
+    // SessionPart 2 and car 2's KnockedOut in one delta; the lap rows do not change.
     last().emit('delta', {
       t: T + 1_000,
       topic: 'TimingData',
       data: { SessionPart: 2, Lines: { '2': { KnockedOut: true } } },
     });
-    last().emit('laps', { t: T + 1_500, laps: [...q1, row(1, 2, 2, 79_123)], stints: [] });
     advance(250);
     expect(heads()).toEqual(['Driver', 'Q1', 'Q2', 'To fastest', 'Timed laps']);
     expect(tiles()).toEqual(['Fastest in Q2', 'Q1 cut-off (P1)']);

@@ -2,6 +2,7 @@ import { type Obj, type Views, view } from '@f1/contracts';
 import { Fragment, type ReactNode } from 'react';
 import { compoundOf, tyresWords, UNKNOWN_COMPOUND } from '../lib/compound.ts';
 import type { Trend } from '../lib/crossings.ts';
+import { phaseName } from '../lib/quali.ts';
 import { type Driver, teamColour, teamStyle } from '../lib/session.ts';
 import { Note } from '../ui/Note.tsx';
 import { Scroll } from '../ui/Scroll.tsx';
@@ -338,7 +339,9 @@ function TyreCell({ tyre, number, year }: { tyre: Stint | undefined; number: str
 
 /**
  * The knock-out line in qualifying: after the row of the last place through (NoEntries[SessionPart]), with the
- * session page's words. Undefined outside a part, in the last part (no entry) and when the line would fall off the table.
+ * session page's line. Undefined outside a part, while the session is Inactive (before Q1, between parts), in the
+ * last part (no entry) and when the line would fall off the table. It never says "knocked out": the flag does not end a
+ * lap in progress, and a part's Finished outlasts the switch.
  */
 function cutAfter(state: Obj, rows: number): { index: number; label: string } | undefined {
   const info = view(state, 'SessionInfo');
@@ -347,9 +350,11 @@ function cutAfter(state: Obj, rows: number): { index: number; label: string } | 
   const part = timing?.SessionPart;
   const through = part !== undefined && part >= 1 ? timing?.NoEntries?.[String(part)] : undefined;
   if (part === undefined || through === undefined || through < 1 || through >= rows) return undefined;
-  const prefix = info.Name?.startsWith('Sprint') ? 'SQ' : 'Q';
-  const below = view(state, 'SessionStatus')?.Status === 'Finished' ? `knocked out in ${prefix}${part}` : 'drop zone';
-  return { index: through - 1, label: `${prefix}${part + 1} above · ${below} below` };
+  if (view(state, 'SessionStatus')?.Status === 'Inactive') return undefined;
+  return {
+    index: through - 1,
+    label: `${phaseName(info.Name ?? null, part + 1)} above · drop zone below`,
+  };
 }
 
 export function Tower({

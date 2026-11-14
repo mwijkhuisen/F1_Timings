@@ -174,6 +174,12 @@ describe('feedReached', () => {
     expect(feedReached(state(undefined)).size).toBe(0);
     expect(feedReached({}).size).toBe(0);
   });
+
+  it('ignores a SessionPart above 3 (a hostile recording would size every row)', () => {
+    expect(feedReached(state(3)).size).toBe(2);
+    expect(feedReached(state(4)).size).toBe(0);
+    expect(feedReached(state(100_000_000)).size).toBe(0);
+  });
 });
 
 describe('phaseName', () => {

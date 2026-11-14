@@ -681,18 +681,24 @@ describe('the knock-out line in qualifying', () => {
     expect(html(field(1, { entries: {} }))).not.toContain('cutlabel');
   });
 
-  it('says "drop zone" while the part runs and "knocked out in" once it is Finished', () => {
+  it('says "<next part> above · drop zone below", whatever the session status', () => {
     expect(labels(html(field(1)))[0]).toContain('<span>Q2 above · drop zone below</span>');
     expect(labels(html(field(2)))[0]).toContain('<span>Q3 above · drop zone below</span>');
-    expect(labels(html(field(1, { status: 'Finished' })))[0]).toContain(
-      '<span>Q2 above · knocked out in Q1 below</span>',
-    );
+    for (const status of ['Finished', 'Finalised', 'Aborted'])
+      expect(labels(html(field(1, { status })))[0]).toContain('<span>Q2 above · drop zone below</span>');
+    expect(html(field(1, { status: 'Finished' }))).not.toContain('knocked out');
+  });
+
+  it('draws no line while the session is Inactive: before Q1 and between the parts', () => {
+    expect(html(field(1, { status: 'Inactive' }))).not.toContain('cutlabel');
+    expect(html(field(2, { status: 'Inactive' }))).not.toContain('cutlabel');
+    expect(html(field(2, { status: 'Started' }))).toContain('cutlabel');
   });
 
   it('names the parts SQ in a sprint qualifying', () => {
     expect(labels(html(field(1, { name: 'Sprint Qualifying' })))[0]).toContain('SQ2 above · drop zone below');
     expect(labels(html(field(2, { name: 'Sprint Shootout', status: 'Finished' })))[0]).toContain(
-      'SQ3 above · knocked out in SQ2 below',
+      'SQ3 above · drop zone below',
     );
   });
 

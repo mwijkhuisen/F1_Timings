@@ -2152,8 +2152,7 @@ header .theme[aria-pressed="true"] {
   list-style: none;
 }
 
-.card .rows li,
-.card p.rows {
+.card .rows li {
   display: flex;
   align-items: baseline;
   justify-content: space-between;

@@ -185,9 +185,13 @@ type Ranked = { Value?: string | undefined; Position?: number | undefined };
  * Over the TimingStats lines, the picked value ranked 1 with a text, the lowest `score` winning: the feed ranks it, but
  * may leave a stale 1 on the driver just beaten. A tie (two Infinity too) keeps the first in key order.
  */
-function first<T extends Ranked>(state: Obj, pick: (l: Line) => T | undefined, score: (value: string) => number) {
+function first<T extends Ranked>(
+  lines: Views['TimingStats']['Lines'],
+  pick: (l: Line) => T | undefined,
+  score: (value: string) => number,
+) {
   let best: { n: string; v: T; value: string; s: number } | undefined;
-  for (const [n, l] of Object.entries(view(state, 'TimingStats')?.Lines ?? {})) {
+  for (const [n, l] of Object.entries(lines ?? {})) {
     const v = l && pick(l);
     if (!/^\d{1,3}$/.test(n) || v?.Position !== 1 || !v.Value) continue;
     const s = score(v.Value);
@@ -198,7 +202,7 @@ function first<T extends Ranked>(state: Obj, pick: (l: Line) => T | undefined, s
 
 /** The fastest lap so far: the TimingStats line ranked 1 on its personal best (the feed ranks it, deletions included). */
 export function fastestSoFar(state: Obj): Fastest | undefined {
-  const best = first(state, (l) => l.PersonalBestLapTime, lapMs);
+  const best = first(view(state, 'TimingStats')?.Lines, (l) => l.PersonalBestLapTime, lapMs);
   return best && { driver: driverOf(view(state, 'DriverList') ?? {}, best.n), value: best.value, lap: best.v.Lap };
 }
 
@@ -209,10 +213,11 @@ const speed = (v: string): number => (/^\d{1,3}(\.\d+)?$/.test(v) ? -Number(v) :
 /** The feed's bests so far, each with its holder: S1 to S3, then I1, I2, finish line and speed trap; none without a ranked value. */
 export function bestsSoFar(state: Obj): Best[] {
   const drivers = view(state, 'DriverList') ?? {};
+  const lines = view(state, 'TimingStats')?.Lines;
   const sectors = (['0', '1', '2'] as const).map((k, i) => ({
     label: `S${i + 1}`,
     speed: false,
-    best: first(state, (l) => l.BestSectors?.[k], lapMs),
+    best: first(lines, (l) => l.BestSectors?.[k], lapMs),
   }));
   const speeds = (
     [
@@ -221,7 +226,7 @@ export function bestsSoFar(state: Obj): Best[] {
       ['FL', 'Finish line'],
       ['ST', 'Speed trap'],
     ] as const
-  ).map(([k, label]) => ({ label, speed: true, best: first(state, (l) => l.BestSpeeds?.[k], speed) }));
+  ).map(([k, label]) => ({ label, speed: true, best: first(lines, (l) => l.BestSpeeds?.[k], speed) }));
   return [...sectors, ...speeds].flatMap(({ label, speed: sp, best }) =>
     best
       ? [{ label, value: sp ? `${best.value} km/h` : best.value, speed: sp, driver: driverOf(drivers, best.n) }]

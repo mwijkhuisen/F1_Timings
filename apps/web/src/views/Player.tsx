@@ -111,10 +111,7 @@ const Laps = memo(LapTable);
  */
 function PlayerLaps({ detail, laps, reached }: { detail: SessionDetail; laps: LapRows; reached: Map<number, number> }) {
   const qualifying = detail.session.type === 'Qualifying';
-  const quali = useMemo(
-    () => (qualifying ? qualiPhases(laps, detail.results, reached) : null),
-    [qualifying, laps, detail.results, reached],
-  );
+  const quali = qualifying ? qualiPhases(laps, detail.results, reached) : null;
   const table = <Laps detail={detail} laps={laps} />;
   return quali ? (
     <>
@@ -794,7 +791,19 @@ export function Player({
   const stateNow = () => (playing ? now() : stood.current);
   const feed = snap.feed;
   const state = feed?.state;
-  // Rebuilt only when the lap rows change (a snapshot or a `laps` event), so the lap table skips deltas.
+  // The feed's knock-outs, per flush: a part switch moves By phase while no lap row changes. The key keeps the lap table
+  // rebuilt only on row or knock-out changes. They count once the feed shows this recording's session (as `wall` waits).
+  const reachedKey = useMemo(
+    () =>
+      detail?.session.type === 'Qualifying' &&
+      snap.feed &&
+      (sessionKey === undefined || view(snap.feed.state, 'SessionInfo')?.Key === sessionKey)
+        ? JSON.stringify([...feedReached(snap.feed.state)])
+        : '',
+    [snap, detail, sessionKey],
+  );
+  // Rebuilt only when the lap rows or the knock-outs change (a snapshot, a `laps` event or a part switch), so the lap
+  // table skips other deltas.
   const lapTable = useMemo(
     () =>
       detail &&
@@ -802,15 +811,10 @@ export function Player({
         <PlayerLaps
           detail={streamDetail(detail, feed.state)}
           laps={snap.laps}
-          // The feed's knock-outs count once it shows this recording's session (as `wall` waits).
-          reached={
-            sessionKey === undefined || view(feed.state, 'SessionInfo')?.Key === sessionKey
-              ? feedReached(feed.state)
-              : new Map()
-          }
+          reached={new Map(reachedKey ? (JSON.parse(reachedKey) as [number, number][]) : [])}
         />
       ),
-    [detail, feed, snap.laps, sessionKey],
+    [detail, feed, snap.laps, reachedKey],
   );
   // The series is parsed once per flush; the ticking bar only filters it at T.
   const series = useMemo(() => (snap.feed ? statusSeries(snap.feed.state) : []), [snap]);
