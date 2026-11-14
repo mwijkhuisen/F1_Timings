@@ -1,14 +1,20 @@
-import { describe, expect, test, vi } from 'vitest';
+import { mkdtempSync, readdirSync, readFileSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { describe, expect, onTestFinished, test, vi } from 'vitest';
 import {
   assembleRings,
   clipLine,
   clipRing,
+  extract,
+  GEOJSON,
   lineRuns,
   overpassQuery,
   roundPts,
   run,
   runsPath,
   simplify,
+  startBar,
   waterRings,
 } from '../../../scripts/map-extract.ts';
 
@@ -214,5 +220,57 @@ describe('the OSM layers of map-extract (P5c, ADR-0008)', () => {
   test('an unknown argument is a usage error, not an OSM run', async () => {
     const lines: string[] = [];
     expect(await run(['--nope'], {}, (l) => lines.push(l))).toBe(64);
+  });
+});
+
+// The outline run (#91) reads only the vendored GeoJSON, so it runs here into a temporary directory.
+describe('the outline run of map-extract', () => {
+  const root = join(import.meta.dirname, '../../..');
+  const tmp = () => {
+    const d = mkdtempSync(join(tmpdir(), 'map-extract-'));
+    onTestFinished(() => rmSync(d, { recursive: true, force: true }));
+    return { map: join(d, 'map'), circuits: join(d, 'circuits.ts'), geojson: GEOJSON };
+  };
+
+  test('reproduces the committed outline files and circuits.ts byte for byte', () => {
+    const dirs = tmp();
+    expect(extract([], {}, () => {}, dirs)).toBe(0);
+    const committed = join(root, 'apps/web/src/map');
+    const names = readdirSync(dirs.map).sort();
+    expect(names).toEqual(
+      readdirSync(committed)
+        .filter((f) => f.endsWith('.json'))
+        .sort(),
+    );
+    for (const f of names)
+      expect(readFileSync(join(dirs.map, f), 'utf8'), f).toBe(readFileSync(join(committed, f), 'utf8'));
+    expect(readFileSync(dirs.circuits, 'utf8')).toBe(
+      readFileSync(join(root, 'packages/contracts/src/circuits.ts'), 'utf8'),
+    );
+  });
+
+  test('refuses a start/finish point 150 m off the outline (a typo, not a position)', () => {
+    const lines: string[] = [];
+    // 150 m north of Silverstone's sourced point: 0.15 km / 110.57 km per degree of latitude.
+    const off = { 'gb-1948': [52.07879 + 0.15 / 110.57, -1.01535] as const };
+    expect(extract([], {}, (l) => lines.push(l), tmp(), off)).toBe(1);
+    expect(lines.at(-1)).toBe('map-extract: gb-1948: the start/finish point is more than 100 m off the outline');
+  });
+
+  test('a bar is perpendicular to the segment it snaps to, its length centred on the snapped point', () => {
+    const square: [number, number][] = [
+      [0, 0],
+      [1, 0],
+      [1, 1],
+      [0, 1],
+    ];
+    expect(startBar(square, [0.5, 0.03], 0.2)).toEqual({
+      bar: [
+        [0.5, 0.1],
+        [0.5, -0.1],
+      ],
+      off: expect.closeTo(0.03, 9),
+    });
+    expect(startBar(square, [0.5, 0.5], 0.2)).toBeUndefined();
   });
 });

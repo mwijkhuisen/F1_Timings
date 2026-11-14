@@ -11,7 +11,7 @@ import {
   Stints,
   Weather,
 } from '@f1/contracts';
-import { QueryClient, queryOptions, useQuery, useQueryClient } from '@tanstack/react-query';
+import { QueryClient, queryOptions, useQueries, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useEffect, useRef, useSyncExternalStore } from 'react';
 import { ZodError } from 'zod';
 import { savedSessions } from './saved.ts';
@@ -172,19 +172,37 @@ export const useRain = (key: number, live = false) => useQuery(rainQuery(key, li
 /** A circuit's OpenStreetMap layers (ODbL, ADR-0008): SVG path data in km, any of them possibly empty. */
 export type OsmLayers = { water: string; coast: string; roads: string };
 
+/**
+ * A circuit's outline file (A§6.3): SVG path data in km, north up; the viewBox around it; the start/finish bar when the
+ * script's table has one (#91).
+ */
+export type Outline = { outline: string; viewBox: string; start?: string };
+
 // The map files are bundled, one lazy chunk per file, so a map costs no request to a third party (or to the API). The
 // default export, not a named one: Vite's JSON `stringify: 'auto'` gives a file over 10 kB a default export only.
-const OUTLINES = import.meta.glob<{ outline: string }>('../map/*.json', { import: 'default' });
+const OUTLINES = import.meta.glob<Outline>('../map/*.json', { import: 'default' });
 const OSM = import.meta.glob<OsmLayers>('../map/osm/*.json', { import: 'default' });
+
+/** The circuit's outline file by map id, null when there is none. Never an OSM layer: the season page uses this. */
+export const loadOutline = async (id: string): Promise<Outline | null> =>
+  (await OUTLINES[`../map/${id}.json`]?.()) ?? null;
 
 /** The circuit's outline and OSM layers by map id, each null when the circuit has no such file. */
 export async function loadCircuitMap(id: string) {
-  const [outline, osm] = await Promise.all([
-    OUTLINES[`../map/${id}.json`]?.() ?? null,
-    OSM[`../map/osm/${id}.json`]?.() ?? null,
-  ]);
+  const [outline, osm] = await Promise.all([loadOutline(id), OSM[`../map/osm/${id}.json`]?.() ?? null]);
   return { outline: outline?.outline ?? null, osm: osm && { water: osm.water, coast: osm.coast, roads: osm.roads } };
 }
+
+/** The outline files of `ids` by map id, each in once its chunk is (the season page, #91). */
+export const useOutlines = (ids: readonly string[]): ReadonlyMap<string, Outline> =>
+  useQueries({
+    queries: ids.map((id) => ({
+      queryKey: ['outline', id],
+      queryFn: () => loadOutline(id),
+      staleTime: Number.POSITIVE_INFINITY,
+    })),
+    combine: (results) => new Map(results.flatMap((r, i) => (r.data ? [[ids[i] as string, r.data] as const] : []))),
+  });
 
 export const useCircuitMap = (id: string | null) =>
   useQuery({

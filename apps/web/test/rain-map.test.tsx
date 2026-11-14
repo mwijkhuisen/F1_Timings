@@ -174,8 +174,11 @@ describe('the rain map', () => {
   // `vector-effect` is not inherited: on a <g> it does nothing and each child's 1 px stroke scales with the viewBox to 1 km.
   it('gives every stroked element its own non-scaling stroke, never a <g>', () => {
     const css = readFileSync(new URL('../src/styles.css', import.meta.url), 'utf8').replace(/\/\*[\s\S]*?\*\//g, '');
-    const rule = /([^{}]*)\{[^}]*vector-effect:\s*non-scaling-stroke;[^}]*\}/.exec(css)?.[1] ?? '';
-    const selectors = rule.split(',').map((x) => x.trim());
+    // The rain map's own rule; the season page's outlines have theirs (season-page.test.tsx).
+    const rules = [...css.matchAll(/([^{}]*)\{[^}]*vector-effect:\s*non-scaling-stroke;[^}]*\}/g)].map(
+      ([, s = '']) => s,
+    );
+    const selectors = (rules.find((s) => s.includes('.rainfield')) ?? '').split(',').map((x) => x.trim());
     expect(selectors).toEqual([
       '.rainfield .map-coast',
       '.rainfield .map-road',

@@ -1933,6 +1933,66 @@ header .theme[aria-pressed="true"] {
   font-size: 12.5px;
 }
 
+/* Circuit layouts (#91): the outline in --fg (--muted for a cancelled meeting) with the start/finish bar across it,
+   a 64 px box at a card's top right and 180 px in This weekend's Up next column. The boxes have a fixed size, so the
+   page does not move when an outline's chunk arrives. vector-effect is not inherited: it sits on each path. */
+.meeting .thumb {
+  float: right;
+  width: 64px;
+  height: 64px;
+  margin: 2px 0 4px 12px;
+}
+
+.meeting .sess {
+  clear: both;
+}
+
+.layout {
+  margin: 8px 0 0;
+}
+
+.layout .big {
+  display: block;
+  width: 180px;
+  height: 180px;
+}
+
+.layout figcaption {
+  margin-top: 6px;
+  color: var(--muted);
+  font-size: 12.5px;
+}
+
+.thumb path,
+.big path {
+  fill: none;
+  stroke: var(--fg);
+  vector-effect: non-scaling-stroke;
+  stroke-linejoin: round;
+}
+
+.thumb path {
+  stroke-width: 2px;
+}
+
+.big path {
+  stroke-width: 3px;
+}
+
+.thumb .sf,
+.big .sf {
+  stroke-linecap: butt;
+}
+
+.thumb.off path {
+  stroke: var(--muted);
+}
+
+.credit {
+  margin: 24px 0 0;
+  font-size: 12px;
+}
+
 @media (max-width: 640px) {
   .crumbs .sep {
     display: none;
@@ -2604,7 +2664,8 @@ dl.duel > div {
 }
 
 /* Inline links in a sentence are exempt from the 44 px target (WCAG 2.5.8). */
-.rainsrc a {
+.rainsrc a,
+.credit a {
   display: inline;
   min-width: 0;
   min-height: 0;
