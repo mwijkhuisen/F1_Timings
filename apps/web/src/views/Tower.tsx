@@ -1,4 +1,5 @@
 import { type Obj, type Views, view } from '@f1/contracts';
+import type { ReactNode } from 'react';
 import type { Trend } from '../lib/crossings.ts';
 import { compoundOf, type Driver, teamColour, teamStyle } from '../lib/session.ts';
 import { Note } from '../ui/Note.tsx';
@@ -200,7 +201,17 @@ function Sector({ s }: { s: NonNullable<Line['Sectors']>[string] }) {
 }
 
 /** The feed's gap text, the leader's muted "Leader", or — with the reason behind a tap (ui/Note.tsx); `id` is unique on the page. */
-const GapCell = ({ gap, id, className }: { gap: Gap; id: string; className?: string | undefined }) => (
+const GapCell = ({
+  gap,
+  id,
+  className,
+  children,
+}: {
+  gap: Gap;
+  id: string;
+  className?: string | undefined;
+  children?: ReactNode;
+}) => (
   <td className={className}>
     {'value' in gap ? (
       gap.value
@@ -211,8 +222,24 @@ const GapCell = ({ gap, id, className }: { gap: Gap; id: string; className?: str
         —
       </Note>
     )}
+    {children}
   </td>
 );
+
+/** A retired or stopped car's word (#102): the row's --muted is lost under forced colours, the word is not. */
+function OutBadge({ line }: { line: Line }) {
+  const out = line.Retired ? ['RET', 'retired'] : line.Stopped ? ['STOP', 'stopped'] : null;
+  return (
+    out && (
+      <>
+        <span className="badge" aria-hidden="true">
+          {out[0]}
+        </span>
+        <span className="vh">{`, ${out[1]}`}</span>
+      </>
+    )
+  );
+}
 
 const plural = (n: number) => `${n} place${n === 1 ? '' : 's'}`;
 
@@ -404,7 +431,9 @@ export function Tower({
                     )}
                   </th>
                   {places && <PlacesCell places={r.places} number={r.driver.number} />}
-                  <GapCell gap={r.gap} id={`tower-gap-${n}`} />
+                  <GapCell gap={r.gap} id={`tower-gap-${n}`}>
+                    <OutBadge line={line} />
+                  </GapCell>
                   {r.close && 'value' in r.interval ? (
                     <td className="int close">
                       {r.interval.value}

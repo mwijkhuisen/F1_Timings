@@ -266,7 +266,7 @@ describe('the tower', () => {
   it('colours the last lap purple for the overall best and green for a personal best, with the words', () => {
     expect(row('AAA')).toContain('<td class="t-purple">1:30.000<span class="vh">, overall best</span></td>');
     expect(row('BBB')).toContain('<td class="t-green">1:31.000<span class="vh">, personal best</span></td>');
-    expect(html.match(/class="vh">, /g)).toHaveLength(3);
+    expect(html.match(/class="vh">, (overall|personal) best/g)).toHaveLength(3);
   });
 
   it('shows the gap and interval as text, and — with its reason in the title and the popover', () => {
@@ -274,14 +274,18 @@ describe('the tower', () => {
       '<td><span class="muted">Leader</span></td><td><button type="button" class="note" popoverTarget="tower-int-1" ' +
         'aria-describedby="tower-int-1" title="Leader: no car ahead">—</button>',
     );
-    expect(row('BBB')).toContain('<td>+1.5</td><td>+1.5</td>');
+    expect(row('BBB')).toMatch(
+      /<td>\+1\.5<span class="badge"[^>]*>STOP<\/span><span class="vh">, stopped<\/span><\/td><td>\+1\.5<\/td>/,
+    );
     expect(row('DDD')).toContain(
       '<td><button type="button" class="note" popoverTarget="tower-gap-4" aria-describedby="tower-gap-4" ' +
         'title="No gap in the feed">—</button><div popover="auto" id="tower-gap-4" class="pop">No gap in the feed</div></td>',
     );
     expect(row('DDD')).toMatch(/<div popover="auto" id="tower-int-4" class="pop">No interval in the feed<\/div>/);
     // A retired driver keeps the values the feed still sends.
-    expect(row('CCC')).toContain('<td>+9.1</td><td>+4.2</td>');
+    expect(row('CCC')).toMatch(
+      /<td>\+9\.1<span class="badge"[^>]*>RET<\/span><span class="vh">, retired<\/span><\/td><td>\+4\.2<\/td>/,
+    );
   });
 
   it('gives every note a unique id', () => {
@@ -345,7 +349,7 @@ describe('the tower', () => {
   it('shows the pit stops with the IN PIT and OUT badges', () => {
     expect(row('AAA')).toContain('2<span class="badge">IN PIT</span>');
     expect(row('BBB')).toContain('0<span class="badge">OUT</span>');
-    expect(row('CCC')).not.toContain('badge');
+    expect(row('CCC')).not.toMatch(/IN PIT|>OUT</);
     // IN PIT wins over a stale OUT.
     const both = renderToStaticMarkup(
       <Tower state={{ ...state, TimingData: { Lines: { '1': { Line: 1, InPit: true, PitOut: true } } } }} />,
@@ -358,6 +362,31 @@ describe('the tower', () => {
     expect(row('BBB')).toContain('class="out"');
     expect(row('CCC')).toContain('class="out"');
     expect(row('AAA')).not.toContain('class="out"');
+  });
+
+  it('says RET or STOP in the Gap cell, a word that stays when forced colours drop the --muted row (#102)', () => {
+    const badge = (word: string, words: string) =>
+      `<span class="badge" aria-hidden="true">${word}</span><span class="vh">, ${words}</span></td>`;
+    expect(row('CCC')).toContain(`+9.1${badge('RET', 'retired')}`);
+    expect(row('BBB')).toContain(`+1.5${badge('STOP', 'stopped')}`);
+    expect([row('AAA'), row('DDD')].join('')).not.toMatch(/RET|STOP/);
+    // A retired car without a gap keeps its "Retired" reason behind the — and gets the word too; Retired wins.
+    const one = (line: object) =>
+      renderToStaticMarkup(
+        <Tower state={{ ...state, TimingData: { Lines: { '1': { Line: 1, Position: '2', ...line } } } }} />,
+      );
+    expect(one({ Retired: true })).toContain(`>Retired</div>${badge('RET', 'retired')}`);
+    expect(one({ Retired: true, Stopped: true })).not.toContain('STOP');
+    // Under forced colours tr.out's --muted turns into CanvasText; the badge is text in a border, which forced
+    // colours keep, and no forced-colours rule touches the tower's out rows or badges.
+    const css = readFileSync(fileURLToPath(new URL('../src/styles.css', import.meta.url)), 'utf8');
+    const forced = css
+      .split('@media (forced-colors: active) {')
+      .slice(1)
+      .map((b) => b.slice(0, b.indexOf('\n}\n')));
+    expect(forced.length).toBeGreaterThan(0);
+    for (const block of forced) expect(block).not.toMatch(/tr\.out|\.tower[^{]*\.badge/);
+    expect(/\n\.badge \{[^}]*border: 1px solid/.test(css)).toBe(true);
   });
 
   it('waits while the feed shows another session, and shows the rows once it matches', () => {

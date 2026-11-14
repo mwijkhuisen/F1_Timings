@@ -325,12 +325,18 @@ export type PlaybackDelta = z.infer<typeof PlaybackDelta>;
 export type PlaybackEnd = z.infer<typeof PlaybackEnd>;
 export type PlaybackPing = z.infer<typeof PlaybackPing>;
 
-export type SectorDelta = { lap_number: number; s1: number | null; s2: number | null; s3: number | null };
+export type SectorDelta = {
+  lap_number: number;
+  s1: number | null;
+  s2: number | null;
+  s3: number | null;
+  lap: number | null;
+};
 
-/** Per lap_number present in both lists: b − a per sector in ms, null when either value is null or either lap is deleted (D11). */
+/** Per lap_number present in both lists: b − a per sector and lap in ms, null when either value is null or either lap is deleted (D11). */
 export function sectorDeltas(
-  a: readonly Pick<Lap, 'lap_number' | 's1_ms' | 's2_ms' | 's3_ms' | 'deleted'>[],
-  b: readonly Pick<Lap, 'lap_number' | 's1_ms' | 's2_ms' | 's3_ms' | 'deleted'>[],
+  a: readonly Pick<Lap, 'lap_number' | 's1_ms' | 's2_ms' | 's3_ms' | 'lap_ms' | 'deleted'>[],
+  b: readonly Pick<Lap, 'lap_number' | 's1_ms' | 's2_ms' | 's3_ms' | 'lap_ms' | 'deleted'>[],
 ): SectorDelta[] {
   const byLap = new Map(a.map((lap) => [lap.lap_number, lap]));
   const out: SectorDelta[] = [];
@@ -344,6 +350,7 @@ export function sectorDeltas(
       s1: diff(la.s1_ms, lb.s1_ms),
       s2: diff(la.s2_ms, lb.s2_ms),
       s3: diff(la.s3_ms, lb.s3_ms),
+      lap: diff(la.lap_ms, lb.lap_ms),
     });
   }
   return out;

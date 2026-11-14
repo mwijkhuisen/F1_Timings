@@ -227,7 +227,7 @@ describe('Laps', () => {
 });
 
 describe('sectorDeltas', () => {
-  it('sectorDeltas: b − a; null when either value is null or either lap is deleted', () => {
+  it('sectorDeltas: b − a per sector and lap; null when either value is null or either lap is deleted', () => {
     const a = [
       lap({ lap_number: 1, s1_ms: 30_000, s2_ms: 31_000, s3_ms: null }),
       lap({ lap_number: 2, s1_ms: 30_000, s2_ms: 30_000, s3_ms: 30_000, deleted: true }),
@@ -235,21 +235,21 @@ describe('sectorDeltas', () => {
       lap({ lap_number: 4 }),
     ];
     const b = [
-      lap({ lap_number: 1, s1_ms: 29_500, s2_ms: null, s3_ms: 30_000 }),
+      lap({ lap_number: 1, lap_ms: 89_500, s1_ms: 29_500, s2_ms: null, s3_ms: 30_000 }),
       lap({ lap_number: 2, s1_ms: 29_000, s2_ms: 29_000, s3_ms: 29_000 }),
       lap({ lap_number: 3, s1_ms: 30_250, s2_ms: 29_000, s3_ms: 30_000, deleted: true }),
       lap({ lap_number: 5 }),
     ];
     expect(sectorDeltas(a, b)).toEqual([
-      { lap_number: 1, s1: -500, s2: null, s3: null },
-      { lap_number: 2, s1: null, s2: null, s3: null },
-      { lap_number: 3, s1: null, s2: null, s3: null },
+      { lap_number: 1, s1: -500, s2: null, s3: null, lap: -500 },
+      { lap_number: 2, s1: null, s2: null, s3: null, lap: null },
+      { lap_number: 3, s1: null, s2: null, s3: null, lap: null },
     ]);
     expect(sectorDeltas(a, [lap({ lap_number: 3, s1_ms: 30_250, s2_ms: 29_000, s3_ms: 30_000 })])).toEqual([
-      { lap_number: 3, s1: 250, s2: -1000, s3: 0 },
+      { lap_number: 3, s1: 250, s2: -1000, s3: 0, lap: 0 },
     ]);
-    expect(sectorDeltas(a.slice(3), [lap({ lap_number: 4, s1_ms: null })])).toEqual([
-      { lap_number: 4, s1: null, s2: 0, s3: 0 },
+    expect(sectorDeltas(a.slice(3), [lap({ lap_number: 4, s1_ms: null, lap_ms: null })])).toEqual([
+      { lap_number: 4, s1: null, s2: 0, s3: 0, lap: null },
     ]);
   });
 });

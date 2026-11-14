@@ -158,14 +158,27 @@ describe('the mini-sector grid', () => {
         'title="No speed-trap reading in the OpenF1 data">—</button><div popover="auto" id="trap-1-1-i1_kph" ' +
         'class="pop">No speed-trap reading in the OpenF1 data</div></td>',
     );
-    expect([...html.matchAll(/ id="([^"]+)"/g)].map(([, id]) => id)).toEqual(['trap-1-1-i1_kph', 'trap-4-1-st_kph']);
+    expect([...html.matchAll(/ id="([^"]+)"/g)].map(([, id]) => id)).toEqual([
+      'trap-1-1-i1_kph',
+      'ms-del-1-2',
+      'trap-4-1-st_kph',
+    ]);
     expect(render([VER, NOR], 'Race', 'f1-archive')).toContain('title="No speed-trap reading in the F1 archive"');
   });
 
-  it('strikes a deleted lap and badges in- and out-laps, laps in order', () => {
+  it('strikes a deleted lap with its reason behind a tap, and badges in- and out-laps, laps in order', () => {
     expect(ver1?.head).toBe('1<span class="badge">OUT</span>');
-    expect(ver2?.head).toBe('<s>2</s><span class="badge">IN</span>');
-    expect(html).toContain('<th scope="row" title="Deleted: TRACK LIMITS AT TURN 1">');
+    // <s> is not announced and a title cannot be tapped: a Note, as in the lap table (#102).
+    expect(ver2?.head).toBe(
+      '<button type="button" class="note" popoverTarget="ms-del-1-2" aria-describedby="ms-del-1-2" ' +
+        'title="Deleted: TRACK LIMITS AT TURN 1"><s>2</s></button>' +
+        '<div popover="auto" id="ms-del-1-2" class="pop">Deleted: TRACK LIMITS AT TURN 1</div><span class="badge">IN</span>',
+    );
+    expect(html).not.toMatch(/<th scope="row" title=/);
+    const bare = renderToStaticMarkup(
+      <MiniSectors sessionType="Race" source="openf1" laps={[lap(1, 7, { deleted: true })]} drivers={[VER]} />,
+    );
+    expect(bare).toContain('<div popover="auto" id="ms-del-1-7" class="pop">Deleted</div>');
   });
 
   it('groups the laps per selected driver, in pick order, with the team bar', () => {

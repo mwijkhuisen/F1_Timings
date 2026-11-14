@@ -18,6 +18,23 @@ import {
 
 const fmtSeconds = (v: number) => (v === 0 ? '0' : `${v < 0 ? '−' : '+'}${Math.abs(v)}`);
 
+/**
+ * The chart's accessible name (#102), each other driver's last known gap: "Gap to VER: NOR +3.2 s at lap 57, PER no
+ * gap", so how the gap ended is readable without the canvas.
+ */
+export function gapChartLabel(drivers: readonly Driver[], laps: readonly CrossLap[]): string {
+  const [ref, ...others] = drivers;
+  if (!ref) return '';
+  const lapsOf = (d: Driver) => laps.filter((l) => l.driver_number === d.number);
+  const ends = others.map((d) => {
+    const gaps = gapFromCrossings(lapsOf(ref), lapsOf(d));
+    const i = gaps.findLastIndex((g) => g !== null);
+    const g = gaps[i];
+    return `${d.acronym} ${g == null ? 'no gap' : `${fmtDelta(g, 1)} s at lap ${i + 1}`}`;
+  });
+  return `Gap to ${ref.acronym}: ${ends.join(', ')}`;
+}
+
 export function gapChartOption(
   drivers: readonly Driver[],
   laps: readonly CrossLap[],
