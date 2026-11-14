@@ -110,7 +110,8 @@ const TimingLine = z.looseObject({
   PitOut: bool,
   // The gaps depend on the session type (A§11.3): a race sends GapToLeader and IntervalToPositionAhead, practice
   // TimeDiffToFastest and TimeDiffToPositionAhead, and qualifying both per part under Stats, with the interval spelt
-  // TimeDifftoPositionAhead and the part's best lap under BestLapTimes, both keyed by SessionPart − 1.
+  // TimeDifftoPositionAhead and the part's best lap under BestLapTimes, both keyed by SessionPart − 1. TimingData's
+  // NoEntries holds the cars per part, so NoEntries[SessionPart] is the last place through.
   GapToLeader: str,
   IntervalToPositionAhead: obj({ Value: str, Catching: bool }),
   TimeDiffToFastest: str,
@@ -152,7 +153,12 @@ const Message = z.looseObject({
 
 const views = {
   DriverList: z.record(z.string(), opt(Driver)),
-  TimingData: z.looseObject({ SessionPart: int, Withheld: bool, Lines: rec(TimingLine) }),
+  TimingData: z.looseObject({
+    SessionPart: int,
+    NoEntries: rec(z.number().int()),
+    Withheld: bool,
+    Lines: rec(TimingLine),
+  }),
   TimingAppData: z.looseObject({ Lines: rec(z.looseObject({ RacingNumber: str, GridPos: str, Stints: rec(Stint) })) }),
   TimingStats: z.looseObject({ Withheld: bool, SessionType: str, Lines: rec(StatsLine) }),
   SessionInfo: z.looseObject({
