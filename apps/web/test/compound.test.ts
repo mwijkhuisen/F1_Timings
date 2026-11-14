@@ -26,8 +26,8 @@ const NOW = [
 // Pirelli's 2018 colours: Hypersoft pink, Ultrasoft purple, Supersoft red, Soft yellow, Medium white, Hard ice blue,
 // Superhard orange.
 const Y2018 = [
-  ['HYPERSOFT', 'hypersoft', 'Hypersoft', 'HS', '#ff8ad8'],
-  ['ULTRASOFT', 'ultrasoft', 'Ultrasoft', 'US', '#c08cff'],
+  ['HYPERSOFT', 'hypersoft', 'Hypersoft', 'HS', '#feb1c1'],
+  ['ULTRASOFT', 'ultrasoft', 'Ultrasoft', 'US', '#b34da8'],
   ['SUPERSOFT', 'supersoft', 'Supersoft', 'SS', '#ff5050'],
   ['SOFT', 'soft-2018', 'Soft', 'S', '#ffd23f'],
   ['MEDIUM', 'medium-2018', 'Medium', 'M', '#ececec'],

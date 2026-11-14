@@ -191,10 +191,10 @@ describe.each([
   });
 
   // One season's fills read apart (#126): its compounds from lib/compound.ts and the unknown grey. The test tyre has
-  // no fill of its own (the grey, with T). Under colour-blind vision some pairs are close (2018's ultrasoft and wet,
-  // ΔE 3.0 for protanopia): there the letters tell them apart, colour is never the only cue (A§13).
+  // no fill of its own (the grey, with T). Under colour-blind vision some pairs are close (2018's hypersoft and the
+  // unknown grey, ΔE 2.8 for protanopia): there the letters tell them apart, colour is never the only cue (A§13).
   it.each([
-    [2018, 11.5],
+    [2018, 11.15],
     [2026, 15.9],
   ])('the %s compounds and the unknown grey are at least ΔE 10 apart (closest %s)', (year, closest) => {
     const keys = [...new Set([...compoundsOf(year).map((c) => (c.key === 'test' ? 'unknown' : c.key)), 'unknown'])];

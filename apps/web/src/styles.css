@@ -58,9 +58,10 @@
   --intermediate: #4cd964;
   --wet: #4da6ff;
   /* 2018's seven dry compounds (#126), one fixed colour per name: Supersoft, Soft and Medium wear today's soft,
-     medium and hard colours, and Hard is ice blue. */
-  --hypersoft: #ff8ad8;
-  --ultrasoft: #c08cff;
+     medium and hard colours, and Hard is ice blue. Hypersoft is FastF1's pale pink; Ultrasoft is FastF1's purple
+     #b24ba7 lightened 1 % so black letters reach 4.5:1. */
+  --hypersoft: #feb1c1;
+  --ultrasoft: #b34da8;
   --supersoft: #ff5050;
   --soft-2018: #ffd23f;
   --medium-2018: #ececec;
