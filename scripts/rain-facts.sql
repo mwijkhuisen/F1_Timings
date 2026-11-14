@@ -16,7 +16,7 @@
 --      get no grid at all (the job takes OpenF1 sessions only, as Open-Meteo's history starts in 2022).
 --      The names below are pinned to CIRCUITS by test/rain-facts.test.ts.
 --   2. Grids per state and last_error: `live` while a session is in its window or waits for end + 24 h, `final`
---      for the rest. `failed` (the 9th failure in a row) has no automatic retry: reset it by hand.
+--      for the rest. `failed` (the 9th failure in a row) has no automatic retry: reset it with `rain-refetch <session_key>` (runbook ingest.md).
 --   3. Mapped OpenF1 sessions past end + 24 h without a grid: 0 once the backfill has drained.
 --   4. The location-calls spent (an upper bound, as the budget's restart seed: A§8) and the grids touched per UTC
 --      day: no day above 8,000, which is the budget's cap (D3).
