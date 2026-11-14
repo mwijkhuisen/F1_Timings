@@ -65,18 +65,12 @@ const write = (rec: Recording, [r, topic, payload, ts]: Value) =>
   topic === '_subscribe' ? rec.subscribed(r, payload) : rec.feed(r, topic, payload, ts ?? 'undefined');
 
 /** Writes `values` through the recorder, its clock at each line's receivedAt, and finishes it. */
-async function record(
-  dir: string,
-  values: Value[],
-  rotateMs: number,
-  after?: (i: number, rec: Recording) => Promise<void>,
-) {
+async function record(dir: string, values: Value[], rotateMs: number) {
   let clock = 0;
-  const rec = openRecording({ dir, now: () => clock, rotateMs, snapshotMs: 3_600_000 });
-  for (const [i, v] of values.entries()) {
+  const rec = openRecording({ dir, now: () => clock, rotateMs });
+  for (const v of values) {
     clock = v[0];
     write(rec, v);
-    await after?.(i, rec);
   }
   await rec.finish();
 }
@@ -293,12 +287,10 @@ describe('playback', () => {
         fc.array(fc.tuple(fc.nat(), fc.integer({ min: 1, max: 240_000 })), { maxLength: 8 }),
         fc.array(fc.nat(), { maxLength: 3 }), // CarData.z lines, just after these lines
         fc.array(fc.nat(), { maxLength: 4 }), // lines received in the same ms as the line before
-        // Snapshot files after a line (playback ignores them): at its receivedAt, halfway to the next, or at the next.
-        fc.array(fc.tuple(fc.nat(), fc.constantFrom(0, 0.5, 1)), { maxLength: 6 }),
         fc.array(fc.constantFrom('gz', 'plain', 'both'), { minLength: 1, maxLength: 4 }), // the segments' files
         fc.nat(), // T
         fc.constantFrom(1, 2, 4, 8, 16),
-        async ([source, sessionKey], rotateMs, weathers, subs, dups, zs, same, snaps, forms, pick, speed) => {
+        async ([source, sessionKey], rotateMs, weathers, subs, dups, zs, same, forms, pick, speed) => {
           // Before the duplicates are drawn, so a duplicate can repeat a weather line too (never a `_subscribe` one).
           const weatherLines = weathers.map(([i, w]) => weatherAt(nth(source, i)[0] + 1, w));
           const subscribes = subs.flatMap(([i, w]): Value[] => {
@@ -323,19 +315,10 @@ describe('playback', () => {
             const [, ...rest] = nth(values, k);
             values[k] = [nth(values, k - 1)[0], ...rest]; // still in order
           }
-          const snapAt = new Map<number, number[]>();
-          for (const [i, f] of snaps) {
-            const k = i % values.length;
-            const r = nth(values, k)[0];
-            const ms = Math.floor(r + f * ((values[k + 1]?.[0] ?? r + 1000) - r));
-            snapAt.set(k, [...(snapAt.get(k) ?? []), ms]);
-          }
 
           const dir = mkdtempSync(join(tmpdir(), 'f1-playback-'));
           try {
-            await record(dir, values, rotateMs, async (k, rec) => {
-              for (const ms of snapAt.get(k) ?? []) await rec.snapshot(ms);
-            });
+            await record(dir, values, rotateMs);
             const gz = readdirSync(dir)
               .filter((n) => n.endsWith('.jsonl.gz'))
               .sort();
@@ -350,7 +333,7 @@ describe('playback', () => {
             const first = nth(rs, 0);
             const last = nth(rs, rs.length - 1);
             const candidates = [first - 60_000, ...rs, ...rs.map((r, i) => Math.floor((r + (rs[i + 1] ?? r)) / 2))];
-            const at = nth([...candidates, ...[...snapAt.values()].flat(), last + 60_000], pick);
+            const at = nth([...candidates, last + 60_000], pick);
             const { gen, clock } = start(dir, { at, speed, sessionKey });
             const events = await drain(gen, clock);
             const truth = (t: number) => full(values, t, sessionKey);
@@ -403,7 +386,7 @@ describe('playback', () => {
     const values = counter(40, 7000, 360_000); // a line every 7 s for 4.5 min, none of them repeatable
     const last = nth(values, values.length - 1)[0];
     let recNow = T0;
-    const rec = openRecording({ dir, now: () => recNow, rotateMs: 150_000, snapshotMs: 3_600_000 });
+    const rec = openRecording({ dir, now: () => recNow, rotateMs: 150_000 });
     let written = 0;
     let finished = false;
     const clock = { now: T0 - 5000 };
@@ -650,7 +633,7 @@ describe('playback', () => {
 
     // An open recording: `ended` is asked at most every 30 s, and the stream stops on abort, with its file closed.
     const dir = tmp();
-    const rec = openRecording({ dir, now: () => 0, snapshotMs: 3_600_000 });
+    const rec = openRecording({ dir, now: () => 0 });
     for (const v of values) write(rec, v);
     const fds = () => readdirSync('/proc/self/fd').length;
     const before = fds();

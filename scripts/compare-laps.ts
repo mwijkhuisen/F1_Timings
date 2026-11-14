@@ -5,6 +5,7 @@ import { parseArgs } from 'node:util';
 import { archiveEvents, readStreams, reconstruct, safe } from '../apps/server/src/archive/files.ts';
 import { normaliseSession } from '../apps/server/src/ingest/normalise.ts';
 import { type FeedEvent, parseFeedLine } from '../apps/server/src/live/read.ts';
+import { recordingLines, SEGMENT } from '../apps/server/src/live/recording.ts';
 import { EXIT_USAGE } from '../apps/server/src/main.ts';
 import { createClient } from '../apps/server/src/openf1/client.ts';
 import { parse } from '../apps/server/src/openf1/schemas.ts';
@@ -12,7 +13,7 @@ import { merge } from '../packages/contracts/src/index.ts';
 
 export { reconstruct };
 
-// The P2b [box] judge: laps reconstructed from a P2a recording (feed.jsonl or its directory) or an
+// The P2b [box] judge: laps reconstructed from a recording (feed.jsonl or a recorder directory) or an
 // archive directory (fetch-archive.ts) against OpenF1's laps and stints. Run on the owner's machine
 // only: CI never calls OpenF1 (A§12.1 invariant 4). It prints lap and stint numbers, times and the
 // compared fields, plus merge paths; never a raw payload value.
@@ -140,16 +141,21 @@ const line = (d: Diff, what: string) =>
 
 export type Input = { events: FeedEvent[]; archiveDir?: string; skipped: number };
 
-/** A recording (feed.jsonl or a directory holding it) or an archive directory → events. */
+/**
+ * A recording (a feed.jsonl, or a recorder directory: its segments, gzipped or plain, in order, then feed.jsonl) or
+ * an archive directory → events. A plain file can be a pipe, such as `<(zcat …)`.
+ */
 export async function readInput(input: string): Promise<Input | undefined> {
   try {
-    const dir = statSync(input).isDirectory();
-    const feed = dir ? join(input, 'feed.jsonl') : input;
-    if (!dir || readdirSync(input).includes('feed.jsonl')) {
-      const events: FeedEvent[] = [];
-      for await (const l of createInterface({ input: createReadStream(feed), crlfDelay: Number.POSITIVE_INFINITY })) {
+    const events: FeedEvent[] = [];
+    if (!statSync(input).isDirectory()) {
+      for await (const l of createInterface({ input: createReadStream(input), crlfDelay: Number.POSITIVE_INFINITY })) {
         events.push(...parseFeedLine(l));
       }
+      return { events, skipped: 0 };
+    }
+    if (readdirSync(input).some((name) => name === 'feed.jsonl' || SEGMENT.test(name))) {
+      for await (const line of recordingLines(input)) events.push(...parseFeedLine(line.text));
       return { events, skipped: 0 };
     }
     const archive = archiveEvents(readStreams(input));

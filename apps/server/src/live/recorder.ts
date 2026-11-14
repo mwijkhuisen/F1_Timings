@@ -8,7 +8,7 @@ import { codeOf, type DB } from '../db/db.ts';
 import type { Recording as RecordingRow } from '../db/types.ts';
 import { type Conn, type ConnectOptions, connect, type FeedCode } from './feed-client.ts';
 import { type Credentials, credentials, LoginError, login, type Token } from './login.ts';
-import { gzipLeftovers, openRecording, type Recording } from './recording.ts';
+import { gzipLeftovers, openRecording, type Recording, writeRecordingJson } from './recording.ts';
 import {
   checkToken,
   loginAllowed,
@@ -427,7 +427,20 @@ export async function startRecorder(deps: RecorderDeps): Promise<void> {
     if (reason === 'stop') finished.add(r.key);
     if (reason === 'disk') diskUntil = ms() + DISK_COOLDOWN_MS;
     const complete = reason === 'stop' && r.startedSeen && isComplete(r.links, stoppedAt, r.session);
-    const row = { ...rowOf(r), ended_at: new Date(ms()), complete };
+    const endedAt = new Date(ms());
+    // The row's values next to the files, for reindex-recordings after a database loss (#109). Never fatal.
+    try {
+      await writeRecordingJson(join(liveDir, r.path), {
+        session_key: r.key,
+        started_at: new Date(r.startedAt).toISOString(),
+        ended_at: endedAt.toISOString(),
+        bytes: r.rec.bytes,
+        complete,
+      });
+    } catch (err) {
+      log.error({ last_error: 'recording_json', cause: codeOf(err) }, 'recording.json not written');
+    }
+    const row = { ...rowOf(r), ended_at: endedAt, complete };
     if (!(await saveRow(row))) unwritten.push(row);
     log.info({ session_key: r.key, reason, complete, bytes: r.rec.bytes }, 'recording ended');
     if (complete) await ping('f1-live');

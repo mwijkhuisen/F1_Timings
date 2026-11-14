@@ -16,6 +16,7 @@ import { backfill, ingestLock, SESSION_ENDPOINTS, startIngest } from './ingest/i
 import { acceptEmpty, rainRefetch, rederive, refetch } from './ingest/recovery.ts';
 import { JOLPICA_DIR, jolpica } from './jolpica/job.ts';
 import { LIVE_DIR, startRecorder } from './live/recorder.ts';
+import { reindexRecordings } from './live/reindex.ts';
 import { fill } from './merge/fill.ts';
 import { createClient, systemClock } from './openf1/client.ts';
 import { createBudget, createRainClient } from './rain/client.ts';
@@ -36,6 +37,7 @@ export const ROLES = [
   'archive',
   'fill',
   'jolpica',
+  'reindex-recordings',
 ] as const;
 export type Role = (typeof ROLES)[number];
 
@@ -51,7 +53,7 @@ const USAGE =
   `accept-empty <session_key> <${SESSION_ENDPOINTS.join('|')}>; ` +
   'archive <year 2018-2022> [<session_key>...] [--token-file <path>] [--dir <path>]; ' +
   'fill <session_key>...|--all [--archive-dir <path>] [--live-dir <path>]; ' +
-  'jolpica [<year 1950->...] [--dir <path>])';
+  'jolpica [<year 1950->...] [--dir <path>]; reindex-recordings [--live-dir <path>])';
 
 /**
  * Resolves with the exit code. `apiPort` is a test seam only (not configurable in production: Caddy proxies to api:8080).
@@ -71,6 +73,7 @@ export async function run(
   if (role === 'archive') return runArchive(rest, env, log);
   if (role === 'fill') return runFill(rest, env, log);
   if (role === 'jolpica') return runJolpica(rest, env, log);
+  if (role === 'reindex-recordings') return runReindex(rest, env, log);
   if (
     role === 'ingest' ||
     role === 'backfill' ||
@@ -326,6 +329,44 @@ function parseJolpica(argv: readonly string[]) {
   const ok = (y: string) => /^\d{4}$/.test(y) && Number(y) >= 1950 && Number(y) <= now;
   if (!positionals.every(ok) || !privateDir(values.dir, JOLPICA_DIR)) return undefined;
   return { years: [...new Set(positionals.map(Number))], dir: values.dir };
+}
+
+/**
+ * reindex-recordings (#109, A§11.2): a `recording` row for every recorder directory without one, as f1_ingest. Reads
+ * the files only, no network.
+ */
+async function runReindex(argv: readonly string[], env: Env, log: (line: string) => void): Promise<number> {
+  let liveDir: ReturnType<typeof parseReindex>;
+  try {
+    liveDir = parseReindex(argv);
+  } catch {
+    liveDir = undefined;
+  }
+  if (liveDir === undefined) {
+    log(USAGE);
+    return EXIT_USAGE;
+  }
+  const url = dbUrl('f1_ingest', env);
+  if (typeof url === 'string') {
+    log(`reindex-recordings: ${url}`);
+    return EXIT_CONFIG;
+  }
+  const logger = pino({ base: { role: 'reindex-recordings' } });
+  const db = createDb(url, (err) => logger.error({ cause: codeOf(err) }, 'database pool error'));
+  try {
+    return (await reindexRecordings({ db, log: logger, liveDir })) ? 0 : 1;
+  } catch (err) {
+    logger.error({ cause: codeOf(err) }, 'reindex-recordings failed');
+    return 1;
+  } finally {
+    await db.destroy();
+  }
+}
+
+/** `[--live-dir <path>]`: the live dir, or undefined; parseArgs throws on an unknown flag or a positional. */
+function parseReindex(argv: readonly string[]) {
+  const { values } = parseArgs({ args: [...argv], options: { 'live-dir': { type: 'string', default: LIVE_DIR } } });
+  return privateDir(values['live-dir'], LIVE_DIR) ? values['live-dir'] : undefined;
 }
 
 /** The recorder daemon (A§11.2), as f1_ingest. Resolves after SIGTERM/SIGINT, with the running recording closed. */

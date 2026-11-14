@@ -6,8 +6,8 @@ import { MAX_SESSION_BYTES, reconstruct } from '../archive/files.ts';
 import { TOPICS } from '../archive/job.ts';
 import { archiveRows } from '../archive/rows.ts';
 import { codeOf, type DB } from '../db/db.ts';
-import { segment, segments } from '../live/playback.ts';
 import { type FeedEvent, parseFeedLine } from '../live/read.ts';
+import { segment, segments } from '../live/recording.ts';
 import type { Source } from './merge.ts';
 import { mergeSession, staleLap, storeCandidates } from './write.ts';
 

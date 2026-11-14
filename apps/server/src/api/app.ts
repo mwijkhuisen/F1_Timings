@@ -2,6 +2,7 @@ import { stat } from 'node:fs/promises';
 import { join } from 'node:path';
 import { setTimeout as sleep } from 'node:timers/promises';
 import { isUnmatched, PERIOD_LIKE, type Rain, REVISION, type Seasons, type Status, type Stints } from '@f1/contracts';
+import type { HttpBindings } from '@hono/node-server';
 import { type Context, Hono, type MiddlewareHandler } from 'hono';
 import { streamSSE } from 'hono/streaming';
 import { type Kysely, sql } from 'kysely';
@@ -679,7 +680,11 @@ export function createApp({
         }
       } catch (err) {
         if (!abort.signal.aborted) log.error({ cause: codeOf(err) }, 'playback'); // never the message to the client
-        if (codeOf(err) === 'write_timeout') stream.abort(); // ends the response of the stalled client
+        if (codeOf(err) === 'write_timeout') {
+          stream.abort();
+          // abort() alone leaves the socket and its buffer open under @hono/node-server (#109); `close` cancels its reader.
+          (c.env as HttpBindings | undefined)?.outgoing.destroy(); // undefined under app.request()
+        }
       } finally {
         abort.abort();
         streams--;

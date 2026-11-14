@@ -20,7 +20,7 @@ Both timers are enabled by the owner after install (`docs/runbooks/install.md`, 
 | `/srv/f1/state/restarts` | `<name> <rounds>` lines: the containers `f1-tick` restarted in its last round and in how many rounds in a row |
 | `/srv/f1/state/alert-<code>` | the token of the last host alert of that code (pair, held-since epoch, looping names, session key or `low`); remove it to alert again (below) |
 | `/srv/f1/state/live/` | the only part of the state directory the `live` container sees (as `/srv/f1/state`); `f1tv-token` lives here. `62532:62532 0700`; `/srv/f1/state` itself stays root `0700` |
-| `/srv/f1/live/<session_key>-<startedAt>/` | one recording: `feed.jsonl` (current segment), `feed-<ms>.jsonl.gz` (finished ones), `snapshots/<ms>.json.gz`. `62532:62532`, files `0600` |
+| `/srv/f1/live/<session_key>-<startedAt>/` | one recording: `feed.jsonl` (current segment), `feed-<ms>.jsonl.gz` (finished ones), `recording.json` (written at close since #109; older recordings may hold a `snapshots/` directory, never read). `62532:62532`, files `0600` |
 | `/srv/f1/state/measure-<UTC>.tsv` | the samples of one `f1-measure` run, root `0600` (`docs/runbooks/weekend.md`) |
 | `/etc/f1/compose.yaml`, `/usr/local/bin/f1-*` | root-owned copies installed by `f1-install` |
 
@@ -266,6 +266,20 @@ sudo docker compose -p f1 -f /etc/f1/compose.yaml --env-file /srv/f1/state/curre
    The 1950–2017 sessions stay readable. The old image's `fill` leaves them unchanged and counts them as `stale_lap`, and its ingest never touches them. Its next refetch of a 2018+ session drops the jolpica fills from that session's laps. After rolling forward again, run the job again (step 3).
 8. **The dump stays on the VM.** It is CC BY-NC-SA 4.0 (ADR-0009): never copy it anywhere else, never commit it, and never put it in an image, a log or an issue. The site's attribution line (`third-party-licences.txt`, section 4) already names it.
 
+## Rebuild the recording rows (the `reindex-recordings` job) [owner]
+
+`reindex-recordings` (A§4, A§11.2) inserts the `recording` rows that are missing from the directories under `/srv/f1/live`. Run it after a database loss, a re-initialised cluster (#106) or a `docker volume rm` of the database volume, once the ingest backfill has restored the sessions (`no_session` otherwise). `/recordings` then lists the recordings again. It reads files and the database only, never the network, and it is safe beside the running `live` daemon. `f1-update` never runs it and no timer does: you start it, in the `live` service (the RW `/srv/f1/live` mount and the `f1_ingest` login).
+
+```bash
+sudo docker compose -p f1 -f /etc/f1/compose.yaml --env-file /srv/f1/state/current.env \
+  run --rm live reindex-recordings
+```
+
+- **Exit codes:** 0 when no directory failed; 1 when one did (`unreadable`: a read error such as `ELOOP`, `Z_DATA_ERROR` or `playback_too_large`; `no_session`: the session row is missing) or on a database error: the directory's `reindex` line is at error level with the code and `reindex_done` counts `inserted`, `existing` and `failed`; 64 for a positional, an unknown flag or a `--live-dir` outside the `fill` rule (`/srv/f1/live` or a path with a `fixtures-private` segment); 78 without the database secret.
+- **What it rebuilds:** a row for every directory named `<session_key>-<startedAtMs>` that has none. `bytes` and `ended_at` come from the lines (the last line's receive time), `complete` from the directory's `recording.json` when its `session_key` and `started_at` match the name. A directory that has a row is left alone.
+- **What it cannot:** the rows get new ids, so old `/replay/<id>` links break. A recording without `recording.json` (every one made before #109, and every one a crash closed) gets `complete = f`, so `fill` ignores it until you set it by hand.
+- **Snapshots (optional):** since #109 the recorder writes no `snapshots/` directories and nothing reads the old ones. To remove them: `sudo find /srv/f1/live -mindepth 2 -maxdepth 2 -type d -name snapshots -exec rm -r {} +`.
+
 ## Check a recording [box]
 
 After a session, plus 30 minutes (`<path>` is the `path` column, `<session_key>-<startedAt>`). These commands print counts and metadata only, never feed payloads:
@@ -273,7 +287,8 @@ After a session, plus 30 minutes (`<path>` is the `path` column, `<session_key>-
 ```bash
 sudo docker compose -p f1 -f /etc/f1/compose.yaml --env-file /srv/f1/state/current.env exec db \
   psql -U postgres -d f1 -c "SELECT id, session_key, path, started_at, ended_at, bytes, complete FROM recording ORDER BY id DESC LIMIT 3"
-sudo ls -l /srv/f1/live/<path> /srv/f1/live/<path>/snapshots | tail -n 5
+sudo ls -l /srv/f1/live/<path> | tail -n 5
+sudo cat /srv/f1/live/<path>/recording.json
 sudo du -sh /srv/f1/live/<path>
 sudo sh -c 'gzip -t /srv/f1/live/<path>/feed-*.jsonl.gz && zcat /srv/f1/live/<path>/feed-*.jsonl.gz | wc -l'
 sudo docker logs f1-live-1 2>&1 | grep -c '"last_error"'
@@ -283,7 +298,7 @@ Pass:
 
 - `complete = t`, and `ended_at` about 30 minutes after the `Ends` status, which comes some time after the session's end (`date_end` + 3 h at the latest), or at the next session's lead (`date_start` − 60 min) when that came first, with `handover` in the log (A§11.2).
 - Every segment passes `gzip -t`, and the line count is not 0.
-- A snapshot about every 30 s: the `snapshots` listing grows by two files a minute.
+- `recording.json` shows the row's values (`session_key`, `started_at`, `ended_at`, `bytes`), with `complete` equal to the row's. It is absent only for a recording a crash closed (since #109 the recorder writes it at every close).
 - `f1-live` on healthchecks.io is green (`f1-live/fail` turns it red at once for a recording that ended incomplete), and the status panel shows `idle` and the token expiry.
 
 The last command counts the error log lines of the container, each one a fixed code (`feed_socket` after a drop, say). A few reconnects are normal; `complete = t` already says that no disconnect lasted over 60 s.

@@ -6,6 +6,7 @@ import {
   readdirSync,
   readFileSync,
   rmSync,
+  statSync,
   writeFileSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -171,6 +172,7 @@ const endedRow = async () => {
   await until(async () => (await lastRow())?.ended_at != null);
   return await lastRow();
 };
+const recordingJson = (path = '') => JSON.parse(readFileSync(join(liveDir, path, 'recording.json'), 'utf8')) as unknown;
 
 describe('recorder (real PostgreSQL as f1_ingest, fake SignalR)', { timeout: 30_000 }, () => {
   beforeAll(async () => {
@@ -496,6 +498,16 @@ describe('recorder (real PostgreSQL as f1_ingest, fake SignalR)', { timeout: 30_
       const names = readdirSync(join(liveDir, row?.path ?? ''));
       expect(names.filter((n) => n.endsWith('.jsonl'))).toEqual([]);
       expect(names.filter((n) => /^feed-\d+\.jsonl\.gz$/.test(n)).length).toBeGreaterThan(0);
+      // The row's values next to the files (#109), for reindex-recordings.
+      expect(recordingJson(row?.path)).toEqual({
+        session_key: KEY,
+        started_at: row?.started_at.toISOString(),
+        ended_at: row?.ended_at?.toISOString(),
+        bytes: Number(row?.bytes),
+        complete: true,
+      });
+      expect(statSync(join(liveDir, row?.path ?? '', 'recording.json')).mode & 0o777).toBe(0o600);
+      expect(names.filter((n) => n.endsWith('.tmp'))).toEqual([]);
 
       await h.ticks(10);
       expect(await rows()).toHaveLength(1); // complete: not selected again
@@ -669,10 +681,25 @@ describe('recorder (real PostgreSQL as f1_ingest, fake SignalR)', { timeout: 30_
       const h = start();
       await recording();
       await db.updateTable('session').set({ is_cancelled: true }).where('session_key', '=', KEY).execute();
-      expect(await endedRow()).toMatchObject({ complete: false });
+      const row = await endedRow();
+      expect(row).toMatchObject({ complete: false });
+      expect(recordingJson(row?.path)).toMatchObject({ session_key: KEY, complete: false });
       await h.ticks(10);
       expect(await rows()).toHaveLength(1);
       expect(pings).toEqual([]);
+    });
+
+    it('a recording.json that cannot be written is logged by its code, and the row is saved all the same', async () => {
+      await seed(KEY);
+      writeToken(tokenPath, tokenUntil(GOOD_UNTIL));
+      start();
+      await recording();
+      mkdirSync(join(liveDir, (await lastRow())?.path ?? '', 'recording.json')); // the rename cannot replace it
+      await db.updateTable('session').set({ is_cancelled: true }).where('session_key', '=', KEY).execute();
+      expect(await endedRow()).toMatchObject({ complete: false });
+      expect(lines.filter((l) => l.includes('recording_json')).map((l) => JSON.parse(l))).toEqual([
+        expect.objectContaining({ level: 50, last_error: 'recording_json', cause: 'EISDIR' }),
+      ]);
     });
 
     it('a moved session ends the recording incomplete and is recorded at its new time', async () => {
@@ -762,7 +789,7 @@ describe('recorder (real PostgreSQL as f1_ingest, fake SignalR)', { timeout: 30_
     it('a mid-session restart closes the open row, gzips its leftover and starts a new row', async () => {
       await seed(KEY);
       const oldPath = `${KEY}-${T0 - 2 * MIN}`;
-      mkdirSync(join(liveDir, oldPath, 'snapshots'), { recursive: true });
+      mkdirSync(join(liveDir, oldPath, 'snapshots'), { recursive: true }); // an old directory's (#109): left alone
       writeFileSync(join(liveDir, oldPath, 'feed.jsonl'), `[${T0 - 2 * MIN},"Heartbeat",{},"x"]\n`);
       await db
         .insertInto('recording')
@@ -795,6 +822,13 @@ describe('recorder (real PostgreSQL as f1_ingest, fake SignalR)', { timeout: 30_
       expect(row).toMatchObject({ complete: false, ended_at: new Date(clock) });
       expect(Number(row?.bytes)).toBeGreaterThan(0);
       expect(readdirSync(join(liveDir, row?.path ?? '')).filter((n) => n.endsWith('.jsonl'))).toEqual([]);
+      expect(recordingJson(row?.path)).toEqual({
+        session_key: KEY,
+        started_at: new Date(T0 - HOUR).toISOString(),
+        ended_at: new Date(clock).toISOString(),
+        bytes: Number(row?.bytes),
+        complete: false,
+      });
       expect(await status()).toMatchObject({ state: 'idle' });
       expect(pings).toEqual([]);
     });
