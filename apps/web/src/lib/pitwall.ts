@@ -171,18 +171,18 @@ export type RcLogItem = RcItem & { phase?: number | undefined; driver_number: nu
 /**
  * An OpenF1 session's race-control rows with a message, in API order (A§6.1, #111). A row's phase is the last
  * non-null `qualifying_phase` at or before it (A§9's lap rule: deletions and stewards' notes carry none); in
- * qualifying, rows before a first phase row above 1 are Q1. Other rows before any phase row have none.
+ * qualifying, rows before a first phase row of 2 are Q1. Other rows before any phase row have none.
  */
 export function rcLog(rows: RcRows, qualifying: boolean): RcLogItem[] {
   const first = rows.find((r) => r.qualifying_phase !== null)?.qualifying_phase ?? undefined;
-  let phase = qualifying && first !== undefined && first > 1 ? 1 : undefined;
+  let phase = qualifying && first !== undefined && first === 2 ? 1 : undefined;
   return rows.flatMap((r, key) => {
     if (r.qualifying_phase !== null) phase = r.qualifying_phase;
     if (r.message === null) return [];
     return [
       {
         key,
-        time: r.date === null ? undefined : fmtClock(Date.parse(r.date)),
+        time: r.date === null ? '—' : fmtClock(Date.parse(r.date)),
         lap: r.lap_number ?? undefined,
         phase,
         ...kindOf(r.category ?? undefined, r.message),

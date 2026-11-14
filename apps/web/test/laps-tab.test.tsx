@@ -110,14 +110,17 @@ describe('LapsTab', () => {
     act(() => button('Every lap')?.click());
     expect(host.querySelector('table.quali')).toBeNull();
     expect(host.querySelector('table.laps')).not.toBeNull();
-    await vi.waitFor(() => expect(calls).toBe(1));
+    // Wait for the answer itself: an unmount mid-fetch aborts it, and msw then logs a socket hang-up (CLAUDE.md).
+    await vi.waitFor(() => expect(host.querySelector('.rclog')).not.toBeNull());
+    expect(calls).toBe(1);
   });
 
-  it('shows the Δ legend when switched', () => {
+  it('shows the Δ legend when switched', async () => {
     answer();
     render('Practice', 'Practice 2');
     act(() => button('Δ to own best')?.click());
     expect(host.querySelector('ul.legend')?.textContent).toBe('< 0.5 %< 1 %< 2 %≥ 2 % slower than own best');
     expect(host.querySelector('table.laps')?.getAttribute('aria-label')).toBe('Lap Δ to own best');
+    await vi.waitFor(() => expect(host.querySelector('.rclog')).not.toBeNull());
   });
 });

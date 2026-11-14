@@ -115,6 +115,8 @@ export const startsStint = (starts: ReadonlySet<number>, n: number): boolean =>
  * (7787, 9094, 9110, 9488, 9523, 9531, 9693, 9963, 9979, 11286, 11291, 11299) from n (OpenF1 numbers those stints from
  * the in-lap); 74 have no stint nearby (drive-throughs, pit-lane passes under SC: no stop); 87 are 1–2 laps off
  * (missed on purpose).
+ * ponytail: a drive-through on the lap after a stop can count as a stop here; consume each stint once, as
+ * `pitStops` (views/Stints.tsx) does, if a pit cycle ever pairs one.
  */
 export function stops(driver: number, laps: readonly PitLap[], stints: Stints): number[] {
   const starts = new Set<number>();

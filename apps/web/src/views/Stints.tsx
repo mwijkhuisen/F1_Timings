@@ -137,13 +137,18 @@ export function pitStops(
   stints: Stints,
   periods: readonly Period[],
 ): PitStop[] {
+  // A stint is matched by one row only: a later row that would match it again is a pass.
+  const used = new Set<string>();
   const rows = pits.map((p): PitStop => {
     const own = stints.filter((s) => s.driver_number === p.driver_number);
     const n = p.lap_number;
     const starts = new Set(own.flatMap((s) => (s.lap_start === null ? [] : [s.lap_start])));
+    const free = (s: Stints[number] | undefined) =>
+      s && !used.has(`${s.driver_number}/${s.stint_number}`) ? s : undefined;
     const after = startsStint(starts, n)
-      ? (own.find((s) => s.lap_start === n + 1) ?? own.find((s) => s.lap_start === n))
+      ? (free(own.find((s) => s.lap_start === n + 1)) ?? free(own.find((s) => s.lap_start === n)))
       : undefined;
+    if (after) used.add(`${after.driver_number}/${after.stint_number}`);
     return {
       driver: drivers.find((d) => d.number === p.driver_number) ?? {
         number: p.driver_number,
@@ -174,7 +179,8 @@ const seconds = (ms: number) => `${(ms / 1000).toFixed(1)} s`;
 /** A pit row in words for a stint popover. */
 function pitLine(r: PitStop): string {
   const head = `${r.pass ? 'Pit-lane pass' : 'Stop'} after lap ${r.n}`;
-  if (r.laneMs === null) return `${head}: no pit-lane time in the OpenF1 data`;
+  if (r.laneMs === null)
+    return `${head}: no pit-lane time in the OpenF1 data${r.pass ? ', no tyre change in the stints data' : ''}`;
   return `${head}: ${seconds(r.laneMs)} in the pit lane${r.pass ? ', no tyre change in the stints data' : ''}`;
 }
 
@@ -183,19 +189,18 @@ export function StintBars({
   laps,
   stints,
   periods = [],
-  pits = [],
+  pitRows = [],
 }: {
   detail: SessionDetail;
   laps: Laps;
   stints: Stints;
   /** SC and VSC periods (C6); red flags are not drawn here. */
   periods?: readonly Period[];
-  /** A race's pit rows, one popover line each (#111). */
-  pits?: Pits;
+  /** A race's pit rows (`pitStops`), one popover line each (#111). */
+  pitRows?: readonly PitStop[];
 }) {
   const year = detail.meeting.year;
   const drivers = orderDrivers(detail, laps);
-  const pitRows = pitStops(drivers, pits, stints, periods);
   const { total, ticks, rows } = stintLayout(drivers, laps, stints, year);
   const used = new Set(rows.flatMap((r) => inOrder(r).map((s) => s.compound)));
   // The season's compounds in use, softest first, then an unknown one.
@@ -349,9 +354,9 @@ export function PitStops({ detail, rows }: { detail: SessionDetail; rows: readon
             {rows.map((r, i) => (
               // biome-ignore lint/suspicious/noArrayIndexKey: pit rows have no id; the table is static.
               <tr key={i}>
-                <td className="drv" style={teamStyle(r.driver)}>
+                <th scope="row" className="drv" style={teamStyle(r.driver)}>
                   {r.driver.acronym}
-                </td>
+                </th>
                 <td>{r.n}</td>
                 <td>{r.time}</td>
                 <td>
@@ -406,27 +411,27 @@ export function StintsTab({
   const pits = usePits(session);
   const race = detail.session.type === 'Race';
   const rc = useRaceControl(session, race && laps.length > 0);
+  // A cached answer from the Laps tab comes back even when disabled: only a race uses it.
   const periods = useMemo(
-    () => (rc.data ? trackPeriods(rc.data).periods.filter((p) => p.kind !== 'red') : []),
-    [rc.data],
+    () => (race && rc.data ? trackPeriods(rc.data).periods.filter((p) => p.kind !== 'red') : []),
+    [race, rc.data],
+  );
+  const pitRows = useMemo(
+    () =>
+      race && pits.data && stints.data ? pitStops(orderDrivers(detail, laps), pits.data, stints.data, periods) : [],
+    [race, pits.data, stints.data, detail, laps, periods],
   );
   if (!stints.data) return <Pending error={stints.error} />;
   if (stints.data.length === 0) return <NoData session={detail.session} live={live} what="stints" now={now} />;
   return (
     <>
-      {rc.error && <p className="muted">Race control did not load: no SC or VSC lines.</p>}
-      <StintBars
-        detail={detail}
-        laps={laps}
-        stints={stints.data}
-        periods={periods}
-        pits={race ? (pits.data ?? []) : []}
-      />
+      {race && rc.error && <p className="muted">Race control did not load: no SC or VSC lines.</p>}
+      <StintBars detail={detail} laps={laps} stints={stints.data} periods={periods} pitRows={pitRows} />
       {pits.data &&
         (pits.data.length === 0 ? (
           <p className="muted">{`No pit rows in ${sourceWords(detail.session.source)} for this session.`}</p>
         ) : race ? (
-          <PitStops detail={detail} rows={pitStops(orderDrivers(detail, laps), pits.data, stints.data, periods)} />
+          <PitStops detail={detail} rows={pitRows} />
         ) : (
           <p className="muted">Pit stops are listed for races and sprints.</p>
         ))}

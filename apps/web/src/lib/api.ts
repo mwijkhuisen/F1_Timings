@@ -149,7 +149,8 @@ export const usePits = (key: number) =>
 
 /**
  * The race-control rows: the Laps tab's log (every session type, #111) and, in races, the SC, VSC and red-flag bands
- * (lib/track.ts). `enabled`: Compare and Stints ask in races only.
+ * (lib/track.ts). `enabled` only stops the fetch: cached rows and errors still come back, so a caller gates its own use.
+ * Compare and Stints ask in races only.
  */
 export const useRaceControl = (key: number, enabled = true) =>
   useQuery({

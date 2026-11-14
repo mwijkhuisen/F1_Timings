@@ -412,7 +412,8 @@ thead th,
 }
 
 /* The pit stops table (#111): left-aligned text columns. */
-.pits td {
+.pits td,
+.pits th {
   text-align: left;
 }
 

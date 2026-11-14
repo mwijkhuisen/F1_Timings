@@ -71,6 +71,15 @@ describe('pitStops', () => {
     expect(rows[3]?.after?.compound).toBe('MEDIUM');
   });
 
+  it('lets a stint be matched by one row only: the second row on it is a pass', () => {
+    const own = Stints.parse([stint(23, 1, 1, 20, 'MEDIUM'), stint(23, 2, 21, 50, 'HARD')]);
+    const two = Pits.parse([
+      { ...pits[0], lap_number: 20 },
+      { ...pits[0], lap_number: 21 },
+    ]);
+    expect(pitStops(drivers, two, own, []).map((r) => r.pass)).toEqual([false, true]);
+  });
+
   it('finds under sc inside a period', () => {
     expect(rows.map((r) => r.under)).toEqual(['sc', 'sc', undefined, undefined, undefined]);
   });
@@ -109,7 +118,13 @@ describe('PitStops', () => {
 
 describe('StintBars popovers', () => {
   const html = renderToStaticMarkup(
-    <StintBars detail={detail} laps={laps} stints={stints} pits={pits} periods={periods} />,
+    <StintBars
+      detail={detail}
+      laps={laps}
+      stints={stints}
+      pitRows={pitStops(drivers, pits, stints, periods)}
+      periods={periods}
+    />,
   );
 
   it('adds one line per pit row to a driver', () => {
@@ -122,9 +137,11 @@ describe('StintBars popovers', () => {
 
   it('says so when a row has no lane time', () => {
     const none = Pits.parse([{ ...pits[0], lane_ms: null, pit_ms: null }]);
-    expect(renderToStaticMarkup(<StintBars detail={detail} laps={laps} stints={stints} pits={none} />)).toContain(
-      '<li>Stop after lap 22: no pit-lane time in the OpenF1 data</li>',
-    );
+    expect(
+      renderToStaticMarkup(
+        <StintBars detail={detail} laps={laps} stints={stints} pitRows={pitStops(drivers, none, stints, [])} />,
+      ),
+    ).toContain('<li>Stop after lap 22: no pit-lane time in the OpenF1 data</li>');
   });
 
   it('adds nothing without pit rows', () => {

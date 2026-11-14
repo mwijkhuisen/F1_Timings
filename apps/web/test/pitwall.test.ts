@@ -339,6 +339,10 @@ describe('rcLog', () => {
     // Not qualifying, or a first phase row of 1: the rows before it have no phase.
     expect(rcLog(rows, false).map((i) => i.phase)).toEqual([undefined, 2, 2, 3, 3]);
     expect(rcLog([row(null, 'A'), row(1, 'B')], true).map((i) => i.phase)).toEqual([undefined, 1]);
+    // A first phase row of 3 (as A§9): the rows before it have no phase.
+    expect(rcLog([row(null, 'A'), row(3, 'B')], true).map((i) => i.phase)).toEqual([undefined, 3]);
+    // A row without a date shows a dash, so the log's grid keeps its columns.
+    expect(rcLog([row(null, 'A', { date: null })], false).map((i) => i.time)).toEqual(['—']);
   });
 
   it('drops a row without a message but keeps the phase it carries, and keeps API order', () => {

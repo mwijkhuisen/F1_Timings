@@ -91,7 +91,7 @@ export function Strip({ strip, now, playing }: { strip: StripData; now: () => nu
   );
 }
 
-export const FILTERS: [Kind | 'all', string][] = [
+const FILTERS: [Kind | 'all', string][] = [
   ['all', 'All'],
   ['flags', 'Flags'],
   ['sc', 'SC/VSC'],
