@@ -246,10 +246,47 @@ describe('api (f1_api login, Access JWT)', { timeout: 120_000 }, () => {
       expect(failed.status).toBe(500);
       expect(failed.headers.get('cache-control')).toBe('no-store');
       expect(await failed.text()).toBe('{"error":"internal"}');
-      expect(lines.map((l) => JSON.parse(l))).toEqual([expect.objectContaining({ cause: 'ECONNREFUSED', msg: 'api' })]);
+      expect(lines.map((l) => JSON.parse(l))).toEqual([
+        expect.objectContaining({ cause: 'ECONNREFUSED', msg: 'api' }),
+        expect.objectContaining({ msg: 'request', route: '/api/v1/seasons', status: 500 }),
+      ]);
     } finally {
       await down.destroy();
     }
+  });
+
+  it('one request line per request: method, route pattern, status and ms only (#108)', async () => {
+    const marker = 'q-marker-108';
+    const auth = { 'cf-access-jwt-assertion': token };
+    const requests: [string, Record<string, string>][] = [
+      [`/api/v1/sessions/${QUALI}/laps?v=${SHA}&x=${marker}`, auth],
+      [`/api/v1/sessions/${QUALI}?x=${marker}`, { 'cf-access-jwt-assertion': `${token}x` }], // a bad signature
+      [`/api/v1/${marker}?x=${marker}`, auth],
+      [`/healthz?x=${marker}`, auth],
+    ];
+    lines.length = 0;
+    const statuses: number[] = [];
+    for (const [path, headers] of requests) statuses.push((await app.request(path, { headers })).status);
+    expect(statuses).toEqual([200, 401, 404, 200]);
+    const line = (route: string, status: number) => ({
+      level: 30,
+      time: expect.any(Number),
+      msg: 'request',
+      method: 'GET',
+      route,
+      status,
+      ms: expect.any(Number),
+    });
+    // Exactly these fields: the pattern a 401 or 404 matched, never the path, query or headers.
+    expect(lines.map((l) => JSON.parse(l))).toEqual([
+      line('/api/v1/sessions/:key/laps', 200),
+      line('/api/v1/sessions/:key', 401),
+      line('/api/v1/*', 404),
+      line('/healthz', 200),
+    ]);
+    const text = lines.join('');
+    expect(text).not.toContain(marker);
+    expect(text).not.toMatch(/eyJ|\?|cf-access/i);
   });
 
   const TAILS = ['', '/laps', '/stints', '/pits', '/race-control', '/weather', '/rain'];
