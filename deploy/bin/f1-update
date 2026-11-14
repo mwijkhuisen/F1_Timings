@@ -7,8 +7,10 @@
 # differ (a release half pushed); skip an unchanged or known-bad pair; defer while live records
 # (recorder_status not idle and under 5 min old; a drill too; 14 h at most); otherwise migrate,
 # `up -d` and smoke-test (/healthz 200, then every f1 container healthy). Success moves
-# candidate.env to current.env. A failure keeps the pair in failed.env (never retried
-# automatically) and rolls back to current.env. Migrations are never undone (expand/contract).
+# candidate.env to current.env and prunes the dangling images of f1 (by their source label: never
+# Waterheight's; a failed prune only warns and changes no exit code). A failure keeps the pair in
+# failed.env (never retried automatically) and rolls back to current.env. Migrations are never
+# undone (expand/contract).
 #
 # State (/srv/f1/state, root only): current.env, the pair that last passed its smoke test;
 # failed.env, the pair that last failed (rm it to retry); candidate.env, while a deploy runs;
@@ -171,11 +173,10 @@ fi
 # `docker stop f1-live-1` (SIGTERM closes the row, complete = f, and writes idle; if live does not
 # exit within its 60 s grace, the row goes stale after 5 min), then run f1-update.
 HELD_SINCE=$F1_STATE/held-since
-held=$(timeout 20 docker exec -e PGOPTIONS='-c statement_timeout=15s' f1-db-1 psql -U f1_api -d f1 -tAc "SELECT coalesce(session_key::text, '-') FROM recorder_status WHERE state <> 'idle' AND updated_at > now() - interval '5 minutes' AND updated_at <= now() + interval '1 minute'" 2>/dev/null) || {
+held=$(recording) || {
   log "warning: cannot read recorder_status: deploying without the hold"
   held=''
 }
-held=${held//[[:space:]]/}
 if [[ -n $held ]]; then
   now=$(date +%s) since=''
   if [[ -f $HELD_SINCE ]]; then
@@ -203,6 +204,16 @@ if f1_compose "$CANDIDATE" --profile jobs run --rm -T migrate &&
   mv -f -- "$CANDIDATE" "$CURRENT"
   rm -f -- "$FAILED"
   log "deployed $pair"
+  # #106: f1's dangling images only (the source label every f1 image carries; never Waterheight's,
+  # invariant 5): the old :main once its tag moves to the new release. Not -a: the containerd image
+  # store removes names one by one, and one of them can be the name a container uses (f1-server:ci
+  # beside localhost/f1-server:ci, one digest), which compose then tries to pull.
+  if out=$(timeout 300 docker image prune -f --filter "label=org.opencontainers.image.source=https://github.com/mwijkhuisen/F1_Timings" 2>&1); then
+    log "pruned unused f1 images: $(sed -n 's/^Total reclaimed space: /reclaimed /p' <<<"$out")"
+  else
+    rc=$?
+    log "warning: pruning the unused f1 images failed (exit $rc: ${out##*$'\n'}): trying again after the next deploy"
+  fi
   exit 0
 fi
 

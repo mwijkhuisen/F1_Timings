@@ -58,6 +58,8 @@ changed  /etc/f1/recorder-watch.sql
 changed  /etc/f1/compose.yaml
 changed  /usr/local/bin/f1-update
 changed  /usr/local/bin/f1-alert
+changed  /usr/local/bin/f1-status
+changed  /usr/local/bin/f1-psql
 changed  /etc/f1/nftables-f1.conf
 changed  /etc/systemd/system/f1-firewall.service
 changed  /etc/systemd/system/f1-alert@.service

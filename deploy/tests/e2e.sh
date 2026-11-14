@@ -26,7 +26,7 @@
 #   3. f1-update --server f1-server:ci --web f1-web:ci: exit 0, current.env, /healthz 200 on
 #      127.0.0.1:8180 (caddy, api and db as 62532; the publish through f1-publish; local tags),
 #      every container healthy when it returns (the smoke test waits for that); live is idle on an
-#      empty schedule.
+#      empty schedule; the prune after the deploy logs its reclaimed space and keeps both images.
 #  3a. The app's files (#121): /sw.js a 200 of text/javascript or application/javascript (a service
 #      worker takes either; Go defers to the image's mime.types) with Cache-Control no-cache,
 #      /manifest.webmanifest application/manifest+json and /icon-512.png image/png.
@@ -79,7 +79,8 @@
 #      removes held-since.
 #  5b. After the rollback live runs, is healthy and writes recorder_status idle again.
 #   6. docker inspect of db, api, caddy and live: read-only root, CapDrop ALL, user 62532:62532,
-#      no-new-privileges, core size 0; caddy's 127.0.0.1:8180 is the only published port.
+#      no-new-privileges, core size 0, log driver local with max-size 10m and max-file 3 (#106);
+#      caddy's 127.0.0.1:8180 is the only published port.
 #   7. f1-tick restores a deleted table inet f1, runs the recorder watch on the migrated schema and
 #      writes the disk file (free bytes of /srv/f1 and of the Docker data root).
 #   8. A local tag with a registry host (localhost/f1-server:ci) is pulled, never recorded as given.
@@ -99,6 +100,19 @@
 #      with the malformed key the sandboxed f1-alert@e2e.service logs alert_key_invalid; with a
 #      22-character fake key f1-alert test_alert exits 1, curl 7 on the pinned loopback; with the
 #      key file moved away it exits 0 with alert_no_key.
+#  13. The prune (#106), dangling only: with A (f1's source label, its tag moved on: the old :main), C
+#      (the same, but the image of a created container f1-e2e-user) and N (untagged, another source
+#      label) planted, f1-update --web f1-web:e2e deploys and prunes: A is gone; C, N, every name
+#      (f1-server:ci and localhost/f1-server:ci, one digest under the containerd store; f1-web:ci,
+#      f1-web:e2e, f1-server:broken, the two f1-e2e-prune tags) and the image of every running f1
+#      container (postgres too) are kept. Each exists before the prune.
+#  14. The f1-install hold (#106): with compose.yaml and f1-measure changed, live stopped and
+#      recorder_status recording and fresh, f1-install exits 1 and changes no file and no container;
+#      --during-recording installs both and starts live again; a third run makes 0 changes.
+#  15. f1-status (#106) exits 0 with its sections, current.env's web image and revision and the
+#      recorder idle, and prints no secret (checked before its output reaches the log); a failed.env
+#      with an ESC sequence and a UTF-8 CSI comes out as '?', with no byte outside tab, newline and
+#      printable ASCII; f1-psql reads (SELECT 1) and refuses a write (read-only).
 # Invariant 4 at the end: no alert_sent anywhere, the only alert_failed is step 12's, and at least one
 # alert_key_invalid or alert_no_key (so the check is not vacuous).
 # Not here: f1-update's revision check (server and web :main from different commits) runs on the
@@ -113,6 +127,7 @@ readonly DROPIN=/run/systemd/system/f1-update.service.d/e2e.conf
 readonly KEY_AWAY=/etc/f1/secrets/hc_ping_key.e2e # step 12's absent key (a rename keeps owner and mode)
 readonly WATCH_KEY=99104 # step 11a's synthetic meeting and session
 watch_rows=0             # 1 while step 11a's rows may exist: on_exit deletes them before live starts
+prune_ids=()             # step 13's planted image IDs (on_exit removes what the prune did not)
 umask 022
 
 proofs=()
@@ -148,6 +163,8 @@ on_exit() {
     echo "::endgroup::"
   fi
   docker rm -f f1-e2e-sick-1 >/dev/null 2>&1 || true
+  docker rm -f f1-e2e-user >/dev/null 2>&1 || true
+  docker image rm -f f1-e2e-prune:moved f1-e2e-prune:used "${prune_ids[@]}" >/dev/null 2>&1 || true
   ((${#fw_pids[@]} == 0)) || kill "${fw_pids[@]}" 2>/dev/null || true
   ip netns del e2e-fw 2>/dev/null || true
   # Best effort, for a run that failed inside an edge check: never leave the stack unfiltered or the host changed.
@@ -294,7 +311,15 @@ for h in "${health[@]}"; do [[ $h == *'(healthy)' ]] || fail "not healthy when f
 # Invariant 4 rests on the empty schedule: an idle recorder has no session to log in for or to record.
 live_status=$(docker exec f1-db-1 psql -U postgres -d f1 -tAc "SELECT state, (SELECT count(*) FROM session) FROM recorder_status")
 [[ $live_status == 'idle|0' ]] || fail "recorder_status.state and the session count are '$live_status', not 'idle|0'"
-proof "f1-update deployed the local tags f1-server:ci and f1-web:ci (exit 0, current.env written); $URL answers 200 through caddy, api and db (db as 62532 on a new f1_pgdata, roles.sql through initdb, migrate as f1_migrator) with table inet f1 loaded; containers: ${services% } (no ingest, no cloudflared), each healthy when f1-update returned; live idle on an empty schedule (state|sessions: $live_status)"
+# #106: the prune after a deploy keeps the pair in use.
+grep -q 'pruned unused f1 images: reclaimed' "$tmp/update1" || fail "f1-update did not log the prune"
+for image in f1-server:ci f1-web:ci; do
+  if ! docker image inspect "$image" >/dev/null 2>&1; then
+    docker image ls --digests
+    fail "the prune removed $image, which is in use"
+  fi
+done
+proof "f1-update deployed the local tags f1-server:ci and f1-web:ci (exit 0, current.env written); $URL answers 200 through caddy, api and db (db as 62532 on a new f1_pgdata, roles.sql through initdb, migrate as f1_migrator) with table inet f1 loaded; containers: ${services% } (no ingest, no cloudflared), each healthy when f1-update returned; live idle on an empty schedule (state|sessions: $live_status); then '$(grep -o 'pruned unused f1 images.*' "$tmp/update1")', f1-server:ci and f1-web:ci kept"
 
 # ------------------------------------------------------------------ 3a
 step "3a. The service worker, the manifest and the icon are served with their types (#121)"
@@ -691,11 +716,14 @@ for s in db api caddy live; do
   [[ $(docker inspect -f '{{.HostConfig.SecurityOpt}}' "f1-$s-1") == *no-new-privileges:true* ]] || fail "f1-$s-1 lacks no-new-privileges"
   core=$(docker inspect -f '{{json .HostConfig.Ulimits}}' "f1-$s-1")
   [[ $core == *'"Name":"core","Hard":0,"Soft":0'* ]] || fail "f1-$s-1 does not limit core dumps to 0: $core"
+  # #106: log rotation from compose.yaml, not the shared daemon's default.
+  logging=$(docker inspect -f '{{.HostConfig.LogConfig.Type}} {{json .HostConfig.LogConfig.Config}}' "f1-$s-1")
+  [[ $logging == 'local {"max-file":"3","max-size":"10m"}' ]] || fail "f1-$s-1 logging: $logging"
 done
 mapfile -t ids < <(docker ps -q --filter label=com.docker.compose.project=f1)
 ports=$(docker inspect -f '{{.Name}} {{json .HostConfig.PortBindings}}' "${ids[@]}" | grep -vE ' (\{\}|null)$' || true)
 [[ $ports == '/f1-caddy-1 {"80/tcp":[{"HostIp":"127.0.0.1","HostPort":"8180"}]}' ]] || fail "published ports: $ports"
-proof "db, api, caddy and live: ReadonlyRootfs true, CapDrop [ALL], User 62532:62532, no-new-privileges:true, core size 0; the only port binding: $ports"
+proof "db, api, caddy and live: ReadonlyRootfs true, CapDrop [ALL], User 62532:62532, no-new-privileges:true, core size 0, LogConfig $logging; the only port binding: $ports"
 
 # ------------------------------------------------------------------ 7
 step "7. f1-tick restores a deleted table inet f1, runs the recorder watch, writes the disk file"
@@ -874,6 +902,136 @@ mv -- "$KEY_AWAY" /etc/f1/secrets/hc_ping_key
 printf 'ci.dummy.not.a.ping.key\n' >/etc/f1/secrets/hc_ping_key
 [[ $(stat -c '%a %u %g' /etc/f1/secrets/hc_ping_key) == '440 0 62006' ]] || fail "hc_ping_key lost root:62006 0440"
 proof "F1_SMOKE_TIMEOUT=bad (runtime drop-in): f1-update.service failed and its OnFailure logged '$(journalctl -u f1-alert@f1-update.service.service --no-pager -o cat | grep -o 'alert_no_key.*' | head -n 1)'; the sandboxed f1-alert@e2e.service read the malformed key: '$(journalctl -u f1-alert@e2e.service --no-pager -o cat | grep -o 'alert_key_invalid.*' | head -n 1)'; a 22-character fake key: exit 1, '$(grep -o 'alert_failed.*' "$tmp/alert-loopback")' (hc-ping.com -> $hc_ip); the key file moved away: exit 0, '$(grep -o 'alert_no_key.*' "$tmp/alert-nokey")'; hc_ping_key root:62006 0440 again"
+
+# ------------------------------------------------------------------ 13
+step "13. The prune after a deploy removes f1's dangling, unused images only (#106)"
+# prune_fail <message>: the image lists first (the containerd image store keeps names one by one).
+prune_fail() {
+  docker image ls --digests || true
+  docker image ls -a --filter dangling=true || true
+  fail "$1"
+}
+# plant <tag> <value>: an image FROM f1-web:ci (so f1's source label) with LABEL e2e.prune=<value>; its ID.
+plant() { printf '%s\n' 'FROM f1-web:ci' "LABEL e2e.prune=$2" | docker build -q -t "$1" -; }
+# A: dangling once its tag moves on (the old :main after a release).
+prune_a=$(plant f1-e2e-prune:moved a)
+prune_ids+=("$prune_a")
+prune_ids+=("$(plant f1-e2e-prune:moved a2)")
+# C: dangling too, but the image of a container (created, never started, no compose label).
+prune_c=$(plant f1-e2e-prune:used c)
+prune_ids+=("$prune_c")
+docker create --name f1-e2e-user f1-e2e-prune:used >/dev/null
+prune_ids+=("$(plant f1-e2e-prune:used c2)")
+# N: dangling, another source label.
+prune_n=$(printf '%s\n' 'FROM f1-web:ci' 'LABEL org.opencontainers.image.source=https://example.invalid/not-f1' | docker build -q -)
+prune_ids+=("$prune_n")
+for id in "${prune_ids[@]}"; do
+  [[ $id =~ ^sha256:[0-9a-f]{64}$ ]] || fail "a planted build gave '$id', not an image ID"
+done
+docker tag f1-web:ci f1-web:e2e
+names=(f1-server:ci localhost/f1-server:ci f1-web:ci f1-web:e2e f1-server:broken f1-e2e-prune:moved f1-e2e-prune:used)
+for image in "${names[@]}" "$prune_a" "$prune_c" "$prune_n"; do
+  docker image inspect "$image" >/dev/null 2>&1 || prune_fail "$image is missing before the prune: its check would prove nothing"
+done
+run "$tmp/update-prune" "$BIN/f1-update" --web f1-web:e2e
+((rc == 0)) || prune_fail "f1-update --web f1-web:e2e exited $rc"
+grep -q 'deployed server f1-server:ci web f1-web:e2e' "$tmp/update-prune" || fail "f1-update did not log the deploy"
+grep -q 'pruned unused f1 images: reclaimed' "$tmp/update-prune" || prune_fail "f1-update did not log the prune"
+if docker image inspect "$prune_a" >/dev/null 2>&1; then prune_fail "the prune kept A ${prune_a:7:12} (f1's label, dangling, unused)"; fi
+docker image inspect "$prune_c" >/dev/null 2>&1 || prune_fail "the prune removed C ${prune_c:7:12}, the image of f1-e2e-user"
+docker image inspect "$prune_n" >/dev/null 2>&1 || prune_fail "the prune removed N ${prune_n:7:12} (another source label)"
+for image in "${names[@]}"; do
+  docker image inspect "$image" >/dev/null 2>&1 || prune_fail "the prune removed the name $image"
+done
+kept=()
+while read -r id name; do
+  image=$(docker inspect -f '{{.Image}}' "$id")
+  docker image inspect "$image" >/dev/null 2>&1 || prune_fail "the prune removed $image, the image of the running $name"
+  kept+=("$name")
+done < <(docker ps --filter label=com.docker.compose.project=f1 --format '{{.ID}} {{.Names}}')
+[[ " ${kept[*]} " == *' f1-db-1 '* && ${#kept[@]} == 4 ]] || fail "the running f1 containers are '${kept[*]}', not db, api, caddy and live"
+proof "planted A ${prune_a:7:12} (f1's source label, its tag f1-e2e-prune:moved moved on), C ${prune_c:7:12} (the same, the image of the created f1-e2e-user) and N ${prune_n:7:12} (untagged, another source), each present; f1-update --web f1-web:e2e: exit 0, '$(grep -o 'deployed server.*' "$tmp/update-prune")', '$(grep -o 'pruned unused f1 images.*' "$tmp/update-prune")'; gone: A; kept: C, N, the names ${names[*]} and the image of each running ${kept[*]} (postgres too)"
+
+# ------------------------------------------------------------------ 14
+step "14. f1-install refuses while live records and changes nothing; --during-recording installs (#106)"
+printf '# e2e\n' >>/etc/f1/compose.yaml
+printf '# e2e\n' >>"$BIN/f1-measure"
+# live stopped, so that its 30 s tick cannot overwrite the row (as in 4c); no session_key gives "-".
+docker stop f1-live-1 >/dev/null
+docker exec f1-db-1 psql -U postgres -d f1 -tAc "UPDATE recorder_status SET state = 'recording', session_key = NULL, updated_at = now()" >/dev/null
+# snapshot <file>: what f1-install could write: each file's hash, mode, owner and mtime (files only: a
+# glob would hit directories; the secrets left out), and the f1 containers.
+snapshot() {
+  find /etc/f1 /usr/local/bin /etc/systemd/system -type f \( -path '/etc/f1/*' -o -name 'f1-*' \) \
+    ! -path '/etc/f1/secrets/*' -print0 | sort -z >"$tmp/snap-files"
+  {
+    xargs -0 sha256sum <"$tmp/snap-files"
+    xargs -0 stat -c '%n %a %u %g %Y' <"$tmp/snap-files"
+    docker ps -aq --no-trunc --filter label=com.docker.compose.project=f1
+  } >"$1"
+}
+snapshot "$tmp/snap-before"
+run "$tmp/install-held" "$repo/deploy/bin/f1-install"
+((rc == 1)) || fail "f1-install exited $rc while live was recording, not 1"
+grep -q 'live is recording (session -): run again after it ends, or with --during-recording$' "$tmp/install-held" ||
+  fail "f1-install did not refuse with the hold"
+grep -q '^changed' "$tmp/install-held" && fail "the refused f1-install logged a change"
+snapshot "$tmp/snap-after"
+diff "$tmp/snap-before" "$tmp/snap-after" || fail "the refused f1-install changed a file or a container"
+run "$tmp/install-during" "$repo/deploy/bin/f1-install" --during-recording
+((rc == 0)) || fail "f1-install --during-recording exited $rc"
+for line in 'changed  /etc/f1/compose.yaml' 'changed  /usr/local/bin/f1-measure' 'changed  the f1 stack recreated with the new compose.yaml'; do
+  grep -qxF "$line" "$tmp/install-during" || fail "f1-install --during-recording did not log '$line'"
+done
+live_state=''
+for _ in $(seq 40); do
+  live_state=$(docker exec f1-db-1 psql -U postgres -d f1 -tAc "SELECT state FROM recorder_status" 2>/dev/null || true)
+  [[ $live_state == idle && $(docker inspect -f '{{.State.Health.Status}}' f1-live-1 2>/dev/null || true) == healthy ]] && break
+  sleep 3
+done
+[[ $(docker inspect -f '{{.State.Health.Status}}' f1-live-1) == healthy ]] || fail "f1-live-1 is not healthy after f1-install --during-recording"
+[[ $live_state == idle ]] || fail "recorder_status.state is '$live_state' after f1-install --during-recording, not 'idle'"
+run "$tmp/install3" "$repo/deploy/bin/f1-install"
+((rc == 0)) || fail "the third f1-install failed (exit $rc)"
+[[ $(tail -n 1 "$tmp/install3") == 'f1-install: 0 change(s)' ]] || fail "the third f1-install changed something"
+proof "compose.yaml and f1-measure changed, live stopped, recorder_status recording and fresh: f1-install exit 1, '$(grep -o 'live is recording.*' "$tmp/install-held")', no changed line, and the hash, mode, owner and mtime of $(tr -cd '\0' <"$tmp/snap-files" | wc -c) files (/etc/f1 without the secrets, f1-* in /usr/local/bin and /etc/systemd/system) and the f1 containers unchanged; f1-install --during-recording: exit 0, changed /etc/f1/compose.yaml, /usr/local/bin/f1-measure and the stack, f1-live-1 healthy and idle again; a third run: '$(tail -n 1 "$tmp/install3")'"
+
+# ------------------------------------------------------------------ 15
+step "15. f1-status shows the host without a secret; f1-psql reads but cannot write (#106)"
+# f1-status prints failed.env's lines (root writes the file): an ESC sequence and a UTF-8 CSI (C2 9B) in
+# its image line test the filter end to end.
+printf 'F1_SERVER_IMAGE=f1-server:\033[31mx\xc2\x9by\nF1_WEB_IMAGE=f1-web:ci\n' >"$STATE/failed.env"
+# Not run: the output reaches the job log only after the secret check.
+rc=0
+"$BIN/f1-status" >"$tmp/status" 2>&1 || rc=$?
+rm -f -- "$STATE/failed.env"
+# The values never reach a command line or the log: grep reads them from a pipe.
+secrets=0
+for f in /etc/f1/secrets/*; do
+  value=''
+  IFS= read -r value <"$f" || true
+  [[ -n $value ]] || continue
+  secrets=$((secrets + 1))
+  if grep -qF -f <(printf '%s\n' "$value") "$tmp/status"; then fail "f1-status printed the first line of $f"; fi
+done
+((secrets >= 8)) || fail "only $secrets secret files have a value: the secret check proves little"
+if LC_ALL=C grep -q $'[^\t -~]' "$tmp/status"; then fail "f1-status printed a byte outside tab, newline and printable ASCII"; fi
+cat "$tmp/status"
+((rc == 0)) || fail "f1-status exited $rc"
+grep -qxF 'failed.env  F1_SERVER_IMAGE=f1-server:?[31mx??y  revision unavailable: not an image reference' "$tmp/status" ||
+  fail "f1-status did not show failed.env's control bytes as '?'"
+for h in '== deploy' '== disk' '== containers' '== recorder' '== timers'; do
+  grep -qxF "$h" "$tmp/status" || fail "f1-status has no '$h' section"
+done
+grep -qE "^current\.env  F1_WEB_IMAGE=f1-web:e2e  revision $rev\$" "$tmp/status" ||
+  fail "f1-status does not show current.env's F1_WEB_IMAGE=f1-web:e2e with revision $rev"
+sed -n '/^== recorder$/,/^== timers$/p' "$tmp/status" | grep -qw idle || fail "f1-status does not show the recorder idle"
+psql_one=$("$BIN/f1-psql" -tAc 'SELECT 1' </dev/null) || fail "f1-psql -tAc 'SELECT 1' failed"
+[[ $psql_one == 1 ]] || fail "f1-psql -tAc 'SELECT 1' gave '$psql_one'"
+run "$tmp/psql-write" "$BIN/f1-psql" -c 'UPDATE recorder_status SET warning = NULL' </dev/null
+((rc != 0)) || fail "f1-psql wrote to recorder_status"
+grep -q 'read-only transaction' "$tmp/psql-write" || fail "f1-psql's write did not fail as read-only"
+proof "f1-status: exit 0 with == deploy, == disk, == containers, == recorder and == timers, '$(grep -o 'current\.env  F1_WEB_IMAGE=.*' "$tmp/status")', the recorder idle; none of the $secrets non-empty secret first lines in its output; failed.env's ESC sequence and UTF-8 CSI shown as '$(grep -o 'f1-server:?[^ ]*' "$tmp/status")', no byte outside tab, newline and printable ASCII; f1-psql -tAc 'SELECT 1': $psql_one; f1-psql -c 'UPDATE recorder_status …': exit $rc, '$(grep -o 'ERROR:.*' "$tmp/psql-write" | head -n 1)'"
 
 # ------------------------------------------------------------------ invariant 4
 journalctl -u 'f1-alert@*' --no-pager -o cat >"$tmp/journal-alert" 2>&1 || true

@@ -2,7 +2,9 @@
 # hardening (CI: ci / deploy, step `hardening`; D13, invariants 1, 2, 5 and 7).
 # Renders deploy/compose.yaml with `docker compose config` (dummy image refs; no root, no
 # /etc/f1 needed: the secret files and f1.env are never read by `config`) and checks the
-# result with one jq program: every check is named, and a failure prints the names.
+# result with one jq program: every check is named, and a failure prints the names. Besides the
+# container hardening it holds the log rotation (logging), the exact restart map, the services
+# with a stop_grace_period (only db and live) and security_opt being exactly no-new-privileges (#106).
 # Then the negative cases: the same program over a broken copy must fail, naming the check.
 # Then the host files (#104): the GIDs in f1-lib.sh's F1_SECRETS match the program's $gid map; no
 # f1 unit runs as another user or adds a group (User=, Group=, DynamicUser=, SupplementaryGroups=);
@@ -35,7 +37,18 @@ program='
   services: (($c.services | keys) == ["api", "archive", "caddy", "cloudflared", "db", "fill", "ingest", "jolpica", "live", "migrate"]),
   read_only: all($s[]; .value.read_only == true),
   cap_drop_all: all($s[]; .value.cap_drop == ["ALL"]),
-  no_new_privileges: all($s[]; any(.value.security_opt[]?; . == "no-new-privileges:true")),
+  # Exactly this list: a second entry such as seccomp=unconfined would weaken the container.
+  security_opt: all($s[]; .value.security_opt == ["no-new-privileges:true"]),
+  # Log rotation is set per service in compose, not left to the shared daemon (#106).
+  logging: all($s[]; .value.logging == {driver: "local", options: {"max-file": "3", "max-size": "10m"}}),
+  # Jobs run once ("no"); every daemon comes back by itself.
+  restart: (([$s[] | {(.key): .value.restart}] | add) == {
+    api: "unless-stopped", caddy: "unless-stopped", cloudflared: "unless-stopped", db: "unless-stopped",
+    ingest: "unless-stopped", live: "unless-stopped",
+    archive: "no", fill: "no", jolpica: "no", migrate: "no"}),
+  # Only db and live need time to stop cleanly. Compose v5.5.1 renders 1m0s; another version may say 60s.
+  stop_grace_period: (([$s[] | select(.value.stop_grace_period != null) | {(.key): .value.stop_grace_period}] | add // {}) as $g
+    | (($g | keys) == ["db", "live"] and all($g[]; . == "1m0s" or . == "60s"))),
   user_62532: all($s[]; .value.user == "62532:62532"),
   limits: all($s[]; .value.mem_limit != null and .value.cpus != null and .value.pids_limit != null),
   # `config` leaves out a 0, so soft: 0, hard: 0 renders as core: {}. e2e sees the 0s on the running containers.
@@ -134,6 +147,13 @@ negative "api with an extra bind" only_bind_allowlist \
   '.services.api.volumes += [{type: "bind", source: "/srv/f1/state/live", target: "/srv/f1/state", read_only: true}]'
 negative "cloudflared without --protocol http2" tunnel_http2 \
   '.services.cloudflared.command |= map(select(. != "--protocol" and . != "http2"))'
+negative "caddy without logging" logging 'del(.services.caddy.logging)'
+negative "api with a 1g log size" logging '.services.api.logging.options["max-size"] = "1g"'
+negative "ingest with restart no" restart '.services.ingest.restart = "no"'
+negative "migrate with restart unless-stopped" restart '.services.migrate.restart = "unless-stopped"'
+negative "live without stop_grace_period" stop_grace_period 'del(.services.live.stop_grace_period)'
+negative "caddy with stop_grace_period 5s" stop_grace_period '.services.caddy.stop_grace_period = "5s"'
+negative "db with seccomp=unconfined" security_opt '.services.db.security_opt += ["seccomp=unconfined"]'
 
 # ------------------------------------------------------------------ the host (#104)
 # host_checks <f1-lib.sh> <unit…>: F1_SECRETS's name:gid pairs are SECRET_GIDS (f1-install applies
