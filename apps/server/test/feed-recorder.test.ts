@@ -1,3 +1,4 @@
+import { execFileSync } from 'node:child_process';
 import {
   existsSync,
   mkdirSync,
@@ -12,12 +13,18 @@ import {
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { setTimeout as sleep } from 'node:timers/promises';
-import { gunzipSync } from 'node:zlib';
+import { gunzipSync, gzipSync } from 'node:zlib';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { server } from '../../../test/msw.setup.ts';
 import { type Closed, type ConnectOptions, connect, TOPICS } from '../src/live/feed-client.ts';
 import { parseFeedLine } from '../src/live/read.ts';
-import { gzipLeftovers, openRecording, type Recording } from '../src/live/recording.ts';
+import {
+  gzipLeftovers,
+  openRecording,
+  type Recording,
+  recordingLines,
+  writeRecordingJson,
+} from '../src/live/recording.ts';
 import {
   type FakeSignalR,
   numbered,
@@ -103,7 +110,7 @@ let dir: string;
 const open: Recording[] = [];
 /** Rotation in tests is forced through this clock, not through waiting. */
 let clock: number;
-const record = (opts: { rotateMs?: number; snapshotMs?: number } = {}) => {
+const record = (opts: { rotateMs?: number; tickMs?: number } = {}) => {
   const rec = openRecording({ dir, now: () => clock, ...opts });
   open.push(rec);
   return rec;
@@ -171,14 +178,13 @@ describe('feed client against the fake server', () => {
 
     fake.feed([numbered(1)]);
     await until(() => loop.fed() === 1);
-    await rec.snapshot(T0);
     await loop.stop();
     await rec.finish();
 
     const lines = segments(dir);
     expect(JSON.parse(lines[0] ?? '')[1]).toBe('_subscribe');
-    const files = readdirSync(dir, { recursive: true, encoding: 'utf8' }).filter((n) => n.endsWith('.gz'));
-    expect(files).toHaveLength(2);
+    const files = readdirSync(dir).filter((n) => n.endsWith('.gz'));
+    expect(files).toHaveLength(1);
     for (const name of files) {
       const text = gunzipSync(readFileSync(join(dir, name))).toString();
       for (const secret of [TOKEN, 'fake-alb', fake.connectionToken]) expect(text).not.toContain(secret);
@@ -473,42 +479,26 @@ describe('recording', () => {
   it('makes the directories 0700 and the files 0600', async () => {
     const rec = record();
     rec.feed(T0, 'A', { x: 1 }, 'undefined');
-    await rec.snapshot(T0);
     expect(statSync(dir).mode & 0o777).toBe(0o700);
-    expect(statSync(join(dir, 'snapshots')).mode & 0o777).toBe(0o700);
     expect(statSync(join(dir, 'feed.jsonl')).mode & 0o777).toBe(0o600);
-    expect(statSync(join(dir, 'snapshots', `${T0}.json.gz`)).mode & 0o777).toBe(0o600);
     await rec.finish();
     expect(statSync(join(dir, `feed-${T0}.jsonl.gz`)).mode & 0o777).toBe(0o600);
   });
 
-  it('writes a snapshot of the state at that moment, and skips one while another runs', async () => {
-    const rec = record();
+  it('writes no snapshots (#109): only the feed segments, over ticks and a rotation', async () => {
+    const rec = record({ rotateMs: 60_000, tickMs: 5 });
     rec.subscribed(T0, { TimingData: { Seq: 0 } });
     rec.feed(T0 + 1, ...numbered(1));
-    const at = plain(rec.state);
-    const first = rec.snapshot(T0 + 2);
-    const skipped = rec.snapshot(T0 + 3);
-    rec.feed(T0 + 4, ...numbered(2)); // after the moment
-    await Promise.all([first, skipped]);
-    const name = join(dir, 'snapshots', `${T0 + 2}.json.gz`);
-    expect(JSON.parse(gunzipSync(readFileSync(name)).toString())).toEqual(at);
-    expect(readdirSync(join(dir, 'snapshots'))).toEqual([`${T0 + 2}.json.gz`]);
-    expect(at).not.toEqual(plain(rec.state));
-  });
-
-  it('takes snapshots on its own every snapshotMs and stops at finish', async () => {
-    const rec = record({ snapshotMs: 5 });
-    rec.feed(T0, 'A', { x: 1 }, 'undefined');
-    await until(() => readdirSync(join(dir, 'snapshots')).filter((n) => n.endsWith('.gz')).length > 0);
-    await rec.finish();
-    const count = readdirSync(join(dir, 'snapshots')).length;
+    await sleep(30); // a few ticks
+    clock += 60_000;
+    rec.feed(T0 + 60_000, ...numbered(2)); // in a new segment
     await sleep(30);
-    expect(readdirSync(join(dir, 'snapshots'))).toHaveLength(count);
+    await rec.finish();
+    expect(readdirSync(dir).sort()).toEqual([`feed-${T0}.jsonl.gz`, `feed-${T0 + 60_000}.jsonl.gz`]);
   });
 
-  it('rotates on the snapshot tick too, without a new line', async () => {
-    const rec = record({ rotateMs: 60_000, snapshotMs: 5 });
+  it('rotates on the tick too, without a new line', async () => {
+    const rec = record({ rotateMs: 60_000, tickMs: 5 });
     rec.feed(T0, 'A', { x: 1 }, 'undefined');
     clock += 60_000;
     await until(() => existsSync(join(dir, `feed-${T0}.jsonl.gz`)));
@@ -521,9 +511,7 @@ describe('recording', () => {
     await Promise.all([rec.finish(), rec.finish()]);
     await rec.finish();
     rec.feed(T0, 'A', { x: 1 }, 'undefined');
-    await rec.snapshot(T0);
-    expect(readdirSync(dir)).toEqual(['snapshots']);
-    expect(readdirSync(join(dir, 'snapshots'))).toEqual([]);
+    expect(readdirSync(dir)).toEqual([]);
     expect(rec.bytes).toBe(0);
   });
 
@@ -570,17 +558,18 @@ describe('gzipLeftovers', () => {
   const line = (ms: number, n: number) => JSON.stringify([ms, 'TimingData', { Seq: n }, 'undefined']);
 
   it('gzips what a crash left, removes stale tmp files, and the segments give every line once', async () => {
-    mkdirSync(join(dir, 'snapshots'), { recursive: true });
+    mkdirSync(join(dir, 'snapshots'), { recursive: true }); // an old directory's (#109): left alone
     writeFileSync(join(dir, 'feed-100.jsonl'), `${line(100, 1)}\n${line(101, 2)}\n`);
     writeFileSync(join(dir, 'feed-100.jsonl.gz.tmp'), 'half a gzip');
+    writeFileSync(join(dir, 'recording.json.tmp'), 'half');
     writeFileSync(join(dir, 'feed.jsonl'), `${line(200, 3)}\n${line(201, 4)}\n[202,"Timing`);
-    writeFileSync(join(dir, 'snapshots', '.150.tmp'), 'half');
+    writeFileSync(join(dir, 'snapshots', '150.json.gz'), 'old');
     writeFileSync(join(dir, 'other.txt'), 'stays');
 
     await expect(gzipLeftovers(dir)).resolves.toBe(0);
 
     expect(readdirSync(dir).sort()).toEqual(['feed-100.jsonl.gz', 'feed-200.jsonl.gz', 'other.txt', 'snapshots']);
-    expect(readdirSync(join(dir, 'snapshots'))).toEqual([]);
+    expect(readdirSync(join(dir, 'snapshots'))).toEqual(['150.json.gz']);
     const lines = segments(dir);
     expect(lines.slice(0, 4).map(seqOf)).toEqual([1, 2, 3, 4]);
     expect(parseFeedLine('[202,"Timing')).toEqual([]);
@@ -614,5 +603,68 @@ describe('gzipLeftovers', () => {
     const state = plain(rec.state);
     await gzipLeftovers(dir);
     expect(replay(segments(dir))).toEqual(state);
+  });
+});
+
+describe('writeRecordingJson', () => {
+  const meta = {
+    session_key: 9001,
+    started_at: new Date(T0).toISOString(),
+    ended_at: new Date(T0 + 1).toISOString(),
+    bytes: 42,
+    complete: true,
+  };
+
+  it('writes recording.json 0600 through a tmp name that does not stay', async () => {
+    mkdirSync(dir, { recursive: true });
+    await writeRecordingJson(dir, meta);
+    expect(JSON.parse(readFileSync(join(dir, 'recording.json'), 'utf8'))).toEqual(meta);
+    expect(statSync(join(dir, 'recording.json')).mode & 0o777).toBe(0o600);
+    expect(readdirSync(dir)).toEqual(['recording.json']);
+  });
+
+  it('rejects when the rename fails, and leaves no tmp', async () => {
+    mkdirSync(join(dir, 'recording.json'), { recursive: true }); // a file cannot replace a directory
+    await expect(writeRecordingJson(dir, meta)).rejects.toMatchObject({ code: 'EISDIR' });
+    expect(readdirSync(dir)).toEqual(['recording.json']);
+  });
+});
+
+describe('recordingLines', () => {
+  const line = (ms: number) => JSON.stringify([ms, 'TimingData', { Seq: ms }, 'undefined']);
+  const read = async (from: string) => {
+    const out: string[] = [];
+    for await (const l of recordingLines(from)) out.push(l.text);
+    return out;
+  };
+
+  it('reads the sealed segments in numeric order, gzipped or plain, then feed.jsonl', async () => {
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, 'feed-1000.jsonl.gz'), gzipSync(`${line(1000)}\n${line(1001)}\n`));
+    writeFileSync(join(dir, 'feed-999.jsonl.gz'), gzipSync(`${line(999)}\n`));
+    writeFileSync(join(dir, 'feed-1500.jsonl'), `${line(1500)}\n`);
+    writeFileSync(join(dir, 'feed.jsonl'), `${line(2000)}\n[2001,"Timing`); // a partial last line is no line
+    writeFileSync(join(dir, 'feed-3.jsonl.gz.tmp'), 'not a segment');
+    expect(readdirSync(dir).sort().slice(0, 2)).toEqual(['feed-1000.jsonl.gz', 'feed-1500.jsonl']); // name order
+    expect(await read(dir)).toEqual([999, 1000, 1001, 1500, 2000].map(line));
+    rmSync(join(dir, 'feed.jsonl'));
+    expect(await read(dir)).toEqual([999, 1000, 1001, 1500].map(line)); // sealed
+  });
+
+  it('reads no file through a symlink', async () => {
+    writeFileSync(join(root, 'elsewhere'), `${line(1)}\n`);
+    for (const name of ['feed-1.jsonl', 'feed.jsonl']) {
+      const at = join(root, name);
+      mkdirSync(at);
+      symlinkSync(join(root, 'elsewhere'), join(at, name));
+      await expect(read(at)).rejects.toMatchObject({ code: 'ELOOP' });
+    }
+  });
+
+  it('refuses a FIFO without blocking on it', async () => {
+    const at = join(root, 'fifo');
+    mkdirSync(at);
+    execFileSync('mkfifo', [join(at, 'feed-1.jsonl')]);
+    await expect(read(at)).rejects.toMatchObject({ code: 'not_file' });
   });
 });

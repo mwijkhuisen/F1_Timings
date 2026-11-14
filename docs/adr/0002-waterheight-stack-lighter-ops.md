@@ -31,5 +31,11 @@ The owner wants the same kind of stack as Waterheight (`mwijkhuisen/Waterheight`
 ## Consequences
 
 - The project shares Waterheight's gotchas and versions, so its CLAUDE.md gotchas section carries over.
-- Supply-chain protection rests on exact pins, the 7-day release-age rule, Dependabot cooldowns, gitleaks/zizmor/Grype, and GHCR digests rather than signatures.
+- Supply-chain protection rests on exact pins, the 7-day release-age rule, Dependabot, gitleaks/zizmor, and GHCR digests rather than signatures.
+  - Dependabot does two jobs here:
+    - its security alerts on the lockfile, dev dependencies included (a repository setting, not `dependabot.yml`);
+    - its weekly version bumps, after a 7-day cooldown, of the npm packages, the actions and the images pinned by digest (`deploy/{server,web}/Dockerfile` and `deploy/compose.yaml`).
+  - amended (owner, 2026-11-14, #108): no Grype, as A§3 says; it was named here but never run.
+  - **Accepted ceiling:** nothing reports a CVE in an image's OS packages or in its bundled binaries (Node in distroless, Caddy, PostgreSQL, cloudflared). Such a CVE is fixed only when upstream rebuilds the image and Dependabot's weekly run opens the bump after its cooldown, two weeks or so later, and then only once the owner merges and releases.
+  - The dbmate binary and pnpm are pinned by sha256 by hand, so they get neither alerts nor bumps.
 - If the repo ever gets other contributors, revisit signed releases.

@@ -6,6 +6,17 @@
 {
 	admin off
 	auto_https off
+	# No access log (the api logs one line per request, A§14.5), but Caddy's own lines carry the
+	# request: reverse_proxy warns "aborting with incomplete response" whenever a client closes the
+	# playback stream. Caddy blanks Cookie and Authorization, not Cf-Access-Jwt-Assertion, so every
+	# line drops the request headers and the URI as sent (invariant 1, A§12.1; #108).
+	log default {
+		format filter {
+			wrap json
+			request>headers delete
+			request>uri delete
+		}
+	}
 }
 
 # Every response carries these, including /healthz, the 404s and (through

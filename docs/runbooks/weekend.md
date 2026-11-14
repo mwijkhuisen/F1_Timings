@@ -77,7 +77,7 @@ The summary is a Markdown table per service (samples, CPU mean and max %, memory
 
 ## After a session
 
-1. **Check the recording** about 30 minutes after the session ends: `docs/runbooks/update.md`, "Check a recording [box]". It must show `complete = t`, intact segments and a snapshot every 30 s.
+1. **Check the recording** about 30 minutes after the session ends: `docs/runbooks/update.md`, "Check a recording [box]". It must show `complete = t`, intact segments and a `recording.json` that matches the row.
 2. **Replay on the phone.** Tap the recording on `/replay` (`/replay/<recording id>`), or the session's name on the season page.
 3. **healthchecks.io.** `f1-live` is green. Red means the recording ended incomplete (`complete = f`); the `recording` row and `docker logs f1-live-1` say why. `f1-ingest` is green too, or its ping log names the host alert (`docs/runbooks/update.md`, "Alerts from the host"); the next 00:30 UTC ping clears it.
 4. **The deploy.** `journalctl -u f1-update` shows the deferred deploy going through after the recording ended (`deployed …`).
