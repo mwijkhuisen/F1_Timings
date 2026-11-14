@@ -258,31 +258,40 @@ describe('api (f1_api login, Access JWT)', { timeout: 120_000 }, () => {
   it('one request line per request: method, route pattern, status and ms only (#108)', async () => {
     const marker = 'q-marker-108';
     const auth = { 'cf-access-jwt-assertion': token };
-    const requests: [string, Record<string, string>][] = [
-      [`/api/v1/sessions/${QUALI}/laps?v=${SHA}&x=${marker}`, auth],
-      [`/api/v1/sessions/${QUALI}?x=${marker}`, { 'cf-access-jwt-assertion': `${token}x` }], // a bad signature
-      [`/api/v1/${marker}?x=${marker}`, auth],
-      [`/healthz?x=${marker}`, auth],
+    const requests: [string, string, Record<string, string>][] = [
+      ['GET', `/api/v1/sessions/${QUALI}/laps?v=${SHA}&x=${marker}`, auth],
+      ['GET', `/api/v1/sessions/${QUALI}?x=${marker}`, { 'cf-access-jwt-assertion': `${token}x` }], // a bad signature
+      ['GET', `/api/v1/${marker}?x=${marker}`, auth],
+      ['HEAD', `/api/v1/sessions/${QUALI}?x=${marker}`, auth],
+      ['POST', `/api/v1/seasons?x=${marker}`, auth],
+      ['GET', `/api/${marker}?x=${marker}`, auth],
+      ['GET', `/${marker}?x=${marker}`, auth],
+      ['GET', `/healthz?x=${marker}`, auth],
     ];
     lines.length = 0;
     const statuses: number[] = [];
-    for (const [path, headers] of requests) statuses.push((await app.request(path, { headers })).status);
-    expect(statuses).toEqual([200, 401, 404, 200]);
-    const line = (route: string, status: number) => ({
+    for (const [method, path, headers] of requests)
+      statuses.push((await app.request(path, { method, headers })).status);
+    expect(statuses).toEqual([200, 401, 404, 200, 404, 404, 404, 200]);
+    const line = (method: string, route: string, status: number) => ({
       level: 30,
       time: expect.any(Number),
       msg: 'request',
-      method: 'GET',
+      method,
       route,
       status,
       ms: expect.any(Number),
     });
     // Exactly these fields: the pattern a 401 or 404 matched, never the path, query or headers.
     expect(lines.map((l) => JSON.parse(l))).toEqual([
-      line('/api/v1/sessions/:key/laps', 200),
-      line('/api/v1/sessions/:key', 401),
-      line('/api/v1/*', 404),
-      line('/healthz', 200),
+      line('GET', '/api/v1/sessions/:key/laps', 200),
+      line('GET', '/api/v1/sessions/:key', 401),
+      line('GET', '/api/v1/*', 404),
+      line('HEAD', '/api/v1/sessions/:key', 200),
+      line('POST', '/api/v1/*', 404),
+      line('GET', '/api/*', 404),
+      line('GET', '/*', 404), // hono's form of the request log's own '*'
+      line('GET', '/healthz', 200),
     ]);
     const text = lines.join('');
     expect(text).not.toContain(marker);

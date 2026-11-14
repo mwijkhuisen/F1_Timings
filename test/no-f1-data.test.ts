@@ -8,17 +8,31 @@ import { describe, expect, it } from 'vitest';
 // force-added files included. Parser fixtures are synthetic, in their own folders, and small.
 
 const ROOT = join(import.meta.dirname, '..');
-/** Never, anywhere: the private folder, recorder files, audio, PDFs and archives (the dump is a zip). */
+/**
+ * Never, anywhere: the private folder, recorder files (feed-*.jsonl, *.gz), the archive's Index.json,
+ * audio and transcripts (P6), PDFs (the FIA's) and zips (the Jolpica dump).
+ */
 const NEVER =
-  /(^|\/)fixtures-private\/|(^|\/)feed-[^/]*\.jsonl|(^|\/)snapshots\/[^/]*\.json\.gz$|\.(jsonl\.gz|mp3|wav|m4a|aac|ogg|opus|flac|pdf|zip)$/i;
-/** Feed, archive and dump files: only in the synthetic fixture folders. */
-const DATA = /\.(jsonl|jsonStream)$|(^|\/)formula_one_[^/]*\.csv$/i;
-const SYNTHETIC = /^apps\/server\/test\/fixtures\/(live|archive|jolpica)\//;
+  /(^|\/)fixtures-private\/|(^|\/)feed-[^/]*\.jsonl|(^|\/)Index\.json$|\.(gz|zip|pdf|mp3|wav|m4a|aac|ogg|opus|flac|vtt|srt)$/i;
+/** Feed, archive and dump files: each kind only in its own synthetic fixture folder. */
+const DATA = /\.(jsonl|jsonStream)$|(^|\/)formula_one_[^/]*\.csv$|(^|\/)archive\/.+\.json$/i;
+const SYNTHETIC =
+  /^apps\/server\/test\/fixtures\/(live\/[^/]+\.jsonl|archive\/.+\.json(Stream)?|jolpica\/formula_one_[^/]+\.csv)$/i;
+const FOLDERS = /^apps\/server\/test\/fixtures\/(live|archive|jolpica)\//;
 const CAP = 32 * 1024; // the largest synthetic fixture is 8.4 KB; real files are megabytes
+const MAX = 1024 * 1024; // any file: the largest today is a 417 KB design render
+
+/** git as the test needs it: no GIT_DIR or GIT_INDEX_FILE from a hook, no global ignore file. */
+const git = (cwd: string, ...args: string[]) =>
+  execFileSync('git', ['-c', 'core.excludesFile=/dev/null', ...args], {
+    cwd,
+    encoding: 'utf8',
+    env: Object.fromEntries(Object.entries(process.env).filter(([name]) => !name.startsWith('GIT_'))),
+  });
 
 /** The index's paths with their blob sizes, so a file deleted from the working tree still counts. */
 const tracked = (cwd: string) =>
-  execFileSync('git', ['ls-files', '-z', '--format=%(objectsize) %(path)'], { cwd, encoding: 'utf8' })
+  git(cwd, 'ls-files', '-z', '--format=%(objectsize) %(path)')
     .split('\0')
     .filter(Boolean)
     .map((line) => {
@@ -28,7 +42,10 @@ const tracked = (cwd: string) =>
 
 const offending = (files: { path: string; size: number }[]) =>
   files
-    .filter(({ path, size }) => NEVER.test(path) || (SYNTHETIC.test(path) ? size > CAP : DATA.test(path)))
+    .filter(
+      ({ path, size }) =>
+        NEVER.test(path) || (DATA.test(path) && !SYNTHETIC.test(path)) || size > (FOLDERS.test(path) ? CAP : MAX),
+    )
     .map(({ path }) => path)
     .sort();
 
@@ -59,23 +76,32 @@ describe('no F1 data in git (invariant 3)', () => {
         'jolpica-f1-csv.zip',
         'docs/Race Classification.pdf',
         'apps/server/test/fixtures/live/feed-1.jsonl',
+        'apps/server/test/fixtures/archive/race/feed.jsonl', // a kind outside its own folder
+        'apps/server/test/fixtures/jolpica/TimingData.jsonStream',
+        ...['wav', 'm4a', 'aac', 'ogg', 'opus', 'FLAC', 'vtt', 'srt'].map((ext) => `radio/clip.${ext}`),
+        'docs/a.json.gz',
+        '2023/meeting/race/Index.json',
+        'data/archive/2023/race/TimingData.json', // an archive keyframe outside the synthetic folder
       ];
       for (const path of planted) plant(path);
       plant('apps/server/test/fixtures/live/big.jsonl', CAP + 1);
+      plant('docs/render.webp', MAX + 1);
       for (const ok of [
         'apps/server/test/fixtures/live/race.jsonl',
         'apps/server/test/fixtures/archive/race/TimingData.jsonStream',
+        'apps/server/test/fixtures/archive/index-2019.json',
         'apps/server/test/fixtures/jolpica/formula_one_lap.csv',
         'apps/server/src/openf1/fixtures/laps-normal.raw',
-        'docs/a.json.gz',
       ])
         plant(ok, CAP);
+      plant('docs/overview.webp', MAX);
       writeFileSync(join(repo, '.gitignore'), 'fixtures-private/\n'); // hence the force-add below
-      const git = (...args: string[]) => execFileSync('git', args, { cwd: repo, stdio: 'ignore' });
-      git('init', '-q');
-      git('add', '-A');
-      git('add', '-f', 'fixtures-private/archive/11408/TimingData.jsonStream');
-      expect(offending(tracked(repo))).toEqual([...planted, 'apps/server/test/fixtures/live/big.jsonl'].sort());
+      git(repo, 'init', '-q');
+      git(repo, 'add', '-A');
+      git(repo, 'add', '-f', 'fixtures-private/archive/11408/TimingData.jsonStream');
+      expect(offending(tracked(repo))).toEqual(
+        [...planted, 'apps/server/test/fixtures/live/big.jsonl', 'docs/render.webp'].sort(),
+      );
     } finally {
       rmSync(repo, { recursive: true, force: true });
     }

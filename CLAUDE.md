@@ -31,7 +31,10 @@ The plan is binding: `docs/plan/ARCHITECTURE.md` (cited A§x), `docs/plan/PHASES
 
 1. No secret in git, environment variables, image layers, logs or error messages. Secrets are files under `/etc/f1/secrets`, `root:<gid> 0440`.
 2. Nothing is reachable without Cloudflare Access. `/api` verifies the Access JWT itself. Only `127.0.0.1:8180` is published.
-3. Data from the F1 TV feed or archive or the FIA timing PDFs is never committed, nor the Jolpica dump. Their parser fixtures are synthetic. Real files live in the gitignored `fixtures-private/`. `test/no-f1-data.test.ts` enforces this over `git ls-files`: synthetic `*.jsonl`, `*.jsonStream` and `formula_one_*.csv` files may live only in `apps/server/test/fixtures/{live,archive,jolpica}/`, each under 32 KiB.
+3. Data from the F1 TV feed or archive or the FIA timing PDFs is never committed, nor the Jolpica dump. Their parser fixtures are synthetic. Real files live in the gitignored `fixtures-private/`. `test/no-f1-data.test.ts` fails `pnpm check` and CI on names and sizes over `git ls-files` (A§12.1):
+   - synthetic `*.jsonl` only in `apps/server/test/fixtures/live/`, `*.jsonStream`/archive `*.json` only in `…/archive/`, `formula_one_*.csv` only in `…/jolpica/`, each at most 32 KiB;
+   - no `*.gz`, audio, `*.pdf` or `*.zip` anywhere, and no file over 1 MiB;
+   - CI runs only after the push, and the repository is public: run `pnpm check` before committing.
 4. CI never calls OpenF1, F1, Jolpica, the FIA, Open-Meteo, Overpass or hc-ping.com.
 5. The F1 stack shares nothing with Waterheight (`rws`): no networks, volumes, secrets, GIDs, ports, subnets, nftables table, timers or healthchecks group. Never touch `/etc/rws`, `/srv/rws` or the `rws` compose project.
 6. Strict CSP. The browser makes no third-party requests.
@@ -79,6 +82,7 @@ From Waterheight's list, the ones that apply here:
 - **Caddy 2.11:**
   - Headers set before `file_server` stay on its own 404s (an immutable `Cache-Control` on a missing asset): give asset routes a `file` matcher.
   - Responses Caddy builds in its error path (413, 502, `file_server`'s 404) carry none of the site headers; a route's own `respond` keeps them.
+  - Caddy blanks `Cookie` and `Authorization` in logged requests, but not `Cf-Access-Jwt-Assertion`. Even without an access log, `reverse_proxy` warns `aborting with incomplete response`, with the whole request, whenever a client closes a stream. So the global `log default` filter deletes `request>headers` and `request>uri` (#108; `build.test.ts` pins it). Never add a `log` without it.
   - An inline matcher takes one path (`handle /a /a/*` does not parse); use a named matcher. Caddy re-sorts named matchers that hold only a `path`: use `path_regexp` or `expression` when the order matters.
 - **hono 4.13 JWT:** the `hono/jwk` middleware accepts only `Bearer <token>` (Cloudflare Access sends the bare JWT in `Cf-Access-Jwt-Assertion`), so `/api` uses its own middleware on `verifyWithJwks` (A§10). hono's `verify` skips an absent `exp` and checks `iat`/`nbf` with zero leeway.
 - **hono 4.13 `streamSSE`:** it sets `Cache-Control: no-cache`, and its `onError` writes `e.message` to the client. The playback route passes no `onError` and overrides the header with `no-store, no-transform`. `@hono/node-server` 2.1.6 waits for `drain` and cancels the body on socket close (`stream.onAbort`).

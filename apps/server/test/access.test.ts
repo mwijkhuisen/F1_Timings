@@ -38,6 +38,21 @@ afterEach(() => {
   expect(lines.join('')).not.toMatch(/eyJ/);
 });
 
+/**
+ * A fake clock at `time` on 2026-10-26 UTC. The first call fakes `Date` (the tokens' claims) and
+ * `performance` (the certs' windows); later ones move both forward together.
+ */
+const at = (time: string) => {
+  const to = new Date(`2026-10-26T${time}Z`).getTime();
+  if (!vi.isFakeTimers()) {
+    vi.useFakeTimers({ toFake: ['Date', 'performance'] });
+    vi.setSystemTime(to);
+    return;
+  }
+  expect(to).toBeGreaterThanOrEqual(Date.now());
+  vi.advanceTimersByTime(to - Date.now());
+};
+
 const expectUnauthorized = async (res: Response) => {
   expect(res.status).toBe(401);
   expect(res.headers.get('cache-control')).toBe('no-store');
@@ -127,15 +142,18 @@ describe('access', () => {
   });
 
   describe('an unknown kid (a key rotation)', () => {
-    const at = (time: string) => vi.setSystemTime(new Date(`2026-10-26T${time}Z`));
     let certs: unknown[];
+    let up: boolean;
     let fetches: { n: number };
     let app: Hono;
     const status = async (signer: Key) => (await get(app, assertion(await jwt(signer.priv)))).status;
     beforeEach(async () => {
-      vi.useFakeTimers({ toFake: ['Date'] });
       certs = [key.pub];
-      fetches = serveCerts([], () => HttpResponse.json({ keys: certs }));
+      up = true;
+      // The 502 is framed, as the failures below are.
+      fetches = serveCerts([], () =>
+        up ? HttpResponse.json({ keys: certs }) : HttpResponse.text(null, { status: 502 }),
+      );
       app = appWith();
       at('12:00:00');
       expect(await status(key)).toBe(200);
@@ -167,39 +185,40 @@ describe('access', () => {
       expect(fetches.n).toBe(3);
     });
 
-    it('a refetch that fails keeps the keys: a 401, logged, and no fetch for 30 s', async () => {
-      // Framed, as the failures below are.
-      serveCerts([], () => {
-        fetches.n++;
-        return HttpResponse.text(null, { status: 502 });
-      });
+    it('a refetch that fails keeps the keys: a 401, no fetch for 30 s, and stale logged only past 5 min', async () => {
+      up = false;
       lines.length = 0;
       at('12:01:00');
       expect(await status(rotated)).toBe(401);
       expect(fetches.n).toBe(2);
-      expect(lines.map((l) => JSON.parse(l))).toEqual([expect.objectContaining({ code: 'access_certs', stale: true })]);
       at('12:01:29');
       expect([await status(rotated), await status(key)]).toEqual([401, 200]);
       expect(fetches.n).toBe(2);
       at('12:01:30');
       expect(await status(rotated)).toBe(401);
       expect(fetches.n).toBe(3);
+      // Keys under 5 min old: a known kid and an unknown one leave the same log, none.
+      expect(lines).toEqual([]);
+      at('12:05:00');
+      expect([await status(rotated), await status(key)]).toEqual([401, 200]);
+      expect(fetches.n).toBe(4);
+      const stale = expect.objectContaining({ code: 'access_certs', stale: true });
+      expect(lines.map((l) => JSON.parse(l))).toEqual([stale, stale]);
     });
   });
 
   it('two concurrent cold requests share one certs fetch; the certs are kept for 5 min', async () => {
-    vi.useFakeTimers({ toFake: ['Date'] });
-    vi.setSystemTime(new Date('2026-10-26T12:00:00Z'));
+    at('12:00:00');
     const fetches = serveCerts([key.pub]);
     const app = appWith();
     const token = await jwt(key.priv);
     const both = await Promise.all([get(app, assertion(token)), get(app, assertion(token))]);
     expect(both.map((r) => r.status)).toEqual([200, 200]);
     expect(fetches.n).toBe(1);
-    vi.setSystemTime(new Date('2026-10-26T12:04:59Z'));
+    at('12:04:59');
     expect((await get(app, assertion(await jwt(key.priv)))).status).toBe(200);
     expect(fetches.n).toBe(1);
-    vi.setSystemTime(new Date('2026-10-26T12:05:00Z'));
+    at('12:05:00');
     expect((await get(app, assertion(await jwt(key.priv)))).status).toBe(200);
     expect(fetches.n).toBe(2);
   });
@@ -214,8 +233,6 @@ describe('access', () => {
     ['no keys', () => HttpResponse.json({ keys: [] })],
     ['an HTML page', () => new HttpResponse('<html></html>', { headers: { 'content-type': 'text/html' } })],
   ])('certs failing with %s → 503, logged as a code; no fetch for 30 s, then one again', async (_, answer) => {
-    vi.useFakeTimers({ toFake: ['Date'] });
-    const at = (time: string) => vi.setSystemTime(new Date(`2026-10-26T${time}Z`));
     lines.length = 0;
     const fetches = serveCerts([key.pub], answer);
     const app = appWith();
@@ -236,6 +253,37 @@ describe('access', () => {
     expect([fetches.n, again.n]).toEqual([1, 1]);
   });
 
+  it('concurrent requests during a failing fetch share it, and all see the 30 s hold', async () => {
+    at('12:00:00');
+    const fetches = serveCerts([key.pub], () => HttpResponse.text('boom', { status: 500 }));
+    const app = appWith();
+    const token = await jwt(key.priv);
+    const all = await Promise.all([1, 2, 3].map(() => get(app, assertion(token))));
+    expect(all.map((r) => r.status)).toEqual([503, 503, 503]);
+    expect(fetches.n).toBe(1);
+    at('12:00:29');
+    expect((await get(app, assertion(token))).status).toBe(503);
+    expect(fetches.n).toBe(1);
+  });
+
+  it('the windows run on the monotonic clock: a wall clock stepped back changes none', async () => {
+    at('12:00:00');
+    const fetches = serveCerts([key.pub], () => HttpResponse.text(null, { status: 502 }));
+    const app = appWith();
+    expect((await get(app, assertion(await jwt(key.priv)))).status).toBe(503);
+    vi.setSystemTime(new Date('2026-10-26T11:00:00Z')); // Date only: performance.now() goes on
+    vi.advanceTimersByTime(30_000);
+    const again = serveCerts([key.pub]);
+    expect((await get(app, assertion(await jwt(key.priv)))).status).toBe(200); // 30 s after the failure
+    vi.setSystemTime(new Date('2026-10-26T10:00:00Z'));
+    vi.advanceTimersByTime(5 * 60_000 - 1);
+    expect((await get(app, assertion(await jwt(key.priv)))).status).toBe(200);
+    expect([fetches.n, again.n]).toEqual([1, 1]);
+    vi.advanceTimersByTime(1);
+    expect((await get(app, assertion(await jwt(key.priv)))).status).toBe(200); // 5 min after the fetch
+    expect(again.n).toBe(2);
+  });
+
   it('certs entries that are not RSA keys with a kid are skipped; none left → 503', async () => {
     const ec = { kty: 'EC', kid: 'ec-kid', crv: 'P-256', x: 'AAAA', y: 'AAAA' };
     const { kid: _, ...noKid } = stranger.pub;
@@ -247,8 +295,6 @@ describe('access', () => {
   });
 
   it('a failed refresh after 5 min keeps the last keys for up to 1 h, then 503; a good fetch recovers', async () => {
-    vi.useFakeTimers({ toFake: ['Date'] });
-    const at = (time: string) => vi.setSystemTime(new Date(`2026-10-26T${time}Z`));
     let up = true;
     // The 502 is framed, as the failures above are.
     const fetches = serveCerts([key.pub], () =>
