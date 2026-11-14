@@ -18,18 +18,84 @@ const PINNED: Record<string, string> = {
   '20261114000001_starting_grid.sql': '65c14270c8de4eb83317cfc8eb2812aaa8099f9563b7e110741e27cc7f919701',
 };
 
+const dir = fileURLToPath(new URL('../db/migrations/', import.meta.url));
+const files = readdirSync(dir)
+  .filter((f) => f.endsWith('.sql'))
+  .sort();
+
 it('every migration matches its pinned sha256, and no file is added or removed', () => {
-  const dir = fileURLToPath(new URL('../db/migrations/', import.meta.url));
   const actual = Object.fromEntries(
-    readdirSync(dir)
-      .filter((f) => f.endsWith('.sql'))
-      .sort()
-      .map((f) => [
-        f,
-        createHash('sha256')
-          .update(readFileSync(dir + f))
-          .digest('hex'),
-      ]),
+    files.map((f) => [
+      f,
+      createHash('sha256')
+        .update(readFileSync(dir + f))
+        .digest('hex'),
+    ]),
   );
   expect(actual).toEqual(PINNED);
+});
+
+// Expand, then contract (runbook update.md): a rollback runs the previous image on the new schema, so an up
+// section never drops, renames, retypes or tightens what that image reads. The replace idiom (DROP CONSTRAINT x
+// and ADD CONSTRAINT x in the same up section, how a CHECK widens) and DROP NOT NULL pass. A file with a
+// `-- contract: <why>` line passes: no release you could roll back to needs the old shape any more.
+// ponytail: a keyword scan, not a parser. A replaced CHECK that narrows, and dynamic SQL in DO or function
+// bodies (string literals are stripped), pass: review catches those. Parse the SQL if one ever slips through.
+const CONTRACT = [
+  /\bDROP\b/i,
+  /\bRENAME\b/i,
+  /\bALTER\s+(?:COLUMN\s+)?(?!COLUMN\b)(?:"[^"]+"|\w+)\s+(?:SET\s+DATA\s+)?TYPE\b/i,
+  /\bSET\s+NOT\s+NULL\b/i,
+];
+const NAME = String.raw`("[^"]+"|\w+)`;
+
+function contractSteps(file: string): string[] {
+  if (/^-- contract: \S/m.test(file)) return [];
+  const up = (file.split(/^-- migrate:down\b/m)[0] ?? '').split(/^-- migrate:up\b/m).at(-1) ?? '';
+  // Comments first: they hold apostrophes. Then the literals, which may say "drop".
+  const code = up.replace(/--.*$/gm, '').replace(/'(?:[^']|'')*'/g, "''");
+  const added = new Set(
+    [...code.matchAll(new RegExp(String.raw`\bADD\s+CONSTRAINT\s+${NAME}`, 'gi'))].map((m) => m[1]?.toLowerCase()),
+  );
+  return code
+    .split(';')
+    .map((s) => s.replace(/\s+/g, ' ').trim())
+    .filter((s) => {
+      const rest = s
+        .replace(new RegExp(String.raw`\bDROP\s+CONSTRAINT\s+(?:IF\s+EXISTS\s+)?${NAME}`, 'gi'), (m, name: string) =>
+          added.has(name.toLowerCase()) ? '' : m,
+        )
+        .replace(/\bDROP\s+NOT\s+NULL\b/gi, '');
+      return CONTRACT.some((re) => re.test(rest));
+    });
+}
+
+it('no up section has a contract step', () => {
+  expect(files.map((f) => [f, contractSteps(readFileSync(dir + f, 'utf8'))])).toEqual(files.map((f) => [f, []]));
+});
+
+it.each([
+  ['DROP TABLE', 'DROP TABLE lap;', true],
+  ['DROP COLUMN', 'ALTER TABLE lap DROP COLUMN filled;', true],
+  ['an unpaired DROP CONSTRAINT', 'ALTER TABLE lap DROP CONSTRAINT lap_source_check;', true],
+  ['RENAME COLUMN', 'ALTER TABLE lap RENAME COLUMN lap_ms TO ms;', true],
+  ['ALTER COLUMN c TYPE', 'ALTER TABLE lap ALTER COLUMN lap_ms TYPE bigint;', true],
+  ['SET NOT NULL', 'ALTER TABLE lap ALTER COLUMN lap_ms SET NOT NULL;', true],
+  [
+    'the replace idiom',
+    "ALTER TABLE lap\n  DROP CONSTRAINT lap_source_check,\n  ADD CONSTRAINT lap_source_check CHECK (source IN ('openf1', 'x'));",
+    false,
+  ],
+  ['DROP NOT NULL', 'ALTER TABLE lap ALTER COLUMN lap_ms DROP NOT NULL;', false],
+  ['ALTER TYPE … ADD VALUE', "ALTER TYPE state ADD VALUE 'paused';", false],
+  ['a column named type', 'ALTER TABLE session ALTER COLUMN type SET DEFAULT NULL;', false],
+  ['"drop" in a comment and in a string', "-- don't drop it\nUPDATE lap SET note = 'drop it';", false],
+  [
+    'a -- contract: line',
+    '-- contract: no release reads lap.filled any more\nALTER TABLE lap DROP COLUMN filled;',
+    false,
+  ],
+  ['DROP only in the down section', 'CREATE TABLE t (a int);\n-- migrate:down\nDROP TABLE t;', false],
+])('%s: flagged %s', (_name, up, flagged) => {
+  expect(contractSteps(`-- migrate:up\n${up}\n`).length > 0).toBe(flagged);
 });
