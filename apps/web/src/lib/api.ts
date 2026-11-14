@@ -1,6 +1,7 @@
 import {
   Laps,
   Live,
+  Pits,
   RaceControl,
   Rain,
   Recordings,
@@ -110,8 +111,8 @@ export const sessionQuery = (key: number) =>
 export const useSession = (key: number) => useQuery(sessionQuery(key));
 
 /**
- * A new fetch of the session (its `fetch_count` changed, not the first value seen) refetches its laps, stints and
- * weather once (#99); only the session query polls.
+ * A new fetch of the session (its `fetch_count` changed, not the first value seen) refetches its laps, stints, pits,
+ * race control and weather once (#99, #111); only the session query polls.
  */
 export function useRefetchOnFetch(key: number, fetchCount: number | undefined) {
   const client = useQueryClient();
@@ -119,7 +120,8 @@ export function useRefetchOnFetch(key: number, fetchCount: number | undefined) {
   useEffect(() => {
     if (fetchCount === undefined) return;
     if (seen.current !== undefined && seen.current !== fetchCount)
-      for (const what of ['laps', 'stints', 'weather']) void client.invalidateQueries({ queryKey: [what, key] });
+      for (const what of ['laps', 'stints', 'pits', 'race-control', 'weather'])
+        void client.invalidateQueries({ queryKey: [what, key] });
     seen.current = fetchCount;
   }, [client, key, fetchCount]);
 }
@@ -138,8 +140,19 @@ export const useStints = (key: number) =>
     staleTime: STALE_MS,
   });
 
-/** Races only (`enabled`): the SC, VSC and red-flag bands (lib/track.ts). */
-export const useRaceControl = (key: number, enabled: boolean) =>
+export const usePits = (key: number) =>
+  useQuery({
+    queryKey: ['pits', key],
+    queryFn: ({ signal }) => getJson(`/api/v1/sessions/${key}/pits`, Pits, signal),
+    staleTime: STALE_MS,
+  });
+
+/**
+ * The race-control rows: the Laps tab's log (every session type, #111) and, in races, the SC, VSC and red-flag bands
+ * (lib/track.ts). `enabled` only stops the fetch: cached rows and errors still come back, so a caller gates its own use.
+ * Compare and Stints ask in races only.
+ */
+export const useRaceControl = (key: number, enabled = true) =>
   useQuery({
     queryKey: ['race-control', key],
     queryFn: ({ signal }) => getJson(`/api/v1/sessions/${key}/race-control`, RaceControl, signal),

@@ -1,7 +1,8 @@
-import { type Obj, view, weatherRow } from '@f1/contracts';
+import { type Obj, type RaceControl as RcRows, view, weatherRow } from '@f1/contracts';
 import { driverOf, towerRows } from '../views/Tower.tsx';
 import type { Driver } from './session.ts';
 import { utc } from './stream.ts';
+import { fmtClock } from './time.ts';
 import { reading } from './weather.ts';
 
 // The pit wall (A§13, P4d): the session light, the status strip and the side panel, derived from the feed state once
@@ -124,11 +125,19 @@ export function fmtLeft(seconds: number): string {
 
 /** The race-control kinds (D2): the filter chips. A message of no kind shows under All only. */
 export type Kind = 'flags' | 'sc' | 'incidents' | 'limits' | 'other';
-export type RcItem = { key: number; lap?: number | undefined; kind: Kind; tag?: string | undefined; text: string };
+export type RcItem = {
+  key: number;
+  /** The clock time (Amsterdam) of an OpenF1 row; the feed's messages carry none. */
+  time?: string | undefined;
+  lap?: number | undefined;
+  kind: Kind;
+  tag?: string | undefined;
+  text: string;
+};
 export type RaceControl = { items: RcItem[]; counts: Record<Kind | 'all', number> };
 
 /** A message's kind and tag, first match wins. The incidents, track limits and 2026's red-flag text are Category Other. */
-function kindOf(category: string | undefined, text: string): { kind: Kind; tag?: string } {
+export function kindOf(category: string | undefined, text: string): { kind: Kind; tag?: string } {
   if (category === 'SafetyCar') return { kind: 'sc', tag: /VIRTUAL/.test(text) ? 'VSC' : 'SC' };
   if (category === 'Flag' || /\bRED FLAG\b/.test(text)) return { kind: 'flags', tag: 'FLAG' };
   if (/TRACK LIMITS|\bDELETED\b/.test(text)) return { kind: 'limits', tag: 'LIMITS' };
@@ -141,17 +150,58 @@ function kindOf(category: string | undefined, text: string): { kind: Kind; tag?:
  * the stream sends nothing after T and replays from the first line on a seek (A§11.3).
  */
 export function raceControl(state: Obj): RaceControl {
-  const counts = { all: 0, flags: 0, sc: 0, incidents: 0, limits: 0, other: 0 };
   const items = messages(state)
     .reverse()
-    .map(({ key, m, text }) => {
-      const { kind, tag } = kindOf(m.Category, text);
-      counts.all++;
-      counts[kind]++;
-      return { key, lap: m.Lap, kind, tag, text };
-    });
-  return { items, counts };
+    .map(({ key, m, text }) => ({ key, lap: m.Lap, ...kindOf(m.Category, text), text }));
+  return { items, counts: countKinds(items) };
 }
+
+/** The number of items per kind, and all of them. */
+export function countKinds(items: readonly { kind: Kind }[]): RaceControl['counts'] {
+  const counts = { all: 0, flags: 0, sc: 0, incidents: 0, limits: 0, other: 0 };
+  for (const { kind } of items) {
+    counts.all++;
+    counts[kind]++;
+  }
+  return counts;
+}
+
+export type RcLogItem = RcItem & { phase?: number | undefined; driver_number: number | null };
+
+/**
+ * An OpenF1 session's race-control rows with a message, in API order (A§6.1, #111). A row's phase is the last
+ * non-null `qualifying_phase` at or before it (A§9's lap rule: deletions and stewards' notes carry none); in
+ * qualifying, rows before a first phase row of 2 are Q1. Other rows before any phase row have none.
+ */
+export function rcLog(rows: RcRows, qualifying: boolean): RcLogItem[] {
+  const first = rows.find((r) => r.qualifying_phase !== null)?.qualifying_phase ?? undefined;
+  let phase = qualifying && first !== undefined && first === 2 ? 1 : undefined;
+  return rows.flatMap((r, key) => {
+    if (r.qualifying_phase !== null) phase = r.qualifying_phase;
+    if (r.message === null) return [];
+    return [
+      {
+        key,
+        time: r.date === null ? '—' : fmtClock(Date.parse(r.date)),
+        lap: r.lap_number ?? undefined,
+        phase,
+        ...kindOf(r.category ?? undefined, r.message),
+        text: r.message,
+        driver_number: r.driver_number,
+      },
+    ];
+  });
+}
+
+const CAR_ACRONYM = /\b(\d{1,3}) \(([A-Z]{3})\)/g;
+
+/**
+ * Whether a row names the driver: its `driver_number`, or "CAR n (ABC)" in the text with both the number and the
+ * acronym equal (A§9; `driver_number` is null on most rows). The acronym keeps "16:29:31 (PIT)" from reading as car 31.
+ */
+export const mentions = (row: { driver_number: number | null; text: string }, driver: Driver): boolean =>
+  row.driver_number === driver.number ||
+  [...row.text.matchAll(CAR_ACRONYM)].some((m) => Number(m[1]) === driver.number && m[2] === driver.acronym);
 
 export type Pair = { place: string | undefined; ahead: Driver; behind: Driver; interval: string };
 

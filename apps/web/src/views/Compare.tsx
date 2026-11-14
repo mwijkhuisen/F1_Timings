@@ -75,8 +75,10 @@ export function Compare({
   laps: Laps;
   onReference: (driver: number) => void;
 }) {
-  const rc = useRaceControl(session, detail.session.type === 'Race' && laps.length > 0);
-  const periods = useMemo(() => (rc.data ? trackPeriods(rc.data).periods : []), [rc.data]);
+  const race = detail.session.type === 'Race';
+  const rc = useRaceControl(session, race && laps.length > 0);
+  // A cached answer from the Laps tab comes back even when disabled: only a race uses it.
+  const periods = useMemo(() => (race && rc.data ? trackPeriods(rc.data).periods : []), [race, rc.data]);
   const [yWindow, setWindow] = useState<'fit' | '107'>('fit');
   const lapOption = useCallback(
     (t: ChartTokens) => lapChartOption(drivers, laps, t, { window: yWindow, periods, year: detail.meeting.year }),
@@ -92,7 +94,7 @@ export function Compare({
   const names = (ds: readonly Driver[]) => ds.map((d) => d.acronym).join(', ');
   return (
     <>
-      {rc.error && <p className="muted">Race control did not load: no SC, VSC or red-flag bands.</p>}
+      {race && rc.error && <p className="muted">Race control did not load: no SC, VSC or red-flag bands.</p>}
       <div className="cgrid">
         <section className="card">
           <div className="panel-title">
@@ -124,9 +126,7 @@ export function Compare({
             <h2>Best laps, sector by sector</h2>
             <Duel drivers={drivers} laps={laps} />
           </section>
-          {detail.session.type === 'Race' && (
-            <PitCycles session={session} drivers={drivers} laps={laps} rc={rc} periods={periods} />
-          )}
+          {race && <PitCycles session={session} drivers={drivers} laps={laps} rc={rc} periods={periods} />}
         </div>
       </div>
       <div className="controls">

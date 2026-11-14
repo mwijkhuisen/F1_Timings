@@ -1,12 +1,15 @@
 import { merge, type Obj, view, weatherRow } from '@f1/contracts';
 import { describe, expect, it } from 'vitest';
 import {
+  countKinds,
   fastestSoFar,
   fmtLeft,
   LIGHT,
   leftAt,
   lightOf,
+  mentions,
   raceControl,
+  rcLog,
   running,
   stripOf,
   withinASecond,
@@ -280,5 +283,70 @@ describe('fastestSoFar', () => {
     expect(who(stats('1:20.500', '1:20.500'))).toBe(1); // a tie: key order
     expect(who(stats('?', '1:01:20.500'))).toBe(2); // an unparsable value last; h:mm:ss.SSS parses
     expect(who(stats('?', 'x'))).toBe(1);
+  });
+});
+
+describe('countKinds', () => {
+  it('counts each kind and all of them', () => {
+    expect(countKinds([{ kind: 'flags' }, { kind: 'flags' }, { kind: 'other' }, { kind: 'limits' }])).toEqual({
+      all: 4,
+      flags: 2,
+      sc: 0,
+      incidents: 0,
+      limits: 1,
+      other: 1,
+    });
+    expect(countKinds([]).all).toBe(0);
+  });
+});
+
+describe('mentions', () => {
+  const pia = { number: 81, acronym: 'PIA', name: null, team: null };
+  const row = (text: string, driver_number: number | null = null) => ({ driver_number, text });
+
+  it('reads the driver_number, or CAR n (ABC) with both the number and the acronym', () => {
+    expect(mentions(row('x', 81), pia)).toBe(true);
+    expect(mentions(row('CAR 81 (PIA) TIME 1:23.456 DELETED'), pia)).toBe(true);
+    expect(mentions(row('FIA STEWARDS: TURN 4 INCIDENT INVOLVING CARS 4 (NOR) AND 81 (PIA) NOTED'), pia)).toBe(true);
+    expect(mentions(row('CAR 4 (NOR) TIME DELETED', 4), pia)).toBe(false);
+    expect(mentions(row('CAR 81 (NOR) TIME DELETED'), pia)).toBe(false);
+  });
+
+  it('never reads a clock time as a car', () => {
+    const car31 = { number: 31, acronym: 'OCO', name: null, team: null };
+    expect(mentions(row('PIT EXIT CLOSED AT 16:29:31 (PIT)'), car31)).toBe(false);
+    expect(mentions(row('PIT EXIT CLOSED AT 16:29:31 (PIT)'), { ...car31, acronym: 'PIT' })).toBe(true);
+  });
+});
+
+describe('rcLog', () => {
+  const row = (qualifying_phase: number | null, message: string | null, extra: object = {}) => ({
+    date: '2026-10-24T20:47:08.000Z',
+    category: 'Other',
+    flag: null,
+    scope: null,
+    sector: null,
+    driver_number: null,
+    lap_number: null,
+    qualifying_phase,
+    message,
+    ...extra,
+  });
+
+  it('carries the last phase forward, and infers Q1 before a first phase row above 1 in qualifying', () => {
+    const rows = [row(null, 'A'), row(2, 'B'), row(null, 'C'), row(3, 'D'), row(null, 'E')];
+    expect(rcLog(rows, true).map((i) => i.phase)).toEqual([1, 2, 2, 3, 3]);
+    // Not qualifying, or a first phase row of 1: the rows before it have no phase.
+    expect(rcLog(rows, false).map((i) => i.phase)).toEqual([undefined, 2, 2, 3, 3]);
+    expect(rcLog([row(null, 'A'), row(1, 'B')], true).map((i) => i.phase)).toEqual([undefined, 1]);
+    // A first phase row of 3 (as A§9): the rows before it have no phase.
+    expect(rcLog([row(null, 'A'), row(3, 'B')], true).map((i) => i.phase)).toEqual([undefined, 3]);
+    // A row without a date shows a dash, so the log's grid keeps its columns.
+    expect(rcLog([row(null, 'A', { date: null })], false).map((i) => i.time)).toEqual(['—']);
+  });
+
+  it('drops a row without a message but keeps the phase it carries, and keeps API order', () => {
+    const items = rcLog([row(1, null), row(null, 'DELETED', { lap_number: 3 })], true);
+    expect(items.map((i) => [i.key, i.phase, i.lap, i.kind])).toEqual([[1, 1, 3, 'limits']]);
   });
 });
