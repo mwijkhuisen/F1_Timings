@@ -115,6 +115,14 @@ Expected: the changed files as `changed  <path>`, `ok` for the rest, and `f1-ins
 
 - A migration must be expand-only for one release: add a table, column or view; never drop or rename what the previous release still reads. The old image then runs on the new schema, which is exactly what a rollback runs.
 - The contract step (drop, rename, tighten) goes into a later release, once no release you could roll back to needs the old shape.
+- `test/migrations.test.ts` enforces this (#107). It fails on an up section with `DROP`, `RENAME`, a column `TYPE` change or `SET NOT NULL` (comments and string literals do not count). The contract migration says why it is safe on a line of its own, and then passes:
+
+  ```sql
+  -- contract: <why no release you could roll back to still needs the old shape>
+  ```
+
+- The replace idiom needs no marker: `DROP CONSTRAINT x` with `ADD CONSTRAINT x` in the same up section, which is how a CHECK widens. `DROP NOT NULL` passes too.
+- The test does not see a replaced CHECK that narrows, or dynamic SQL in a `DO` or function body. The reviewer looks for those.
 - An applied migration never changes. A mistake is fixed forward in a new migration.
 - A failed migration is not retried by hand; dbmate runs each file in a transaction, so it leaves nothing behind. Fix it forward in a new PR.
 
