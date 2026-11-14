@@ -2,7 +2,7 @@
 
 What to check before, during and after a session so that `live` records it (A§11.2). It sequences the other runbooks and links them; it does not repeat them. Commands run as root (`sudo`) on the VM. Times are UTC. The first [weekend] is Las Vegas, 20–22 Nov 2026; the fallbacks are Lusail 27–29 Nov and Yas Marina 4–6 Dec 2026.
 
-Never run `f1-install`, merge or approve a release during a session. `f1-update` defers a deploy by itself while `live` records, but `f1-install` has no such hold and recreates `live`: that ends the recording with `complete = false`.
+Never run `f1-install`, merge or approve a release during a session. `f1-update` defers a deploy by itself while `live` records. Since #106 `f1-install` refuses too (`live is recording (session N): run again after it ends, or with --during-recording`) when it would change `compose.yaml`, but `--during-recording` overrides that, and a recreated `live` ends the recording with `complete = false`. So the rule stands: never run it during a session.
 
 ## Before the weekend [owner]
 
@@ -13,8 +13,7 @@ Do this by Thursday evening, outside a session.
 3. **The schedule.** List the weekend's sessions with their UTC times and check them against the F1 calendar:
 
    ```bash
-   sudo docker compose -p f1 -f /etc/f1/compose.yaml --env-file /srv/f1/state/current.env exec db \
-     psql -U postgres -d f1 -c "SELECT s.session_key, m.name AS meeting, s.name, s.date_start, s.date_end, s.is_cancelled FROM session s JOIN meeting m USING (meeting_key) WHERE s.date_start >= now() AND s.date_start < now() + interval '5 days' ORDER BY s.date_start"
+   sudo f1-psql -c "SELECT s.session_key, m.name AS meeting, s.name, s.date_start, s.date_end, s.is_cancelled FROM session s JOIN meeting m USING (meeting_key) WHERE s.date_start >= now() AND s.date_start < now() + interval '5 days' ORDER BY s.date_start"
    ```
 
    `live` reads the next session from the database on every tick (30 s), so a changed time is used once `ingest` has synced it. `ingest` syncs the schedule daily at 00:30 UTC and at every start (A§8; a failed sync is retried every 15 minutes, and the sync is skipped during a live window). To pick up a change now: `sudo docker restart f1-ingest-1`, then run the query again. If a session is missing, `meeting` has no row for it yet: wait for the next sync, do not edit the tables.
@@ -50,7 +49,7 @@ Do this by Thursday evening, outside a session.
 - The live view (`/live`) on the phone, with the delay (the slider `Delay <n> s` in the playback controls, 0–120 s, A§13) set next to the F1 TV picture. A replay has no delay slider.
 - `deploy deferred` in `sudo journalctl -u f1-update --since '-1h' --no-pager` is expected while a recording runs: `live is recording (session N): deploy deferred to a later run`. The next run after the recording deploys it. A hold ends after 14 h at the latest (`error: deploys held for over 14 h …`, then the deploy runs). To deploy a fix during a recording at once, end it: `sudo docker stop f1-live-1` (the recording is closed with `complete = f`), then `sudo systemctl start f1-update`.
 - A red `f1-ingest` with a `recorder_missing`, `recorder_stale` or `login_failed` body in its ping log (about 55 minutes before a start, or when a recording is late) is the alarm for a recorder that is not recording: check "The alarm" above and "Manual token fallback". `f1-tick` runs every 10 minutes, so the alert comes up to 10 minutes late.
-- Never run `f1-install` during a recording, and do not restart `live`.
+- Never run `f1-install` during a recording (it refuses unless you pass `--during-recording`, which you must not), and do not restart `live`.
 
 ### The measurement [box]
 

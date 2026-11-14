@@ -6,7 +6,7 @@ The plan is binding: `docs/plan/ARCHITECTURE.md` (cited A§x), `docs/plan/PHASES
 
 ## Commands
 
-- Toolchain: Node 26.10.0 (`.node-version`) and pnpm 12.5.1 from `scripts/install-pnpm.sh <prefix>` (no corepack).
+- Toolchain: Node 26.10.0 (`.node-version`; the build stages run 26.12.1 and compile only, the runtime image has no minor tag: only the major must agree, `test/pins.test.ts`) and pnpm 12.5.1 from `scripts/install-pnpm.sh <prefix>` (no corepack).
 - `pnpm install --frozen-lockfile` · `pnpm check` (Biome, `tsc -b`, unit tests: what CI's `check` job runs) · `pnpm test` (unit only).
 - `pnpm test:integration` needs `DATABASE_URL` (a superuser of a throw-away PostgreSQL 18 **cluster**; CI uses a service container) and `dbmate` 2.36.0 on `PATH`. Each test file creates its own database and applies `deploy/postgres/roles.sql` through `createTestDb()` (`apps/server/test/db.ts`); tests log in as `f1_migrator`/`f1_ingest`/`f1_api`, not as the superuser. `roles.sql` changes cluster-wide state (the three roles and their passwords, `CONNECT` on `postgres` and `template1`), so never point it at a shared server.
 - `apps/server/scripts/dev-db.ts` is the roles step of that test helper. As a CLI (`DATABASE_URL=<superuser URL of a throw-away database> node apps/server/scripts/dev-db.ts`) it sets up the three logins for a manual run such as the [box] backfill (A§8); their random passwords are never printed, so such a run keeps the superuser `DATABASE_URL`.
@@ -88,6 +88,7 @@ From Waterheight's list, the ones that apply here:
 - **EventSource's auto-retry reconnects to the same URL**, so a replay stream would reuse its stale `at`. The web client closes the EventSource on `error` and reopens it itself, with backoff, at the current T (`apps/web/src/lib/stream.ts`, `views/Player.tsx`).
 - **`server.close()` waits for open connections**, so an open SSE stream would block shutdown: `main.ts` calls `server.closeAllConnections()` after it.
 - **Node 26 `FileHandle`:** an open one does not show in `process.getActiveResourcesInfo()`; the playback leak test counts `/proc/self/fd`.
+- **A Dependabot postgres minor PR fails `test/pins.test.ts`** until the owner pushes the matching service image line in `ci.yml` (Dependabot cannot edit workflows). A postgres major is ignored: PGDATA is per major (`docs/runbooks/update.md`, "A PostgreSQL major upgrade").
 - **setup-node v7** caches automatically when `packageManager` names npm; every job sets `package-manager-cache: false` (no caches in CI).
 - **The service worker build** (#121): `apps/web/vite.config.ts` has a second Rolldown entry `sw` (`src/sw/main.ts`) emitted as `/sw.js`. Nothing it imports may be imported by the app, or Rolldown makes a shared chunk and `sw.js` gets an `import` (the saved list copies the pathname regex for that reason). The `__F1_BUILD__` and `__F1_SHELL__` placeholders are filled in `generateBundle`. `build.test.ts` splits the `sw` chunk out of `chunks`, and runs the built file in a `node:vm` context to prove it is a classic script. It registers only under `import.meta.env.PROD`.
 - **TanStack Query 5:** the default `networkMode: 'online'` pauses queries after an `offline` event; this app sets `'always'` (`lib/api.ts`), because the service worker decides what answers offline.
