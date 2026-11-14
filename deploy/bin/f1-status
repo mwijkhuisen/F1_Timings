@@ -3,10 +3,11 @@
 # state, the disk, the containers, the recorder and the timers. It never reads /etc/f1/secrets or
 # f1.env, and a probe that fails prints "unavailable: …" instead of stopping the rest.
 # Rows and labels come from containers and images (a container writes recorder_status), so all
-# output goes through a filter that drops the C0 and UTF-8 C1 control characters (tab and newline
-# kept): nothing it prints can drive root's terminal.
+# output goes through one ASCII-only pass that turns every byte but tab, newline and printable ASCII
+# into '?' (a single pass: nothing it drops can re-join into a control sequence): nothing it prints
+# can drive root's terminal. Each docker and df probe gets 10 s, the psql one 20 s.
 #
-# Exit: 0 printed; 1 not root; 64 usage.
+# Exit: 0 once it printed (a failed probe too); 1 not root; 64 usage.
 #
 # Usage: sudo f1-status
 set -euo pipefail
@@ -21,28 +22,30 @@ fi
 
 # env_images <file>: each line of one of f1-update's env files, with its image's revision label.
 env_images() {
-  local line ref rev
-  if [[ ! -f $1 ]]; then
+  local line ref rev text
+  # Read at once: candidate.env can go between a test and the read (f1-update moves it).
+  if ! text=$(cat -- "$1" 2>/dev/null); then
     echo "${1##*/}: (not present)"
     return 0
   fi
-  while IFS= read -r line || [[ -n $line ]]; do
+  while IFS= read -r line; do
+    [[ -n $line ]] || continue
     ref=${line#*=}
     if [[ ! $ref =~ $F1_REF_RE ]]; then
       rev='unavailable: not an image reference'
-    elif ! rev=$(docker image inspect -f '{{index .Config.Labels "org.opencontainers.image.revision"}}' "$ref" 2>/dev/null); then
+    elif ! rev=$(timeout 10 docker image inspect -f '{{index .Config.Labels "org.opencontainers.image.revision"}}' "$ref" 2>/dev/null </dev/null); then
       rev='unavailable: image not present'
     fi
     printf '%s  %s  revision %s\n' "${1##*/}" "$line" "$rev"
-  done <"$1"
+  done <<<"$text"
 }
 
 status() {
   local since docker_root
   echo '== deploy'
-  env_images "$F1_STATE/current.env" || echo 'unavailable: current.env'
-  env_images "$F1_STATE/failed.env" || echo 'unavailable: failed.env'
-  if [[ -f $F1_STATE/candidate.env ]]; then env_images "$F1_STATE/candidate.env" || echo 'unavailable: candidate.env'; fi
+  env_images "$F1_STATE/current.env"
+  env_images "$F1_STATE/failed.env"
+  if [[ -f $F1_STATE/candidate.env ]]; then env_images "$F1_STATE/candidate.env"; fi
   if [[ ! -f $F1_STATE/held-since ]]; then
     echo 'held-since: (not present)'
   elif since=$(<"$F1_STATE/held-since") && [[ $since =~ ^[0-9]{1,12}$ ]]; then
@@ -60,13 +63,13 @@ status() {
   echo '== disk'
   printf 'f1-tick (time, free bytes of /srv/f1 and of the Docker data root): '
   cat -- "$F1_STATE/disk" 2>/dev/null || echo "unavailable: no $F1_STATE/disk"
-  docker_root=$(docker info -f '{{.DockerRootDir}}' 2>/dev/null) || docker_root=''
+  docker_root=$(timeout 10 docker info -f '{{.DockerRootDir}}' 2>/dev/null </dev/null) || docker_root=''
   [[ -n $docker_root ]] || echo 'unavailable: the Docker data root (docker info)'
-  df -h -- /srv/f1 ${docker_root:+"$docker_root"} || echo 'unavailable: df'
+  timeout 10 df -h -- /srv/f1 ${docker_root:+"$docker_root"} </dev/null || echo 'unavailable: df'
 
   echo '== containers'
   # Every container of project f1 (a job's too), without compose: it needs no current.env.
-  docker ps -a --filter label=com.docker.compose.project=f1 \
+  timeout 10 docker ps -a --filter label=com.docker.compose.project=f1 \
     --format 'table {{.Label "com.docker.compose.service"}}\t{{.Names}}\t{{.State}}\t{{.Status}}' </dev/null ||
     echo 'unavailable: docker ps'
 
@@ -80,8 +83,7 @@ status() {
   systemctl list-timers --all --no-pager f1-update.timer f1-tick.timer || echo 'unavailable: systemctl list-timers'
   systemctl show -p Id -p Result -p ExecMainStatus -p ExecMainExitTimestamp f1-update.service f1-tick.service ||
     echo 'unavailable: systemctl show'
-  return 0
 }
 
-# C0 (but tab and newline) and DEL, then the UTF-8 C1 range U+0080-U+009F (CSI is C2 9B).
-status 2>&1 | tr -d '\000-\010\013-\037\177' | LC_ALL=C sed 's/\xc2[\x80-\x9f]//g' || true
+# Every byte outside tab, newline and printable ASCII (C0, DEL, UTF-8 C1 such as CSI C2 9B) becomes '?'.
+status 2>&1 | LC_ALL=C tr -c '\011\012\040-\176' '?' || true

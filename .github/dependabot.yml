@@ -56,5 +56,4 @@ updates:
     open-pull-requests-limit: 5
     ignore:
       - dependency-name: postgres
-        versions: [">=19"]
         update-types: ["version-update:semver-major"]

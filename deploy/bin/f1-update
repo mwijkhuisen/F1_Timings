@@ -7,7 +7,7 @@
 # differ (a release half pushed); skip an unchanged or known-bad pair; defer while live records
 # (recorder_status not idle and under 5 min old; a drill too; 14 h at most); otherwise migrate,
 # `up -d` and smoke-test (/healthz 200, then every f1 container healthy). Success moves
-# candidate.env to current.env and prunes the unused images of f1 (by their source label: never
+# candidate.env to current.env and prunes the dangling images of f1 (by their source label: never
 # Waterheight's; a failed prune only warns and changes no exit code). A failure keeps the pair in
 # failed.env (never retried automatically) and rolls back to current.env. Migrations are never
 # undone (expand/contract).
@@ -204,12 +204,15 @@ if f1_compose "$CANDIDATE" --profile jobs run --rm -T migrate &&
   mv -f -- "$CANDIDATE" "$CURRENT"
   rm -f -- "$FAILED"
   log "deployed $pair"
-  # #106: the unused images of f1 only (the source label every f1 image carries; never Waterheight's,
-  # invariant 5). current.env's pair is in use, and a rollback never goes further back than it.
-  if out=$(timeout 300 docker image prune -af --filter "label=org.opencontainers.image.source=https://github.com/mwijkhuisen/F1_Timings" 2>&1); then
+  # #106: f1's dangling images only (the source label every f1 image carries; never Waterheight's,
+  # invariant 5): the old :main once its tag moves to the new release. Not -a: the containerd image
+  # store removes names one by one, and one of them can be the name a container uses (f1-server:ci
+  # beside localhost/f1-server:ci, one digest), which compose then tries to pull.
+  if out=$(timeout 300 docker image prune -f --filter "label=org.opencontainers.image.source=https://github.com/mwijkhuisen/F1_Timings" 2>&1); then
     log "pruned unused f1 images: $(sed -n 's/^Total reclaimed space: /reclaimed /p' <<<"$out")"
   else
-    log "warning: pruning the unused f1 images failed: trying again after the next deploy"
+    rc=$?
+    log "warning: pruning the unused f1 images failed (exit $rc: ${out##*$'\n'}): trying again after the next deploy"
   fi
   exit 0
 fi

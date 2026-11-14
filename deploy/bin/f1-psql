@@ -1,13 +1,14 @@
 #!/usr/bin/env bash
 # f1-psql (#106; A§14.5): psql in the f1 database of the running stack, for the runbooks' read-only
-# diagnostics: sudo f1-psql -c 'SELECT …', or sudo f1-psql for a prompt. Through compose exec on db
-# with current.env (compose needs its image references), as postgres over db's local socket: those
-# diagnostics read lap_source and raw_response, which f1_api cannot read.
+# diagnostics: sudo f1-psql -c 'SELECT …', or sudo f1-psql for a prompt. Through docker exec on
+# f1-db-1 (as recording() in f1-lib.sh), as postgres over db's local socket: those diagnostics read
+# lap_source and raw_response, which f1_api cannot read. Not compose exec: compose would load the
+# whole project, f1.env included, and needs current.env for its image references.
 # Every transaction is read-only by default (default_transaction_read_only): a guard against an
 # accident, not a boundary. A superuser can turn it off, and root owns the host anyway. Writes keep
 # the runbooks' long `docker compose … exec db psql` form.
 #
-# Exit: psql's; 1 not root, or nothing deployed yet (no current.env).
+# Exit: psql's (docker's when f1-db-1 does not run); 1 not root.
 #
 # Usage: sudo f1-psql [<psql argument>…]
 set -euo pipefail
@@ -15,9 +16,7 @@ set -euo pipefail
 . "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/f1-lib.sh"
 
 ((EUID == 0)) || die "run as root (sudo)"
-[[ -f $F1_STATE/current.env ]] || die "no $F1_STATE/current.env: nothing is deployed yet"
-# A TTY for an interactive prompt only; -T for a pipe, a file or f1-status.
-tty=(-T)
-if [[ -t 0 && -t 1 ]]; then tty=(); fi
-f1_compose "$F1_STATE/current.env" exec "${tty[@]}" -e PGOPTIONS='-c default_transaction_read_only=on' \
-  db psql -X -U postgres -d f1 "$@"
+# A TTY for an interactive prompt only: not for a pipe, a file or f1-status.
+tty=()
+if [[ -t 0 && -t 1 ]]; then tty=(-t); fi
+exec docker exec -i "${tty[@]}" -e PGOPTIONS='-c default_transaction_read_only=on' f1-db-1 psql -X -U postgres -d f1 "$@"

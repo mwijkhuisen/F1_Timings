@@ -44,9 +44,9 @@ Both are root-only copies that `f1-install` puts in `/usr/local/bin` (#106, owne
 - `== recorder`: `recorder_status` (state, session_key, updated_at, warning) and the last 3 `recording` rows.
 - `== timers`: `systemctl list-timers` and the last result and exit status of `f1-update.service` and `f1-tick.service`.
 
-A probe that fails prints `unavailable: …` and the rest still runs. It never reads a secret or `f1.env`. Rows and image labels come from containers, so the output passes a filter that drops control characters (tab and newline stay). It is safe to paste into an issue.
+A probe that fails prints `unavailable: …` and the rest still runs. It never reads a secret or `f1.env`. Rows and image labels come from containers, so the output passes one ASCII-only filter: every byte except tab, newline and printable ASCII becomes `?`, so no control character and no UTF-8 reaches your terminal. It is safe to paste into an issue.
 
-`sudo f1-psql [<psql argument>…]` is psql in the f1 database, as `postgres`, over `db`'s local socket, with `default_transaction_read_only=on`. It needs a deploy (`current.env`). Use it for the runbooks' read-only queries: `sudo f1-psql -c "SELECT …"`, `sudo f1-psql -f - < file.sql` (it adds `-T` itself unless both stdin and stdout are a terminal), or no argument for a prompt. The read-only default guards against an accident; it is not a boundary (a superuser can turn it off, and you are root). A write keeps the long `sudo docker compose -p f1 -f /etc/f1/compose.yaml --env-file /srv/f1/state/current.env exec -T db psql -U postgres -d f1 …` form on purpose.
+`sudo f1-psql [<psql argument>…]` is psql in the f1 database, as `postgres`, over `db`'s local socket, with `default_transaction_read_only=on`. It runs `docker exec -i [-t] … f1-db-1 psql -X -U postgres -d f1`, so it needs neither `current.env` nor compose and loads no `f1.env`. Use it for the runbooks' read-only queries: `sudo f1-psql -c "SELECT …"`, `sudo f1-psql -f - < file.sql` (it adds `-T` itself unless both stdin and stdout are a terminal), or no argument for a prompt. The read-only default guards against an accident; it is not a boundary (a superuser can turn it off, and you are root). A write keeps the long `sudo docker compose -p f1 -f /etc/f1/compose.yaml --env-file /srv/f1/state/current.env exec -T db psql -U postgres -d f1 …` form on purpose.
 
 ## What an `f1-update` run logs
 
@@ -54,8 +54,8 @@ A probe that fails prints `unavailable: …` and the rest still runs. It never r
 |---|---|---|
 | `up to date (server … web …)` | the pulled digests equal `current.env` | 0 |
 | `deploying …`, `smoke test passed: http://127.0.0.1:8180/healthz 200, no f1 container unhealthy, starting or restarting`, `deployed …` | success; `candidate.env` became `current.env`, `failed.env` was removed | 0 |
-| `pruned unused f1 images: reclaimed <size>` | after `deployed …`: the unused f1 images were removed (`docker image prune -af`, filtered on the F1_Timings source label, so Waterheight's images stay). Compare with `docker system df` | 0 |
-| `warning: pruning the unused f1 images failed: trying again after the next deploy` | the prune failed or ran over 300 s; the deploy itself succeeded. It changes no exit code. `sudo docker image ls` shows what is left; the next deploy prunes again | 0 |
+| `pruned unused f1 images: reclaimed <size>` | after `deployed …`: the dangling f1 images were removed (`docker image prune -f --filter "label=org.opencontainers.image.source=https://github.com/mwijkhuisen/F1_Timings"`, no `-a`: each old release goes once its `:main` tag has moved on, and Waterheight's images stay). Tagged leftovers (`f1-server:broken` from a drill, a manual `:sha-<git>` pull) and old postgres and cloudflared images stay: remove them by hand with `docker image rm`. Compare with `docker system df`. (Owner D3 was `-a`; reverted to dangling-only after CI run 43584730838, #106: under Docker's containerd image store `prune -a` removes image names one by one and dropped `f1-server:ci`, a name the running containers used.) | 0 |
+| `warning: pruning the unused f1 images failed (exit N: <docker's last line>): trying again after the next deploy` | the prune failed or ran over 300 s; the deploy itself succeeded. It changes no exit code. `sudo docker image ls` shows what is left; the next deploy prunes again | 0 |
 | `not configured: run f1-install, then fill …` | `f1.env` or a secret is empty or malformed; nothing deployed | 0 |
 | `pulling … failed: trying again next run` | GHCR unreachable, or the packages are private | 0 |
 | `another f1-update or f1-install is running` | the lock is held | 0 |
@@ -144,7 +144,17 @@ Expected: the changed files as `changed  <path>`, `ok` for the rest, and `f1-ins
 
 A **postgres minor** from Dependabot is a normal PR: its own PR, outside the `compose-images` group. `test/pins.test.ts` fails it until the postgres image in `ci.yml`'s service container matches compose's (Dependabot cannot edit workflows), so the owner pushes that one line to the branch, and the PR then deploys like any other host-file change (above). The data directory does not change within a major.
 
-Below, `OLD=18` and `NEW=19`, and `<new image>` is the PR's new `postgres:<tag>@sha256:…` line from `deploy/compose.yaml`. Outside a weekend, with time for a rollback.
+Below, the same shell session keeps these variables (a `sudo` command sees them expanded). `<new image>` is the PR's new `postgres:<tag>@sha256:…` line from `deploy/compose.yaml`. Outside a weekend, with time for a rollback.
+
+```bash
+OLD=18 NEW=19
+F1="docker compose -p f1 -f /etc/f1/compose.yaml --env-file /srv/f1/state/current.env"
+U=f1-pg-upgrade:$OLD-to-$NEW
+OLDBIN=/usr/lib/postgresql/$OLD/bin NEWBIN=/usr/lib/postgresql/$NEW/bin
+D_OLD=/var/lib/postgresql/$OLD/docker D_NEW=/var/lib/postgresql/$NEW/docker
+# every upgrade container: no network, no capabilities, uid 62532, the volume at db's path
+PGRUN="sudo docker run --rm --network none --cap-drop ALL --security-opt no-new-privileges --user 62532:62532 -v f1_pgdata:/var/lib/postgresql -w /tmp --entrypoint"
+```
 
 1. **Stop both timers**, so nothing deploys or restarts a container meanwhile:
 
@@ -152,60 +162,65 @@ Below, `OLD=18` and `NEW=19`, and `<new image>` is the PR's new `postgres:<tag>@
    sudo systemctl disable --now f1-update.timer f1-tick.timer
    ```
 
-2. **Dump** the database and the roles to root-only files (`/root/f1-upgrade` is an example). They are the way back:
+2. **Stop everything but `db`, then dump** the database and the roles to root-only files (`/root/f1-upgrade` is an example). Nothing writes to the database while it is dumped, and the files are the way back. `globals.sql` holds the four SCRAM verifiers of the roles: it is root `0600`, and step 8 deletes it.
 
    ```bash
    sudo install -d -m 0700 /root/f1-upgrade
-   F1="docker compose -p f1 -f /etc/f1/compose.yaml --env-file /srv/f1/state/current.env"
-   sudo $F1 exec -T db pg_dump -U postgres -Fc f1 | sudo tee /root/f1-upgrade/f1.dump >/dev/null
-   sudo $F1 exec -T db pg_dumpall -U postgres --globals-only | sudo tee /root/f1-upgrade/globals.sql >/dev/null
+   sudo $F1 stop api ingest live caddy cloudflared
+   sudo sh -c "umask 077; $F1 exec -T db pg_dump -U postgres -Fc f1 > /root/f1-upgrade/f1.dump"
+   sudo sh -c "umask 077; $F1 exec -T db pg_dumpall -U postgres --globals-only > /root/f1-upgrade/globals.sql"
+   sudo sh -c "$F1 exec -T db pg_restore --list < /root/f1-upgrade/f1.dump > /dev/null" && echo dump-readable
    sudo ls -l /root/f1-upgrade
    ```
 
-   `-U postgres` is needed everywhere: uid 62532 has no passwd entry, and libpq will not guess a user name without one.
+   Each command's exit status is the command's own (no pipe hides a failed `pg_dump`); `dump-readable` shows that the dump parses. `-U postgres` is needed everywhere: uid 62532 has no passwd entry, and libpq will not guess a user name without one.
 
-3. **Stop the stack** (the data directory must not be in use, and the old server must shut down cleanly):
-
-   ```bash
-   sudo $F1 stop
-   ```
-
-4. **`pg_upgrade` in a one-off container** from the new major's image, as root, with the volume at the same path as in `db`. The image has the new binaries only, so it gets the old major's server package too:
+3. **Stop `db`** (the data directory must not be in use, and the old server must shut down cleanly):
 
    ```bash
-   sudo docker run --rm -it --user root --entrypoint bash \
-     -v f1_pgdata:/var/lib/postgresql -e OLD=18 -e NEW=19 <new image>
+   sudo $F1 stop db
    ```
 
-   Inside the container:
+4. **`pg_upgrade`** in one-off containers from a local upgrade image. The new major's image has the new binaries only, so the image gets the old major's server package too. It is built without the volume, and the containers that touch the volume run as 62532 with no network, no capabilities and no root.
 
-   1. **The old binaries.** `apt-get update && apt-get install -y postgresql-$OLD` (the PGDG repository). This needs egress: the container is on Docker's default bridge, outside f1's networks, so `table inet f1` does not filter it, but check that the host's forward rules let it reach `apt.postgresql.org`.
-   2. **A passwd entry for 62532**, which `initdb` and `pg_upgrade` both need: `groupadd -g 62532 f1pg && useradd -u 62532 -g 62532 -M -d /var/lib/postgresql f1pg` (add `-o` if the id is taken). The entrypoint uses nss_wrapper for the same reason; that works here too if you prefer it. Run what follows as 62532, with the superuser named `postgres` (`-U postgres` on every command, since the existing roles belong to `postgres`, not to `f1pg`):
+   1. **Build the upgrade image.** PGDG is already configured in the official image, and the build needs egress (it runs on Docker's default bridge, outside f1's networks, so `table inet f1` does not filter it, but check that the host's forward rules let it reach `apt.postgresql.org`). The second `RUN` gives 62532 a passwd entry, which `initdb` and `pg_upgrade` both need (the entrypoint uses nss_wrapper for the same reason; add `-o` if the id is taken):
 
       ```bash
-      P="setpriv --reuid=62532 --regid=62532 --clear-groups"
-      OLDBIN=/usr/lib/postgresql/$OLD/bin NEWBIN=/usr/lib/postgresql/$NEW/bin
+      sudo tee /root/f1-upgrade/Dockerfile >/dev/null <<EOF2
+      FROM postgres:<new>-trixie@sha256:<digest>
+      RUN apt-get update && apt-get install -y --no-install-recommends postgresql-$OLD && rm -rf /var/lib/apt/lists/*
+      RUN groupadd -g 62532 f1pg && useradd -u 62532 -g 62532 -M -d /var/lib/postgresql f1pg
+      EOF2
+      sudo docker build -t $U /root/f1-upgrade
       ```
-   3. **Check that the old cluster shut down cleanly:** `$P $OLDBIN/pg_controldata /var/lib/postgresql/$OLD/docker | grep 'cluster state'` must say `shut down`. If it does not, stop here: start the old stack, stop it again properly, and retry.
-   4. **`initdb` the new directory** as 62532 with the arguments of `db`'s `POSTGRES_INITDB_ARGS` in `deploy/compose.yaml`, verbatim (compare it with the file; the entrypoint-only password is left out). Checksums are on by default in PG 18 and later, as they were in the old cluster:
+
+      (`FROM` is `<new image>`.) The superuser is named `postgres` (`-U postgres` on every command, since the existing roles belong to `postgres`, not to `f1pg`).
+   2. **Check that the old cluster shut down cleanly:** `$PGRUN $OLDBIN/pg_controldata $U $D_OLD | grep 'cluster state'` must say `shut down`. If it does not, stop here: start the old stack, stop it again properly, and retry.
+   3. **`initdb` the new directory** with the arguments of `db`'s `POSTGRES_INITDB_ARGS` in `deploy/compose.yaml`, verbatim (compare it with the file; the entrypoint-only password is left out). Checksums are on by default in PG 18 and later, as they were in the old cluster:
 
       ```bash
-      $P $NEWBIN/initdb -D /var/lib/postgresql/$NEW/docker -U postgres \
+      $PGRUN $NEWBIN/initdb $U -D $D_NEW -U postgres \
         --locale-provider=builtin --builtin-locale=C.UTF-8 --locale=C.UTF-8 --encoding=UTF8 \
         --auth-local=trust --auth-host=scram-sha-256
       ```
-   5. **`pg_upgrade --link --check`, then `--link`**, from a working directory 62532 can write (`/tmp`), because `pg_upgrade` creates `pg_upgrade_output.d` there. Both directories are on the same volume, so `--link` works:
+   4. **`pg_upgrade --link --check`, then `--link`**, from `/tmp` (the `-w` of `$PGRUN`; `pg_upgrade` creates `pg_upgrade_output.d` there). Both directories are on the same volume, so `--link` works:
 
       ```bash
-      cd /tmp
-      A="-U postgres -b $OLDBIN -B $NEWBIN -d /var/lib/postgresql/$OLD/docker -D /var/lib/postgresql/$NEW/docker"
-      $P $NEWBIN/pg_upgrade $A --link --check
-      $P $NEWBIN/pg_upgrade $A --link
+      A="-U postgres -b $OLDBIN -B $NEWBIN -d $D_OLD -D $D_NEW"
+      $PGRUN $NEWBIN/pg_upgrade $U $A --link --check
+      $PGRUN $NEWBIN/pg_upgrade $U $A --link
+      ```
+   5. **Carry the host-access settings over.** `pg_upgrade` copies neither `pg_hba.conf` nor `postgresql.auto.conf`, and the `initdb` above writes loopback host lines only, whereas the image's entrypoint had appended `host all all all scram-sha-256` to the old one, which is how `api`, `ingest` and `live` log in over the network. Without it they cannot connect. Do this before the new major starts (step 6) and before step 8 deletes the old directory. Never use `trust` for a host line:
+
+      ```bash
+      $PGRUN /bin/sh $U -c "cp -p $D_OLD/pg_hba.conf $D_NEW/pg_hba.conf && diff $D_OLD/postgresql.auto.conf $D_NEW/postgresql.auto.conf; grep -x 'host all all all scram-sha-256' $D_NEW/pg_hba.conf"
       ```
 
-   `--link` is one-way: once the new server has started, the old directory cannot be used again, so step 2's dumps are the only way back. The roles, their passwords and the grants come over through `pg_upgrade`. `roles.sql` does not rerun: the new image's entrypoint skips its set-up because `PG_VERSION` exists in `/var/lib/postgresql/$NEW/docker`.
+      The `grep` must print the line. The `diff` shows what the old `postgresql.auto.conf` set (a difference is expected: the new file is empty); carry over any setting you still want, then check it with `$PGRUN /bin/cat $U $D_NEW/postgresql.auto.conf`.
 
-5. **The PR** moves the new image line in `deploy/compose.yaml`, the service image in `ci.yml` and `PG_MAJOR` in `test/pins.test.ts` together, plus every other place that names the old major (`grep -rn '18\.6\|postgresql/18\|PostgreSQL 18'`: A§3, A§14.2, CLAUDE.md, `deploy/tests`). The owner pushes the `ci.yml` part. Merge it only after step 4 has succeeded, because `f1-update` and `f1-install` apply compose.
+   `--link` is one-way: once the new server has started, the old directory cannot be used again, so step 2's dumps are the only way back. The roles, their passwords and the grants come over through `pg_upgrade`. `roles.sql` does not rerun: the new image's entrypoint skips its set-up because `PG_VERSION` exists in `$D_NEW`.
+
+5. **The PR** moves the new image line in `deploy/compose.yaml`, the service image in `ci.yml` and `PG_MAJOR` in `test/pins.test.ts` together, plus every other place that names the old major (`grep -rn '18\.6\|postgresql/18\|PostgreSQL 18'`: A§3, A§14.2, CLAUDE.md, `deploy/tests`). The owner pushes the `ci.yml` part. Merging it changes nothing on the host (`f1-update` uses the installed `/etc/f1/compose.yaml`, which only `f1-install` replaces, and the timers are off anyway), so the order is free; merge it once step 4 has succeeded, so that `main` does not name a major you could not migrate to.
 
 6. **`sudo deploy/bin/f1-install`** from the updated checkout: it recreates the stack on the new image and smoke-tests it. Expect `warning: cannot read recorder_status: installing without the hold` (the db was stopped), which is fine here.
 
@@ -215,7 +230,13 @@ Below, `OLD=18` and `NEW=19`, and `<new image>` is the PR's new `postgres:<tag>@
    sudo $F1 exec -T db vacuumdb -U postgres --all --analyze-in-stages --missing-stats-only
    ```
 
-8. **Check, then delete the old cluster.** `sudo f1-status` (all containers healthy, `recorder` answers, `/status` in the browser). When that is fine, delete the old directory (`sudo docker run --rm -v f1_pgdata:/var/lib/postgresql --entrypoint rm <new image> -rf /var/lib/postgresql/18`) and `/root/f1-upgrade` when you no longer want the dumps.
+8. **Check, then clean up.** `sudo f1-status` (all containers healthy, `recorder` answers, `/status` in the browser). When that is fine, delete the old directory, then the dumps (`globals.sql` holds the SCRAM verifiers: do not leave it), then the upgrade image. The prune never touches the upgrade image or the old postgres image (no F1 label), so remove both by hand:
+
+   ```bash
+   $PGRUN /bin/rm $U -rf /var/lib/postgresql/$OLD
+   sudo rm -rf /root/f1-upgrade
+   sudo docker image rm $U <the old postgres image>
+   ```
 
 9. **Timers back on:** `sudo systemctl enable --now f1-update.timer f1-tick.timer`.
 
@@ -224,7 +245,7 @@ Below, `OLD=18` and `NEW=19`, and `<new image>` is the PR's new `postgres:<tag>@
 P2c adds the `live` service, two secrets (`f1tv_username`, `f1tv_password`) and two host directories. The compose file and the image must arrive in this order:
 
 1. Merge the PR.
-2. Approve the release in GitHub (the `production` environment). **Not during a session**: a deploy restarts `live`, which closes the open `recording` row with `complete = false` and starts a new one on the next tick. Since P2f `f1-update` defers a deploy by itself while `live` records, but `f1-install` has no such hold and must still not run during a session.
+2. Approve the release in GitHub (the `production` environment). **Not during a session**: a deploy restarts `live`, which closes the open `recording` row with `complete = false` and starts a new one on the next tick. Since P2f `f1-update` defers a deploy by itself while `live` records, but `f1-install` refuses too while `live` records (see 'Host-file changes'), but still do not run it during a session.
 3. Wait until `f1-update` has deployed the new image: `sudo journalctl -u f1-update --since '-30min' --no-pager` shows `deployed …`, and `sudo cat /srv/f1/state/current.env` names the new digests. The old compose file is still installed, so there is no `live` yet.
 4. Run `f1-install` from a fresh checkout (`docs/runbooks/install.md`, step 3; update the checkout first). It creates `/srv/f1/live` and `/srv/f1/state/live` (`62532:62532 0700`) and the two empty secret files, installs the new `compose.yaml` and, because a deploy is running, recreates the stack with the images of `current.env`, so `live` starts now. It ends with the two files to fill. Do this outside a session too.
 5. Fill `f1tv_username` and `f1tv_password` straight away (`docs/runbooks/install.md`, step 4, A4). Until then `live` runs, records nothing and shows `no_credentials` on the status panel; it reads the files again on its next tick (within 30 s).
