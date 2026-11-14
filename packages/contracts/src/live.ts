@@ -152,7 +152,13 @@ const Message = z.looseObject({
 
 const views = {
   DriverList: z.record(z.string(), opt(Driver)),
-  TimingData: z.looseObject({ SessionPart: int, Withheld: bool, Lines: rec(TimingLine) }),
+  TimingData: z.looseObject({
+    SessionPart: int,
+    // The cars per part, so NoEntries[SessionPart] is the last place through.
+    NoEntries: rec(z.number().int()),
+    Withheld: bool,
+    Lines: rec(TimingLine),
+  }),
   TimingAppData: z.looseObject({ Lines: rec(z.looseObject({ RacingNumber: str, GridPos: str, Stints: rec(Stint) })) }),
   TimingStats: z.looseObject({ Withheld: bool, SessionType: str, Lines: rec(StatsLine) }),
   SessionInfo: z.looseObject({

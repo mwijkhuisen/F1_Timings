@@ -1383,12 +1383,19 @@ header .links {
   vertical-align: middle;
 }
 
-.quali tr.cut > * {
+:is(.quali, .tower) tr.cut > * {
   border-bottom: 2px solid var(--fg);
 }
 
-.quali tr.cutlabel td {
+:is(.quali, .tower) tr.cutlabel td {
   text-align: left;
+}
+
+/* The tower's label cell is no Pos cell: no 48 px width, no sticky left. */
+.tower tr.cutlabel td:first-child {
+  width: auto;
+  min-width: 0;
+  position: static;
 }
 
 .cutlabel span {
@@ -2145,8 +2152,7 @@ header .theme[aria-pressed="true"] {
   list-style: none;
 }
 
-.card .rows li,
-.card p.rows {
+.card .rows li {
   display: flex;
   align-items: baseline;
   justify-content: space-between;

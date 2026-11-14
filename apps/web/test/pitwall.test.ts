@@ -1,6 +1,7 @@
 import { merge, type Obj, view, weatherRow } from '@f1/contracts';
 import { describe, expect, it } from 'vitest';
 import {
+  bestsSoFar,
   fastestSoFar,
   fmtLeft,
   LIGHT,
@@ -280,5 +281,67 @@ describe('fastestSoFar', () => {
     expect(who(stats('1:20.500', '1:20.500'))).toBe(1); // a tie: key order
     expect(who(stats('?', '1:01:20.500'))).toBe(2); // an unparsable value last; h:mm:ss.SSS parses
     expect(who(stats('?', 'x'))).toBe(1);
+  });
+});
+
+describe('bestsSoFar', () => {
+  const lines = (a: object, b: object = {}) => ({ TimingStats: { Lines: { '1': a, '2': b } } });
+  const sector = (value: string, position?: number) => ({ BestSectors: { '0': { Value: value, Position: position } } });
+  const speedOf = (value: string, position?: number) => ({ BestSpeeds: { ST: { Value: value, Position: position } } });
+  const who = (state: Obj) => bestsSoFar(state).map((b) => b.driver.number);
+
+  it('is empty before any ranked value', () => {
+    expect(bestsSoFar({})).toEqual([]);
+    expect(bestsSoFar(practiceState())).toEqual([]);
+  });
+
+  it('lists S1 to S3, I1, I2, Finish line and Speed trap in that order, each with its holder', () => {
+    const best = (v: string) => ({ Value: v, Position: 1 });
+    const state = raceState({
+      extra: {
+        TimingStats: {
+          Lines: {
+            '1': {
+              BestSpeeds: { ST: best('301'), I2: best('299'), FL: best('310.5') },
+              BestSectors: { '2': best('30.1') },
+            },
+            '2': { BestSpeeds: { I1: best('288') }, BestSectors: { '1': best('28.222'), '0': best('1:02.003') } },
+          },
+        },
+      },
+    });
+    expect(bestsSoFar(state)).toEqual([
+      { label: 'S1', value: '1:02.003', speed: false, driver: expect.objectContaining({ acronym: 'BBB' }) },
+      { label: 'S2', value: '28.222', speed: false, driver: expect.objectContaining({ acronym: 'BBB' }) },
+      { label: 'S3', value: '30.1', speed: false, driver: expect.objectContaining({ acronym: 'AAA' }) },
+      { label: 'I1', value: '288 km/h', speed: true, driver: expect.objectContaining({ acronym: 'BBB' }) },
+      { label: 'I2', value: '299 km/h', speed: true, driver: expect.objectContaining({ acronym: 'AAA' }) },
+      { label: 'Finish line', value: '310.5 km/h', speed: true, driver: expect.objectContaining({ acronym: 'AAA' }) },
+      { label: 'Speed trap', value: '301 km/h', speed: true, driver: expect.objectContaining({ acronym: 'AAA' }) },
+    ]);
+  });
+
+  it('takes the lower time of two sector lines ranked 1, whatever the key order', () => {
+    expect(who(lines(sector('25.300', 1), sector('25.100', 1)))).toEqual([2]);
+    expect(who(lines(sector('25.100', 1), sector('25.300', 1)))).toEqual([1]);
+    expect(who(lines(sector('25.100', 1), sector('25.100', 1)))).toEqual([1]); // a tie: key order
+  });
+
+  it('takes the higher speed of two lines ranked 1, whatever the key order', () => {
+    expect(who(lines(speedOf('310', 1), speedOf('312', 1)))).toEqual([2]);
+    expect(who(lines(speedOf('312', 1), speedOf('310', 1)))).toEqual([1]);
+    expect(who(lines(speedOf('99.5', 1), speedOf('312', 1)))).toEqual([2]); // not a string compare
+  });
+
+  it('leaves out a field that is unranked or has no value', () => {
+    expect(bestsSoFar(lines(sector('25.1', 2), speedOf('312')))).toEqual([]);
+    expect(bestsSoFar(lines(sector('', 1), speedOf('', 1)))).toEqual([]);
+    expect(bestsSoFar(lines({ BestSectors: { '3': { Value: '25.1', Position: 1 } } }))).toEqual([]);
+  });
+
+  it('sorts an unparsable value last', () => {
+    expect(who(lines(sector('?', 1), sector('25.100', 1)))).toEqual([2]);
+    expect(who(lines(speedOf('fast', 1), speedOf('300', 1)))).toEqual([2]);
+    expect(bestsSoFar(lines(speedOf('fast', 1)))).toMatchObject([{ label: 'Speed trap', value: 'fast km/h' }]);
   });
 });

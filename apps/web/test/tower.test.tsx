@@ -426,7 +426,10 @@ describe('the tower', () => {
         state={{
           SessionInfo: { Type: 'Race' },
           DriverList: { '5': { Tla: '<b>' } },
-          TimingData: { Lines: { '5': { Line: 1, GapToLeader: '<i>', IntervalToPositionAhead: { Value: '&x' } } } },
+          TimingData: {
+            NoEntries: { '0': 1 },
+            Lines: { '5': { Line: 1, GapToLeader: '<i>', IntervalToPositionAhead: { Value: '&x' } } },
+          },
         }}
       />,
     );
@@ -629,5 +632,91 @@ describe('the closing trend at the line (race, with a trend)', () => {
       expect(none).not.toContain('Interval change');
       expect(none).not.toContain('At the line');
     }
+  });
+});
+
+describe('the knock-out line in qualifying', () => {
+  // Six cars; NoEntries holds the cars per part, so NoEntries[SessionPart] is the last place through.
+  const field = (part: number, o: { type?: string; name?: string; status?: string; entries?: Obj } = {}): Obj => ({
+    SessionInfo: { Key: 9, Type: o.type ?? 'Qualifying', Name: o.name ?? 'Qualifying' },
+    SessionStatus: { Status: o.status ?? 'Started' },
+    DriverList: Object.fromEntries([1, 2, 3, 4, 5, 6].map((n) => [String(n), { Tla: `D${n}` }])),
+    TimingData: {
+      SessionPart: part,
+      NoEntries: o.entries ?? { '0': 6, '1': 4, '2': 2 },
+      Lines: Object.fromEntries([1, 2, 3, 4, 5, 6].map((n) => [String(n), { Line: n, Position: String(n) }])),
+    },
+  });
+  const html = (s: Obj) => renderToStaticMarkup(<Tower state={s} />);
+  const rows = (h: string) => h.split('<tr').filter((r) => r.includes('</th>') && r.includes('class="drv"'));
+  const cutRows = (h: string) => rows(h).filter((r) => r.startsWith(' class="cut"'));
+  const labels = (h: string) => [...h.matchAll(/<tr class="cutlabel">.*?<\/tr>/g)].map((m) => m[0]);
+
+  it('sits under the 4th row in Q1 and the 2nd in Q2, the label row right after it', () => {
+    for (const [part, last] of [
+      [1, 'D4'],
+      [2, 'D2'],
+    ] as const) {
+      const h = html(field(part));
+      expect(cutRows(h)).toHaveLength(1);
+      expect(cutRows(h)[0]).toContain(`>${last}</th>`);
+      expect(labels(h)).toHaveLength(1);
+      expect(h).toMatch(new RegExp(`class="cut">.*?>${last}</th>.*?</tr><tr class="cutlabel">`));
+    }
+  });
+
+  it('keeps the other row classes beside cut', () => {
+    const s = field(1);
+    ((s.TimingData as Obj).Lines as Obj)['4'] = { Line: 4, Retired: true };
+    expect(renderToStaticMarkup(<Tower state={s} focus="4" />)).toContain('<tr class="out focus cut">');
+  });
+
+  it('is absent in Q3, before Q1, outside qualifying and when every car goes through', () => {
+    expect(labels(html(field(3)))).toEqual([]);
+    expect(html(field(3))).not.toContain('class="cut');
+    expect(html(field(0))).not.toContain('cutlabel');
+    expect(html(field(1, { type: 'Race' }))).not.toContain('cutlabel');
+    expect(html(field(1, { entries: { '1': 6 } }))).not.toContain('cutlabel');
+    expect(html(field(1, { entries: { '1': 9 } }))).not.toContain('cutlabel');
+    expect(html(field(1, { entries: {} }))).not.toContain('cutlabel');
+  });
+
+  it('says "<next part> above · drop zone below", whatever the session status', () => {
+    expect(labels(html(field(1)))[0]).toContain('<span>Q2 above · drop zone below</span>');
+    expect(labels(html(field(2)))[0]).toContain('<span>Q3 above · drop zone below</span>');
+    for (const status of ['Finished', 'Finalised', 'Aborted'])
+      expect(labels(html(field(1, { status })))[0]).toContain('<span>Q2 above · drop zone below</span>');
+    expect(html(field(1, { status: 'Finished' }))).not.toContain('knocked out');
+  });
+
+  it('draws no line while the session is Inactive: before Q1 and between the parts', () => {
+    expect(html(field(1, { status: 'Inactive' }))).not.toContain('cutlabel');
+    expect(html(field(2, { status: 'Inactive' }))).not.toContain('cutlabel');
+    expect(html(field(2, { status: 'Started' }))).toContain('cutlabel');
+  });
+
+  it('names the parts SQ in a sprint qualifying', () => {
+    expect(labels(html(field(1, { name: 'Sprint Qualifying' })))[0]).toContain('SQ2 above · drop zone below');
+    expect(labels(html(field(2, { name: 'Sprint Shootout', status: 'Finished' })))[0]).toContain(
+      'SQ3 above · drop zone below',
+    );
+  });
+
+  it('spans the header: colSpan equals the number of header cells', () => {
+    const h = html(field(1));
+    const head = h.slice(h.indexOf('<thead>'), h.indexOf('</thead>'));
+    expect(labels(h)[0]).toContain(`<td colSpan="${head.split('<th ').length - 1}">`);
+  });
+});
+
+describe('the finish-line speed', () => {
+  it('shows only in the panel: FL is no tower cell', () => {
+    const s: Obj = {
+      SessionInfo: { Type: 'Race' },
+      DriverList: { '1': { Tla: 'AAA' } },
+      TimingData: { Lines: { '1': { Line: 1, Position: '1', Speeds: { FL: { Value: '333' } } } } },
+      TimingStats: { Lines: { '1': { BestSpeeds: { FL: { Value: '333' } } } } },
+    };
+    expect(renderToStaticMarkup(<Tower state={s} />)).not.toContain('333');
   });
 });

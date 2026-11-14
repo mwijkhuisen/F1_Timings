@@ -1,6 +1,14 @@
 import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, expect, it } from 'vitest';
-import { fastestSoFar, LIGHT, type Light, raceControl, stripOf, withinASecond } from '../src/lib/pitwall.ts';
+import {
+  bestsSoFar,
+  fastestSoFar,
+  LIGHT,
+  type Light,
+  raceControl,
+  stripOf,
+  withinASecond,
+} from '../src/lib/pitwall.ts';
 import { Panel, SessionLight, Strip } from '../src/views/PitWall.tsx';
 import { practiceState, raceState } from './feed-state.ts';
 
@@ -9,7 +17,9 @@ import { practiceState, raceState } from './feed-state.ts';
 const T = Date.parse('2026-01-11T14:20:00Z') + 65_500; // 65.5 s after the clock's Utc
 const strip = (s = raceState()) => renderToStaticMarkup(<Strip strip={stripOf(s)} now={() => T} playing={false} />);
 const panel = (s = raceState(), race = true) =>
-  renderToStaticMarkup(<Panel rc={raceControl(s)} pairs={withinASecond(s)} fastest={fastestSoFar(s)} race={race} />);
+  renderToStaticMarkup(
+    <Panel rc={raceControl(s)} pairs={withinASecond(s)} fastest={fastestSoFar(s)} bests={bestsSoFar(s)} race={race} />,
+  );
 
 describe('SessionLight', () => {
   it.each(Object.keys(LIGHT) as Light[])('%s: the word as text, the lamps hidden, the lit lamp a class', (key) => {
@@ -65,6 +75,21 @@ describe('Panel', () => {
     ],
   });
   const html = panel(s);
+  const withBests = raceState({
+    extra: {
+      TimingStats: {
+        Lines: {
+          '1': { PersonalBestLapTime: { Value: '1:21.000', Position: 2, Lap: 8 } },
+          '2': {
+            PersonalBestLapTime: { Value: '1:20.500', Position: 1, Lap: 9 },
+            BestSectors: { '1': { Value: '28.222', Position: 1 } },
+            BestSpeeds: { FL: { Value: '310', Position: 1 } },
+          },
+        },
+      },
+    },
+  });
+  const bestsHtml = panel(withBests);
 
   it('offers the race-control kinds as pressed buttons with their counts, All pressed', () => {
     expect(html).toContain(
@@ -84,20 +109,30 @@ describe('Panel', () => {
     expect(html.indexOf('L5')).toBeLessThan(html.indexOf('L1<'));
   });
 
-  it('pairs the cars within a second, and shows the fastest lap so far', () => {
+  it('pairs the cars within a second, and shows the bests so far: the lap, then the sectors and speeds', () => {
     expect(html).toContain(
       '<li><span><span class="muted">P1</span> <b>AAA</b> <span class="muted">from</span> <b>BBB</b></span><span>+0.400</span></li>',
     );
-    expect(html).toContain(
-      '<span class="t-purple">1:20.500<span class="vh">, overall best</span></span> <b>BBB</b></span><span class="muted">L9</span>',
+    expect(bestsHtml).toContain('<h2>Bests so far</h2><ul class="rows">');
+    expect(bestsHtml).toContain(
+      '<li><span>Lap <b>BBB</b></span><span><span class="t-purple">1:20.500<span class="vh">, overall best</span></span><span class="muted"> L9</span></span></li>',
     );
+    expect(bestsHtml).toContain(
+      '<li><span>S2 <b>BBB</b></span><span class="t-purple">28.222<span class="vh">, overall best</span></span></li>',
+    );
+    expect(bestsHtml).toContain('<li><span>Finish line <b>BBB</b></span><span>310 km/h</span></li>');
+    expect(bestsHtml.indexOf('Lap <b>')).toBeLessThan(bestsHtml.indexOf('S2 <b>'));
+    expect(bestsHtml.indexOf('S2 <b>')).toBeLessThan(bestsHtml.indexOf('Finish line'));
   });
 
   it('says when there is nothing yet, and has no "within a second" outside races', () => {
-    const empty = renderToStaticMarkup(<Panel rc={raceControl({})} pairs={[]} fastest={undefined} race={true} />);
+    const empty = renderToStaticMarkup(
+      <Panel rc={raceControl({})} pairs={[]} fastest={undefined} bests={[]} race={true} />,
+    );
     expect(empty).toContain('<p class="muted">No messages yet.</p>');
     expect(empty).toContain('No car within a second of the one ahead.');
-    expect(empty).toContain('No lap time yet.');
+    expect(empty).toContain('<p class="muted">No times yet.</p>');
+    expect(empty).not.toContain('Fastest lap so far');
     expect(empty).not.toContain('class="scroll"');
     expect(panel(practiceState(), false)).not.toContain('Within a second');
   });
@@ -105,7 +140,13 @@ describe('Panel', () => {
 
 describe('feed text as text', () => {
   const evil = '<img src=x onerror=alert(1)>';
-  const s = raceState({ msgs: [[3, 'Other', evil]], extra: { WeatherData: { AirTemp: evil, Rainfall: '0' } } });
+  const s = raceState({
+    msgs: [[3, 'Other', evil]],
+    extra: {
+      WeatherData: { AirTemp: evil, Rainfall: '0' },
+      TimingStats: { Lines: { '1': { BestSpeeds: { ST: { Value: '<b>x</b>', Position: 1 } } } } },
+    },
+  });
 
   it('escapes a message in the strip and the panel', () => {
     for (const html of [strip(s), panel(s)]) {
@@ -114,5 +155,11 @@ describe('feed text as text', () => {
     }
     expect(strip(s)).toContain('title="&lt;img src=x onerror=alert(1)&gt;"');
     expect(strip(s)).toContain('<dd class="v">dry</dd>'); // a temperature that is no number is left out
+  });
+
+  it('escapes a TimingStats value in the Bests so far card', () => {
+    const html = panel(s);
+    expect(html).not.toContain('<b>x</b>');
+    expect(html).toContain('&lt;b&gt;x&lt;/b&gt; km/h');
   });
 });
