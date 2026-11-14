@@ -131,7 +131,7 @@ export function StatusPanel({ status }: { status: StatusData }) {
       <FailedTable rows={status.failed} view="laps" label="Last fetch failed" />
       <h2>Rain</h2>
       <Counts values={Object.entries(status.rain.states)} />
-      <h3>Last fetch failed</h3>
+      <h3>Grids whose last fetch failed</h3>
       <FailedTable rows={status.rain.failed} view="weather" label="Rain grids, last fetch failed" />
       <h2>Race control in an unknown form</h2>
       {status.rc_unmatched.length === 0 ? (

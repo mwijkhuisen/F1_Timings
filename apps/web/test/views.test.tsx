@@ -313,7 +313,9 @@ describe('the status panel', () => {
     expect(r).toContain('aria-label="Rain grids, last fetch failed"');
     expect(r).toContain('<td><a href="/2026/0/9966/weather">Qualifying</a></td><td>3</td><td>http_429</td><td>—</td>');
     expect(html).toContain('<h2>Rain</h2><dl class="counts">');
-    expect(html).toContain('<h3>Last fetch failed</h3><p>None.</p><h2>Race control in an unknown form</h2>');
+    expect(html).toContain(
+      '<h3>Grids whose last fetch failed</h3><p>None.</p><h2>Race control in an unknown form</h2>',
+    );
   });
 
   it('race control in an unknown form: none, or each race with a link to its laps and the row count', () => {
