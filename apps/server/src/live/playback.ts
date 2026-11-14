@@ -231,6 +231,11 @@ export async function* playback(o: {
   /** Whether the recording is finished: called at EOF, at most every 30 s. */
   ended: () => Promise<boolean>;
   signal: AbortSignal;
+  /**
+   * Called once, just before the open's snapshot is yielded (#101): the seek's wall time in ms on `now` (reading,
+   * parsing and the lap rows) and the lines it applied. Never for a later snapshot (a switch or a backlog).
+   */
+  onOpen?: (seek: { ms: number; lines: number }) => void;
 }): AsyncGenerator<PlaybackEvent> {
   const start = o.now();
   const T = () => (o.at === 'live' ? o.now() - o.delay * 1000 : o.at + (o.now() - start) * o.speed);
@@ -302,7 +307,7 @@ export async function* playback(o: {
 
   // Seek: every line from the first one up to T, through one feed (its duplicate filter sees every line) and the laps.
   // ponytail: a full scan per stream open, ~1.1 s for a 4 h race on WSL and more on the VM's 1 CPU; a per-recording
-  // scan cache if that hurts.
+  // scan cache if that hurts. `onOpen` measures it: the api logs it per open (#101, A§11.3 "Cost").
   const at = T();
   const src = lines(o.dir, 0);
   try {
@@ -314,8 +319,14 @@ export async function* playback(o: {
       return line;
     };
     let line: Line | null | undefined = await seekNext();
-    for (; line && line.r <= at; line = await seekNext()) apply(line);
-    yield snapshot(at);
+    let seeked = 0;
+    for (; line && line.r <= at; line = await seekNext()) {
+      apply(line);
+      seeked++;
+    }
+    const first = snapshot(at);
+    o.onOpen?.({ ms: o.now() - start, lines: seeked });
+    yield first;
 
     let wrote = o.now();
     let polled = Number.NEGATIVE_INFINITY;

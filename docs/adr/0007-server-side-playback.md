@@ -36,3 +36,9 @@
 - **A session switch clears the state.** When a `SessionInfo` carries another `Key` than the state's, the stream clears the state and sends a fresh `snapshot`. Without it the previous session's lines stayed (limit E, A§11.3): FP1 11397 ended with 32 TimingData/DriverList/TimingAppData lines for 22 drivers and 171 race-control messages instead of 67; with the reset it has 22/22/22 and 67. The lap and stint rows are byte-identical with and without it on both recordings.
 - **The stream carries the lap and stint rows.** All of them in the `snapshot`, and the changed ones in a new `laps` event (A§10).
 - **Replay sync** is the seek bar with markers plus ±1/±5/±30 s position nudges. The 0–120 s delay slider is live only (A§11.3, A§13).
+
+## Amendment (owner, 2026-11-13, #101)
+
+- **A live delay change reopens only when it goes below the open stream's delay.** The stream keeps the delay it opened at, and the page holds each event for the shown delay minus that one, counted from its arrival (A§11.3, A§13). A decrease below it opens one new stream, as before.
+  - Why: syncing to F1 TV takes several ±1/±5 nudges, and each reopen cost a full scan on the VM's 1 CPU and about 0.65 MB of mobile data for a full race (A§11.3 "Cost").
+  - Not the rejected alternative: the hold covers at most 120 s of one live stream's events, never a recording. Replay is unchanged, and the server is unchanged (no side channel, no new input).

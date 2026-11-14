@@ -6,7 +6,7 @@ import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from 'vitest';
 import { HttpError, isStale, markStale } from '../src/lib/api.ts';
 import { useTitle } from '../src/lib/routes.ts';
-import { streamUrl } from '../src/lib/stream.ts';
+import { MAX_HELD, openStream, streamUrl } from '../src/lib/stream.ts';
 import { fmtClock } from '../src/lib/time.ts';
 import { OFFLINE } from '../src/ui/ErrorView.tsx';
 import { Live, Replay } from '../src/views/Live.tsx';
@@ -151,12 +151,109 @@ const slide = (label: string, v: number) =>
 const delayShown = () => Number($<HTMLInputElement>('input[aria-label="Delay"]').value);
 const last = () => FakeES.all.at(-1) as FakeES;
 const atOf = (es: FakeES) => new URL(es.url, 'http://x').searchParams.get('at');
+/** `still=1` marks a still frame's open for the server's open log (#101); a playing stream has none. */
+const stillOf = (es: FakeES) => new URL(es.url, 'http://x').searchParams.get('still');
 const openCount = () => FakeES.all.filter((e) => !e.closed).length;
 
 describe('streamUrl', () => {
   it('builds live and replay URLs', () => {
     expect(streamUrl({ recording: 7, at: 'live', delay: 12 })).toBe('/api/v1/playback/7/stream?at=live&delay=12');
     expect(streamUrl({ recording: 7, at: 1234, delay: 12 })).toBe('/api/v1/playback/7/stream?at=1234');
+    expect(streamUrl({ recording: 7, at: 1234, delay: 12, still: true })).toBe(
+      '/api/v1/playback/7/stream?at=1234&still=1',
+    );
+    // A still frame is a replay at T: live never carries it.
+    expect(streamUrl({ recording: 7, at: 'live', delay: 12, still: true })).toBe(
+      '/api/v1/playback/7/stream?at=live&delay=12',
+    );
+  });
+});
+
+describe('openStream hold (#101)', () => {
+  const handlers = () => {
+    const seen: string[] = [];
+    return {
+      seen,
+      h: {
+        onData: (f: { t: number }, kind: string) => seen.push(`${kind} ${f.t - NOW}`),
+        onError: () => seen.push('error'),
+        onStale: () => seen.push('stale'),
+        onEnd: (t: number) => seen.push(`end ${t - NOW}`),
+      },
+    };
+  };
+  const delta = (t: number) => ({ t: NOW + t, topic: 'TrackStatus', data: { Status: '1' } });
+
+  it('holds each event for `hold` after its arrival, in order; a change applies at once; a ping is never held', () => {
+    const { seen, h } = handlers();
+    const s = openStream({ recording: 7, at: 'live', delay: 0 }, h, FakeES as unknown as typeof EventSource);
+    s.hold(2_000);
+    const es = last();
+    es.emit('snapshot', { t: NOW, state: {}, laps: [], stints: [] });
+    advance(500);
+    es.emit('delta', delta(500));
+    es.emit('ping', { t: NOW + 500 });
+    advance(1_499);
+    expect(seen).toEqual([]);
+    advance(1);
+    expect(seen).toEqual(['snapshot 0']);
+    advance(500);
+    expect(seen).toEqual(['snapshot 0', 'delta 500']);
+    es.emit('delta', delta(2_500)); // arrives at +2.5 s
+    s.hold(5_000); // longer: due at +7.5 s
+    advance(4_999);
+    expect(seen).toHaveLength(2);
+    s.hold(1_000); // shorter: overdue, applied at once
+    expect(seen).toEqual(['snapshot 0', 'delta 500', 'delta 2500']);
+    s.hold(0);
+    es.emit('delta', delta(8_000));
+    expect(seen.at(-1)).toBe('delta 8000'); // nothing queued and no hold: as it arrives
+    s.close();
+  });
+
+  it('a held event that fails its contract is stale at once; close drops the held ones', () => {
+    const { seen, h } = handlers();
+    const s = openStream({ recording: 7, at: 'live', delay: 0 }, h, FakeES as unknown as typeof EventSource);
+    s.hold(5_000);
+    const es = last();
+    es.emit('snapshot', { t: NOW, state: {}, laps: [], stints: [] });
+    es.emit('delta', { t: 'x' });
+    expect(seen).toEqual(['stale']);
+    expect(es.closed).toBe(true);
+    advance(10_000);
+    expect(seen).toEqual(['stale']);
+    s.close();
+
+    const other = handlers();
+    const t = openStream({ recording: 7, at: 'live', delay: 0 }, other.h, FakeES as unknown as typeof EventSource);
+    t.hold(5_000);
+    last().emit('snapshot', { t: NOW, state: {}, laps: [], stints: [] });
+    t.close();
+    advance(10_000);
+    expect(other.seen).toEqual([]);
+  });
+
+  it(`fails as on an error past ${MAX_HELD} held events`, () => {
+    const { seen, h } = handlers();
+    const s = openStream({ recording: 7, at: 'live', delay: 0 }, h, FakeES as unknown as typeof EventSource);
+    s.hold(60_000);
+    const es = last();
+    const listener = (name: string, data: unknown) => {
+      // Straight to the listeners, without a React act() per event.
+      for (const f of (es as unknown as { listeners: Map<string, ((e: MessageEvent) => void)[]> }).listeners.get(
+        name,
+      ) ?? [])
+        f(new MessageEvent(name, { data: JSON.stringify(data) }));
+    };
+    listener('snapshot', { t: NOW, state: {}, laps: [], stints: [], weather: [] });
+    for (let i = 1; i < MAX_HELD; i++) listener('delta', delta(i));
+    expect(seen).toEqual([]);
+    listener('delta', delta(MAX_HELD));
+    expect(seen).toEqual(['error']);
+    expect(es.closed).toBe(true);
+    advance(120_000);
+    expect(seen).toEqual(['error']);
+    s.close();
   });
 });
 
@@ -227,7 +324,8 @@ describe('Player', () => {
     expect(delayShown()).toBe(5);
   });
 
-  it('a delay change closes the old stream and opens one with the new delay', () => {
+  // #101: was "a delay change closes the old stream and opens one with the new delay".
+  it("live: a delay change at or above the open stream's delay never opens a stream", () => {
     render({});
     expect(FakeES.all).toHaveLength(1);
     const first = last();
@@ -238,14 +336,180 @@ describe('Player', () => {
     click('5 seconds earlier');
     advance(300);
     slide('Delay', 9);
-    advance(399);
+    advance(1_000);
+    // Back down to the stream's own delay: the held events are due, nothing is missing.
+    slide('Delay', 0);
+    advance(1_000);
     expect(FakeES.all).toHaveLength(1);
     expect(first.closed).toBe(false);
-    advance(1);
-    expect(FakeES.all).toHaveLength(2);
-    expect(first.closed).toBe(true);
-    expect(last().url).toBe('/api/v1/playback/7/stream?at=live&delay=9');
     expect(openCount()).toBe(1);
+  });
+
+  describe('live delay without a reopen (#101)', () => {
+    const light = () => host.querySelector('.strip .lw')?.textContent;
+    const clock = () => $('.clockline time').textContent;
+    const yellow = { topic: 'TrackStatus', data: { Status: '2' } };
+    const delayOf = (es: FakeES) => new URL(es.url, 'http://x').searchParams.get('delay');
+    const pill = () => $('.clockline .pill').textContent;
+
+    it('an increase holds every event for the difference after it arrives: T stands still, nothing after T shows', () => {
+      render({ sessionKey: 9100 });
+      const stream = last();
+      stream.emit('snapshot', { t: NOW, state: raceState(), laps: [], stints: [] });
+      advance(250);
+      expect(light()).toBe('Track clear');
+      advance(1_250); // T = NOW + 1.5 s
+
+      click('5 seconds earlier'); // renders the clock line at once
+      expect(pill()).toBe('LIVE, 5 s behind');
+      expect(clock()).toBe(fmtClock(NOW + 1_000));
+      // T stands at NOW + 1.5 s for the 5 s the page is now further behind.
+      advance(1_000);
+      expect(clock()).toBe(fmtClock(NOW + 1_000));
+      stream.emit('delta', { t: NOW + 2_500, ...yellow }); // arrives at NOW + 2.5 s, due at NOW + 7.5 s
+      advance(3_900); // NOW + 6.4 s: T has stood at NOW + 1.5 s (it runs again from NOW + 6.5 s, as now − 5 s)
+      expect(clock()).toBe(fmtClock(NOW + 1_000));
+      advance(1_099); // NOW + 7.499 s: T is NOW + 2.499 s, so the event at NOW + 2.5 s is not shown yet
+      expect(light()).toBe('Track clear');
+      expect(FakeES.all).toHaveLength(1);
+      advance(1);
+      advance(250);
+      expect(light()).toBe('Yellow flag');
+      expect(clock()).toBe(fmtClock(NOW + 2_000)); // resynced to the event, never past it
+      // It runs again, 5 s further behind (unheld, T would be NOW + 9.75 s by now).
+      advance(2_000);
+      expect([fmtClock(NOW + 3_000), fmtClock(NOW + 4_000)]).toContain(clock());
+
+      // `end` is held the same way: the bar stays live until it is due.
+      // The server closes the response after `end`, so a real EventSource fires `error` at once: no failure, no reopen.
+      stream.emit('end', { t: NOW + 4_750 });
+      stream.emit('error');
+      expect(stream.closed).toBe(true);
+      expect(host.textContent).not.toContain('Reconnecting…');
+      advance(4_999);
+      expect(pill()).toBe('LIVE, 5 s behind');
+      advance(1);
+      expect(pill()).toBe('Paused');
+      advance(60_000);
+      expect(FakeES.all).toHaveLength(1); // it never reopens
+    });
+
+    it('a held `end` keeps the held events before it when the transport closes, and the watchdog stops', () => {
+      render({ sessionKey: 9100 });
+      const stream = last();
+      stream.emit('snapshot', { t: NOW, state: raceState(), laps: [], stints: [] });
+      advance(250);
+      click('5 seconds earlier');
+      stream.emit('delta', { t: NOW + 250, ...yellow });
+      stream.emit('end', { t: NOW + 300 });
+      stream.emit('error');
+      advance(4_999);
+      expect(light()).toBe('Track clear');
+      advance(1);
+      advance(250);
+      expect(light()).toBe('Yellow flag'); // the held delta, then `end`
+      expect(pill()).toBe('Paused');
+      advance(60_000); // past the 40 s watchdog
+      expect(FakeES.all).toHaveLength(1);
+      expect(host.textContent).not.toContain('Reconnecting…');
+    });
+
+    it('a pending decrease reopens nothing once Live or a reconnect has opened at that delay', () => {
+      localStorage.setItem('f1.delay', '30');
+      render({ sessionKey: 9100 });
+      slide('Delay', 20);
+      advance(100);
+      button('Pause');
+      button('Live');
+      expect(last().url).toBe('/api/v1/playback/7/stream?at=live&delay=20');
+      const live = last();
+      advance(1_000);
+      expect(FakeES.all).toHaveLength(2);
+      expect(live.closed).toBe(false);
+
+      // An error, then a decrease 200 ms before the 1 s retry: the retry opens at the new delay, the timer adds none.
+      live.emit('error');
+      advance(800);
+      slide('Delay', 10);
+      advance(200);
+      expect(last().url).toBe('/api/v1/playback/7/stream?at=live&delay=10');
+      const retried = last();
+      advance(1_000);
+      expect(last()).toBe(retried);
+      expect(retried.closed).toBe(false);
+      expect(openCount()).toBe(1);
+    });
+
+    it("a decrease below the open stream's delay opens exactly one, 400 ms after the last change", () => {
+      localStorage.setItem('f1.delay', '30');
+      render({ sessionKey: 9100 });
+      const first = last();
+      expect(delayOf(first)).toBe('30');
+      first.emit('snapshot', { t: NOW - 30_000, state: raceState(), laps: [], stints: [] });
+      advance(250);
+      click('5 seconds earlier'); // 35 s: holds 5 s
+      advance(1_000);
+      first.emit('delta', { t: NOW - 28_750, ...yellow }); // arrives at NOW + 1.25 s
+      for (let i = 0; i < 3; i++) click('1 second later'); // 32 s: holds 2 s, so it is due at NOW + 3.25 s
+      advance(1_999);
+      expect(light()).toBe('Track clear');
+      advance(1);
+      advance(250);
+      expect(light()).toBe('Yellow flag');
+      expect(FakeES.all).toHaveLength(1);
+
+      slide('Delay', 25); // below 30: the new data comes from a new stream
+      advance(399);
+      expect(FakeES.all).toHaveLength(1);
+      expect(first.closed).toBe(false);
+      advance(1);
+      expect(FakeES.all).toHaveLength(2);
+      expect(first.closed).toBe(true);
+      expect(last().url).toBe('/api/v1/playback/7/stream?at=live&delay=25');
+      expect(openCount()).toBe(1);
+      // The closed stream shows nothing more.
+      first.emit('delta', { t: NOW - 25_000, topic: 'TrackStatus', data: { Status: '5' } });
+      advance(10_000);
+      expect(light()).toBe('Yellow flag');
+      expect(FakeES.all).toHaveLength(2);
+    });
+
+    it("a seek opens exactly one stream, and the old stream's held events never show", () => {
+      render({ sessionKey: 9100 });
+      const first = last();
+      first.emit('snapshot', { t: NOW, state: raceState(), laps: [], stints: [] });
+      advance(250);
+      click('5 seconds earlier');
+      first.emit('delta', { t: NOW + 250, ...yellow }); // held until NOW + 5.25 s
+      slide('Position', NOW - 600_000);
+      advance(400);
+      expect(FakeES.all).toHaveLength(2);
+      expect(first.closed).toBe(true);
+      expect(atOf(last())).toBe(String(NOW - 600_000));
+      expect(openCount()).toBe(1);
+      advance(10_000);
+      expect(light()).toBe('Track clear');
+      expect(FakeES.all).toHaveLength(2);
+    });
+
+    it('an error during a hold reopens at the shown delay, which holds nothing; the held events are dropped', () => {
+      render({ sessionKey: 9100 });
+      const first = last();
+      first.emit('snapshot', { t: NOW, state: raceState(), laps: [], stints: [] });
+      advance(250);
+      click('5 seconds earlier');
+      first.emit('delta', { t: NOW + 250, ...yellow }); // held
+      first.emit('error');
+      advance(1_000);
+      expect(FakeES.all).toHaveLength(2);
+      expect(last().url).toBe('/api/v1/playback/7/stream?at=live&delay=5');
+      advance(10_000);
+      expect(light()).toBe('Track clear'); // dropped with the stream: the new snapshot covers it
+      last().emit('snapshot', { t: Date.now() - 5_000, state: raceState(), laps: [], stints: [] });
+      last().emit('delta', { t: Date.now() - 5_000, ...yellow });
+      advance(250);
+      expect(light()).toBe('Yellow flag'); // at once: the new stream is at the shown delay
+    });
   });
 
   it('a seek, a nudge, pause and play each reopen at the right at (one stream at a time)', () => {
@@ -1239,6 +1503,7 @@ describe('the player bar', () => {
 
   it('a seek while paused opens one still frame, closed by its snapshot; a new seek closes a pending one first', () => {
     render({ recording: ended, start: T });
+    expect(stillOf(last())).toBeNull(); // playing
     last().emit('snapshot', { t: T, state: {}, laps: [], stints: [] });
     button('Pause');
     expect(openCount()).toBe(0);
@@ -1248,6 +1513,7 @@ describe('the player bar', () => {
     advance(1);
     expect(FakeES.all).toHaveLength(2);
     expect(atOf(last())).toBe(String(T - 30_000));
+    expect(stillOf(last())).toBe('1');
     expect(openCount()).toBe(1);
     expect(pill()).toBe('Paused'); // a still frame does not play
     last().emit('snapshot', { t: T - 30_000, state: {}, laps: [], stints: [] });
@@ -1275,6 +1541,7 @@ describe('the player bar', () => {
     advance(1_000);
     expect(FakeES.all).toHaveLength(5);
     expect(atOf(last())).toBe(String(T - 40_000));
+    expect(stillOf(last())).toBe('1');
     expect(openCount()).toBe(1);
     last().emit('snapshot', { t: T - 40_000, state: {}, laps: [], stints: [] });
     expect(openCount()).toBe(0);
@@ -1282,6 +1549,7 @@ describe('the player bar', () => {
 
     button('Play');
     expect(atOf(last())).toBe(String(T - 40_000));
+    expect(stillOf(last())).toBeNull();
     expect(pill()).toBe('Replay');
     expect(openCount()).toBe(1);
   });
@@ -1753,7 +2021,7 @@ describe('the player bar', () => {
       expect(region.textContent).toBe('Red flag');
     });
 
-    it('live: toggling keeps the stream and the delay; a pending delay change still commits while minimized', () => {
+    it('live: toggling keeps the stream and the delay; a pending delay decrease still commits while minimized', () => {
       localStorage.setItem('f1.delay', '30');
       render({ recording: open, start: 'live' });
       const delayOf = (es: FakeES) => new URL(es.url, 'http://x').searchParams.get('delay');
@@ -1771,19 +2039,20 @@ describe('the player bar', () => {
       expect(FakeES.all).toHaveLength(opened);
       expect(stream.closed).toBe(false);
 
-      // A nudge, then minimized within the 400 ms: the new delay reaches the stream all the same.
-      click('5 seconds earlier');
-      expect(delayShown()).toBe(35);
+      // A nudge below the stream's delay, then minimized within the 400 ms: the new delay reaches the stream all the
+      // same (#101: an increase reopens nothing, so it is a decrease).
+      click('5 seconds later');
+      expect(delayShown()).toBe(25);
       advance(100);
       act(() => toggle().click());
-      expect(pill()).toBe('LIVE, 35 s behind');
+      expect(pill()).toBe('LIVE, 25 s behind');
       advance(300);
       expect(stream.closed).toBe(true);
       expect(atOf(last())).toBe('live');
-      expect(delayOf(last())).toBe('35');
+      expect(delayOf(last())).toBe('25');
       expect(openCount()).toBe(1);
       act(() => toggle().click());
-      expect(delayShown()).toBe(35);
+      expect(delayShown()).toBe(25);
       act(() => root.unmount());
 
       // Mounted minimized: the stored delay applies to the stream and the pill.
@@ -1795,8 +2064,8 @@ describe('the player bar', () => {
       root = createRoot(host);
       render({ recording: open, start: 'live' });
       expect(toggle().getAttribute('aria-expanded')).toBe('false');
-      expect(delayOf(last())).toBe('35');
-      expect(pill()).toBe('LIVE, 35 s behind');
+      expect(delayOf(last())).toBe('25');
+      expect(pill()).toBe('LIVE, 25 s behind');
     });
   });
 });

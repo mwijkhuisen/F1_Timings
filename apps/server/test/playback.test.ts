@@ -159,6 +159,7 @@ function start(
     clock?: { now: number };
     ended?: () => Promise<boolean>;
     tick?: () => Promise<void>;
+    onOpen?: (seek: { ms: number; lines: number }) => void;
   },
 ) {
   const clock = o.clock ?? { now: 0 };
@@ -177,6 +178,7 @@ function start(
     },
     ended: o.ended ?? (async () => true),
     signal: abort.signal,
+    ...(o.onOpen && { onOpen: o.onOpen }),
   });
   return { gen, clock, abort };
 }
@@ -574,6 +576,28 @@ describe('playback', () => {
     expect(kinds(rest).filter((k) => k === 'snapshot')).toHaveLength(1);
     expect(deltas(rest).map((d) => d.t)).toEqual(values.filter((v) => v[0] > T0 + 32_000).map((v) => v[0]));
     expect(rest.at(-1)?.ev.event).toBe('end');
+  });
+
+  it('onOpen reports the seek once, before its snapshot: the lines applied and the ms on `now`; never a later snapshot', async () => {
+    const dir = tmp();
+    await record(dir, counter(60), 3_600_000);
+    const seen: unknown[] = [];
+    const clock = { now: 0 };
+    const { gen } = start(dir, {
+      at: T0 + 5_500,
+      clock,
+      onOpen: (s) => seen.push(['open', s]),
+    });
+    // The seek takes 7 ms on the injected clock: `now` is read at the start and once the snapshot is built.
+    const first = gen.next();
+    clock.now += 7;
+    const ev = (await first).value as PlaybackEvent;
+    seen.push(ev.event);
+    expect(seen).toEqual([['open', { ms: 7, lines: 6 }], 'snapshot']); // the lines at 0 … 5 s
+    clock.now += 30_000; // a stalled consumer: the next write sends a fresh snapshot
+    const rest = await drain(gen, clock);
+    expect(kinds(rest)).toContain('snapshot');
+    expect(seen).toHaveLength(2);
   });
 
   it('never sends a recorded topic it does not parse yet (#96): no delta, and none in a snapshot', async () => {
