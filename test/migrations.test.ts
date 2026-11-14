@@ -37,36 +37,45 @@ it('every migration matches its pinned sha256, and no file is added or removed',
 
 // Expand, then contract (runbook update.md): a rollback runs the previous image on the new schema, so an up
 // section never drops, renames, retypes or tightens what that image reads. The replace idiom (DROP CONSTRAINT x
-// and ADD CONSTRAINT x in the same up section, how a CHECK widens) and DROP NOT NULL pass. A file with a
-// `-- contract: <why>` line passes: no release you could roll back to needs the old shape any more.
-// ponytail: a keyword scan, not a parser. A replaced CHECK that narrows, and dynamic SQL in DO or function
-// bodies (string literals are stripped), pass: review catches those. Parse the SQL if one ever slips through.
+// and ADD CONSTRAINT x in the same statement, how a CHECK widens) and DROP NOT NULL pass. A `-- contract: <why>`
+// line above `-- migrate:down` passes the file: no release you could roll back to needs the old shape any more.
+// ponytail: a keyword scan, not a parser. A replaced CHECK that narrows, a widened CHECK the old image cannot
+// read, a unique index, data rewrites, SET SCHEMA and dynamic SQL in DO or function bodies (string literals are
+// stripped) pass: review catches those. Parse the SQL if one ever slips through.
 const CONTRACT = [
   /\bDROP\b/i,
   /\bRENAME\b/i,
+  /\bREVOKE\b/i,
   /\bALTER\s+(?:COLUMN\s+)?(?!COLUMN\b)(?:"[^"]+"|\w+)\s+(?:SET\s+DATA\s+)?TYPE\b/i,
   /\bSET\s+NOT\s+NULL\b/i,
+  // An ADD COLUMN NOT NULL without a DEFAULT: the old image's INSERTs fail.
+  /^(?=.*\bADD\s+COLUMN\b)(?=.*\bNOT\s+NULL\b)(?!.*\bDEFAULT\b)/i,
 ];
 const NAME = String.raw`("[^"]+"|\w+)`;
+const names = (s: string, re: string) =>
+  new Set([...s.matchAll(new RegExp(re + NAME, 'gi'))].map((m) => m[1]?.toLowerCase()));
 
 function contractSteps(file: string): string[] {
-  if (/^-- contract: \S/m.test(file)) return [];
-  const up = (file.split(/^-- migrate:down\b/m)[0] ?? '').split(/^-- migrate:up\b/m).at(-1) ?? '';
-  // Comments first: they hold apostrophes. Then the literals, which may say "drop".
-  const code = up.replace(/--.*$/gm, '').replace(/'(?:[^']|'')*'/g, "''");
-  const added = new Set(
-    [...code.matchAll(new RegExp(String.raw`\bADD\s+CONSTRAINT\s+${NAME}`, 'gi'))].map((m) => m[1]?.toLowerCase()),
+  const head = file.split(/^-- migrate:down\b/m)[0] ?? '';
+  if (/^-- contract: \S/m.test(head)) return [];
+  // One left-to-right pass: a literal may hold "--", a comment an apostrophe.
+  const code = (head.split(/^-- migrate:up\b/m).at(-1) ?? '').replace(
+    /'(?:[^']|'')*'|--[^\n]*|\/\*[\s\S]*?\*\//g,
+    (m) => (m[0] === "'" ? "''" : ' '),
   );
   return code
     .split(';')
     .map((s) => s.replace(/\s+/g, ' ').trim())
     .filter((s) => {
+      const added = names(s, String.raw`\bADD\s+CONSTRAINT\s+`);
+      const dropped = names(s, String.raw`\bDROP\s+CONSTRAINT\s+(?:IF\s+EXISTS\s+)?`);
       const rest = s
         .replace(new RegExp(String.raw`\bDROP\s+CONSTRAINT\s+(?:IF\s+EXISTS\s+)?${NAME}`, 'gi'), (m, name: string) =>
           added.has(name.toLowerCase()) ? '' : m,
         )
         .replace(/\bDROP\s+NOT\s+NULL\b/gi, '');
-      return CONTRACT.some((re) => re.test(rest));
+      // A new constraint on an existing table tightens it, unless it replaces one of the same name.
+      return CONTRACT.some((re) => re.test(rest)) || [...added].some((n) => !dropped.has(n));
     });
 }
 
@@ -96,6 +105,29 @@ it.each([
     false,
   ],
   ['DROP only in the down section', 'CREATE TABLE t (a int);\n-- migrate:down\nDROP TABLE t;', false],
+  [
+    '"--" in a string does not hide a later DROP',
+    "COMMENT ON COLUMN lap.x IS 'filled -- see #12';\nALTER TABLE lap DROP COLUMN y;\nINSERT INTO t VALUES ('a');",
+    true,
+  ],
+  ['a block comment with an apostrophe', "/* it's */ ALTER TABLE lap DROP COLUMN y;", true],
+  ['"drop" in a block comment', '/* we never drop */ CREATE TABLE t (a int);', false],
+  ['REVOKE', 'REVOKE SELECT ON lap FROM f1_api;', true],
+  ['an unpaired ADD CONSTRAINT', 'ALTER TABLE lap ADD CONSTRAINT lap_x_check CHECK (lap_ms > 0);', true],
+  ['ADD COLUMN NOT NULL without DEFAULT', 'ALTER TABLE lap ADD COLUMN x int NOT NULL;', true],
+  ['ADD COLUMN NOT NULL DEFAULT', 'ALTER TABLE lap ADD COLUMN x int NOT NULL DEFAULT 0;', false],
+  [
+    "one table's ADD does not excuse another's DROP",
+    'ALTER TABLE a DROP CONSTRAINT c;\nALTER TABLE b ADD CONSTRAINT c CHECK (true);',
+    true,
+  ],
 ])('%s: flagged %s', (_name, up, flagged) => {
   expect(contractSteps(`-- migrate:up\n${up}\n`).length > 0).toBe(flagged);
+});
+
+it('a -- contract: line counts above -- migrate:down only', () => {
+  const drop = 'ALTER TABLE lap DROP COLUMN y;';
+  const why = '-- contract: no release reads lap.y any more';
+  expect(contractSteps(`${why}\n-- migrate:up\n${drop}\n`)).toEqual([]);
+  expect(contractSteps(`-- migrate:up\n${drop}\n-- migrate:down\n${why}\n`)).toEqual(['ALTER TABLE lap DROP COLUMN y']);
 });
