@@ -29,7 +29,7 @@ describe('merge', () => {
 
         const before = createFeed();
         for (const ev of list.slice(0, split)) before.apply(ev);
-        // P2c writes the snapshot as JSON; a reconnect's full state arrives as one `full` event per topic.
+        // A playback snapshot is the state as JSON; a reconnect's full state arrives as one `full` event per topic.
         const snapshot = JSON.parse(JSON.stringify(before.state)) as Obj;
         const resumed = createFeed();
         for (const [topic, payload] of Object.entries(snapshot)) resumed.apply({ t: 0, topic, payload, full: true });

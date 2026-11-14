@@ -1,15 +1,12 @@
-import { constants } from 'node:fs';
-import { open, readdir, stat } from 'node:fs/promises';
+import { open, stat } from 'node:fs/promises';
 import { join } from 'node:path';
-import { pipeline } from 'node:stream';
-import { createGunzip } from 'node:zlib';
 import { type Lap, type Obj, type Stints, view, type Weather, weatherRow, withWeatherRow } from '@f1/contracts';
-import { codeOf } from '../db/db.ts';
 import { progressiveColours } from '../timing/colours.ts';
 import { markLaps } from '../timing/rules.ts';
 import { createLaps, type LapRow, qualifyingParts, type StintRow } from './laps.ts';
 import { createFeed } from './merge.ts';
 import { isObj, parseFeedLine, utc } from './read.ts';
+import { type Line, missing, NOFOLLOW, notFile, segment, segments, splitter } from './recording.ts';
 
 // State at T over one recording's files (A§11.3, ADR-0007): a replay from the first line up to T, then a delta per
 // change, paced by the live clock (T = now − delay) or the replay clock (T = at + elapsed × speed). The time axis is
@@ -27,7 +24,6 @@ export type PlaybackEvent =
   | { event: 'laps'; data: { t: number; laps: Lap[]; stints: Stints } }
   | { event: 'end'; data: { t: number } }
   | { event: 'ping'; data: { t: number } };
-type Line = { r: number; text: string };
 
 const BEHIND_MS = 5_000;
 const HEARTBEAT_MS = 15_000;
@@ -36,16 +32,6 @@ const TAIL_MS = 1_000;
 const ENDED_MS = 30_000;
 const CHUNK = 64 * 1024;
 const AGAIN_MS = 50;
-// Files from `live`, which parses the untrusted feed (A§12.1): no file is read through a symlink (ELOOP), and no line
-// grows without bound.
-const NOFOLLOW = constants.O_RDONLY | constants.O_NOFOLLOW;
-const MAX_LINE = 8 * 2 ** 20; // a feed line is a few kB
-const SEGMENT = /^feed-(\d+)\.jsonl(\.gz)?$/;
-
-const missing = (err: unknown): undefined => {
-  if (codeOf(err) !== 'ENOENT') throw err;
-};
-const tooLarge = () => Object.assign(new Error('playback_too_large'), { code: 'playback_too_large' });
 const keyOf = (info: unknown) => (isObj(info) && typeof info.Key === 'number' ? info.Key : undefined);
 // The topics the lap rows read: the engine's two, and A§9's race control and qualifying parts (lapRows).
 const LAP_TOPICS = new Set(['TimingData', 'TimingAppData', 'RaceControlMessages', 'SessionData']);
@@ -113,51 +99,6 @@ export function lapRows(
   };
 }
 
-/** The `\n`-terminated lines of a byte stream whose receivedAt is a safe integer; a partial line waits for the rest. */
-function splitter(): (chunk: Buffer) => Line[] {
-  let rest = Buffer.alloc(0);
-  return (chunk) => {
-    const buf = Buffer.concat([rest, chunk]); // a copy: the caller may reuse its chunk
-    const out: Line[] = [];
-    let from = 0;
-    for (let end = buf.indexOf(10); end >= 0; end = buf.indexOf(10, from)) {
-      const text = buf.toString('utf8', from, end);
-      from = end + 1;
-      const r = Number(/^\[(\d+),/.exec(text)?.[1]);
-      if (Number.isSafeInteger(r)) out.push({ r, text });
-    }
-    rest = buf.subarray(from);
-    if (rest.length > MAX_LINE) throw tooLarge();
-    return out;
-  };
-}
-
-/** A sealed segment: the plain file while it is there (it is complete once renamed), else its gzip. */
-export async function* segment(dir: string, base: string, plain: boolean): AsyncGenerator<Line> {
-  const fh = plain ? await open(join(dir, base), NOFOLLOW).catch(missing) : undefined;
-  const file = (fh ?? (await open(join(dir, `${base}.gz`), NOFOLLOW))).createReadStream(); // closes its handle
-  const source = fh ? file : pipeline(file, createGunzip(), () => {}); // an error surfaces in the loop below
-  const split = splitter();
-  try {
-    for await (const chunk of source) yield* split(chunk);
-  } finally {
-    source.destroy();
-    file.destroy();
-  }
-}
-
-/** The sealed segments in numeric order of their first receivedAt. `*.tmp` never matches. */
-export async function segments(dir: string): Promise<{ ms: number; base: string; plain: boolean }[]> {
-  const found = new Map<number, { ms: number; base: string; plain: boolean }>();
-  for (const name of await readdir(dir)) {
-    const m = SEGMENT.exec(name);
-    const ms = Number(m?.[1]);
-    if (!m || !Number.isSafeInteger(ms)) continue;
-    found.set(ms, { ms, base: `feed-${m[1]}.jsonl`, plain: !m[2] || found.get(ms)?.plain === true });
-  }
-  return [...found.values()].sort((a, b) => a.ms - b.ms);
-}
-
 /**
  * Every line from `from` on, in order: the sealed segments from the last one that starts at or before `from`, then
  * feed.jsonl, tailed. `undefined` means nothing more for now, `null` that a rotation may be in progress: the open
@@ -186,7 +127,9 @@ async function* lines(dir: string, from: number): AsyncGenerator<Line | null | u
         continue;
       }
       gone = false;
-      const { ino } = await fh.stat();
+      const st = await fh.stat();
+      if (!st.isFile()) throw notFile(); // NOFOLLOW opened a FIFO without blocking
+      const { ino } = st;
       const buffer = Buffer.allocUnsafe(CHUNK);
       const split = splitter();
       let first: number | undefined;

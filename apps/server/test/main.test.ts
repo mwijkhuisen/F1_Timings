@@ -73,6 +73,11 @@ describe('run', () => {
     [['jolpica', '--dir', '/srv/f1/archive']],
     [['jolpica', '--dir', '/srv/f1/jolpica/../archive']],
     [['jolpica', '--dir', '/home/x/F1_Timing/fixtures-private-evil/jolpica']],
+    [['reindex-recordings', 'x']],
+    [['reindex-recordings', '--bogus']],
+    [['reindex-recordings', '--live-dir']],
+    // --live-dir only where git never sees the files (invariant 3)
+    [['reindex-recordings', '--live-dir', '/tmp/x']],
   ])('%j is a usage error', async (argv) => {
     const lines: string[] = [];
     expect(await run(argv, {}, (l) => lines.push(l))).toBe(EXIT_USAGE);
@@ -108,6 +113,8 @@ describe('run', () => {
     [['jolpica']],
     [['jolpica', '1950', '2017', String(new Date().getUTCFullYear()), '--dir', '/srv/f1/jolpica']],
     [['jolpica', '--dir', '/home/x/F1_Timing/fixtures-private/jolpica/2026-10-27/csv']],
+    [['reindex-recordings']],
+    [['reindex-recordings', '--live-dir', '/home/x/F1_Timing/fixtures-private/live']],
   ])('%j without a database setting is a config error', async (argv) => {
     const lines: string[] = [];
     expect(await run(argv, { DATABASE_URL: 'mysql://x/y' }, (l) => lines.push(l))).toBe(EXIT_CONFIG);

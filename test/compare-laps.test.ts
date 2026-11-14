@@ -1,6 +1,7 @@
 import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { gzipSync } from 'node:zlib';
 import { describe, expect, it } from 'vitest';
 import {
   BAR,
@@ -119,6 +120,25 @@ describe('readInput and compare', () => {
       ['TimingData', 5000],
     ]);
     expect(await readInput(join(dir, 'missing'))).toBeUndefined();
+  });
+
+  it('reads a recorder directory: its segments in numeric order, gzipped or plain, then feed.jsonl', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'f1-compare-'));
+    const line = (t: number, topic: string) => JSON.stringify([t, topic, { n: t }, 'undefined']);
+    writeFileSync(
+      join(dir, 'feed-1000.jsonl.gz'),
+      gzipSync(`${line(1000, 'TimingData')}\n${line(1001, 'LapCount')}\n`),
+    );
+    writeFileSync(join(dir, 'feed-999.jsonl.gz'), gzipSync(`${line(999, 'Heartbeat')}\n`)); // after 1000 by name
+    writeFileSync(join(dir, 'feed.jsonl'), `${line(2000, 'TrackStatus')}\n`);
+    const input = await readInput(dir);
+    expect(input?.events.map((e) => [e.t, e.topic])).toEqual([
+      [999, 'Heartbeat'],
+      [1000, 'TimingData'],
+      [1001, 'LapCount'],
+      [2000, 'TrackStatus'],
+    ]);
+    expect(input?.archiveDir).toBeUndefined();
   });
 
   it('refuses under CI and without inputs', async () => {

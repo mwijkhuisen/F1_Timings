@@ -1,5 +1,6 @@
 import { mkdtempSync, readdirSync, readFileSync, rmSync } from 'node:fs';
 import type { Server } from 'node:http';
+import { connect, type Socket } from 'node:net';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {
@@ -65,7 +66,7 @@ let openPath: string;
 /** `n` lines 100 ms apart from `at`, each changing the state, through the real recorder on an injected clock. */
 function record(path: string, at: number, n: number): Recording {
   let clock = at;
-  const rec = openRecording({ dir: join(liveDir, path), now: () => clock, snapshotMs: 3_600_000 });
+  const rec = openRecording({ dir: join(liveDir, path), now: () => clock });
   recs.push(rec);
   for (let i = 0; i < n; i++) {
     clock = at + i * 100;
@@ -79,7 +80,7 @@ function record(path: string, at: number, n: number): Recording {
  * the F1 times (the laps' clock) kept. Its full state at the start becomes its SessionInfo alone (the session's Key).
  */
 async function recordPractice(path: string, at: number) {
-  const rec = openRecording({ dir: join(liveDir, path), now: () => at, snapshotMs: 3_600_000 });
+  const rec = openRecording({ dir: join(liveDir, path), now: () => at });
   const values = readFileSync(join(import.meta.dirname, 'fixtures/live/practice.jsonl'), 'utf8')
     .trim()
     .split('\n')
@@ -95,12 +96,12 @@ async function recordPractice(path: string, at: number) {
 const headers = { 'cf-access-jwt-assertion': '', connection: 'close' };
 const aborts: AbortController[] = [];
 /** A request to the real server; the controller is aborted after the test at the latest. */
-async function call(path: string) {
+async function call(path: string, origin = base) {
   const abort = new AbortController();
   aborts.push(abort);
   return {
     abort,
-    res: await fetch(`${base}${path}`, {
+    res: await fetch(`${origin}${path}`, {
       headers: { ...headers, 'cf-access-jwt-assertion': token },
       signal: abort.signal,
     }),
@@ -134,31 +135,36 @@ const events = (text: string) =>
       return { event: m?.[1], data: JSON.parse(m?.[2] ?? '') as unknown };
     });
 
-const sample = async () => ({
-  conns: await new Promise<number>((resolve) => srv.getConnections((_, n) => resolve(n))),
+const sample = async (s = srv) => ({
+  conns: await new Promise<number>((resolve) => s.getConnections((_, n) => resolve(n))),
   fds: readdirSync('/proc/self/fd').length,
   timeouts: process.getActiveResourcesInfo().filter((r) => r === 'Timeout').length,
 });
 const pause = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 /** Until no connection is left and two samples 100 ms apart agree. */
-async function quiet() {
-  let last = await sample();
+async function quiet(s = srv) {
+  let last = await sample(s);
   for (let i = 0; i < 100; i++) {
     await pause(100);
-    const next = await sample();
+    const next = await sample(s);
     if (next.conns === 0 && next.fds === last.fds && next.timeouts === last.timeouts) return next;
     last = next;
   }
   return last;
 }
 /** Until the sample is back at the baseline; on failure the diff shows what is still open. */
-async function backTo(baseline: Awaited<ReturnType<typeof sample>>) {
-  let now = await sample();
-  for (let i = 0; i < 100 && !(now.conns === 0 && now.fds <= baseline.fds && now.timeouts <= baseline.timeouts); i++) {
+async function backTo(baseline: Awaited<ReturnType<typeof sample>>, s = srv) {
+  let now = await sample(s);
+  for (let i = 0; i < 600 && !(now.conns === 0 && now.fds <= baseline.fds && now.timeouts <= baseline.timeouts); i++) {
     await pause(50);
-    now = await sample();
+    now = await sample(s);
   }
-  expect(now).toEqual({ conns: 0, fds: baseline.fds, timeouts: baseline.timeouts });
+  // Below the baseline is no leak: an idle database connection (a handle and its timer) may close meanwhile.
+  expect(now, JSON.stringify(baseline)).toEqual({
+    conns: 0,
+    fds: Math.min(now.fds, baseline.fds),
+    timeouts: Math.min(now.timeouts, baseline.timeouts),
+  });
 }
 
 describe('playback routes (f1_api login, Access JWT, real socket)', { timeout: 60_000 }, () => {
@@ -316,6 +322,131 @@ describe('playback routes (f1_api login, Access JWT, real socket)', { timeout: 6
       if (again === 503) await pause(50);
     }
     expect(again).toBe(200);
+  });
+
+  // Each wait below is a poll of up to ~30 s, for a slow runner (the 42 MB seek alone can take 10 s): the test's own
+  // timeout covers all of them.
+  it('a stalled client is ended by the write timeout and frees its slot', { timeout: 240_000 }, async () => {
+    // A finished recording whose snapshot (6 topics of 7 MiB, each line under MAX_LINE) is far more than the socket
+    // buffers of both ends hold, then 3 small lines. Seeked to the last big line, the stream is the snapshot, 3 deltas
+    // and `end`: the snapshot fills the socket, the first delta waits in the response stream's own queue, and the next
+    // write is the one that never completes.
+    const BIG_AT = NOW - 4 * 24 * 60 * MIN;
+    const path = `${S_DONE}-${BIG_AT}`;
+    const { id } = await admin
+      .insertInto('recording')
+      .values({
+        session_key: S_DONE,
+        path,
+        started_at: new Date(BIG_AT),
+        ended_at: new Date(BIG_AT + MIN),
+        complete: true,
+      })
+      .returning('id')
+      .executeTakeFirstOrThrow();
+    const rec = openRecording({ dir: join(liveDir, path), now: () => BIG_AT });
+    for (let i = 0; i < 6; i++) rec.feed(BIG_AT + i, `Big${i}`, { Text: 'x'.repeat(7 * 2 ** 20) }, iso(BIG_AT + i));
+    for (let i = 6; i < 9; i++) rec.feed(BIG_AT + i, 'TimingData', { Lines: { '1': { N: i } } }, iso(BIG_AT + i));
+    await rec.finish();
+
+    const slow = createApp({
+      db: apiDb,
+      access: access({ team: TEAM, aud: AUD }, log),
+      log,
+      liveDir,
+      writeTimeoutMs: 200,
+    });
+    const srv2 = serve({ fetch: slow.fetch, port: 0, hostname: '127.0.0.1' }) as Server;
+    let client: Socket | undefined;
+    try {
+      await new Promise((resolve) => srv2.once('listening', resolve));
+      const port = (srv2.address() as { port: number }).port;
+      const base2 = `http://127.0.0.1:${port}`;
+      server.use(http.all(`${base2}/*`, () => passthrough()));
+      const open = stream(ids.open, 'at=live');
+      const warm = await call(open, base2);
+      await readUntil(warm.res, /event: snapshot/);
+      warm.abort.abort();
+      const baseline = await quiet(srv2);
+      expect(baseline.conns).toBe(0);
+
+      const seven = await Promise.all(Array.from({ length: 7 }, () => call(open, base2)));
+      for (const { res } of seven) {
+        expect(res.status).toBe(200);
+        await readUntil(res, /event: snapshot\ndata: .*\n\n/);
+      }
+
+      lines.length = 0;
+      const raw = connect({ host: '127.0.0.1', port });
+      raw.on('error', () => {}); // only a FIN counts below
+      client = raw;
+      await new Promise((resolve) => raw.once('connect', resolve));
+      const head = new Promise<Buffer>((resolve) =>
+        raw.once('data', (chunk: Buffer) => {
+          raw.pause(); // in the same turn: a flowing socket with no listener would read on and drop the data
+          resolve(chunk);
+        }),
+      );
+      raw.write(
+        `GET ${stream(id, `at=${BIG_AT + 5}`)} HTTP/1.1\r\nHost: 127.0.0.1:${port}\r\ncf-access-jwt-assertion: ${token}\r\n\r\n`,
+      );
+      expect((await head).toString('latin1')).toMatch(/^HTTP\/1\.1 200 /);
+      expect((await sample(srv2)).conns).toBe(8); // the 7 and the raw client
+
+      const logged = () => own().map((l) => JSON.parse(l) as Record<string, unknown>); // #108's request lines aside
+      for (let i = 0; i < 600 && !logged().some((l) => l.cause === 'write_timeout'); i++) await pause(50);
+      expect(logged()).toEqual([
+        expect.objectContaining({ msg: 'playback open', snapshot_bytes: expect.any(Number) }),
+        expect.objectContaining({ msg: 'playback', cause: 'write_timeout' }),
+      ]);
+      expect(logged()[0]?.snapshot_bytes).toBeGreaterThan(40e6);
+
+      // The raw client is still connected and paused, yet the server has closed its side of the socket (the route
+      // destroys the response: hono's stream.abort() alone would leave node-server waiting for a `drain`, #109) and its
+      // slot is free: an 8th stream next to the 7 is a 200.
+      expect(raw.destroyed).toBe(false);
+      let conns = 8;
+      for (let i = 0; i < 600 && conns !== 7; i++) {
+        await pause(50);
+        conns = (await sample(srv2)).conns;
+      }
+      expect(conns).toBe(7);
+      expect(raw.destroyed).toBe(false);
+      let again = 503;
+      for (let i = 0; i < 600 && again === 503; i++) {
+        const next = await call(open, base2);
+        again = next.res.status;
+        if (again === 503) await next.res.body?.cancel();
+        else next.abort.abort();
+        if (again === 503) await pause(50);
+      }
+      expect(again).toBe(200);
+      expect(raw.destroyed).toBe(false);
+
+      // Resumed, the raw client reads what the kernel still held and then the server's FIN.
+      let ended = false;
+      raw.once('end', () => {
+        ended = true;
+      });
+      let deadline: NodeJS.Timeout | undefined;
+      const closed = new Promise<string>((resolve) => {
+        raw.once('close', () => resolve('close'));
+        deadline = setTimeout(() => resolve('deadline'), 30_000);
+      });
+      raw.resume();
+      expect(await closed).toBe('close');
+      clearTimeout(deadline);
+      expect(ended).toBe(true);
+
+      raw.destroy();
+      for (const { abort } of seven) abort.abort();
+      await backTo(baseline, srv2);
+    } finally {
+      client?.destroy();
+      srv2.closeAllConnections();
+      await new Promise((resolve) => srv2.close(resolve));
+      await admin.deleteFrom('recording').where('id', '=', id).execute();
+    }
   });
 
   it('a finished recording streams snapshot, deltas in order, then end; each event parses against its contract', async () => {

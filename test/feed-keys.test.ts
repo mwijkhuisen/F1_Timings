@@ -1,6 +1,7 @@
 import { mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { gzipSync } from 'node:zlib';
 import { describe, expect, it } from 'vitest';
 import { census, feedKeys, keyPaths } from '../scripts/feed-keys.ts';
 
@@ -64,6 +65,22 @@ describe('census', () => {
     ]);
     // Key names and counts only: no value reaches the output.
     expect(lines.join('\n')).not.toMatch(/\+\d\.\d{3}/);
+  });
+
+  it('reads a sealed recorder directory, gzipped and plain segments in order, as its feed.jsonl', async () => {
+    const flat = mkdtempSync(join(tmpdir(), 'f1-keys-'));
+    writeFileSync(join(flat, 'feed.jsonl'), `${RECORDING}\n`);
+    const [l1, l2, l3, l4, l5] = RECORDING.split('\n');
+    const dir = mkdtempSync(join(tmpdir(), 'f1-keys-'));
+    writeFileSync(join(dir, 'feed-1000.jsonl.gz'), gzipSync(`${l1}\n${l2}\n`));
+    writeFileSync(join(dir, 'feed-3000.jsonl'), `${l3}\n`);
+    writeFileSync(join(dir, 'feed-4000.jsonl.gz'), gzipSync(`${l4}\n${l5}\n`));
+    const want: string[] = [];
+    const got: string[] = [];
+    expect(await feedKeys([flat], (l) => want.push(l))).toBe(0);
+    expect(await feedKeys([dir], (l) => got.push(l))).toBe(0);
+    expect(got.slice(1)).toEqual(want.slice(1));
+    expect(got[1]).toBe('events 6, skipped lines 0');
   });
 
   it('counts another topic with --topic', async () => {

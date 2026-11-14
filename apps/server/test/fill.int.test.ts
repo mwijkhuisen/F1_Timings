@@ -76,7 +76,7 @@ function archiveFiles(key: number, sessionKey = true) {
  * size of an extra TimingStats line, a topic the parser does not read.
  */
 async function record(key: number, path: string, session = key, pad = 0) {
-  const rec = openRecording({ dir: join(liveDir, path), now: () => T0, snapshotMs: 3_600_000 });
+  const rec = openRecording({ dir: join(liveDir, path), now: () => T0 });
   const feed = readFileSync(join(FIXTURES, 'live/practice.jsonl'), 'utf8').trim().split('\n');
   for (const [i, line] of feed.entries()) {
     const [, topic, payload, ts] = JSON.parse(line) as [number, string, Record<string, unknown>, string?];

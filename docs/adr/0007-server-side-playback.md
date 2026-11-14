@@ -42,3 +42,7 @@
 - **A live delay change reopens only when it goes below the open stream's delay.** The stream keeps the delay it opened at, and the page holds each event for the shown delay minus that one, counted from its arrival (A§11.3, A§13). A decrease below it opens one new stream, as before.
   - Why: syncing to F1 TV takes several ±1/±5 nudges, and each reopen cost a full scan on the VM's 1 CPU and about 0.65 MB of mobile data for a full race (A§11.3 "Cost").
   - Not the rejected alternative: the hold covers at most 120 s of one live stream's events, never a recording. Replay is unchanged, and the server is unchanged (no side channel, no new input).
+
+## Amendment (owner, 2026-11-14, #109)
+
+- **The recorder keeps raw messages only.** It no longer writes the 30 s snapshot files that the first decision lists: nothing has read them since P2e. At each close it writes `recording.json` (the row's values), and `reindex-recordings` rebuilds missing `recording` rows from the directories (A§11.2). Existing `snapshots/` directories are left alone and never read.
