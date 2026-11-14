@@ -25,29 +25,29 @@ const RsaKey = z.looseObject({ kid: z.string(), kty: z.literal('RSA'), n: z.stri
 type Key = z.infer<typeof RsaKey>;
 
 const CERTS_TTL_MS = 5 * 60_000;
+const CERTS_KID_MS = 60_000; // an unknown kid refetches at most this often (a key rotation)
+const CERTS_RETRY_MS = 30_000; // a failed fetch is not tried again sooner
 const CERTS_STALE_MS = 60 * 60_000;
 const CERTS_TIMEOUT_MS = 5_000;
 const NBF_LEEWAY_S = 60;
 
 const unauthorized = (c: Context) => c.json({ error: 'unauthorized' }, 401, { 'Cache-Control': 'no-store' });
 
-/** RS256 with a kid, checked before any certs fetch: junk never triggers one. */
-const rs256 = (token: string) => {
+/** The kid of an RS256 header, checked before any certs fetch: junk never triggers one. */
+const rs256Kid = (token: string) => {
   try {
     const { header } = decode(token);
-    return header.alg === 'RS256' && typeof header.kid === 'string';
+    return header.alg === 'RS256' && typeof header.kid === 'string' ? header.kid : undefined;
   } catch {
-    return false;
+    return undefined;
   }
 };
 
 export function access({ team, aud }: AccessConfig, log: Pick<Logger, 'error'>): MiddlewareHandler {
   const iss = `https://${team}.cloudflareaccess.com`;
-  // ponytail: an unknown kid is a 401 without a refetch, so a key rotation can refuse logins for up
-  // to 5 min (fix: refetch on an unknown kid, at most once a minute). A failed fetch is not cached,
-  // so while the certs fail every request past the TTL tries again, each waiting up to 5 s (fix: a
-  // 30 s negative cache, if unauthenticated traffic ever reaches the origin past Access).
+  // The certs' windows run on the monotonic clock: a wall clock stepped back would stretch them.
   let good: { keys: Key[]; at: number } | undefined; // the last certs fetched
+  let failed = Number.NEGATIVE_INFINITY; // when the last fetch failed
   let pending: Promise<Key[]> | undefined; // one fetch, shared by concurrent requests
   const fetchCerts = async () => {
     const res = await fetch(`${iss}/cdn-cgi/access/certs`, {
@@ -64,21 +64,33 @@ export function access({ team, aud }: AccessConfig, log: Pick<Logger, 'error'>):
       return rsa.success ? [rsa.data] : [];
     });
     if (keys.length === 0) throw new Error('certs');
-    good = { keys, at: Date.now() };
+    good = { keys, at: performance.now() };
     return keys;
   };
-  /** Keys under 5 min old, else a refetch; if that fails, keys under 1 h old; else it throws (503). */
-  const keys = async () => {
-    const at = Date.now();
-    if (good && at - good.at < CERTS_TTL_MS) return good.keys;
-    pending ??= fetchCerts().finally(() => {
-      pending = undefined;
-    });
+  /**
+   * Keys under 5 min old that hold the token's kid, or any under 1 min old (an unknown kid refetches
+   * at most once a minute); else a refetch, unless the last one failed under 30 s ago. Without one,
+   * or when it fails, keys under 1 h old (logged as stale once past their 5 min, so a token with a
+   * known kid and one without log alike within them); else it throws (503).
+   */
+  const keys = async (kid: string) => {
+    const at = performance.now();
+    const known = good?.keys.some((k) => k.kid === kid);
+    if (good && at - good.at < (known ? CERTS_TTL_MS : CERTS_KID_MS)) return good.keys;
     try {
+      if (at - failed < CERTS_RETRY_MS) throw new Error('certs');
+      pending ??= fetchCerts()
+        .catch((err: unknown) => {
+          failed = performance.now(); // seen by every request that shares this fetch
+          throw err;
+        })
+        .finally(() => {
+          pending = undefined;
+        });
       return await pending;
     } catch (err) {
       if (!good || at - good.at >= CERTS_STALE_MS) throw err;
-      log.error({ code: 'access_certs', stale: true }, 'access');
+      if (at - good.at >= CERTS_TTL_MS) log.error({ code: 'access_certs', stale: true }, 'access');
       return good.keys;
     }
   };
@@ -86,10 +98,11 @@ export function access({ team, aud }: AccessConfig, log: Pick<Logger, 'error'>):
   return async (c, next) => {
     // The bare JWT; Authorization and cookies are ignored.
     const token = c.req.header('cf-access-jwt-assertion');
-    if (token === undefined || token === '' || /\s/.test(token) || !rs256(token)) return unauthorized(c);
+    const kid = token && !/\s/.test(token) ? rs256Kid(token) : undefined;
+    if (!token || kid === undefined) return unauthorized(c);
     let known: Key[];
     try {
-      known = await keys();
+      known = await keys(kid);
     } catch {
       log.error({ code: 'access_certs' }, 'access');
       return c.json({ error: 'unavailable' }, 503, { 'Cache-Control': 'no-store' });

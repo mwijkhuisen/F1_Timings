@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# sse-check (CI: ci / deploy, e2e step 3f; #40, A§14.2). The real f1-web:ci Caddyfile in front of a stub
+# sse-check (CI: ci / deploy, e2e step 3g; #40, A§14.2). The real f1-web:ci Caddyfile in front of a stub
 # api (node from f1-server:ci) on a throw-away Docker network. Three assertions on a playback stream
 # of 6 events, 1 s apart: (1) no Content-Encoding; (2) each event arrives within 500 ms of its send
 # time (unbuffered); (3) the 2 KB JSON control route is still compressed. Fail 0 is a route that is
