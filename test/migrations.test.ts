@@ -18,18 +18,116 @@ const PINNED: Record<string, string> = {
   '20261114000001_starting_grid.sql': '65c14270c8de4eb83317cfc8eb2812aaa8099f9563b7e110741e27cc7f919701',
 };
 
+const dir = fileURLToPath(new URL('../db/migrations/', import.meta.url));
+const files = readdirSync(dir)
+  .filter((f) => f.endsWith('.sql'))
+  .sort();
+
 it('every migration matches its pinned sha256, and no file is added or removed', () => {
-  const dir = fileURLToPath(new URL('../db/migrations/', import.meta.url));
   const actual = Object.fromEntries(
-    readdirSync(dir)
-      .filter((f) => f.endsWith('.sql'))
-      .sort()
-      .map((f) => [
-        f,
-        createHash('sha256')
-          .update(readFileSync(dir + f))
-          .digest('hex'),
-      ]),
+    files.map((f) => [
+      f,
+      createHash('sha256')
+        .update(readFileSync(dir + f))
+        .digest('hex'),
+    ]),
   );
   expect(actual).toEqual(PINNED);
+});
+
+// Expand, then contract (runbook update.md): a rollback runs the previous image on the new schema, so an up
+// section never drops, renames, retypes or tightens what that image reads. The replace idiom (DROP CONSTRAINT x
+// and ADD CONSTRAINT x in the same statement, how a CHECK widens) and DROP NOT NULL pass. A `-- contract: <why>`
+// line above `-- migrate:down` passes the file: no release you could roll back to needs the old shape any more.
+// ponytail: a keyword scan, not a parser. A replaced CHECK that narrows, a widened CHECK the old image cannot
+// read, a unique index, data rewrites, SET SCHEMA and dynamic SQL in DO or function bodies (string literals are
+// stripped) pass: review catches those. Parse the SQL if one ever slips through.
+const CONTRACT = [
+  /\bDROP\b/i,
+  /\bRENAME\b/i,
+  /\bREVOKE\b/i,
+  /\bALTER\s+(?:COLUMN\s+)?(?!COLUMN\b)(?:"[^"]+"|\w+)\s+(?:SET\s+DATA\s+)?TYPE\b/i,
+  /\bSET\s+NOT\s+NULL\b/i,
+  // An ADD COLUMN NOT NULL without a DEFAULT: the old image's INSERTs fail.
+  /^(?=.*\bADD\s+COLUMN\b)(?=.*\bNOT\s+NULL\b)(?!.*\bDEFAULT\b)/i,
+];
+const NAME = String.raw`("[^"]+"|\w+)`;
+const names = (s: string, re: string) =>
+  new Set([...s.matchAll(new RegExp(re + NAME, 'gi'))].map((m) => m[1]?.toLowerCase()));
+
+function contractSteps(file: string): string[] {
+  const head = file.split(/^-- migrate:down\b/m)[0] ?? '';
+  if (/^-- contract: \S/m.test(head)) return [];
+  // One left-to-right pass: a literal may hold "--", a comment an apostrophe.
+  const code = (head.split(/^-- migrate:up\b/m).at(-1) ?? '').replace(
+    /'(?:[^']|'')*'|--[^\n]*|\/\*[\s\S]*?\*\//g,
+    (m) => (m[0] === "'" ? "''" : ' '),
+  );
+  return code
+    .split(';')
+    .map((s) => s.replace(/\s+/g, ' ').trim())
+    .filter((s) => {
+      const added = names(s, String.raw`\bADD\s+CONSTRAINT\s+`);
+      const dropped = names(s, String.raw`\bDROP\s+CONSTRAINT\s+(?:IF\s+EXISTS\s+)?`);
+      const rest = s
+        .replace(new RegExp(String.raw`\bDROP\s+CONSTRAINT\s+(?:IF\s+EXISTS\s+)?${NAME}`, 'gi'), (m, name: string) =>
+          added.has(name.toLowerCase()) ? '' : m,
+        )
+        .replace(/\bDROP\s+NOT\s+NULL\b/gi, '');
+      // A new constraint on an existing table tightens it, unless it replaces one of the same name.
+      return CONTRACT.some((re) => re.test(rest)) || [...added].some((n) => !dropped.has(n));
+    });
+}
+
+it('no up section has a contract step', () => {
+  expect(files.map((f) => [f, contractSteps(readFileSync(dir + f, 'utf8'))])).toEqual(files.map((f) => [f, []]));
+});
+
+it.each([
+  ['DROP TABLE', 'DROP TABLE lap;', true],
+  ['DROP COLUMN', 'ALTER TABLE lap DROP COLUMN filled;', true],
+  ['an unpaired DROP CONSTRAINT', 'ALTER TABLE lap DROP CONSTRAINT lap_source_check;', true],
+  ['RENAME COLUMN', 'ALTER TABLE lap RENAME COLUMN lap_ms TO ms;', true],
+  ['ALTER COLUMN c TYPE', 'ALTER TABLE lap ALTER COLUMN lap_ms TYPE bigint;', true],
+  ['SET NOT NULL', 'ALTER TABLE lap ALTER COLUMN lap_ms SET NOT NULL;', true],
+  [
+    'the replace idiom',
+    "ALTER TABLE lap\n  DROP CONSTRAINT lap_source_check,\n  ADD CONSTRAINT lap_source_check CHECK (source IN ('openf1', 'x'));",
+    false,
+  ],
+  ['DROP NOT NULL', 'ALTER TABLE lap ALTER COLUMN lap_ms DROP NOT NULL;', false],
+  ['ALTER TYPE … ADD VALUE', "ALTER TYPE state ADD VALUE 'paused';", false],
+  ['a column named type', 'ALTER TABLE session ALTER COLUMN type SET DEFAULT NULL;', false],
+  ['"drop" in a comment and in a string', "-- don't drop it\nUPDATE lap SET note = 'drop it';", false],
+  [
+    'a -- contract: line',
+    '-- contract: no release reads lap.filled any more\nALTER TABLE lap DROP COLUMN filled;',
+    false,
+  ],
+  ['DROP only in the down section', 'CREATE TABLE t (a int);\n-- migrate:down\nDROP TABLE t;', false],
+  [
+    '"--" in a string does not hide a later DROP',
+    "COMMENT ON COLUMN lap.x IS 'filled -- see #12';\nALTER TABLE lap DROP COLUMN y;\nINSERT INTO t VALUES ('a');",
+    true,
+  ],
+  ['a block comment with an apostrophe', "/* it's */ ALTER TABLE lap DROP COLUMN y;", true],
+  ['"drop" in a block comment', '/* we never drop */ CREATE TABLE t (a int);', false],
+  ['REVOKE', 'REVOKE SELECT ON lap FROM f1_api;', true],
+  ['an unpaired ADD CONSTRAINT', 'ALTER TABLE lap ADD CONSTRAINT lap_x_check CHECK (lap_ms > 0);', true],
+  ['ADD COLUMN NOT NULL without DEFAULT', 'ALTER TABLE lap ADD COLUMN x int NOT NULL;', true],
+  ['ADD COLUMN NOT NULL DEFAULT', 'ALTER TABLE lap ADD COLUMN x int NOT NULL DEFAULT 0;', false],
+  [
+    "one table's ADD does not excuse another's DROP",
+    'ALTER TABLE a DROP CONSTRAINT c;\nALTER TABLE b ADD CONSTRAINT c CHECK (true);',
+    true,
+  ],
+])('%s: flagged %s', (_name, up, flagged) => {
+  expect(contractSteps(`-- migrate:up\n${up}\n`).length > 0).toBe(flagged);
+});
+
+it('a -- contract: line counts above -- migrate:down only', () => {
+  const drop = 'ALTER TABLE lap DROP COLUMN y;';
+  const why = '-- contract: no release reads lap.y any more';
+  expect(contractSteps(`${why}\n-- migrate:up\n${drop}\n`)).toEqual([]);
+  expect(contractSteps(`-- migrate:up\n${drop}\n-- migrate:down\n${why}\n`)).toEqual(['ALTER TABLE lap DROP COLUMN y']);
 });

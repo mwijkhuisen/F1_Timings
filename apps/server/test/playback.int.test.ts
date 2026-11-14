@@ -46,6 +46,8 @@ const LAPS_AT = NOW - 2 * 24 * 60 * MIN;
 
 const lines: string[] = [];
 const log = pino({ base: null }, { write: (line: string) => void lines.push(line) });
+/** The lines but the request lines (#108; api.int.test.ts covers those). */
+const own = () => lines.filter((l) => JSON.parse(l).msg !== 'request');
 
 let testDb: TestDb;
 let admin: Kysely<DB>;
@@ -391,7 +393,7 @@ describe('playback routes (f1_api login, Access JWT, real socket)', { timeout: 6
       expect((await head).toString('latin1')).toMatch(/^HTTP\/1\.1 200 /);
       expect((await sample(srv2)).conns).toBe(8); // the 7 and the raw client
 
-      const logged = () => lines.map((l) => JSON.parse(l) as Record<string, unknown>);
+      const logged = () => own().map((l) => JSON.parse(l) as Record<string, unknown>); // #108's request lines aside
       for (let i = 0; i < 600 && !logged().some((l) => l.cause === 'write_timeout'); i++) await pause(50);
       expect(logged()).toEqual([
         expect.objectContaining({ msg: 'playback open', snapshot_bytes: expect.any(Number) }),
@@ -521,8 +523,13 @@ describe('playback routes (f1_api login, Access JWT, real socket)', { timeout: 6
       expect(seen.length, query).toBeGreaterThan(1);
       expect(seen.at(-1)?.event, query).toBe('end');
       const data = /^event: snapshot\ndata: (.*)$/m.exec(text)?.[1] ?? '';
-      expect(lines, query).toHaveLength(1);
-      const raw = lines[0] ?? '';
+      // The stream's request line (#108) times its headers only, and comes once.
+      expect(
+        lines.map((l) => JSON.parse(l)).filter((l) => l.msg === 'request'),
+        query,
+      ).toEqual([expect.objectContaining({ method: 'GET', route: '/api/v1/playback/:recording/stream', status: 200 })]);
+      expect(own(), query).toHaveLength(1);
+      const raw = own()[0] ?? '';
       const line = JSON.parse(raw) as Record<string, unknown>;
       // pino's own three, then the four fixed fields: no URL, id, path, time on the feed's axis or feed text.
       expect(Object.keys(line).sort(), query).toEqual(
@@ -541,7 +548,7 @@ describe('playback routes (f1_api login, Access JWT, real socket)', { timeout: 6
     });
     expect(head.status).toBe(200);
     await pause(200); // a seek would have logged by now: it takes a few ms on this recording
-    expect(lines).toEqual([]);
+    expect(own()).toEqual([]);
   });
 
   it('/recordings: every recording with its session and meeting, newest first, no-store', async () => {
@@ -605,13 +612,13 @@ describe('playback routes (f1_api login, Access JWT, real socket)', { timeout: 6
       expect(res.headers.get('cache-control')).toBe('no-store');
       expect(await res.text(), path).toBe('{"error":"bad request"}');
     }
-    expect(lines).toEqual([]); // a 400 logs nothing, and opens nothing to log
+    expect(own()).toEqual([]); // a 400 logs nothing but its request line, and opens nothing to log
     for (const path of [`999999/stream?at=live`, `${ids.missing}/stream?at=live`]) {
       const res = await get(`/api/v1/playback/${path}`);
       expect(res.status, path).toBe(404);
       expect(await res.text(), path).toBe('{"error":"not found"}');
     }
-    expect(lines.map((l) => JSON.parse(l))).toEqual([expect.objectContaining({ cause: 'ENOENT', msg: 'playback' })]);
+    expect(own().map((l) => JSON.parse(l))).toEqual([expect.objectContaining({ cause: 'ENOENT', msg: 'playback' })]);
   });
 
   it('every route here is a 401 without a token', async () => {

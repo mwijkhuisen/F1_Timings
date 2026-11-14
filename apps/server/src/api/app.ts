@@ -4,6 +4,7 @@ import { setTimeout as sleep } from 'node:timers/promises';
 import { isUnmatched, PERIOD_LIKE, type Rain, REVISION, type Seasons, type Status, type Stints } from '@f1/contracts';
 import type { HttpBindings } from '@hono/node-server';
 import { type Context, Hono, type MiddlewareHandler } from 'hono';
+import { routePath } from 'hono/route';
 import { streamSSE } from 'hono/streaming';
 import { type Kysely, sql } from 'kysely';
 import type { Logger } from 'pino';
@@ -41,7 +42,7 @@ export function createApp({
 }: {
   db: Kysely<DB>;
   access: MiddlewareHandler;
-  /** `info` is the playback open line only (#101): fixed fields, never input or feed text. */
+  /** `info` is the request line (#108) and the playback open line (#101): fixed fields, never input or feed text. */
   log: Pick<Logger, 'error' | 'info'>;
   /** The recordings' root (A§11.2), read-only here. */
   liveDir: string;
@@ -70,6 +71,15 @@ export function createApp({
     return row ? { key, state: row.ingest_state, v } : notFound(c);
   };
   const app = new Hono();
+
+  // One line per request (#108, A§14.5), a 401 included: the matched route's pattern (from the code),
+  // never the URL, a query, a header or a body. The method is one of Node's parser's fixed list.
+  app.use('*', async (c, next) => {
+    const start = performance.now();
+    await next();
+    const ms = Math.round(performance.now() - start); // for the stream: until its headers
+    log.info({ method: c.req.method, route: routePath(c, -1), status: c.res.status, ms }, 'request');
+  });
 
   // The only route without the JWT check (the update smoke test); through the tunnel it is behind Access.
   app.get('/healthz', async (c) => {
