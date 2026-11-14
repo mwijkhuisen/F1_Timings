@@ -7,7 +7,7 @@ import { describe, expect, it } from 'vitest';
 import { init } from '../src/lib/echarts.ts';
 import type { Driver } from '../src/lib/session.ts';
 import { fmtDelta } from '../src/lib/time.ts';
-import { Compare } from '../src/views/Compare.tsx';
+import { Compare, PitCycles } from '../src/views/Compare.tsx';
 import { DeltaTable, Duel, deltaReason } from '../src/views/DeltaTable.tsx';
 import { DriverPicker } from '../src/views/DriverPicker.tsx';
 import { gapChartLabel } from '../src/views/gap-chart-option.ts';
@@ -769,6 +769,20 @@ describe('the duel (C7)', () => {
     expect(reasonOf(duel([VER, NOR], l), 'duel-4-s2')).toBe('No S2 time for VER');
   });
 
+  // The player's progressive colours (A§11.3, #112) colour each improvement: the best is the fastest of them.
+  it('heads with the fastest of several purple or green laps, and the lap chart rings that one', () => {
+    const l = [
+      lap(1, 1, 81000, [28000, 30000, 23000], 'purple'),
+      lap(1, 2, 80000, [27500, 29900, 22600], 'purple'),
+      lap(4, 1, 81500, [28100, 30100, 23300], 'green'),
+      lap(4, 2, 80700, [27900, 30000, 22800], 'green'),
+    ];
+    expect(duel([VER, NOR], l)).toContain('<h3>NOR L2 <span class="t-green">1:20.700');
+    expect(duel([VER, NOR], l)).toContain('vs VER L2 <span class="t-purple">1:20.000');
+    const [ver] = lapChartOption([VER, NOR], l, tokens, fit).series;
+    expect(ver?.data).toEqual([[1, 81000], expect.objectContaining({ value: [2, 80000], symbol: 'circle' })]);
+  });
+
   it('gives one block per other driver, and one muted line where a best lap is missing', () => {
     expect([...duel([VER, NOR, PER]).matchAll(/<h3>(\w+)/g)].map(([, a]) => a)).toEqual(['NOR', 'PER']);
     const noBest = laps.filter((l) => !(l.driver_number === 4 && l.lap_number === 5));
@@ -941,6 +955,19 @@ describe('the pit cycles card', () => {
 
   it('is absent outside races', () => {
     expect(render('Practice', { stints, rc: control })).not.toContain('Pit cycles');
+  });
+
+  // The player (#112, D1): a cycle shows once its after line is crossed; L20/L21 has no crossing after.
+  it('settled, lists only the cycles whose after line is crossed', () => {
+    const html = renderToStaticMarkup(
+      <PitCycles drivers={[VER, NOR]} laps={raceLaps} periods={[]} stints={stints} rc={[]} failed={false} settled />,
+    );
+    expect(html).toBe(
+      '<section class="card"><h2>Pit cycles</h2><ul class="cycles">' +
+        '<li>VER pitted L4, NOR L6: VER 5.0 s ahead before, 5.0 s ahead after</li>' +
+        '</ul></section>',
+    );
+    expect(html).not.toContain('VER pitted L20, NOR L21');
   });
 });
 

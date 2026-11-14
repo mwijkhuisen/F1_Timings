@@ -1,4 +1,29 @@
+import { useMemo, useState } from 'react';
 import { type Driver, teamStyle } from '../lib/session.ts';
+
+/**
+ * The picks of Compare and Mini-sectors (E1, C4) from `chosen`, in pick order, the first the reference; null `chosen`
+ * (before the first pick) is the top 2 of `order`. `pick` stores a new choice. The player (#112) holds `chosen` itself,
+ * so the picks survive a tab switch.
+ */
+export function picksOf(order: readonly Driver[], chosen: number[] | null, pick: (numbers: number[]) => void) {
+  const selected = chosen === null ? order.slice(0, 2) : chosen.flatMap((n) => order.filter((x) => x.number === n));
+  const numbers = selected.map((x) => x.number);
+  return {
+    chosen,
+    selected,
+    numbers,
+    toggle: (n: number) => pick(numbers.includes(n) ? numbers.filter((x) => x !== n) : [...numbers, n]),
+    setReference: (n: number) => pick([n, ...numbers.filter((x) => x !== n)]),
+  };
+}
+
+/** The session page's picks: until the first pick `chosen` is `initial` (its `?d=`). */
+export function usePicks(order: readonly Driver[], initial: number[] | null) {
+  const [picked, setPicked] = useState<number[] | null>(null);
+  const chosen = picked ?? initial;
+  return useMemo(() => picksOf(order, chosen, setPicked), [chosen, order]);
+}
 
 /**
  * The driver picker of Compare and Mini-sectors (D2, C3): the picked drivers as chips in pick order, each with a

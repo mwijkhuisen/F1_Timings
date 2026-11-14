@@ -1290,6 +1290,16 @@ header .links {
     flex: 1 1 100%;
   }
 
+  /* The player's View switch (#112, D2): 6 px sides, so the six tabs aim for one row; if they still do not fit they
+     wrap, and none is hidden. */
+  .views {
+    flex-wrap: wrap;
+  }
+
+  .views button {
+    padding: 0 6px;
+  }
+
   /* Minimized, the head is one 44 px row: the time left and the lap are in the status strip, so only T and the mode,
      stacked tightly beside Play/Pause and the toggle (a 61 px bar at 390 px). */
   .player.min .clockline {
