@@ -1,0 +1,57 @@
+{
+ "name": "compare-T2-1280-dark",
+ "url": "/replay/7?t=20:46:00&tab=compare",
+ "title": "Safety car · Replay: Mexico City Grand Prix · Race · F1 Timings",
+ "errs": [],
+ "scrollWidth": 1280,
+ "clientWidth": 1280,
+ "viewScrollWidth": 1248,
+ "viewClientWidth": 1248,
+ "viewButtons": [
+  "Tower",
+  "Laps",
+  "Order",
+  "Compare [pressed]",
+  "Stints",
+  "Weather"
+ ],
+ "viewRows": 1,
+ "viewButtonPadding": "12px",
+ "bandClasses": [],
+ "tiles": [],
+ "stintLegend": [],
+ "stintDashes": 0,
+ "charts": [
+  "732x575",
+  "448x320"
+ ],
+ "cardTitles": [
+  "Lap times",
+  "Gap to PIA",
+  "Best laps, sector by sector",
+  "Pit cycles"
+ ],
+ "status": [
+  ""
+ ],
+ "muted": [
+  "Results: laps, compare, stints",
+  "Resumed at 20:46:00: press Play when the video is there.",
+  "No pit cycles within 3 laps for the picked drivers."
+ ],
+ "clock": "20:46:00\n41:00 left\nLap 37/64\nPAUSED",
+ "docH": 2854,
+ "steps": [
+  "ready=true"
+ ],
+ "apiRequests": [
+  "GET /api/v1/recordings",
+  "GET /api/v1/seasons",
+  "GET /api/v1/live",
+  "GET /api/v1/status",
+  "GET /api/v1/seasons/2026",
+  "GET /api/v1/sessions/11399?v=dev",
+  "GET /api/v1/playback/7/stream?at=1794253560000&still=1"
+ ],
+ "serverOpenStreams": 0
+}

@@ -1,0 +1,53 @@
+{
+ "name": "stints-T1-390-dark",
+ "url": "/replay/7?t=20:18:00&tab=stints",
+ "title": "Track clear · Replay: Mexico City Grand Prix · Race · F1 Timings",
+ "errs": [],
+ "scrollWidth": 390,
+ "clientWidth": 390,
+ "viewScrollWidth": 358,
+ "viewClientWidth": 358,
+ "viewButtons": [
+  "Tower",
+  "Laps",
+  "Order",
+  "Compare",
+  "Stints [pressed]",
+  "Weather"
+ ],
+ "viewRows": 1,
+ "viewButtonPadding": "6px",
+ "bandClasses": [],
+ "tiles": [],
+ "stintLegend": [
+  "Ssoft",
+  "Mmedium",
+  "Hhard",
+  "number: laps in the stint"
+ ],
+ "stintDashes": 0,
+ "charts": [],
+ "cardTitles": [],
+ "status": [
+  ""
+ ],
+ "muted": [
+  "Results: laps, compare, stints",
+  "Resumed at 20:18:00: press Play when the video is there."
+ ],
+ "clock": "20:18:00\n1:09:00 left\nLap 18/64\nPAUSED",
+ "docH": 3000,
+ "steps": [
+  "ready=true"
+ ],
+ "apiRequests": [
+  "GET /api/v1/recordings",
+  "GET /api/v1/seasons",
+  "GET /api/v1/live",
+  "GET /api/v1/status",
+  "GET /api/v1/seasons/2026",
+  "GET /api/v1/sessions/11399?v=dev",
+  "GET /api/v1/playback/7/stream?at=1794251880000&still=1"
+ ],
+ "serverOpenStreams": 0
+}

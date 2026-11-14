@@ -1,0 +1,72 @@
+{
+ "name": "laps-T3-1280-dark",
+ "url": "/replay/7?t=20:58:00&tab=laps",
+ "title": "Track clear · Replay: Mexico City Grand Prix · Race · F1 Timings",
+ "errs": [],
+ "scrollWidth": 1280,
+ "clientWidth": 1280,
+ "viewScrollWidth": 1248,
+ "viewClientWidth": 1248,
+ "viewButtons": [
+  "Tower",
+  "Laps [pressed]",
+  "Order",
+  "Compare",
+  "Stints",
+  "Weather"
+ ],
+ "viewRows": 1,
+ "viewButtonPadding": "12px",
+ "bandClasses": [
+  "band band-vsc (lap 22 VSC)",
+  "band band-vsc (lap 23 VSC)",
+  "band band-vsc (lap 24 VSC)",
+  "band band-sc (lap 35 SC)",
+  "band band-sc (lap 36 SC)",
+  "band band-sc (lap 37 SC)",
+  "band band-sc (lap 38 SC)",
+  "band band-sc (lap 39 SC)"
+ ],
+ "tiles": [
+  "Fastest lap",
+  "Best S1",
+  "Best S2",
+  "Best S3",
+  "Sum of best sectors",
+  "Top speed"
+ ],
+ "stintLegend": [
+  "overall best",
+  "personal best",
+  "other",
+  "in-lapIN",
+  "Hnew stint",
+  "deleted",
+  "SC / VSC lap"
+ ],
+ "stintDashes": 0,
+ "charts": [],
+ "cardTitles": [],
+ "status": [
+  ""
+ ],
+ "muted": [
+  "Results: laps, compare, stints",
+  "Resumed at 20:58:00: press Play when the video is there."
+ ],
+ "clock": "20:58:00\n29:00 left\nLap 44/64\nPAUSED",
+ "docH": 2000,
+ "steps": [
+  "ready=true"
+ ],
+ "apiRequests": [
+  "GET /api/v1/recordings",
+  "GET /api/v1/seasons",
+  "GET /api/v1/live",
+  "GET /api/v1/status",
+  "GET /api/v1/seasons/2026",
+  "GET /api/v1/sessions/11399?v=dev",
+  "GET /api/v1/playback/7/stream?at=1794254280000&still=1"
+ ],
+ "serverOpenStreams": 0
+}
