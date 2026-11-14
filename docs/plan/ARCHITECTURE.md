@@ -32,12 +32,12 @@ Same versions as Waterheight at P0 time. Re-check each pin against the 7-day rel
 | Database | PostgreSQL 18.6 (own container), Kysely 0.29.8 + pg 8.23.1, kysely-codegen 0.20.0, dbmate 2.36.0 | Immutable migrations |
 | Web | React 19.3.0, Vite 8.3.4 + @vitejs/plugin-react 6.1.2, TanStack Query 5.104.2, ECharts 6.1.0 (lazy chunk) | English only, no i18n library. Times through `Intl.DateTimeFormat` in Europe/Amsterdam, no Temporal polyfill (owner, 2026-10-28) |
 | Live feed (P2) | SignalR Core client: a hand-rolled ~200-line client on Node's global WebSocket (undici), no dependency | Owner, 2026-10-30 (A§11.1) |
-| Edge | Caddy 2.11.7, cloudflared 2026.10.7, Cloudflare Access (free plan) | Own tunnel |
-| Images | Build: `node:26.12.1-trixie-slim`. Runtime: `gcr.io/distroless/nodejs26-debian13:nonroot`. Web: `caddy:2.11.7-alpine`. Also `postgres:18.6-trixie`, `cloudflare/cloudflared:2026.10.7`, dbmate 2.36.0 (release binary, sha256-checked) and, in the CI nft check only, `debian:trixie-slim`. All pinned by digest | |
+| Edge | Caddy 2.11.8, cloudflared 2026.10.7, Cloudflare Access (free plan) | Own tunnel |
+| Images | Build: `node:26.13.0-trixie-slim`. Runtime: `gcr.io/distroless/nodejs26-debian13:nonroot`. Web: `caddy:2.11.8-alpine`. Also `postgres:18.6-trixie`, `cloudflare/cloudflared:2026.10.7`, dbmate 2.36.0 (release binary, sha256-checked) and, in the CI nft check only, `debian:trixie-slim`. All pinned by digest | |
 
 **Pins that must agree** (owner, 2026-11-14, #106; `test/pins.test.ts`, a unit test, so `pnpm check` and CI's `check` job run it): the postgres image of the CI service container equals compose's (and its major is 18: PGDATA is per major, so a major moves only through the runbook `docs/runbooks/update.md` "A PostgreSQL major upgrade"); dbmate's version and sha256 in CI equal the server Dockerfile's; the two build stages are the same `node` tag; and the Node major is the same in `.node-version`, both build stages and the runtime image. Each check has a negative case that plants one mismatch.
 
-**Accepted Node difference** (owner, 2026-11-14, #106, D2): only the major has to agree. CI and development run `.node-version` 26.10.0; the build stages (26.12.1) only compile; the runtime is distroless `nodejs26`, pinned by digest and with no minor tag, so its minor is whatever that digest holds. `.node-version` stays 26.10.0.
+**Accepted Node difference** (owner, 2026-11-14, #106, D2): only the major has to agree. CI and development run `.node-version` 26.10.0; the build stages (26.13.0) only compile; the runtime is distroless `nodejs26`, pinned by digest and with no minor tag, so its minor is whatever that digest holds. `.node-version` stays 26.10.0.
 
 ### Reused from Waterheight / dropped
 
