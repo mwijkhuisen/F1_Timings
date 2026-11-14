@@ -3,6 +3,7 @@ import { fileURLToPath } from 'node:url';
 import fc from 'fast-check';
 import { describe, expect, it } from 'vitest';
 import { deltaE, linear, oklab, type Vision } from '../src/lib/colour.ts';
+import { compoundsOf } from '../src/lib/compound.ts';
 import { clampForLight } from '../src/lib/session.ts';
 
 // A§13 (P4a): every text token on every surface, the mini-sector fills, the compound letters, the colour
@@ -33,7 +34,22 @@ const TEXT = ['fg', 'muted', 'dim', 'purple', 'green', 'live', 'amber'];
 // The mini-sector fills (purple and green full, other and unknown half height, pit hatched, no data dashed) and the
 // rain map's three steps (P5c).
 const FILLS = ['purple', 'green', 'ms-other', 'pit', 'muted', 'dim', 'rain-1', 'rain-2', 'rain-3'];
-const COMPOUNDS = ['soft', 'medium', 'hard', 'intermediate', 'wet', 'unknown'];
+// Today's compounds, 2018's seven dry ones (#126) and the grey of an unknown compound or a test tyre.
+const COMPOUNDS = [
+  'soft',
+  'medium',
+  'hard',
+  'intermediate',
+  'wet',
+  'hypersoft',
+  'ultrasoft',
+  'supersoft',
+  'soft-2018',
+  'medium-2018',
+  'hard-2018',
+  'superhard',
+  'unknown',
+];
 // Lines, washes and rings: drawn next to text, never as text or a meaning of their own; the rain map's water and roads
 // are context under the rain (P5c, D2).
 const DECORATION = ['line', 'line-soft', 'cmp-ring', 'on-cmp', 'display', 'map-water', 'map-road'];
@@ -172,6 +188,20 @@ describe.each([
   // The compound dot and the stint bars put --on-cmp text on a compound fill; an unknown compound gets --unknown.
   it.each(COMPOUNDS)('--on-cmp reaches 4.5:1 on --%s', (token) => {
     expect(contrast(hex(theme, 'on-cmp'), hex(theme, token))).toBeGreaterThanOrEqual(4.5);
+  });
+
+  // One season's fills read apart (#126): its compounds from lib/compound.ts and the unknown grey. The test tyre has
+  // no fill of its own (the grey, with T). Under colour-blind vision some pairs are close (2018's hypersoft and the
+  // unknown grey, ΔE 2.8 for protanopia): there the letters tell them apart, colour is never the only cue (A§13).
+  it.each([
+    [2018, 11.15],
+    [2026, 15.9],
+  ])('the %s compounds and the unknown grey are at least ΔE 10 apart (closest %s)', (year, closest) => {
+    const keys = [...new Set([...compoundsOf(year).map((c) => (c.key === 'test' ? 'unknown' : c.key)), 'unknown'])];
+    for (const k of keys) expect(COMPOUNDS, `--${k}`).toContain(k);
+    const set = keys.map((k) => hex(theme, k));
+    expect(minDeltaE(set, 'normal')).toBeGreaterThanOrEqual(10);
+    expect(minDeltaE(set, 'normal')).toBeCloseTo(closest, 1);
   });
 
   // Purple (overall best), green (personal best) and plain text must read apart for everyone.

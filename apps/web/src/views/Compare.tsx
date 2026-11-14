@@ -79,8 +79,8 @@ export function Compare({
   const periods = useMemo(() => (rc.data ? trackPeriods(rc.data).periods : []), [rc.data]);
   const [yWindow, setWindow] = useState<'fit' | '107'>('fit');
   const lapOption = useCallback(
-    (t: ChartTokens) => lapChartOption(drivers, laps, t, { window: yWindow, periods }),
-    [drivers, laps, yWindow, periods],
+    (t: ChartTokens) => lapChartOption(drivers, laps, t, { window: yWindow, periods, year: detail.meeting.year }),
+    [drivers, laps, yWindow, periods, detail.meeting.year],
   );
   const gapOption = useCallback(
     (t: ChartTokens) => gapChartOption(drivers, laps, t, periods),

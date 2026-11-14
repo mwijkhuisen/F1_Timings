@@ -1,7 +1,8 @@
 import type { Lap, Laps, SessionDetail } from '@f1/contracts';
 import { type ReactNode, useState } from 'react';
 import { deltaStep, ownBests } from '../lib/bests.ts';
-import { compoundOf, type Driver, orderDrivers, teamStyle } from '../lib/session.ts';
+import { type Compound, compoundOf, tyresWords, UNKNOWN_COMPOUND } from '../lib/compound.ts';
+import { type Driver, orderDrivers, teamStyle } from '../lib/session.ts';
 import { fmtClock, fmtDelta, fmtLap, fmtSector } from '../lib/time.ts';
 import { KIND_LABEL, KIND_NAME, type Kind, kindsAt, type Period, type Track } from '../lib/track.ts';
 import { Note } from '../ui/Note.tsx';
@@ -47,17 +48,20 @@ export function missingReason(
 }
 
 /** `stint`: a run start after the driver's first lap, drawn as a rule. */
-type Entry = { lap: Lap; dot: string | null; stint: boolean };
+type Entry = { lap: Lap; dot: Compound | null; stint: boolean };
 
-/** Laps per driver per lap number. The compound dot marks a run start: a new compound, or new tyres out of the pits. */
-function entries(laps: Laps): Map<number, Map<number, Entry>> {
+/**
+ * Laps per driver per lap number. The compound dot marks a run start: a new compound, or new tyres out of the pits.
+ * `year` picks the season's compounds (lib/compound.ts).
+ */
+function entries(laps: Laps, year: number): Map<number, Map<number, Entry>> {
   const out = new Map<number, Map<number, Entry>>();
   const sorted = laps.toSorted((a, b) => a.driver_number - b.driver_number || a.lap_number - b.lap_number);
   let prev: Lap | undefined;
   for (const lap of sorted) {
     if (prev?.driver_number !== lap.driver_number) prev = undefined;
     const start = lap.compound !== prev?.compound || lap.is_pit_out === true;
-    const dot = start ? compoundOf(lap.compound) : null;
+    const dot = start ? compoundOf(lap.compound, year) : null;
     const mine = out.get(lap.driver_number) ?? new Map<number, Entry>();
     out.set(lap.driver_number, mine.set(lap.lap_number, { lap, dot, stint: start && prev !== undefined }));
     prev = lap;
@@ -142,10 +146,10 @@ function Cell({
     >
       {dot && (
         <>
-          <span className={`cmp cmp-${dot}`} title={lap.compound ?? undefined} aria-hidden="true">
-            {dot[0]?.toUpperCase()}
+          <span className={`cmp cmp-${dot.key}`} title={dot.name} aria-hidden="true">
+            {dot.letter}
           </span>
-          <span className="vh">{dot} tyres, </span>
+          <span className="vh">{tyresWords(dot)}, </span>
         </>
       )}
       {body}
@@ -216,7 +220,7 @@ export function LapGrid({
   periods?: readonly Period[];
 }) {
   const drivers = orderDrivers(detail, laps);
-  const byDriver = entries(laps);
+  const byDriver = entries(laps, detail.meeting.year);
   const own = ownBests(laps, FIELD[metric]);
   const last = laps.reduce((n, l) => Math.max(n, l.lap_number), 0);
   const lapNumbers = Array.from({ length: last }, (_, i) => i + 1);
@@ -292,9 +296,13 @@ export function LapGrid({
 
 const STEPS = ['< 0.5 %', '< 1 %', '< 2 %', '≥ 2 % slower than own best'];
 
-/** What the styles mean, so colour is never the only cue (A§13). */
-export function Legend({ show, periods }: { show: Show; periods: readonly Period[] }) {
+/**
+ * What the styles mean, so colour is never the only cue (A§13). The new-stint dot is the season's hard tyre, so its
+ * colour and letter are never another compound's in that season (white is Medium in 2018).
+ */
+export function Legend({ show, periods, year }: { show: Show; periods: readonly Period[]; year: number }) {
   const has = (...kinds: Kind[]) => periods.some((p) => kinds.includes(p.kind));
+  const sample = compoundOf('HARD', year) ?? UNKNOWN_COMPOUND;
   return (
     <ul className="legend" aria-label="Legend">
       {show === 'times' ? (
@@ -311,8 +319,8 @@ export function Legend({ show, periods }: { show: Show; periods: readonly Period
             <span className="badge">IN</span>
           </li>
           <li>
-            <span className="cmp cmp-hard" aria-hidden="true">
-              H
+            <span className={`cmp cmp-${sample.key}`} aria-hidden="true">
+              {sample.letter}
             </span>
             new stint
           </li>
@@ -371,7 +379,7 @@ export function LapTable({ detail, laps, track }: { detail: SessionDetail; laps:
           Drivers as columns
         </button>
       </div>
-      <Legend show={show} periods={periods} />
+      <Legend show={show} periods={periods} year={detail.meeting.year} />
       <LapGrid detail={detail} laps={laps} metric={metric} columns={columns} show={show} periods={periods} />
       {track && track.unplaced.length > 0 && (
         <div className="muted">

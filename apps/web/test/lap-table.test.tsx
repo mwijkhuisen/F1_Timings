@@ -271,13 +271,47 @@ describe('the lap grid', () => {
         ?.slice(1),
     );
     expect(dots).toEqual([
-      ['cmp-soft', 'SOFT', 'S', 'soft tyres, '],
+      ['cmp-soft', 'Soft', 'S', 'soft tyres, '],
       undefined,
       undefined,
-      ['cmp-soft', 'SOFT', 'S', 'soft tyres, '],
+      ['cmp-soft', 'Soft', 'S', 'soft tyres, '],
       undefined,
-      ['cmp-medium', 'MEDIUM', 'M', 'medium tyres, '],
+      ['cmp-medium', 'Medium', 'M', 'medium tyres, '],
     ]);
+  });
+
+  // #126: a 2018 session's compounds are 2018's, with their own colours and two letters where one is ambiguous.
+  it('names a 2018 run start in its season, and the same names from 2019 as today', () => {
+    const rows = [
+      lap(44, 1, [[90000, null]], { compound: 'ULTRASOFT' }),
+      lap(44, 2, [[90000, null]], { compound: 'SUPERSOFT' }),
+      lap(44, 3, [[90000, null]], { compound: 'SOFT' }),
+    ];
+    const dots = (year: number) =>
+      cells(
+        renderToStaticMarkup(
+          <LapGrid
+            detail={{ ...detail, meeting: { ...detail.meeting, year } }}
+            laps={rows}
+            metric="lap"
+            columns={false}
+          />,
+        ),
+      ).map((c) =>
+        /<span class="cmp (cmp-[\w-]+)" title="(\w+)" aria-hidden="true">(\w+)<\/span><span class="vh">([\w ,]+)<\/span>/
+          .exec(c.body)
+          ?.slice(1),
+      );
+    expect(dots(2018)).toEqual([
+      ['cmp-ultrasoft', 'Ultrasoft', 'US', 'ultrasoft tyres, '],
+      ['cmp-supersoft', 'Supersoft', 'SS', 'supersoft tyres, '],
+      ['cmp-soft-2018', 'Soft', 'S', 'soft tyres, '],
+    ]);
+    expect(dots(2019)).toEqual([undefined, undefined, ['cmp-soft', 'Soft', 'S', 'soft tyres, ']]);
+    // 2019's unknown names get no dot, as an unknown compound always has.
+    expect(renderToStaticMarkup(<LapGrid detail={detail} laps={rows} metric="lap" columns={false} />)).not.toContain(
+      'cmp-unknown',
+    );
   });
 
   it('orders drivers by position, nulls last, and leaves out drivers without laps', () => {
@@ -491,18 +525,28 @@ describe('Δ to own best', () => {
   });
 
   it('has a legend of the steps', () => {
-    expect(renderToStaticMarkup(<Legend show="delta" periods={[]} />)).toBe(
+    expect(renderToStaticMarkup(<Legend year={2026} show="delta" periods={[]} />)).toBe(
       '<ul class="legend" aria-label="Legend"><li><span class="sw" aria-hidden="true"></span>&lt; 0.5 %</li><li><span class="sw heat-1" aria-hidden="true"></span>&lt; 1 %</li><li><span class="sw heat-2" aria-hidden="true"></span>&lt; 2 %</li><li><span class="sw heat-3" aria-hidden="true"></span>≥ 2 % slower than own best</li></ul>',
     );
   });
 });
 
 describe('the legend and the unplaced rows', () => {
+  // White is Medium in 2018: the new-stint sample is the season's hard tyre.
+  it("draws the new-stint sample as the season's hard tyre", () => {
+    expect(renderToStaticMarkup(<Legend year={2026} show="times" periods={[]} />)).toContain(
+      '<li><span class="cmp cmp-hard" aria-hidden="true">H</span>new stint</li>',
+    );
+    expect(renderToStaticMarkup(<Legend year={2018} show="times" periods={[]} />)).toContain(
+      '<li><span class="cmp cmp-hard-2018" aria-hidden="true">H</span>new stint</li>',
+    );
+  });
+
   it('lists the bands only when there are periods', () => {
-    const vsc = renderToStaticMarkup(<Legend show="times" periods={[{ kind: 'vsc', from: 1, to: 2 }]} />);
+    const vsc = renderToStaticMarkup(<Legend year={2026} show="times" periods={[{ kind: 'vsc', from: 1, to: 2 }]} />);
     expect(vsc).toContain('<li><span class="band band-sc">SC / VSC lap</span></li>');
     expect(vsc).not.toContain('red-flag');
-    const red = renderToStaticMarkup(<Legend show="times" periods={[{ kind: 'red', from: 1, to: 2 }]} />);
+    const red = renderToStaticMarkup(<Legend year={2026} show="times" periods={[{ kind: 'red', from: 1, to: 2 }]} />);
     expect(red).toContain('<li><span class="band band-red">red-flag lap</span></li>');
     expect(red).not.toContain('SC / VSC');
   });

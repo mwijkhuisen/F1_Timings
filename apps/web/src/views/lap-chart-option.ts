@@ -1,6 +1,7 @@
 import type { Lap } from '@f1/contracts';
 import { deltaE } from '../lib/colour.ts';
-import { clampForLight, compoundOf, type Driver } from '../lib/session.ts';
+import { compoundOf } from '../lib/compound.ts';
+import { clampForLight, type Driver } from '../lib/session.ts';
 import { fmtDelta, fmtLap } from '../lib/time.ts';
 import { KIND_LABEL, type Period } from '../lib/track.ts';
 
@@ -119,13 +120,14 @@ type ChartLap = Pick<
   'driver_number' | 'lap_number' | 'lap_ms' | 'deleted' | 'colour' | 'is_pit_in' | 'is_pit_out' | 'compound'
 >;
 
-export type LapChartView = { window: 'fit' | '107'; periods: readonly Period[] };
+/** `year` is the session's `meeting.year`: it names the compound in the tooltip (lib/compound.ts). */
+export type LapChartView = { window: 'fit' | '107'; periods: readonly Period[]; year: number };
 
 export function lapChartOption(
   drivers: readonly Driver[],
   laps: readonly ChartLap[],
   tokens: ChartTokens,
-  { window, periods }: LapChartView,
+  { window, periods, year }: LapChartView,
 ) {
   const picked = new Set(drivers.map((d) => d.number));
   const mine = laps.filter((l) => picked.has(l.driver_number));
@@ -220,8 +222,8 @@ export function lapChartOption(
     const parts = [`${name} ${fmtLap(l.lap_ms)}`];
     const r = ref && d !== ref ? at(ref, n) : undefined;
     if (r?.lap_ms != null) parts.push(fmtDelta(l.lap_ms - r.lap_ms));
-    const compound = compoundOf(l.compound);
-    if (compound) parts.push(compound[0]?.toUpperCase() + compound.slice(1));
+    const compound = compoundOf(l.compound, year);
+    if (compound) parts.push(compound.name);
     const flags = [
       l.deleted && 'deleted',
       l.is_pit_in && 'IN',

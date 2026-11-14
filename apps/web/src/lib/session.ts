@@ -77,12 +77,6 @@ export const pollMs = (s: Pick<Session, 'is_cancelled' | 'ingest_state'>): 60_00
     ? 60_000
     : false;
 
-const COMPOUNDS = ['SOFT', 'MEDIUM', 'HARD', 'INTERMEDIATE', 'WET'];
-
-/** A known compound in lower case (its class is `cmp-<that>`), or null for null or anything else. */
-export const compoundOf = (compound: string | null): string | null =>
-  compound !== null && COMPOUNDS.includes(compound) ? compound.toLowerCase() : null;
-
 export type Driver = { number: number; acronym: string; name: string | null; team: string | null };
 
 const HEX = /^[0-9A-Fa-f]{6}$/;
