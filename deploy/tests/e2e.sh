@@ -406,17 +406,18 @@ must ip link set e2e-fw0 up
 must ip -n e2e-fw link set e2e-fw1 up
 must ip -n e2e-fw link set lo up
 must ip -n e2e-fw route add default via "$FW_PUBLIC.1"
-gw_egress=$(docker network inspect -f '{{(index .IPAM.Config 0).Gateway}}' f1-egress)
-gw_publish=$(docker network inspect -f '{{(index .IPAM.Config 0).Gateway}}' f1-publish)
+# bridge_ip <bridge>: the bridge's IPv4 address, its containers' gateway. Not docker network inspect:
+# Docker 28 leaves IPAM's Gateway empty for a network that compose gives only a subnet.
+bridge_ip() { ip -o -4 addr show dev "$1" | awk '{ split($4, a, "/"); print a[1] }'; }
+gw_egress=$(bridge_ip f1-egress) gw_publish=$(bridge_ip f1-publish)
 # Safety (invariant 4): every target is the netns behind e2e-fw0 or an address of an f1 bridge on this host.
 for p in "${FW_PRIVATE[@]}" "$FW_PUBLIC"; do
   route=$(ip -o route get "$p.2") || fail "3g: no route to $p.2"
   [[ $route == "$p.2 dev e2e-fw0 "* ]] || fail "3g: $p.2 does not go to e2e-fw0: $route"
 done
-for b in f1-egress f1-publish; do
-  gw=$gw_egress
-  [[ $b == f1-egress ]] || gw=$gw_publish
-  ip -o -4 addr show dev "$b" | grep -qF " inet $gw/" || fail "3g: the gateway '$gw' is not an address of the bridge $b"
+[[ $gw_egress =~ ^10\.62\.3\.[0-9]+$ && $gw_publish =~ ^10\.62\.7\.[0-9]+$ ]] ||
+  fail "3g: the bridges' addresses are '$gw_egress' (f1-egress) and '$gw_publish' (f1-publish), not one each in 10.62.3.0/24 and 10.62.7.0/24"
+for gw in "$gw_egress" "$gw_publish"; do
   [[ $(ip -o route get "$gw") == "local $gw dev lo "* ]] || fail "3g: $gw is not local: $(ip -o route get "$gw")"
 done
 ip netns exec e2e-fw python3 -I -m http.server 443 --bind 0.0.0.0 --directory "$tmp/www" >"$tmp/fw-ns.log" 2>&1 &
