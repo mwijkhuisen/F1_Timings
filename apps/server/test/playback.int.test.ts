@@ -382,10 +382,13 @@ describe('playback routes (f1_api login, Access JWT, real socket)', { timeout: 6
     ];
     for (const { query, mode, applied } of cases) {
       lines.length = 0;
-      const { res, abort } = await call(stream(ids.done, query));
+      const { res } = await call(stream(ids.done, query));
       expect(res.status, query).toBe(200);
-      const text = await readUntil(res, /event: snapshot\ndata: .*\n\n/);
-      abort.abort();
+      // To the `end`: a line per event (or a second one for any later event) would show in the count.
+      const text = await res.text();
+      const seen = events(text);
+      expect(seen.length, query).toBeGreaterThan(1);
+      expect(seen.at(-1)?.event, query).toBe('end');
       const data = /^event: snapshot\ndata: (.*)$/m.exec(text)?.[1] ?? '';
       expect(lines, query).toHaveLength(1);
       const raw = lines[0] ?? '';
@@ -406,6 +409,7 @@ describe('playback routes (f1_api login, Access JWT, real socket)', { timeout: 6
       headers: { ...headers, 'cf-access-jwt-assertion': token },
     });
     expect(head.status).toBe(200);
+    await pause(200); // a seek would have logged by now: it takes a few ms on this recording
     expect(lines).toEqual([]);
   });
 

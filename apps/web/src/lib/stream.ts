@@ -21,7 +21,7 @@ import {
 // The weather rows (P5b): the snapshot's, then one per WeatherData delta, read from the merged view at the delta's t.
 
 export type Stint = Stints[number];
-/** `still`: a paused seek's still frame (A§13), which the server only logs (#101); replay only. */
+/** `still`: a still frame (a paused seek, or a load that resumes at `?t`, A§13), which the server only logs (#101). */
 export type StreamParams = { recording: number; at: number | 'live'; delay: number; still?: boolean };
 /** Mutated in place by every event; a snapshot starts a new one. `weather` is a new array per row. */
 export type Feed = { t: number; state: Obj; laps: Map<string, Lap>; stints: Map<string, Stint>; weather: Weather };
