@@ -85,6 +85,9 @@ export function openStream(params: StreamParams, h: Handlers, ES: typeof EventSo
   let open = true;
   let heard = Date.now();
   let held = 0;
+  // `end` has arrived: the server closes the response after it, so the transport is done (its `error` is no failure),
+  // and only the held events, `end` last, are left to apply.
+  let ending = false;
   // In arrival order. Parsed on arrival, so a contract failure is stale at once; applied once due.
   const queue: { arrived: number; apply: () => void }[] = [];
   let due: ReturnType<typeof setTimeout> | undefined;
@@ -99,7 +102,7 @@ export function openStream(params: StreamParams, h: Handlers, ES: typeof EventSo
     es.close();
   };
   const fail = () => {
-    if (!open) return;
+    if (!open || ending) return;
     close();
     h.onError();
   };
@@ -126,7 +129,13 @@ export function openStream(params: StreamParams, h: Handlers, ES: typeof EventSo
     if (queue.length === 1) drain();
   };
   /** `hold: false` for the heartbeat: it is liveness only and changes nothing on the page. */
-  const on = <T>(name: string, contract: { parse(v: unknown): T }, apply: (d: T) => void, hold = true) =>
+  const on = <T>(
+    name: string,
+    contract: { parse(v: unknown): T },
+    apply: (d: T) => void,
+    hold = true,
+    arrived?: () => void,
+  ) =>
     es.addEventListener(name, (e) => {
       if (!open) return;
       heard = Date.now();
@@ -139,6 +148,7 @@ export function openStream(params: StreamParams, h: Handlers, ES: typeof EventSo
       }
       if (hold) later(() => apply(d));
       else apply(d);
+      if (open) arrived?.();
     });
 
   on('snapshot', PlaybackSnapshot, (d) => {
@@ -165,10 +175,21 @@ export function openStream(params: StreamParams, h: Handlers, ES: typeof EventSo
     h.onData(feed, 'laps');
   });
   on('ping', PlaybackPing, () => {}, false); // liveness only
-  on('end', PlaybackEnd, (d) => {
-    close();
-    h.onEnd(d.t);
-  });
+  on(
+    'end',
+    PlaybackEnd,
+    (d) => {
+      close();
+      h.onEnd(d.t);
+    },
+    true,
+    () => {
+      // Still held: close the transport and the watchdog now, and let the queue drain to the `end`.
+      ending = true;
+      clearInterval(watch);
+      es.close();
+    },
+  );
   es.addEventListener('error', fail);
   return {
     close,

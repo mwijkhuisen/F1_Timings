@@ -381,12 +381,63 @@ describe('Player', () => {
       expect([fmtClock(NOW + 3_000), fmtClock(NOW + 4_000)]).toContain(clock());
 
       // `end` is held the same way: the bar stays live until it is due.
+      // The server closes the response after `end`, so a real EventSource fires `error` at once: no failure, no reopen.
       stream.emit('end', { t: NOW + 4_750 });
+      stream.emit('error');
+      expect(stream.closed).toBe(true);
+      expect(host.textContent).not.toContain('Reconnecting…');
       advance(4_999);
       expect(pill()).toBe('LIVE, 5 s behind');
       advance(1);
       expect(pill()).toBe('Paused');
+      advance(60_000);
+      expect(FakeES.all).toHaveLength(1); // it never reopens
+    });
+
+    it('a held `end` keeps the held events before it when the transport closes, and the watchdog stops', () => {
+      render({ sessionKey: 9100 });
+      const stream = last();
+      stream.emit('snapshot', { t: NOW, state: raceState(), laps: [], stints: [] });
+      advance(250);
+      click('5 seconds earlier');
+      stream.emit('delta', { t: NOW + 250, ...yellow });
+      stream.emit('end', { t: NOW + 300 });
+      stream.emit('error');
+      advance(4_999);
+      expect(light()).toBe('Track clear');
+      advance(1);
+      advance(250);
+      expect(light()).toBe('Yellow flag'); // the held delta, then `end`
+      expect(pill()).toBe('Paused');
+      advance(60_000); // past the 40 s watchdog
       expect(FakeES.all).toHaveLength(1);
+      expect(host.textContent).not.toContain('Reconnecting…');
+    });
+
+    it('a pending decrease reopens nothing once Live or a reconnect has opened at that delay', () => {
+      localStorage.setItem('f1.delay', '30');
+      render({ sessionKey: 9100 });
+      slide('Delay', 20);
+      advance(100);
+      button('Pause');
+      button('Live');
+      expect(last().url).toBe('/api/v1/playback/7/stream?at=live&delay=20');
+      const live = last();
+      advance(1_000);
+      expect(FakeES.all).toHaveLength(2);
+      expect(live.closed).toBe(false);
+
+      // An error, then a decrease 200 ms before the 1 s retry: the retry opens at the new delay, the timer adds none.
+      live.emit('error');
+      advance(800);
+      slide('Delay', 10);
+      advance(200);
+      expect(last().url).toBe('/api/v1/playback/7/stream?at=live&delay=10');
+      const retried = last();
+      advance(1_000);
+      expect(last()).toBe(retried);
+      expect(retried.closed).toBe(false);
+      expect(openCount()).toBe(1);
     });
 
     it("a decrease below the open stream's delay opens exactly one, 400 ms after the last change", () => {

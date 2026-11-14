@@ -675,12 +675,15 @@ export function Player({
     if (open.at !== 'live') return;
     const from = open.delay ?? 0;
     const hold = Math.max(0, v - from) * 1000;
-    clock.current = { t: clock.current.t, wall: clock.current.wall + hold - held.current, floor: nowT() };
-    held.current = hold;
-    stream.current?.hold(hold);
+    if (hold !== held.current) {
+      clock.current = { t: clock.current.t, wall: clock.current.wall + hold - held.current, floor: nowT() };
+      held.current = hold;
+      stream.current?.hold(hold);
+    }
+    // Not after a pause or a seek, nor when another open (Live, a reconnect) is at this delay already.
     if (v < from)
       timers.current.delay = setTimeout(
-        () => setOpen((o) => (o.at === 'live' ? { at: 'live', delay: v } : o)), // not after a pause or a seek
+        () => setOpen((o) => (o.at === 'live' && o.delay !== v ? { at: 'live', delay: v } : o)),
         DEBOUNCE_MS,
       );
   };
@@ -713,6 +716,7 @@ export function Player({
   };
   const pause = () => {
     rearm();
+    clearTimeout(timers.current.delay); // a pending live delay reopen: this open supersedes it
     const t = nowT();
     freeze(t);
     stood.current = t;
@@ -729,6 +733,7 @@ export function Player({
   };
   const goLive = () => {
     rearm();
+    clearTimeout(timers.current.delay); // a pending live delay reopen: this open supersedes it
     freeze(Date.now() - delay * 1000);
     setResumed(null);
     setOpen({ at: 'live', delay });
