@@ -32,6 +32,9 @@
 #  3f. The logs (#108): requests with a JWT-shaped Cf-Access-Jwt-Assertion (refused before any certs
 #      fetch) and a marked query leave neither, nor the path, in caddy's or the api's log; the api
 #      logs the 401's request line with its route pattern.
+#  3g. The playback stream through the real Caddyfile (#40): deploy/tests/sse-check.sh (a stub api in
+#      f1-server:ci, f1-web:ci on a throw-away network): uncompressed and on cadence, the control route
+#      compressed; three negative cases fail.
 #   4. Egress from api to a non-Cloudflare host is blocked.
 #  4b. f1-measure 60s 2 in the background; after 8 s `docker restart f1-live-1`, then SIGTERM: exit 0
 #      and the summary (the signal path), stats rows for db, api, caddy and live, the disk rows
@@ -273,6 +276,12 @@ done
 grep -qF '"method":"GET","route":"/api/v1/sessions/:key/laps","status":401' "$tmp/api.log" \
   || fail "the api logged no request line for the 401 on /api/v1/sessions/:key/laps"
 proof "4 requests with a JWT-shaped Cf-Access-Jwt-Assertion and ?q=<marker>: neither the JWT nor the marked path or query is in caddy's or the api's log; the api's request line for the 401 names the route /api/v1/sessions/:key/laps"
+
+# ------------------------------------------------------------------ 3g
+step "3g. The playback stream passes Caddy uncompressed and unbuffered (#40)"
+run "$tmp/sse" bash "$repo/deploy/tests/sse-check.sh"
+((rc == 0)) || fail "sse-check exited $rc"
+proof "$(tail -n 1 "$tmp/sse")"
 
 # ------------------------------------------------------------------ 4
 step "4. Egress from api to a non-Cloudflare host is blocked"
