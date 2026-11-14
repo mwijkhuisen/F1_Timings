@@ -43,6 +43,8 @@
 }
 
 :80 {
+	import site_headers
+
 	handle_errors {
 		import site_headers
 		respond "{err.status_code} {err.status_text}"
