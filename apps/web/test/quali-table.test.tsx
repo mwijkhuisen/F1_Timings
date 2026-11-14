@@ -50,13 +50,11 @@ describe('QualiTable', () => {
     expect(sq).toContain('>Knocked out in SQ1</div>');
   });
 
-  it("boxes each phase's fastest time", () => {
-    expect([...html.matchAll(/<span class="t-purple">([\d:.]+)<\/span>/g)].map(([, t]) => t)).toEqual([
-      '1:20.010',
-      '1:19.010',
-      '1:18.010',
-    ]);
+  it("boxes each phase's fastest time, with the words for a screen reader (#102)", () => {
+    const fastest = /<span class="t-purple">([\d:.]+)<span class="vh">, fastest of the phase<\/span><\/span>/g;
+    expect([...html.matchAll(fastest)].map(([, t]) => t)).toEqual(['1:20.010', '1:19.010', '1:18.010']);
     expect(row('C01').match(/t-purple/g)).toHaveLength(3);
+    expect(html.match(/fastest of the phase/g)).toHaveLength(3);
   });
 
   it('shows the margin to the cut-off, the gap to pole and the timed laps', () => {

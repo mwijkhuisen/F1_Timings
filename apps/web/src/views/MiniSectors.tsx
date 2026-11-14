@@ -113,11 +113,18 @@ export function MiniSectors({
                 .toSorted((a, b) => a.lap_number - b.lap_number)
                 .map((l) => (
                   <tr key={l.lap_number}>
-                    <th
-                      scope="row"
-                      title={l.deleted ? (l.deleted_reason ? `Deleted: ${l.deleted_reason}` : 'Deleted') : undefined}
-                    >
-                      {l.deleted ? <s>{l.lap_number}</s> : l.lap_number}
+                    <th scope="row">
+                      {/* A screen reader does not announce <s>, and a phone cannot hover: the reason is a Note, as in the lap table. */}
+                      {l.deleted ? (
+                        <Note
+                          id={`ms-del-${d.number}-${l.lap_number}`}
+                          text={l.deleted_reason ? `Deleted: ${l.deleted_reason}` : 'Deleted'}
+                        >
+                          <s>{l.lap_number}</s>
+                        </Note>
+                      ) : (
+                        l.lap_number
+                      )}
                       {l.is_pit_in && <span className="badge">IN</span>}
                       {l.is_pit_out && <span className="badge">OUT</span>}
                     </th>

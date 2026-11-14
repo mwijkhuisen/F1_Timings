@@ -6,7 +6,7 @@ import { Note } from '../ui/Note.tsx';
 import { Scroll } from '../ui/Scroll.tsx';
 
 // The sector-delta table (D5): the first selected driver is the reference (E4); every other
-// driver gets a Δ S1/S2/S3 group, that driver − the reference. A Best-lap row heads it (E3).
+// driver gets a Δ S1/S2/S3/Lap group, that driver − the reference. A Best-lap row heads it (E3).
 // Above it on Compare, the duel (C7): each other driver's best lap against the reference's, sector by sector.
 
 type DeltaLap = Pick<
@@ -15,14 +15,16 @@ type DeltaLap = Pick<
 >;
 
 const SECTORS = ['s1', 's2', 's3'] as const;
-type Sector = (typeof SECTORS)[number];
+/** The delta table's columns per driver: the sectors, then the lap (#102). */
+const FIELDS = [...SECTORS, 'lap'] as const;
+type Field = (typeof FIELDS)[number];
 
 /**
  * Why a delta is `—` (#99): a lap missing ("No lap 12 for NOR"; `lap` null is the Best-lap row, "No best lap for NOR"),
- * a deleted lap, or a sector time missing ("No S2 time for NOR", "for NOR and VER" when both are).
+ * a deleted lap, or a sector or lap time missing ("No S2 time for NOR", "No lap time for NOR and VER" when both are).
  */
 export function deltaReason(
-  sector: Sector,
+  field: Field,
   pair: readonly (readonly [Driver, DeltaLap | undefined])[],
   lap: number | null,
 ): string {
@@ -34,7 +36,7 @@ export function deltaReason(
   const noLap = who((l) => l === undefined);
   if (noLap) return lap === null ? `No best lap for ${noLap}` : `No lap ${lap} for ${noLap}`;
   if (pair.some(([, l]) => l?.deleted)) return 'Deleted lap';
-  return `No ${sector.toUpperCase()} time for ${who((l) => l?.[`${sector}_ms` as const] === null)}`;
+  return `No ${field === 'lap' ? 'lap' : field.toUpperCase()} time for ${who((l) => l?.[`${field}_ms` as const] === null)}`;
 }
 
 /** The driver's own best lap: the server colours exactly that lap purple or green (A§9). */
@@ -49,17 +51,9 @@ const barWidth = (ms: number, full: number) =>
   ({ '--w': `${Math.min(50, (Math.abs(ms) / full) * 50).toFixed(1)}%` }) as CSSProperties;
 
 /** `id`: unique on the page, per row and driver; `reason` says why a sector is `—`. */
-const Cells = ({
-  delta,
-  id,
-  reason,
-}: {
-  delta: SectorDelta | undefined;
-  id: string;
-  reason: (s: Sector) => string;
-}) => (
+const Cells = ({ delta, id, reason }: { delta: SectorDelta | undefined; id: string; reason: (s: Field) => string }) => (
   <>
-    {SECTORS.map((s) => {
+    {FIELDS.map((s) => {
       const v = delta?.[s] ?? null;
       if (v === null)
         return (
@@ -80,11 +74,14 @@ const Cells = ({
   </>
 );
 
-/** "RUS L41 1:21.316": the lap time coloured purple or green, as the server coloured it. */
+/** "RUS L41 1:21.316": the lap time coloured purple or green, as the server coloured it, with the colour's words. */
 const BestLap = ({ driver, lap }: { driver: Driver; lap: DeltaLap }) => (
   <>
     {driver.acronym} L{lap.lap_number}{' '}
-    <span className={`t-${lap.colour.lap}`}>{lap.lap_ms === null ? '—' : fmtLap(lap.lap_ms)}</span>
+    <span className={`t-${lap.colour.lap}`}>
+      {lap.lap_ms === null ? '—' : fmtLap(lap.lap_ms)}
+      <span className="vh">{lap.colour.lap === 'purple' ? ', overall best' : ', personal best'}</span>
+    </span>
   </>
 );
 
@@ -182,8 +179,8 @@ export function DeltaTable({ drivers, laps }: { drivers: readonly Driver[]; laps
       best,
       bestDelta: bestDeltas(refBest, best),
       byLap: new Map(sectorDeltas(refLaps, mine).map((x) => [x.lap_number, x])),
-      /** Why a sector of lap `n` (null: the best laps) is `—`, the other driver first. */
-      reason: (n: number | null) => (s: Sector) =>
+      /** Why a sector or the lap of lap `n` (null: the best laps) is `—`, the other driver first. */
+      reason: (n: number | null) => (s: Field) =>
         deltaReason(
           s,
           [
@@ -208,14 +205,14 @@ export function DeltaTable({ drivers, laps }: { drivers: readonly Driver[]; laps
                 Lap
               </th>
               {groups.map(({ driver }) => (
-                <th key={driver.number} scope="colgroup" colSpan={3} className="drv" style={teamStyle(driver)}>
+                <th key={driver.number} scope="colgroup" colSpan={4} className="drv" style={teamStyle(driver)}>
                   {driver.acronym} Δ vs {ref.acronym}
                 </th>
               ))}
             </tr>
             <tr>
               {groups.flatMap(({ driver }) =>
-                ['S1', 'S2', 'S3'].map((s) => (
+                ['S1', 'S2', 'S3', 'Lap'].map((s) => (
                   <th key={`${driver.number}-${s}`} scope="col">
                     {s}
                   </th>

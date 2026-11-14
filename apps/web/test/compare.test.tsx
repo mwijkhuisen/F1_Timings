@@ -10,6 +10,7 @@ import { fmtDelta } from '../src/lib/time.ts';
 import { Compare } from '../src/views/Compare.tsx';
 import { DeltaTable, Duel, deltaReason } from '../src/views/DeltaTable.tsx';
 import { DriverPicker } from '../src/views/DriverPicker.tsx';
+import { gapChartLabel } from '../src/views/gap-chart-option.ts';
 import { type ChartTokens, lapChartOption, lineStyles } from '../src/views/lap-chart-option.ts';
 import { sessionDetail } from './laps.ts';
 
@@ -580,25 +581,26 @@ describe('the delta table', () => {
     expect(html).toContain('<div class="scroll" tabindex="0" role="region" aria-label="Sector deltas"><table');
     expect(rows(html).slice(0, 2)).toEqual([
       ['Lap', 'NOR Δ vs VER'],
-      ['S1', 'S2', 'S3'],
+      ['S1', 'S2', 'S3', 'Lap'],
     ]);
   });
 
   it('heads the table with the best laps (green or purple) of each driver', () => {
-    // VER lap 2 (purple) against NOR lap 5 (green): 28050 − 28000, 30150 − 30000, 22700 − 22500.
-    expect(body[0]).toEqual(['Best lap<br/>L2 vs L5', '+0.050', '+0.150', '+0.200']);
+    // VER lap 2 (purple) against NOR lap 5 (green): 28050 − 28000, 30150 − 30000, 22700 − 22500, 80900 − 80500.
+    expect(body[0]).toEqual(['Best lap<br/>L2 vs L5', '+0.050', '+0.150', '+0.200', '+0.400']);
   });
 
-  it('signs a delta as the other driver − the reference, per lap', () => {
-    expect(body[1]).toEqual(['1', '−5.000', '+0.000', '+0.000']);
+  it('signs a delta as the other driver − the reference, per lap, the lap time last (#102)', () => {
+    expect(body[1]).toEqual(['1', '−5.000', '+0.000', '+0.000', '−5.000']);
   });
 
-  it('sector deltas are skipped when either value is null or the lap is deleted', () => {
-    // Lap 2: NOR S2 is null. Lap 3: VER S2 is null and NOR's lap is deleted. Lap 4: VER's lap is deleted.
+  it('skips a delta when either value is null or the lap is deleted, the lap time too (#102)', () => {
+    // Lap 2: NOR S2 is null, both laps timed. Lap 3: VER has no S2 and no lap time, NOR's lap is deleted.
+    // Lap 4: VER's lap is deleted, though both have a time.
     expect(body.slice(2)).toEqual([
-      ['2', '+0.100', '—', '−0.100'],
-      ['3', '—', '—', '—'],
-      ['4', '—', '—', '—'],
+      ['2', '+0.100', '—', '−0.100', '+0.500'],
+      ['3', '—', '—', '—', '—'],
+      ['4', '—', '—', '—', '—'],
     ]);
     // NOR lap 5 has no VER lap 5: no row.
     expect(body).toHaveLength(5);
@@ -607,32 +609,37 @@ describe('the delta table', () => {
   it('makes the first selected the reference', () => {
     const swapped = rows(table([NOR, VER]));
     expect(swapped[0]).toEqual(['Lap', 'VER Δ vs NOR']);
-    expect(swapped[2]).toEqual(['Best lap<br/>L5 vs L2', '−0.050', '−0.150', '−0.200']);
-    expect(swapped[3]).toEqual(['1', '+5.000', '+0.000', '+0.000']);
+    expect(swapped[2]).toEqual(['Best lap<br/>L5 vs L2', '−0.050', '−0.150', '−0.200', '−0.400']);
+    expect(swapped[3]).toEqual(['1', '+5.000', '+0.000', '+0.000', '+5.000']);
   });
 
   it('keeps the Best-lap row with — where a driver has no best lap', () => {
     // Without NOR lap 5 (its only green lap), NOR has no best lap.
     const noBest = laps.filter((l) => !(l.driver_number === 4 && l.lap_number === 5));
     const r = rows(renderToStaticMarkup(<DeltaTable drivers={[VER, NOR]} laps={noBest} />));
-    expect(r[2]).toEqual(['Best lap<br/>L2 vs L—', '—', '—', '—']);
+    expect(r[2]).toEqual(['Best lap<br/>L2 vs L—', '—', '—', '—', '—']);
     expect(r[3]?.[0]).toBe('1');
   });
 
   it('says so when the reference has no laps, and still shows the Best-lap row', () => {
     const html = table([driver(99, 'ZZZ', null), VER]);
     expect(html).toMatch(/^<p class="muted">ZZZ has no laps in this session: no deltas.<\/p><div class="scroll" /);
-    expect(rows(html).slice(2)).toEqual([['Best lap<br/>L— vs L2', '—', '—', '—']]);
+    expect(rows(html).slice(2)).toEqual([['Best lap<br/>L— vs L2', '—', '—', '—', '—']]);
     expect(table([VER, NOR])).toMatch(/^<div class="scroll" /);
   });
 
   it('gives every other driver its own column group', () => {
     const three = rows(table([VER, NOR, PER]));
     expect(three[0]).toEqual(['Lap', 'NOR Δ vs VER', 'PER Δ vs VER']);
-    expect(three[1]).toEqual(['S1', 'S2', 'S3', 'S1', 'S2', 'S3']);
-    expect(three[2]).toEqual(['Best lap<br/>L2 vs L5, L2', '+0.050', '+0.150', '+0.200', '+0.300', '+0.300', '+0.400']);
+    expect(three[1]).toEqual(['S1', 'S2', 'S3', 'Lap', 'S1', 'S2', 'S3', 'Lap']);
+    expect(three[2]).toEqual([
+      'Best lap<br/>L2 vs L5, L2',
+      ...['+0.050', '+0.150', '+0.200', '+0.400'],
+      ...['+0.300', '+0.300', '+0.400', '+1.000'],
+    ]);
     // Lap 1: PER has none.
-    expect(three[3]).toEqual(['1', '−5.000', '+0.000', '+0.000', '—', '—', '—']);
+    expect(three[3]).toEqual(['1', '−5.000', '+0.000', '+0.000', '−5.000', '—', '—', '—', '—']);
+    expect(table([VER, NOR, PER]).match(/scope="colgroup" colSpan="4"/g)).toHaveLength(2);
   });
 
   it('says why each — is: no lap, no best lap, a deleted lap or a missing sector time (#99)', () => {
@@ -642,6 +649,9 @@ describe('the delta table', () => {
     expect(reasonOf(three, 'dt-3-4-s2')).toBe('Deleted lap');
     expect(reasonOf(three, 'dt-4-4-s3')).toBe('Deleted lap'); // VER's lap 4
     expect(reasonOf(three, 'dt-1-11-s1')).toBe('No lap 1 for PER');
+    expect(reasonOf(three, 'dt-1-11-lap')).toBe('No lap 1 for PER');
+    expect(reasonOf(three, 'dt-3-4-lap')).toBe('Deleted lap'); // and VER has no lap time
+    expect(reasonOf(three, 'dt-4-4-lap')).toBe('Deleted lap');
     const noBest = laps.filter((l) => !(l.driver_number === 4 && l.lap_number === 5));
     expect(reasonOf(renderToStaticMarkup(<DeltaTable drivers={[VER, NOR]} laps={noBest} />), 'dt-best-4-s1')).toBe(
       'No best lap for NOR',
@@ -675,6 +685,12 @@ describe('deltaReason', () => {
     expect(deltaReason('s2', pair({ s2_ms: null }, {}), 12)).toBe('No S2 time for NOR');
     expect(deltaReason('s3', pair({ s3_ms: null }, { s3_ms: null }), null)).toBe('No S3 time for NOR and VER');
   });
+
+  it('names who has no lap time (#102)', () => {
+    expect(deltaReason('lap', pair({}, { lap_ms: null }), 12)).toBe('No lap time for VER');
+    expect(deltaReason('lap', pair({ lap_ms: null }, { lap_ms: null }), null)).toBe('No lap time for NOR and VER');
+    expect(deltaReason('lap', pair({ lap_ms: null, deleted: true }, {}), 12)).toBe('Deleted lap');
+  });
 });
 
 describe('the delta-cell bars', () => {
@@ -684,14 +700,17 @@ describe('the delta-cell bars', () => {
   it('draws a bar from the centre, left (neg) when faster than the reference, 500 ms to the half, capped', () => {
     // Best lap: NOR − VER = +0.050 S1, so right (pos), 50 / 500 × 50 % = 5 %.
     expect(cells[0]).toEqual([' class="dc"', '+0.050<i class="db pos" aria-hidden="true" style="--w:5.0%"></i>']);
-    // Lap 1 S1: −5.000, left and capped at the half.
-    expect(cells[3]).toEqual([' class="dc"', '−5.000<i class="db neg" aria-hidden="true" style="--w:50.0%"></i>']);
+    // The best laps' Δ Lap: +0.400, the same bar (#102): 400 / 500 × 50 % = 40 %.
+    expect(cells[3]).toEqual([' class="dc"', '+0.400<i class="db pos" aria-hidden="true" style="--w:40.0%"></i>']);
+    // Lap 1 S1: −5.000, left and capped at the half; its Δ Lap too.
+    expect(cells[4]).toEqual([' class="dc"', '−5.000<i class="db neg" aria-hidden="true" style="--w:50.0%"></i>']);
+    expect(cells[7]).toEqual(cells[4]);
   });
 
   it('has no bar for a zero and none, nor the dc class, for —', () => {
-    expect(cells[4]).toEqual([' class="dc"', '+0.000']);
+    expect(cells[5]).toEqual([' class="dc"', '+0.000']);
     // Lap 2 S2: NOR has no S2, with the reason behind a tap.
-    expect(cells[7]).toEqual([
+    expect(cells[9]).toEqual([
       '',
       '<button type="button" class="note" popoverTarget="dt-2-4-s2" aria-describedby="dt-2-4-s2" title="No S2 time for NOR">' +
         '—</button><div popover="auto" id="dt-2-4-s2" class="pop">No S2 time for NOR</div>',
@@ -709,10 +728,11 @@ const duelRows = (html: string) =>
   ].map(([, s, cls = null, team = null, w = null, v]) => [s, cls, w, team, v]);
 
 describe('the duel (C7)', () => {
-  it('heads each block with both best laps, coloured as the server did, the other driver first', () => {
+  it('heads each block with both best laps, coloured as the server did with the words (#102), the other driver first', () => {
     const html = duel([VER, NOR]);
     expect(html).toContain(
-      '<h3>NOR L5 <span class="t-green">1:20.900</span> vs VER L2 <span class="t-purple">1:20.500</span></h3>',
+      '<h3>NOR L5 <span class="t-green">1:20.900<span class="vh">, personal best</span></span> vs ' +
+        'VER L2 <span class="t-purple">1:20.500<span class="vh">, overall best</span></span></h3>',
     );
     expect(html).toContain('<p class="duelaxis"><span>◀ VER faster</span><span>NOR faster ▶</span></p>');
     expect(html).toContain('<p class="foot">Lap +0.400</p>');
@@ -773,7 +793,8 @@ describe('the comparison', () => {
     expect(html).toMatch(/^<div class="cgrid"><section class="card"><div class="panel-title"><h2>Lap times<\/h2>/);
     expect(html).toContain('<div class="chart" role="img" aria-label="Lap times: VER, NOR"></div>');
     expect(html).toContain('<div class="side"><section class="card"><div class="panel-title"><h2>Gap to VER</h2>');
-    expect(html).toContain('<div class="chart" role="img" aria-label="Gap to VER: NOR"></div>');
+    // These laps have no date_start, so no crossing: the name says there is no gap (#102).
+    expect(html).toContain('<div class="chart" role="img" aria-label="Gap to VER: NOR no gap"></div>');
     expect(html).toContain('<h2>Best laps, sector by sector</h2>');
     expect(html).toContain('Loading…');
     expect(html).toContain('aria-label="Sector deltas"');
@@ -801,6 +822,34 @@ describe('the comparison', () => {
       ['PER', 'false'],
     ]);
     expect(html).toContain('<h2>Gap to NOR</h2>');
+  });
+});
+
+describe('the gap chart name (#102)', () => {
+  const T0 = Date.parse('2026-10-25T20:00:00Z');
+  /** Driver d's lap n, started `ms` after T0. */
+  const at = (d: number, n: number, ms: number, lap_ms: number | null = 90_000) =>
+    lap(d, n, lap_ms, [null], null, { date_start: new Date(T0 + ms).toISOString() });
+  const SAI = driver(55, 'SAI', null);
+
+  it("ends with each other driver's last known gap and its lap, in pick order", () => {
+    const l = [
+      // VER crosses at 90, 180 and 270 s.
+      at(1, 1, 0),
+      at(1, 2, 90_000),
+      at(1, 3, 180_000),
+      // NOR crosses at 93.25 and 183.2 s; its lap 3 has no time and no lap 4, so its last crossing is lap 2's.
+      at(4, 1, 2_000),
+      at(4, 2, 93_250),
+      at(4, 3, 183_200, null),
+      // PER does one lap of 88.5 s, ahead of VER.
+      at(11, 1, 0, 88_500),
+    ];
+    // SAI has no laps.
+    expect(gapChartLabel([VER, NOR, PER, SAI], l)).toBe(
+      'Gap to VER: NOR +3.2 s at lap 2, PER −1.5 s at lap 1, SAI no gap',
+    );
+    expect(gapChartLabel([NOR, VER], l)).toBe('Gap to NOR: VER −3.2 s at lap 2');
   });
 });
 

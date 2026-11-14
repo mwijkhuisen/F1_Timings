@@ -61,7 +61,14 @@ function PhaseTd({
   const m = margin(cell, phase);
   return (
     <td>
-      <span className={same(cell.best, phase.fastest) ? 't-purple' : undefined}>{fmtLap(cell.best.lap_ms)}</span>
+      {same(cell.best, phase.fastest) ? (
+        <span className="t-purple">
+          {fmtLap(cell.best.lap_ms)}
+          <span className="vh">, fastest of the phase</span>
+        </span>
+      ) : (
+        <span>{fmtLap(cell.best.lap_ms)}</span>
+      )}
       {del}
       {m !== null && <small className="margin">{marginText(m)}</small>}
     </td>

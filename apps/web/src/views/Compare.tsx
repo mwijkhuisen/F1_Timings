@@ -6,7 +6,7 @@ import type { Driver } from '../lib/session.ts';
 import { type Period, trackPeriods } from '../lib/track.ts';
 import { Chart } from './Chart.tsx';
 import { DeltaTable, Duel } from './DeltaTable.tsx';
-import { gapChartOption } from './gap-chart-option.ts';
+import { gapChartLabel, gapChartOption } from './gap-chart-option.ts';
 import { type ChartTokens, lapChartOption } from './lap-chart-option.ts';
 
 /**
@@ -118,7 +118,7 @@ export function Compare({
               <h2>Gap to {ref.acronym}</h2>
               <p>seconds at each line crossing</p>
             </div>
-            <Chart label={`Gap to ${ref.acronym}: ${names(others)}`} option={gapOption} />
+            <Chart label={gapChartLabel(drivers, laps)} option={gapOption} />
           </section>
           <section className="card">
             <h2>Best laps, sector by sector</h2>
