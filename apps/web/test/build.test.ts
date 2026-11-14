@@ -75,6 +75,18 @@ describe('the CSP', () => {
   });
 });
 
+describe("Caddy's log (#108)", () => {
+  // reverse_proxy's own lines (a stream the client closed) carry the request, and Caddy leaves
+  // Cf-Access-Jwt-Assertion in it: the one log, the default logger, drops the headers and the URI.
+  it('is the default logger alone, without the request headers or URI', () => {
+    const caddyfile = readFileSync(join(webDir, '../../deploy/web/Caddyfile'), 'utf8');
+    expect(caddyfile.match(/^\s*log\b.*$/gm)).toEqual(['\tlog default {']);
+    expect(caddyfile).toContain(
+      '\tlog default {\n\t\tformat filter {\n\t\t\twrap json\n\t\t\trequest>headers delete\n\t\t\trequest>uri delete\n\t\t}\n\t}\n',
+    );
+  });
+});
+
 const SHA = 'c'.repeat(40);
 
 describe('web build', () => {

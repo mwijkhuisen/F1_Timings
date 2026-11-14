@@ -9,8 +9,8 @@
 # logs alert_key_invalid (or alert_no_key) and sends nothing; the one request, in step 12, goes to
 # loopback (asserted at the end). It needs the images f1-server:ci and f1-web:ci (built by the job)
 # and nft, curl, flock, getent, journalctl, systemd-analyze, ip netns, python3, groupadd and useradd.
-# The edge checks (1b, 3f, 3g, 3h) log every miss as an ::error:: line and go on, so one run shows
-# them all; the run fails at the end of 3h if any was missed. Their set-up failures fail at once.
+# The edge checks (1b, 3h, 3i, 3j) log every miss as an ::error:: line and go on, so one run shows
+# them all; the run fails at the end of 3j if any was missed. Their set-up failures fail at once.
 #   1. f1-install twice: the second run makes 0 changes; systemd-analyze verify on the units (the
 #      template f1-alert@.service too); f1-update.service and f1-tick.service have OnFailure=
 #      f1-alert@<unit>.service; /srv/f1/live, /srv/f1/archive and /srv/f1/state/live are 62532:62532 0700,
@@ -36,13 +36,19 @@
 #  3d. The jolpica job (profile jobs) on the empty /srv/f1/jolpica: exit 1 with jolpica_done error bad_dump.
 #  3e. F1_REVISION (#98): the f1-server:ci image's ENV equals its revision label, and the f1-web:ci build
 #      embeds it under /srv/www/assets.
-#  3f. What Caddy serves on 127.0.0.1:8180 (deploy/web/Caddyfile): 13 requests (the SPA, /healthz, a
+#  3f. The logs (#108): requests with a JWT-shaped Cf-Access-Jwt-Assertion (refused before any certs
+#      fetch) and a marked query leave neither, nor the path, in caddy's or the api's log; the api
+#      logs the 401's request line with its route pattern.
+#  3g. The playback stream through the real Caddyfile (#40): deploy/tests/sse-check.sh (a stub api in
+#      f1-server:ci, f1-web:ci on a throw-away network): uncompressed and on cadence, the control route
+#      compressed; three negative cases fail.
+#  3h. What Caddy serves on 127.0.0.1:8180 (deploy/web/Caddyfile): 13 requests (the SPA, /healthz, a
 #      missing file, POST, a 2 KB body to the api and to /healthz, a dotfile, two missing assets (one
 #      with an extension, one without), an unknown /api path, a dot segment under /api (--path-as-is),
 #      OPTIONS on the api, the api's own 401); each has its status, each of the 8 site headers exactly
 #      once and no Server or Via; GET / has Cache-Control no-cache, the 405 Allow GET, HEAD, the asset
 #      miss no immutable Cache-Control.
-#  3g. The firewall (A§14.3), with table inet f1 and without it: a veth into the netns e2e-fw holds a
+#  3i. The firewall (A§14.3), with table inet f1 and without it: a veth into the netns e2e-fw holds a
 #      /30 in each private range (10/8, 172.16/12, 192.168/16, 100.64/10, 169.254/16; not 127/8) and in
 #      TEST-NET-3 (203.0.113.0/24, the public stand-in), with python3 listeners there (:443 and :53)
 #      and on the gateways of f1-egress and f1-publish. `ip route get` puts every target on e2e-fw0 or
@@ -54,7 +60,7 @@
 #      gateway dropped; from api: 203.0.113.2:443 dropped (not in cf4). Without the table all 13 are
 #      open, so the drops are the table's. f1-firewall.service loads it again and the restart empties
 #      resolvers4 of the test address.
-#  3h. The recreate path: caddy labelled through an extra compose file, then f1-install with a changed
+#  3j. The recreate path: caddy labelled through an extra compose file, then f1-install with a changed
 #      /etc/f1/compose.yaml recreates the stack and smoke-tests it (caddy has a new Id and no label);
 #      a second run makes 0 changes. The edge checks fail here if any was missed.
 #  4b. f1-measure 60s 2 in the background; after 8 s `docker restart f1-live-1`, then SIGTERM: exit 0
@@ -124,12 +130,12 @@ fail() {
   echo "::error::e2e: $*"
   exit 1
 }
-missed=() # misses of the edge checks (1b, 3f, 3g, 3h): logged at once; the run fails at the end of 3h
+missed=() # misses of the edge checks (1b, 3h, 3i, 3j): logged at once; the run fails at the end of 3j
 miss() {
   missed+=("$*")
   echo "::error::e2e: $*"
 }
-fw_pids=() # step 3g's listeners
+fw_pids=() # step 3i's listeners
 on_exit() {
   local rc=$?
   ((group == 0)) || echo "::endgroup::"
@@ -345,7 +351,30 @@ docker run --rm --entrypoint grep f1-web:ci -rlF "$rev" /srv/www/assets >/dev/nu
 proof "F1_REVISION=$rev is the f1-server:ci ENV and sits in the f1-web:ci bundle (/srv/www/assets)"
 
 # ------------------------------------------------------------------ 3f
-step "3f. What Caddy serves: each status with the 8 site headers, each once, and no Server or Via"
+step "3f. The logs: the api's request line, and no Access JWT, query or path in caddy's or the api's log"
+# JWT-shaped, but no RS256 header: the api refuses it before any certs fetch, so nothing leaves the runner.
+jwt=eyJe2e108.marker.sig
+for path in /api/v1/sessions/1/laps /api/v1/e2e108path /healthz /assets/e2e108path.js; do
+  curl -s -o /dev/null --max-time 5 -H "Cf-Access-Jwt-Assertion: $jwt" "http://127.0.0.1:8180$path?q=e2e108query" \
+    || fail "curl $path"
+done
+docker logs f1-caddy-1 >"$tmp/caddy.log" 2>&1
+docker logs f1-api-1 >"$tmp/api.log" 2>&1
+for s in caddy api; do
+  ! grep -qF -e "$jwt" -e e2e108 "$tmp/$s.log" || fail "the $s log holds the request's JWT, query or path"
+done
+grep -qF '"method":"GET","route":"/api/v1/sessions/:key/laps","status":401' "$tmp/api.log" \
+  || fail "the api logged no request line for the 401 on /api/v1/sessions/:key/laps"
+proof "4 requests with a JWT-shaped Cf-Access-Jwt-Assertion and ?q=<marker>: neither the JWT nor the marked path or query is in caddy's or the api's log; the api's request line for the 401 names the route /api/v1/sessions/:key/laps"
+
+# ------------------------------------------------------------------ 3g
+step "3g. The playback stream passes Caddy uncompressed and unbuffered (#40)"
+run "$tmp/sse" bash "$repo/deploy/tests/sse-check.sh"
+((rc == 0)) || fail "sse-check exited $rc"
+proof "$(tail -n 1 "$tmp/sse")"
+
+# ------------------------------------------------------------------ 3h
+step "3h. What Caddy serves: each status with the 8 site headers, each once, and no Server or Via"
 n=${#missed[@]}
 # deploy/web/Caddyfile's (site_headers), exactly.
 readonly SITE_HEADERS=(
@@ -367,41 +396,41 @@ edge() {
   what="$path${*:+ ${*//"$tmp/"/}}"
   : >"$tmp/edge.h"
   if ! curl -sS --max-time 5 -o "$tmp/edge.b" -D "$tmp/edge.raw" "$@" "http://127.0.0.1:8180$path"; then
-    miss "3f $what: curl failed"
+    miss "3h $what: curl failed"
     return 0
   fi
   tr -d '\r' <"$tmp/edge.raw" >"$tmp/edge.h"
   status=$(head -n 1 "$tmp/edge.h")
   edge_seen+=("$what ${status#HTTP/* }")
-  [[ $status =~ ^HTTP/[0-9.]+\ $want(\ |$) ]] || miss "3f $what: '$status', not $want"
+  [[ $status =~ ^HTTP/[0-9.]+\ $want(\ |$) ]] || miss "3h $what: '$status', not $want"
   for h in "${SITE_HEADERS[@]}"; do
     grep -qixF -- "$h" "$tmp/edge.h" && continue
     got=$(grep -i "^${h%%:*}:" "$tmp/edge.h" || echo 'none')
-    miss "3f $what ($want): ${h%%:*} is '$got'"
+    miss "3h $what ($want): ${h%%:*} is '$got'"
   done
   for h in "${SITE_HEADERS[@]}"; do
     got=$(grep -ci "^${h%%:*}:" "$tmp/edge.h" || true)
-    ((got == 1)) || miss "3f $what ($want): ${h%%:*} occurs $got times, not once"
+    ((got == 1)) || miss "3h $what ($want): ${h%%:*} occurs $got times, not once"
   done
   got=$(grep -iE '^(server|via):' "$tmp/edge.h" || true)
-  [[ -z $got ]] || miss "3f $what ($want): names the software: ${got//$'\n'/; }"
+  [[ -z $got ]] || miss "3h $what ($want): names the software: ${got//$'\n'/; }"
 }
 edge 200 /
-grep -qix 'cache-control: no-cache' "$tmp/edge.h" || miss "3f / (200): $(grep -i '^cache-control:' "$tmp/edge.h" || echo 'no Cache-Control'), not no-cache"
+grep -qix 'cache-control: no-cache' "$tmp/edge.h" || miss "3h / (200): $(grep -i '^cache-control:' "$tmp/edge.h" || echo 'no Cache-Control'), not no-cache"
 edge 200 /healthz
 edge 404 /nope.txt # @missing_file, not the app
 edge 405 / -X POST
-grep -qix 'allow: GET, HEAD' "$tmp/edge.h" || miss "3f POST / (405): $(grep -i '^allow:' "$tmp/edge.h" || echo 'no Allow'), not GET, HEAD"
+grep -qix 'allow: GET, HEAD' "$tmp/edge.h" || miss "3h POST / (405): $(grep -i '^allow:' "$tmp/edge.h" || echo 'no Allow'), not GET, HEAD"
 # GET with a body (a POST is the 405). The 413 is Caddy's, through handle_errors; the second is /healthz,
 # the other route that imports to_api.
 edge 413 /api/v1/seasons -X GET -H 'Expect:' --data-binary @"$tmp/2k"
 edge 413 /healthz -X GET -H 'Expect:' --data-binary @"$tmp/2k"
 edge 404 /.git/config
 edge 404 /assets/nope.js
-if grep -qiE '^cache-control:.*immutable' "$tmp/edge.h"; then miss "3f /assets/nope.js (404): $(grep -i '^cache-control:' "$tmp/edge.h")"; fi
+if grep -qiE '^cache-control:.*immutable' "$tmp/edge.h"; then miss "3h /assets/nope.js (404): $(grep -i '^cache-control:' "$tmp/edge.h")"; fi
 # No extension: it reaches @assets_miss (/assets/nope.js is also answered by @missing_file).
 edge 404 /assets/nope
-if grep -qiE '^cache-control:.*immutable' "$tmp/edge.h"; then miss "3f /assets/nope (404): $(grep -i '^cache-control:' "$tmp/edge.h")"; fi
+if grep -qiE '^cache-control:.*immutable' "$tmp/edge.h"; then miss "3h /assets/nope (404): $(grep -i '^cache-control:' "$tmp/edge.h")"; fi
 # The api answers any /api/* without an Access JWT with 401, so this 404 is Caddy's own.
 edge 404 /api/x
 # Pins the !{path}.contains('/.') clause: curl keeps the dot segment.
@@ -415,8 +444,8 @@ if ((${#missed[@]} == n)); then
   proof "127.0.0.1:8180, ${#edge_seen[@]} requests, each with the 8 site headers exactly once and no Server or Via: ${seen%; }; GET / Cache-Control no-cache, the 405 Allow GET, HEAD, the asset miss without immutable"
 fi
 
-# ------------------------------------------------------------------ 3g
-step "3g. The firewall, with table inet f1 and without it: no private range, no host, no egress from f1-publish"
+# ------------------------------------------------------------------ 3i
+step "3i. The firewall, with table inet f1 and without it: no private range, no host, no egress from f1-publish"
 n=${#missed[@]}
 # A /30 in each private range that from_f1 drops (127/8 cannot be routed off the host) and in TEST-NET-3,
 # the public stand-in: <p>.1 on the host's e2e-fw0, <p>.2 in the netns. Not f1-*: no f1 rule names them.
@@ -438,13 +467,13 @@ bridge_ip() { ip -o -4 addr show dev "$1" | awk '{ split($4, a, "/"); print a[1]
 gw_egress=$(bridge_ip f1-egress) gw_publish=$(bridge_ip f1-publish)
 # Safety (invariant 4): every target is the netns behind e2e-fw0 or an address of an f1 bridge on this host.
 for p in "${FW_PRIVATE[@]}" "$FW_PUBLIC"; do
-  route=$(ip -o route get "$p.2") || fail "3g: no route to $p.2"
-  [[ $route == "$p.2 dev e2e-fw0 "* ]] || fail "3g: $p.2 does not go to e2e-fw0: $route"
+  route=$(ip -o route get "$p.2") || fail "3i: no route to $p.2"
+  [[ $route == "$p.2 dev e2e-fw0 "* ]] || fail "3i: $p.2 does not go to e2e-fw0: $route"
 done
 [[ $gw_egress =~ ^10\.62\.3\.[0-9]+$ && $gw_publish =~ ^10\.62\.7\.[0-9]+$ ]] ||
-  fail "3g: the bridges' addresses are '$gw_egress' (f1-egress) and '$gw_publish' (f1-publish), not one each in 10.62.3.0/24 and 10.62.7.0/24"
+  fail "3i: the bridges' addresses are '$gw_egress' (f1-egress) and '$gw_publish' (f1-publish), not one each in 10.62.3.0/24 and 10.62.7.0/24"
 for gw in "$gw_egress" "$gw_publish"; do
-  [[ $(ip -o route get "$gw") == "local $gw dev lo "* ]] || fail "3g: $gw is not local: $(ip -o route get "$gw")"
+  [[ $(ip -o route get "$gw") == "local $gw dev lo "* ]] || fail "3i: $gw is not local: $(ip -o route get "$gw")"
 done
 # The test addresses join the DNS accept (resolvers4): one public, one private (DNS comes before the private
 # drop). Never the real resolver. The restart below empties the set again.
@@ -469,7 +498,7 @@ fw_targets=("${FW_PRIVATE[@]/%/.2:443}" "$FW_PUBLIC.2:443" "$FW_PUBLIC.2:53" "$f
 for t in "${fw_targets[@]}"; do
   for i in $(seq 10); do
     curl -fsS --max-time 2 -o /dev/null "http://$t/" 2>/dev/null && break
-    ((i < 10)) || fail "3g: http://$t/ does not answer the host"
+    ((i < 10)) || fail "3i: http://$t/ does not answer the host"
     sleep 1
   done
 done
@@ -490,11 +519,11 @@ fw_expect() {
   shift 2
   out=$(docker run --rm --pull never --read-only --cap-drop ALL --security-opt no-new-privileges \
     --network "container:$c" --entrypoint /nodejs/bin/node f1-server:ci \
-    -e "$FW_PROBE" "$@" 2>"$tmp/fw-probe.err") || miss "3g $c ($fw_state): the probe failed: $(cat "$tmp/fw-probe.err")"
+    -e "$FW_PROBE" "$@" 2>"$tmp/fw-probe.err") || miss "3i $c ($fw_state): the probe failed: $(cat "$tmp/fw-probe.err")"
   printf '%s\n' "$out" | sed "s/^/$c ($fw_state)| /"
   for t in "$@"; do
     fw_seen+=("$fw_state: ${c%-1} -> $t $want")
-    grep -qxF "$t $want" <<<"$out" || miss "3g $c ($fw_state): $t is not $want: '$(grep -F "$t " <<<"$out" || echo 'no result')'"
+    grep -qxF "$t $want" <<<"$out" || miss "3i $c ($fw_state): $t is not $want: '$(grep -F "$t " <<<"$out" || echo 'no result')'"
   done
 }
 live_open=("$FW_PUBLIC.2:443" "$FW_PUBLIC.2:53" "$fw_dns_priv:53")
@@ -511,9 +540,9 @@ fw_expect f1-live-1 open "${FW_PRIVATE[@]/%/.2:443}" "$gw_egress:18080" "${live_
 fw_expect f1-caddy-1 open "$FW_PUBLIC.2:443" "$FW_PUBLIC.2:53" "$gw_publish:18080"
 fw_expect f1-api-1 open "$FW_PUBLIC.2:443"
 must systemctl restart f1-firewall.service
-nft list table inet f1 >/dev/null || fail "3g: f1-firewall.service did not load table inet f1 again"
+nft list table inet f1 >/dev/null || fail "3i: f1-firewall.service did not load table inet f1 again"
 # The restart resets the set and f1-resolvers refills it with the real resolver.
-if nft list set inet f1 resolvers4 | grep -qwF "$FW_PUBLIC.2"; then miss "3g: resolvers4 still holds $FW_PUBLIC.2 after the restart"; fi
+if nft list set inet f1 resolvers4 | grep -qwF "$FW_PUBLIC.2"; then miss "3i: resolvers4 still holds $FW_PUBLIC.2 after the restart"; fi
 kill "${fw_pids[@]}" 2>/dev/null || true
 wait "${fw_pids[@]}" 2>/dev/null || true
 fw_pids=()
@@ -523,32 +552,32 @@ if ((${#missed[@]} == n)); then
   proof "the f1 firewall, ${#fw_seen[@]} probes by node (read-only, no capabilities) in live's, caddy's and api's network namespaces, 13 targets per table state (targets behind e2e-fw0 or on the f1-egress and f1-publish bridges, by ip route get; $FW_PUBLIC.2 and $fw_dns_priv in resolvers4): ${seen%; }; f1-firewall.service loaded the table again and resolvers4 no longer held $FW_PUBLIC.2"
 fi
 
-# ------------------------------------------------------------------ 3h
-step "3h. f1-install recreates a running stack whose compose.yaml changed, and smoke-tests it"
+# ------------------------------------------------------------------ 3j
+step "3j. f1-install recreates a running stack whose compose.yaml changed, and smoke-tests it"
 n=${#missed[@]}
 printf '%s\n' 'services:' '  caddy:' '    labels: ["f1.e2e=stale"]' >"$tmp/label.yaml"
 run "$tmp/label" docker compose -p f1 -f /etc/f1/compose.yaml -f "$F1_COMPOSE_OVERRIDE" -f "$tmp/label.yaml" \
   --env-file "$STATE/current.env" up -d caddy
-((rc == 0)) || fail "3h: compose up -d caddy with the label exited $rc"
+((rc == 0)) || fail "3j: compose up -d caddy with the label exited $rc"
 caddy_label() { docker inspect -f '{{with index .Config.Labels "f1.e2e"}}{{.}}{{end}}' f1-caddy-1; }
-[[ $(caddy_label) == stale ]] || fail "3h: caddy has no label f1.e2e=stale: '$(caddy_label)'"
+[[ $(caddy_label) == stale ]] || fail "3j: caddy has no label f1.e2e=stale: '$(caddy_label)'"
 caddy_id=$(docker inspect -f '{{.Id}}' f1-caddy-1)
 printf '# e2e: differs from the checkout\n' >>/etc/f1/compose.yaml
 run "$tmp/install-recreate" "$repo/deploy/bin/f1-install"
-((rc == 0)) || miss "3h: f1-install with a changed compose.yaml exited $rc"
-grep -qx 'changed  the f1 stack recreated with the new compose.yaml' "$tmp/install-recreate" || miss "3h: f1-install did not recreate the stack"
-grep -q 'smoke test passed' "$tmp/install-recreate" || miss "3h: f1-install did not pass its smoke test"
-new_id=$(docker inspect -f '{{.Id}}' f1-caddy-1) || miss "3h: caddy is gone after the recreate"
-[[ $new_id != "$caddy_id" ]] || miss "3h: caddy was not recreated (Id ${caddy_id:0:12})"
-label=$(caddy_label) || miss "3h: caddy is gone after the recreate (no label to read)"
-[[ -z $label ]] || miss "3h: caddy still has the label f1.e2e: '$label'"
+((rc == 0)) || miss "3j: f1-install with a changed compose.yaml exited $rc"
+grep -qx 'changed  the f1 stack recreated with the new compose.yaml' "$tmp/install-recreate" || miss "3j: f1-install did not recreate the stack"
+grep -q 'smoke test passed' "$tmp/install-recreate" || miss "3j: f1-install did not pass its smoke test"
+new_id=$(docker inspect -f '{{.Id}}' f1-caddy-1) || miss "3j: caddy is gone after the recreate"
+[[ $new_id != "$caddy_id" ]] || miss "3j: caddy was not recreated (Id ${caddy_id:0:12})"
+label=$(caddy_label) || miss "3j: caddy is gone after the recreate (no label to read)"
+[[ -z $label ]] || miss "3j: caddy still has the label f1.e2e: '$label'"
 run "$tmp/install-again" "$repo/deploy/bin/f1-install"
-[[ $(tail -n 1 "$tmp/install-again") == 'f1-install: 0 change(s)' ]] || miss "3h: the next f1-install: '$(tail -n 1 "$tmp/install-again")'"
-curl -fsS --max-time 5 -o /dev/null "$URL" || miss "3h: $URL is not 200 after the recreate"
+[[ $(tail -n 1 "$tmp/install-again") == 'f1-install: 0 change(s)' ]] || miss "3j: the next f1-install: '$(tail -n 1 "$tmp/install-again")'"
+curl -fsS --max-time 5 -o /dev/null "$URL" || miss "3j: $URL is not 200 after the recreate"
 if ((${#missed[@]} == n)); then
   proof "caddy labelled f1.e2e=stale (Id ${caddy_id:0:12}), compose.yaml changed: f1-install exit 0, 'changed  the f1 stack recreated with the new compose.yaml', '$(grep -o 'smoke test passed.*' "$tmp/install-recreate")', caddy now Id ${new_id:0:12} without the label; the next run '$(tail -n 1 "$tmp/install-again")'; $URL 200"
 fi
-((${#missed[@]} == 0)) || fail "${#missed[@]} edge check(s) failed (steps 1b, 3f, 3g, 3h): see the ::error:: lines above"
+((${#missed[@]} == 0)) || fail "${#missed[@]} edge check(s) failed (steps 1b, 3h, 3i, 3j): see the ::error:: lines above"
 
 # ------------------------------------------------------------------ 4b
 step "4b. f1-measure 60s 2 on the running stack: docker restart of live, then SIGTERM"
