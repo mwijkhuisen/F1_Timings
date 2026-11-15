@@ -305,7 +305,7 @@ Checked against the live APIs on 2026-10-25 (Austin quali `11392`, Marina Bay ra
   - **New: lap 2 is missing from our 2018 rows. The files have it.**
     - Every driver with laps lacks lap 2 in the races 5170 (19 drivers) and 5090 (18), and 10 of the 20 drivers lack it in the Italian GP qualifying 5174.
     - FP2 5068 has no hole, nor do the 2019 race 5498 and the 2021 race 6675 (from P3a's [box]).
-    - The 2018 TimingData stream carries `NumberOfLaps` 2 for each of those drivers (5170: 19 messages, 5174: 20), and LapSeries has a lap-2 position. So the gap is in our lap reconstruction for the 2018 format, cause [U], a follow-up of P3d.
+    - The 2018 TimingData stream carries `NumberOfLaps` 2 for each of those drivers (5170: 19 messages, 5174: 20), and LapSeries has a lap-2 position. So the gap is in our lap reconstruction for the 2018 format, cause [U] (#198).
   - **What the other files hold** (key paths and leaf counts from the final `.json`, message counts from the stream):
     - `LapSeries`: `#.LapPosition.#`, one position per lap and driver, lap 0 included (5068: ours + 1 on 20 of 20). It has 17 (5170) and 13 (5090) more positions than our rows + 1, which is lap 2 among others.
     - `PitLaneTimeCollection` is in the stream only. 5170 has 42 messages, with `PitTimes.#.Duration`, `PitTimes.#.Lap` and `PitTimes.#.RacingNumber` 21 times each, each entry later `_deleted`, and the final `.json` is an empty `PitTimes`. So 2018 pit-lane times need the stream, and the archive job does not fetch this topic until P3e.
