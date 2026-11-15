@@ -1,3 +1,4 @@
+import { readFileSync } from 'node:fs';
 import { parseArgs } from 'node:util';
 import { safe } from '../apps/server/src/archive/files.ts';
 import { createFeed } from '../apps/server/src/live/merge.ts';
@@ -14,20 +15,30 @@ import { readInput } from './compare-laps.ts';
 // files only and prints key names and counts, never a value, so its output can go into a PR. With --codes it also
 // prints values for status-like keys only (Status, Started, Message, Category, Flag, Mode, Scope), short alphanumeric
 // tokens only: per key path, the distinct leaf values of 1–24 letters or digits (such as TrackStatus 4 or SessionStatus
-// Started) with their counts, any other value under those keys counting as <text>. Other keys print no value.
+// Started) with their counts, any other value under those keys counting as <text>. Other keys print no value. An input
+// ending in .json is one final state, an archive's `<Topic>.json` or a session's `Index.json` (whose key paths are its
+// topic list, A§6.2): its key paths with their leaf counts, --topic ignored.
 
 const USAGE =
-  'usage: feed-keys.ts [--topic <name>] [--codes] <feed.jsonl | recording dir | archive dir>…\n' +
+  'usage: feed-keys.ts [--topic <name>] [--codes] <feed.jsonl | recording dir | archive dir | <Topic>.json | Index.json>…\n' +
   '  --codes: values for status-like keys only (Status, Started, Message, Category, Flag, Mode, Scope), short\n' +
   '  alphanumeric tokens only; any other value under them is <text>, other keys print no value';
 const CODE = /^[A-Za-z0-9]{1,24}$/;
 const STATUS_KEYS = new Set(['Status', 'Started', 'Message', 'Category', 'Flag', 'Mode', 'Scope']);
 const MAX_DEPTH = 32; // as merge() (A§11.3): input is untrusted
 
-/** Every key path in `value`, numeric keys and array indices as `#`. A leaf, or an empty object or array, ends one. */
-export function keyPaths(value: unknown, into = new Set<string>(), prefix = '', depth = 0): Set<string> {
+/**
+ * Every key path in `value` with the number of leaves under it, numeric keys and array indices as `#`. A leaf, or an
+ * empty object or array, ends a path and counts 1.
+ */
+export function keyPaths(
+  value: unknown,
+  into = new Map<string, number>(),
+  prefix = '',
+  depth = 0,
+): Map<string, number> {
   const keys = typeof value === 'object' && value !== null && depth < MAX_DEPTH ? Object.keys(value) : [];
-  if (keys.length === 0 && prefix !== '') into.add(prefix);
+  if (keys.length === 0 && prefix !== '') into.set(prefix, (into.get(prefix) ?? 0) + 1);
   for (const key of keys) {
     const name = /^\d+$/.test(key) ? '#' : key;
     keyPaths((value as Record<string, unknown>)[key], into, prefix === '' ? name : `${prefix}.${name}`, depth + 1);
@@ -77,7 +88,7 @@ export function census(events: readonly FeedEvent[], topic: string, archive: boo
     const key = whole ?? label(feed.state);
     const group = groups.get(key) ?? { messages: 0, paths: new Map<string, number>(), codes: new Map() };
     group.messages++;
-    for (const path of keyPaths(ev.payload)) group.paths.set(path, (group.paths.get(path) ?? 0) + 1);
+    for (const path of keyPaths(ev.payload).keys()) group.paths.set(path, (group.paths.get(path) ?? 0) + 1);
     if (withCodes) codes(ev.payload, group.codes);
     groups.set(key, group);
   }
@@ -104,6 +115,24 @@ export async function feedKeys(argv: readonly string[], log: (line: string) => v
   }
   for (const name of inputs) {
     log(`== ${name}`);
+    if (name.endsWith('.json')) {
+      let state: unknown;
+      try {
+        state = JSON.parse(readFileSync(name, 'utf8').replace(/^﻿/, ''));
+      } catch {
+        log('feed-keys: input');
+        return 1;
+      }
+      const paths = keyPaths(state);
+      const stateCodes = withCodes ? codes(state) : new Map<string, Map<string, number>>();
+      log(`state: ${paths.size} key paths`);
+      for (const [path, n] of [...paths].sort(([a], [b]) => (a < b ? -1 : 1))) {
+        log(safe(`  ${path} ${n}`));
+        for (const [code, k] of [...(stateCodes.get(path) ?? [])].sort(([a], [b]) => (a < b ? -1 : 1)))
+          log(safe(`    = ${code} ${k}`));
+      }
+      continue;
+    }
     const input = await readInput(name);
     if (input === undefined) {
       log('feed-keys: input (unreadable, or an archive without a Heartbeat t0)');
