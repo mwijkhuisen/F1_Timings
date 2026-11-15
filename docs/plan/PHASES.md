@@ -14,6 +14,7 @@ Status: approved by the owner (2026-10-25). It builds on `ARCHITECTURE.md` (cite
 | Nov 2026 → Jan 2027 | **P5a–P5c** | Weather (owner, 2026-11-07), next to P4. P5c's live check needs a session (Lusail 27–29 Nov or Yas Marina 4–6 Dec 2026, else 2027 testing) |
 | Nov 2026 → Jan 2027 | **P6a–P6c** | Team radio (owner, 2026-11-09), next to P4 and P5. P6a's live check needs a session (Las Vegas 20–22 Nov, else Lusail or Yas Marina). P6b and P6c start only after their gate checks |
 | After P2 | **P3a–P3g**, then **P7** | History (owner, 2026-11-10): the F1 archive from 2018 (every topic, 2023 on as files only), Jolpica 1950–2017, the FIA PDFs from 2012, the sources combined, old-season views; then telemetry. P3d's probes come first |
+| After the #123 plan PR | **P8** | Championship standings (owner, 2026-11-15), 2023 on; next to P4–P6 |
 
 Remaining 2026 weekends (OpenF1 schedule): Austin (race 25 Oct) · Mexico City 30 Oct–1 Nov · São Paulo 6–8 Nov · Las Vegas 20–22 Nov · Lusail 27–29 Nov · Yas Marina 4–6 Dec.
 
@@ -25,7 +26,7 @@ Remaining 2026 weekends (OpenF1 schedule): Austin (race 25 Oct) · Mexico City 3
   - **[weekend]** needs a real F1 session.
   - **[owner]** is a manual owner action or judgement.
 - **Per phase:** one issue with the goal, scope, deliverables and acceptance criteria copied from this file. Branch `claude/p<N><x>-<slug>`, conventional commits, and a PR with an evidence checklist (each criterion → test or command output). Agents never merge. The owner merges with a merge commit once `ci` and `security` are green (branch protection on `main` requires both; owner, 2026-10-25).
-- **Reviews:** a fresh-session `/code-review` before merging P1b, P1c, P2b, P2c, P2d, P4e, P5a, P5b, P5c, P6a and P6b. A security review for anything touching secrets, the firewall, Access, the token or the compose hardening (P0 CI, P1f, P2c), for P5c (a new outbound host in the `ingest` daemon and third-party map data in the page), for P6a (a new outbound path in the recorder, a file-serving route and a CSP change), and for P6b (a new container, C++ parsing third-party MP3 files, a host download script and a new route), for P3f (a new outbound host, `fia.com`, and a parser for third-party PDF files) and for P7 if it adds a route over a large table (owner, 2026-11-10). A fresh-session `/code-review` also before merging P3b, P3c, P3e and P3f. For the web-only P4 phases a Sonnet security review is recommended where more feed or URL text is parsed or rendered (P4d, P4e, P4f), and optional elsewhere unless the CSP or the build config changes.
+- **Reviews:** a fresh-session `/code-review` before merging P1b, P1c, P2b, P2c, P2d, P4e, P5a, P5b, P5c, P6a, P6b and P8 (P8: a migration, two endpoints, a route and a spoiler rule; owner, 2026-11-15, #123). A security review for anything touching secrets, the firewall, Access, the token or the compose hardening (P0 CI, P1f, P2c), for P5c (a new outbound host in the `ingest` daemon and third-party map data in the page), for P6a (a new outbound path in the recorder, a file-serving route and a CSP change), and for P6b (a new container, C++ parsing third-party MP3 files, a host download script and a new route), for P3f (a new outbound host, `fia.com`, and a parser for third-party PDF files) and for P7 if it adds a route over a large table (owner, 2026-11-10). A fresh-session `/code-review` also before merging P3b, P3c, P3e and P3f. For the web-only P4 phases a Sonnet security review is recommended where more feed or URL text is parsed or rendered (P4d, P4e, P4f), and optional elsewhere unless the CSP or the build config changes. For P8 a Sonnet security review is recommended (owner, 2026-11-15, #123): a new route under the same Access and fixed errors, and two new paths on an existing host.
 - **Models and effort** (owner, 2026-10-25; each phase issue has its own table):
   - Build: Opus 5.5 at `xhigh` (`high` for UI and well-specified phases, `max` for P2b's lap reconstruction). Sonnet 5.5 at `high` for small phases (P2f, P3d).
   - Code review: a fresh session with a different model from the build. Sonnet 5.5 at `xhigh` for required reviews and `high`/`medium` otherwise; Opus 5.5 when Sonnet built.
@@ -265,7 +266,7 @@ Remaining 2026 weekends (OpenF1 schedule): Austin (race 25 Oct) · Mexico City 3
 - **Related issues:**
   - #96 (pit-lane topics, its topic check) and #126 (2018 compound names) take facts from P3d;
   - #122 is P7;
-  - #123 (standings) can take Jolpica's standings from 1950 once P3c is in.
+  - #123 (standings) is P8, from 2023 on; #189 plans 1950–2022 from Jolpica's standings tables (owner, 2026-11-15, #123, D3).
 - **Keys for sessions without one** (Jolpica and FIA before 2018; confirmed by P3c, 2026-11-12, with the `TT` table 01 FP1, 02 FP2, 03 FP3, 04 Qualifying, 05 Race, recorded in A§7):
   - The keys are derived in a reserved range that collides with neither the archive (session keys under 7,200 through 2021) nor OpenF1 (7,763 on).
   - `meeting_key = 1YYYYRR` (7 digits) and `session_key = 1YYYYRRTT` (9 digits, within the API's `^\d{1,9}$`). `TT` is a fixed code per session type.
@@ -724,6 +725,43 @@ Remaining 2026 weekends (OpenF1 schedule): Austin (race 25 Oct) · Mexico City 3
   - whether a table (perhaps partitioned per season) or compressed files next to the archive serve the views better.
 - **Scope** (written into this section once the gate has passed): a parser for the two `.z` topics on the P2b reader, the storage, `/api/v1/sessions/:key/telemetry?driver=&lap=` with a bounded size, and the views: a speed trace with throttle and brake per lap, two laps compared, and a track position replay in the player.
 - **Acceptance:** written into this section and the issue once the gate has passed.
+
+### P8: Championship standings (owner, 2026-11-15; the plan of #123)
+
+- **Goal:** every race and sprint since 2023 shows the drivers' and constructors' championship standings after it, inside its Result tab.
+- **Decisions** (owner, 2026-11-15, #123): D1 standings appear only as a section of the Result tab; D2 drivers and constructors tables plus a progression chart; D3 P8 covers 2023 on, and 1950–2022 is #189 (Jolpica's standings tables); D4 OpenF1's `championship_drivers` and `championship_teams` are the ninth and tenth endpoints, with a cross-check on `/status`; D5 the standing after a settled session is the next session's `points_start` (it heals OpenF1's stale `session_result.points` in 7779 and 9213), with the sum as the fallback. The [U] facts are in A§6.1, the rules in A§9.
+- **Scope in:**
+  - `session_result.points` kept by the schema and the normaliser into `result.points` (`real`, null without a value; only OpenF1 writes it)
+  - OpenF1 `championship_drivers` and `championship_teams` as the ninth and tenth per-session endpoints, fetched for each openf1 `Race`-type session (races and sprints) by `session_key`: zod schemas (each field nullable and bounded by its column), fixtures, tables `championship_driver` and `championship_team` keyed (session_key, driver_number) and (session_key, team_name), the `raw_response.endpoint` CHECK extended, grants (`f1_ingest` replaces, `f1_api` reads). The failure rule is the starting grid's: a failure keeps the stored rows and never fails the session, and a 404 "No results found." is an empty answer (A§8)
+  - `rederive` derives them from their raw rows, and a missing raw for these two is not `incomplete` (A§8)
+  - a re-queue in the same migration: every final openf1 race-type session of 2023 on goes back to `fetched` (about 113 sessions × 10 requests ≈ 1,130 requests ≈ 45 min, paused during live windows); it trips `due_backlog` once
+  - `timing/standings.ts` (pure): the counted sessions, people by `full_name` through the season's `driver` rows, the standing from the next session's `points_start` with the sum as the fallback, the countback on race results only, this session's points and the place change (A§9)
+  - `GET /sessions/:key/standings` with a strict `Standings` contract and the A§10 cache rule (`final` and not `provisional`); the service worker's pathname regex gains `standings`
+  - `/status` gains `standings_mismatch` (A§10)
+  - on the Result tab of a race-type session: a "Standings after this race" or "Standings after this sprint" section with a Drivers and a Constructors table and a points progression chart on the lazy ECharts chunk, with a provisional caption (A§13)
+- **Scope out:** 1950–2022 (#189); `ChampionshipPrediction` (U7, A§6.1); standings outside the Result tab (#118).
+- **Acceptance:**
+  - [CI] the schemas and the normaliser keep `points` (the golden `session_result-normal` and `-sprint` fixtures gain it), and new `championship_drivers-*` and `championship_teams-*` fixtures (a race, a sprint, a 404 qualifying) are recorded with `record-fixture.ts` on the owner's machine once the schemas exist.
+  - [CI] unit tests of `standings.ts`:
+    - the healed chain (a stale `session_result` corrected by N's `points_start`)
+    - the fallback, and the absent-person carry
+    - a number that is not in the session's `driver` rows
+    - one person with two numbers
+    - a team change
+    - the race-only countback against a sprint-only tie
+    - a full tie
+    - a cancelled session
+    - a later session never counted
+  - [CI] a route integration test: the contract, the errors, the cache rule with `provisional`, and no later session's points.
+  - [CI] a `/status` `standings_mismatch` integration test.
+  - [CI] the ingest: the two endpoints' failure and 404 rule (the session carries on, `fail_count` unchanged), and `rederive` derives them.
+  - [CI] component tests: the section only on race-type sessions with rows, the provisional caption, none on Season, `/` or the player, the chart at 390 px, and `build.test.ts`'s chart users list.
+  - [box] the migration and `rederive --all`, then the re-queue drained:
+    - every 2023+ race and sprint row has `points` (counts)
+    - every counted session has championship rows (counts)
+    - `standings_mismatch` lists 7779 (1 row) and 9213 (9 rows), and any other entry is explained
+  - [owner] the final 2023, 2024 and 2025 standings and the current 2026 one match the official tables; a 2024 race, a 2025 sprint and a 2026 race look right on the phone.
+- **Models:** build on Opus 5.5 at `high`; code review on Sonnet 5.5 at `xhigh`; security review on Sonnet 5.5 at `medium`; GitHub chores on Haiku 5.5 at `low`. Branch `claude/p8-standings`.
 
 ## 4. Owner actions
 
