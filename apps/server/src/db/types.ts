@@ -25,6 +25,26 @@ export type JsonValue = JsonArray | JsonObject | JsonPrimitive;
 
 export type Timestamp = ColumnType<Date, Date | string, Date | string>;
 
+export interface ChampionshipDriver {
+  driver_number: number;
+  points_current: number | null;
+  points_start: number | null;
+  position_current: number | null;
+  position_start: number | null;
+  session_key: number;
+  source: string;
+}
+
+export interface ChampionshipTeam {
+  points_current: number | null;
+  points_start: number | null;
+  position_current: number | null;
+  position_start: number | null;
+  session_key: number;
+  source: string;
+  team_name: string;
+}
+
 export interface Driver {
   acronym: string | null;
   driver_number: number;
@@ -216,6 +236,7 @@ export interface Result {
   gaps_ms: number[] | null;
   grid: number | null;
   laps: number | null;
+  points: number | null;
   position: number | null;
   session_key: number;
   source: string;
@@ -262,6 +283,8 @@ export interface Weather {
 }
 
 export interface DB {
+  championship_driver: ChampionshipDriver;
+  championship_team: ChampionshipTeam;
   driver: Driver;
   forecast: Forecast;
   forecast_hour: ForecastHour;

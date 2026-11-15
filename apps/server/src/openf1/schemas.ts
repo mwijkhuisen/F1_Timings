@@ -126,6 +126,7 @@ const SessionResult = z.object({
   // A number, or a string such as "1" or "DQ" (the normaliser keeps only a number).
   position: opt(z.union([z.number(), z.string()])),
   number_of_laps: opt(int16),
+  points: opt(real), // races and sprints only (P8, A§6.1)
   dnf: opt(z.boolean()),
   dns: opt(z.boolean()),
   dsq: opt(z.boolean()),
@@ -157,6 +158,20 @@ const StartingGrid = z.object({
   meeting_key: opt(int32), // not stored
 });
 
+// P8 (A§6.1): the standings after a race or sprint, under the session's own key. points_current is provisional
+// (before post-race DSQs); the next session's points_start holds the corrected standing (A§9). team_name is a key
+// (a btree entry holds at most ~2.7 kB), so its length is bounded.
+const championship = {
+  session_key: int32,
+  position_start: opt(int16),
+  position_current: opt(int16),
+  points_start: opt(real),
+  points_current: opt(real),
+  meeting_key: opt(int32), // not stored
+};
+const ChampionshipDrivers = z.object({ driver_number: int16, ...championship });
+const ChampionshipTeams = z.object({ team_name: text.max(200), ...championship });
+
 export const schemas = {
   meetings: z.array(Meeting),
   sessions: z.array(Session),
@@ -168,6 +183,8 @@ export const schemas = {
   session_result: z.array(SessionResult),
   weather: z.array(Weather),
   starting_grid: z.array(StartingGrid).max(100), // an over-long answer is a grid schema failure on its own (O1)
+  championship_drivers: z.array(ChampionshipDrivers), // a failure of either is its own (O1, A§8)
+  championship_teams: z.array(ChampionshipTeams),
 };
 
 export type Endpoint = keyof typeof schemas;
@@ -183,6 +200,8 @@ export type RaceControl = z.infer<typeof RaceControl>;
 export type SessionResult = z.infer<typeof SessionResult>;
 export type Weather = z.infer<typeof Weather>;
 export type StartingGrid = z.infer<typeof StartingGrid>;
+export type ChampionshipDrivers = z.infer<typeof ChampionshipDrivers>;
+export type ChampionshipTeams = z.infer<typeof ChampionshipTeams>;
 
 /** Paths and codes only, never a value from the body. */
 export type ShapeError = { code: 'shape'; issues: { path: string; code: string }[] };

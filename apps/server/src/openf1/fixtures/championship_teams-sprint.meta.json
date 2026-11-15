@@ -1,0 +1,13 @@
+{
+  "url": "https://api.openf1.org/v1/championship_teams?session_key=11383",
+  "fetchedAt": "2026-11-15T12:39:59.040Z",
+  "status": 200,
+  "trim": {
+    "drivers": null,
+    "laps": null
+  },
+  "rows": {
+    "fetched": 11,
+    "kept": 11
+  }
+}

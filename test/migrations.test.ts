@@ -17,6 +17,7 @@ const PINNED: Record<string, string> = {
   '20261113000002_ingest_status.sql': '4aab2d1b71f8a740eaf0397f668cee1baaf7873a1a669ea4ec41e98ebe26b405',
   '20261114000001_starting_grid.sql': '65c14270c8de4eb83317cfc8eb2812aaa8099f9563b7e110741e27cc7f919701',
   '20261115000001_forecast.sql': '366eb4ab6755c436a92b3ceba4fc66e680e7f33e08ef52b152b2000b3db108b4',
+  '20261115000002_standings.sql': '0150724dc02e83b1081487608760c9c2bda28805cdcd605b9d0a1dbe14f85e26',
 };
 
 const dir = fileURLToPath(new URL('../db/migrations/', import.meta.url));
