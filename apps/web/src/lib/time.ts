@@ -35,6 +35,10 @@ export const fmtSector = (ms: number): string =>
 export const fmtDelta = (ms: number, digits = 3): string =>
   `${ms < 0 ? '−' : '+'}${(Math.abs(ms) / 1000).toFixed(digits)}`;
 
+/** A classification gap: `fmtDelta` under a minute, `+1:21.666` from it (the Result tab, #110). */
+export const fmtGap = (ms: number): string =>
+  Math.abs(ms) < 60_000 ? fmtDelta(ms) : `${ms < 0 ? '−' : '+'}${fmtLap(Math.abs(ms))}`;
+
 const clock = new Intl.DateTimeFormat('en-GB', {
   timeZone: 'Europe/Amsterdam',
   hour: '2-digit',

@@ -2,7 +2,7 @@ import type { Laps, Live, SessionDetail } from '@f1/contracts';
 import type { ReactNode } from 'react';
 import { phaseName } from '../lib/quali.ts';
 import { orderDrivers, plural, sourceWords, statusOf, teamStyle } from '../lib/session.ts';
-import { fmtDelta, fmtDuration, fmtLap } from '../lib/time.ts';
+import { fmtDuration, fmtGap, fmtLap } from '../lib/time.ts';
 import { NoData } from '../ui/NoData.tsx';
 import { Note } from '../ui/Note.tsx';
 import { Scroll } from '../ui/Scroll.tsx';
@@ -34,7 +34,7 @@ function gapOf(r: Row, winner: Row | undefined, race: boolean): string | null {
   const time = r.durations_ms?.[0] ?? null;
   if (r.position === 1) return time === null ? null : fmtDuration(time);
   const gap = r.gaps_ms?.[0] ?? null;
-  if (gap !== null) return fmtDelta(gap);
+  if (gap !== null) return fmtGap(gap);
   const behind = race && !r.dns && !r.dsq && r.laps !== null && winner?.laps != null ? winner.laps - r.laps : 0;
   return behind > 0 ? `+${plural(behind, 'lap')}` : null;
 }
@@ -59,7 +59,7 @@ function QCell({ r, p, laps, name, source }: { r: Row; p: number; laps: Laps | n
           <span className="badge">NO LAP</span>
         </Note>
       )}
-      {gap !== null && <small className="margin">{gap === 0 ? 'fastest' : fmtDelta(gap)}</small>}
+      {gap !== null && <small className="margin">{gap === 0 ? 'fastest' : fmtGap(gap)}</small>}
     </td>
   );
 }

@@ -2,7 +2,7 @@ import { readFileSync } from 'node:fs';
 import type { Laps, SessionDetail } from '@f1/contracts';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, expect, it } from 'vitest';
-import { fmtDuration } from '../src/lib/time.ts';
+import { fmtDuration, fmtGap } from '../src/lib/time.ts';
 import { ResultTab, ResultTable } from '../src/views/Result.tsx';
 import { lap, result, sessionDetail } from './laps.ts';
 
@@ -76,9 +76,11 @@ describe('the Result tab: a race (session_result-normal, 11388)', () => {
     expect(rows.slice(-3)).toEqual(['D18', 'D43', 'D5']);
   });
 
-  it("shows the winner's race time, then the gaps, and +n laps for a lapped gap", () => {
+  it("shows the winner's race time, then the gaps (+m:ss.SSS from a minute), and +n laps for a lapped gap", () => {
     expect(cells(html, 'D3').map(text)).toEqual(['1', '', '62', '1:42:00.785', '']);
     expect(text(cells(html, 'D16')[3])).toBe('+7.335');
+    // From a minute up, as a lap time (owner, 2026-11-15).
+    expect(text(cells(html, 'D30')[3])).toBe('+1:21.666');
     expect(text(cells(html, 'D10')[3])).toBe('+1 lap');
     expect(text(cells(html, 'D11')[3])).toBe('+2 laps');
     expect(text(cells(html, 'D77')[3])).toBe('+3 laps');
@@ -182,6 +184,15 @@ describe('fmtDuration', () => {
     expect(fmtDuration(3_599_999)).toBe('59:59.999');
     expect(fmtDuration(3_600_000)).toBe('1:00:00.000');
     expect(fmtDuration(6_120_785)).toBe('1:42:00.785');
+  });
+});
+
+describe('fmtGap', () => {
+  it('is signed seconds under a minute and +m:ss.SSS from it', () => {
+    expect(fmtGap(7_335)).toBe('+7.335');
+    expect(fmtGap(59_999)).toBe('+59.999');
+    expect(fmtGap(60_000)).toBe('+1:00.000');
+    expect(fmtGap(81_666)).toBe('+1:21.666');
   });
 });
 
