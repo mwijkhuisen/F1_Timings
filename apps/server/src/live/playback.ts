@@ -15,7 +15,7 @@ import { markLaps } from '../timing/rules.ts';
 import { type Frame, toOutline } from './fit.ts';
 import { createLaps, type LapRow, qualifyingParts, type StintRow } from './laps.ts';
 import { createFeed } from './merge.ts';
-import { isObj, parseFeedLine, utc } from './read.ts';
+import { isObj, parseFeedLine, UNPARSED, utc } from './read.ts';
 import { type Line, missing, NOFOLLOW, notFile, segment, segments, splitter } from './recording.ts';
 import { decodeZ, positions, type ZFail } from './telemetry.ts';
 
@@ -52,8 +52,6 @@ const FRAME_MS = 30_000; // without a frame, asked again at most this often (a l
 const keyOf = (info: unknown) => (isObj(info) && typeof info.Key === 'number' ? info.Key : undefined);
 // The topics the lap rows read: the engine's two, and A§9's race control and qualifying parts (lapRows).
 const LAP_TOPICS = new Set(['TimingData', 'TimingAppData', 'RaceControlMessages', 'SessionData']);
-/** Recorded, not parsed yet (#96): kept out of the state and the stream, as the `.z` topics. */
-const UNPARSED = new Set(['PitLaneTimeCollection', 'PitStopSeries', 'PitStop']);
 
 /**
  * The engine's rows in the shapes of the Lap and Stints contracts, with A§9's deleted laps and qualifying phases from

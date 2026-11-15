@@ -28,6 +28,9 @@
 
 export type FeedEvent = { t: number /* epoch ms */; topic: string; payload: unknown; full?: true };
 
+/** Recorded, not parsed yet (#96): the playback and the map frame's finder skip them, as the `.z` topics. */
+export const UNPARSED: ReadonlySet<string> = new Set(['PitLaneTimeCollection', 'PitStopSeries', 'PitStop']);
+
 /** A plain object: not null, not an array. */
 export const isObj = (v: unknown): v is Record<string, unknown> =>
   typeof v === 'object' && v !== null && !Array.isArray(v);

@@ -47,6 +47,22 @@ const practice = (cars: Car[], extra: Value[] = []) =>
       (a, b) => a[0] - b[0],
     ),
   );
+const GAVE_UP = { outcome: 'gave_up' };
+/** A lap that starts and never ends, then `n` Position lines that fail to decode, 100 ms apart from t0 + 1 s. */
+const undecodable = (n: number): Value[] =>
+  [
+    ...session({
+      outline: OUTLINE,
+      frame: NEAR,
+      sessionKey: 9001,
+      t0: T0,
+      cars: [{ driver: 4, laps: [80_000] }],
+    }).filter((v) => v[1] !== 'Position.z'),
+    ...Array.from({ length: n }, (_, i): Value => {
+      const r = T0 + 1_000 + i * 100;
+      return [r, 'Position.z', '!!!', new Date(r).toISOString()];
+    }),
+  ].sort((a, b) => a[0] - b[0]);
 const closeTo = (a: Frame, b: Frame) => {
   expect(a.m).toBe(b.m);
   expect(a.s).toBeCloseTo(b.s, 3);
@@ -118,13 +134,13 @@ describe('findFrame (P7a, D2)', () => {
 
   it('finds the first complete lap of a practice session; nothing is decoded before a lap starts', async () => {
     const counts = zCounts();
-    const found = await findFrame(
+    const { outcome, found } = await findFrame(
       iterate(practice([{ driver: 4, laps: [80_000, 75_000, 76_000] }], [junk(T0 - 20_000), junk(T0 + 10_000)])),
       9001,
       OUTLINE,
       counts,
     );
-    expect(found).toBeDefined();
+    expect(outcome).toBe('found');
     closeTo(found?.frame as Frame, NEAR);
     expect(found?.rms).toBeLessThan(1);
     expect(found?.samples).toBe(75_000 / 250); // lap 2: lap 1 is the out-lap
@@ -136,29 +152,31 @@ describe('findFrame (P7a, D2)', () => {
       { driver: 4, laps: [80_000, 75_000, 76_000, 77_000], gaps: [[110_000, 112_000]] },
       { driver: 4, laps: [80_000, 75_000, 76_000, 77_000], offTrack: [[120_000, 120_250]] },
     ] satisfies Car[]) {
-      const found = await findFrame(iterate(practice([car])), 9001, OUTLINE, zCounts());
+      const { found } = await findFrame(iterate(practice([car])), 9001, OUTLINE, zCounts());
       expect(found?.samples).toBe(76_000 / 250);
     }
     // A gap of 1 s is jitter (T3): lap 2 stands.
     const jitter = { driver: 4, laps: [80_000, 75_000, 76_000], gaps: [[110_000, 111_000]] } satisfies Car;
-    expect((await findFrame(iterate(practice([jitter])), 9001, OUTLINE, zCounts()))?.samples).toBe(75_000 / 250 - 4);
+    expect((await findFrame(iterate(practice([jitter])), 9001, OUTLINE, zCounts())).found?.samples).toBe(
+      75_000 / 250 - 4,
+    );
   });
 
-  it('no complete lap, or another session: undefined', async () => {
-    expect(
-      await findFrame(iterate(practice([{ driver: 4, laps: [80_000] }])), 9001, OUTLINE, zCounts()),
-    ).toBeUndefined();
+  it('no complete lap, or another session: none (the end of the lines)', async () => {
+    expect(await findFrame(iterate(practice([{ driver: 4, laps: [80_000] }])), 9001, OUTLINE, zCounts())).toEqual({
+      outcome: 'none',
+    });
     const other = practice([{ driver: 4, laps: [80_000, 75_000, 76_000] }]);
-    expect(await findFrame(iterate(other), 9002, OUTLINE, zCounts())).toBeUndefined();
+    expect(await findFrame(iterate(other), 9002, OUTLINE, zCounts())).toEqual({ outcome: 'none' });
   });
 
   it('gives up after 50 candidates', async () => {
     const laps = Array.from({ length: 60 }, () => 31_000);
     const gaps = laps.map((_, i): [number, number] => [i * 31_000 + 10_000, i * 31_000 + 12_000]);
     const seen: Line[] = [];
-    expect(
-      await findFrame(iterate(practice([{ driver: 4, laps, gaps }]), seen), 9001, OUTLINE, zCounts()),
-    ).toBeUndefined();
+    expect(await findFrame(iterate(practice([{ driver: 4, laps, gaps }]), seen), 9001, OUTLINE, zCounts())).toEqual(
+      GAVE_UP,
+    );
     // Laps 2–51 tried: it stops at the first Position line past lap 51's end + 1.5 s.
     expect((seen.at(-1) as Line).r - (T0 + 51 * 31_000)).toBeGreaterThan(3_000);
     expect((seen.at(-1) as Line).r - (T0 + 51 * 31_000)).toBeLessThan(5_000);
@@ -168,11 +186,27 @@ describe('findFrame (P7a, D2)', () => {
     const laps = Array.from({ length: 25 }, () => 100_000);
     const gaps = laps.map((_, i): [number, number] => [i * 100_000 + 10_000, i * 100_000 + 12_000]);
     const seen: Line[] = [];
-    expect(
-      await findFrame(iterate(practice([{ driver: 4, laps, gaps }]), seen), 9001, OUTLINE, zCounts()),
-    ).toBeUndefined();
+    expect(await findFrame(iterate(practice([{ driver: 4, laps, gaps }]), seen), 9001, OUTLINE, zCounts())).toEqual(
+      GAVE_UP,
+    );
     expect((seen.at(-1) as Line).r - T0).toBeGreaterThan(1_800_000);
     expect((seen.at(-1) as Line).r - T0).toBeLessThan(1_805_000);
+  });
+
+  it('gives up after 4,000 decoded Position lines (a feed faster than one a second)', async () => {
+    const counts = zCounts();
+    expect(await findFrame(iterate(lines(undecodable(4_001))), 9001, OUTLINE, counts)).toEqual(GAVE_UP);
+    expect(counts.bad_base64).toBe(4_000);
+    // One fewer is the end of the lines: none.
+    expect(await findFrame(iterate(lines(undecodable(4_000))), 9001, OUTLINE, zCounts())).toEqual({ outcome: 'none' });
+  });
+
+  it('gives up after 200,000 lines read, whatever they hold', async () => {
+    const seen: Line[] = [];
+    const many = (n: number) => Array.from({ length: n }, (_, i): Line => ({ r: T0 + i, text: 'x' }));
+    expect(await findFrame(iterate(many(200_001), seen), 9001, OUTLINE, zCounts())).toEqual(GAVE_UP);
+    expect(seen).toHaveLength(200_001);
+    expect(await findFrame(iterate(many(200_000)), 9001, OUTLINE, zCounts())).toEqual({ outcome: 'none' });
   });
 });
 
@@ -243,6 +277,39 @@ describe('createFrames (P7a, D2)', () => {
       ['info', 'none', 0, null],
       ['info', 'none', 0, null],
     ]);
+  });
+
+  it('a give-up is final on an open recording too: the same lines would give it again', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    const { seen, log } = logger();
+    const frames = createFrames(log);
+    const dir = recording(undecodable(4_001));
+    expect(await frames.get(ask(dir, false))).toBeUndefined();
+    vi.setSystemTime(Date.now() + 60_000);
+    expect(await frames.get(ask(dir, false))).toBeUndefined();
+    expect(seen.map((s) => [s.fields.outcome, s.fields.samples, s.fields.rms_m, s.fields.bad_base64])).toEqual([
+      ['gave_up', 0, null, 4_000],
+    ]);
+  });
+
+  it('runs one fit at a time: a second recording asked at once starts after the first one ends', async () => {
+    const ends: { at: number; ms: number }[] = [];
+    const log = {
+      info: (fields: Record<string, unknown>) => ends.push({ at: performance.now(), ms: fields.ms as number }),
+      error: () => {},
+    } as unknown as Parameters<typeof createFrames>[0];
+    const frames = createFrames(log);
+    const lap = [{ driver: 4, laps: [80_000, 75_000, 76_000] }];
+    const [a, b] = [recording(sessionOf(lap)), recording(sessionOf(lap))];
+    const both = await Promise.all([
+      frames.get({ ...ask(a, true), id: '1' }),
+      frames.get({ ...ask(b, true), id: '2' }),
+    ]);
+    expect(both.every((f) => f !== undefined)).toBe(true);
+    const [first, second] = ends as [{ at: number; ms: number }, { at: number; ms: number }];
+    expect(first.ms).toBeGreaterThan(1); // a real run, so an overlap would show
+    // The second run's start (its end minus its ms, rounded) is not before the first one's end.
+    expect(second.at - second.ms).toBeGreaterThanOrEqual(first.at - 1);
   });
 
   it('a failed run is logged as its code, gives undefined and is not cached', async () => {

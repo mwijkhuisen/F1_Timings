@@ -62,9 +62,9 @@ export async function mapFit(
   const dir = args.positionals[0] as string;
 
   const [t0, zc] = [performance.now(), zCounts()];
-  const found = await findFrame(recordingLines(dir), Number(session), outline, zc);
+  const { outcome, found } = await findFrame(recordingLines(dir), Number(session), outline, zc);
   const ms = Math.round(performance.now() - t0);
-  log(`outcome ${found ? 'found' : 'none'}`);
+  log(`outcome ${outcome}`);
   if (!found) {
     log(`fit_ms ${ms}`);
     return 0; // none is a result, not a failure: the recording may have no complete on-track lap

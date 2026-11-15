@@ -3,7 +3,7 @@ import type { Logger } from 'pino';
 import { codeOf } from '../db/db.ts';
 import { createLaps, type LapRow } from './laps.ts';
 import { createFeed } from './merge.ts';
-import { isObj, parseFeedLine } from './read.ts';
+import { isObj, parseFeedLine, UNPARSED } from './read.ts';
 import { type Line, recordingLines } from './recording.ts';
 import { decodeZ, positions, type ZFail, zCounts } from './telemetry.ts';
 
@@ -27,6 +27,10 @@ const BUFFER_MAX = 2_000;
 const ROWS_MS = 10_000; // laps.ts rows() clones and sorts every row: at most once per 10 s of F1 time
 const GIVE_UP_MS = 30 * 60_000;
 const CANDIDATES = 50;
+// The budget (P7a review): a fit runs outside the 8-stream cap. About one Position line a second, so GIVE_UP_MS is
+// about 1,800 decoded lines; a 4 h race is about 99k lines, so LINES_MAX covers one that starts an hour early too.
+const DECODED_MAX = 4_000;
+const LINES_MAX = 200_000;
 const GAP_MS = 1_500; // T3: a longer gap on a lap is a real dropout; also the edges and the wait for late samples
 const MIN_SAMPLES = 60;
 const MIN_LAP_MS = 30_000;
@@ -167,6 +171,9 @@ export async function fitFrame(points: readonly Pt[], outline: readonly Pt[]): P
 type Sample = { t: number; on: boolean; x: number; y: number };
 type Candidate = { driver: number; start: number; end: number };
 export type Found = { frame: Frame; rms: number; samples: number; lines: number };
+/** A frame, a give-up (the same lines give it again) or the end of the lines (an open recording may have more). */
+export type Fit = { outcome: 'found'; found: Found } | { outcome: 'gave_up' | 'none'; found?: undefined };
+const GAVE_UP: Fit = { outcome: 'gave_up' };
 
 const keyOf = (info: unknown) => (isObj(info) && typeof info.Key === 'number' ? info.Key : undefined);
 const hasCount = (delta: unknown) =>
@@ -185,28 +192,28 @@ function* complete(laps: readonly LapRow[]): Generator<Candidate & { key: string
 
 /**
  * The recording's first complete on-track lap, fitted (D2). One createFeed and createLaps over the non-`.z` events,
- * as playback's apply runs them; `Position.z` is decoded only once a lap has a start, into a per-car buffer of the
- * last BUFFER_MS (at most BUFFER_MAX samples). After a TimingData count, the laps' rows (at most every ROWS_MS of F1
+ * as playback's apply runs them (UNPARSED skipped); `Position.z` is decoded only once a lap has a start, into a per-car
+ * buffer of the last BUFFER_MS (at most BUFFER_MAX samples). After a TimingData count, the laps' rows (at most every ROWS_MS of F1
  * time) give the candidates; one is judged once the Position data reaches its end + GAP_MS, as samples arrive
  * 1.7–2.3 s late (A§6.2). It passes when every sample in [start, end) is OnTrack, at least MIN_SAMPLES over at least
  * MIN_LAP_MS, with no gap and neither edge over GAP_MS, and the fit's rms is at most MAX_RMS_M. A lap start from a
  * Subscribe state carries its receive time (limit C, about 2 s): a few points of the next lap, still on the track.
- * Undefined after CANDIDATES tries, GIVE_UP_MS of feed time after the first lap, or at the end of the lines. A failed
- * decode is counted in `counts`, never thrown.
+ * It gives up after CANDIDATES tries, GIVE_UP_MS of feed time after the first lap, DECODED_MAX decoded lines or
+ * LINES_MAX lines read, and is none at the end of the lines. A failed decode is counted in `counts`, never thrown.
  */
 export async function findFrame(
   lines: AsyncIterable<Line>,
   sessionKey: number,
   outline: string,
   counts: Record<ZFail, number>,
-): Promise<Found | undefined> {
+): Promise<Fit> {
   const shape = outlinePoints(outline);
   const feed = createFeed();
   const engine = createLaps(sessionKey, 'f1-live');
   const cars = new Map<number, Sample[]>();
   const seen = new Set<string>();
   const pending: Candidate[] = [];
-  let [read, tried, reached, rowsAt] = [0, 0, Number.NEGATIVE_INFINITY, Number.NEGATIVE_INFINITY];
+  let [read, decoded, tried, reached, rowsAt] = [0, 0, 0, Number.NEGATIVE_INFINITY, Number.NEGATIVE_INFINITY];
   let [decoding, due] = [false, false];
   let first: number | undefined; // the F1 time of the first lap
 
@@ -224,9 +231,10 @@ export async function findFrame(
   };
 
   for await (const line of lines) {
-    read++;
+    if (++read > LINES_MAX) return GAVE_UP;
     for (const ev of parseFeedLine(line.text)) {
       if (ev.topic === 'Position.z') {
+        if (decoding && ++decoded > DECODED_MAX) return GAVE_UP;
         const z = decoding ? decodeZ(ev.payload) : undefined;
         if (z && !z.ok) counts[z.fail]++;
         for (const { t, cars: list } of z?.ok ? positions(z.value) : []) {
@@ -239,7 +247,7 @@ export async function findFrame(
             while (buf.length > BUFFER_MAX || (buf[0] as Sample).t < t - BUFFER_MS) buf.shift();
           }
         }
-      } else if (!ev.topic.endsWith('.z')) {
+      } else if (!ev.topic.endsWith('.z') && !UNPARSED.has(ev.topic)) {
         // A new session's SessionInfo clears the state first, as in playback.
         const [key, current] = [keyOf(ev.payload), keyOf(feed.state.SessionInfo)];
         if (ev.topic === 'SessionInfo' && key !== undefined && current !== undefined && key !== current) {
@@ -260,25 +268,27 @@ export async function findFrame(
         }
         pending.sort((x, y) => x.end - y.end);
       }
-      if (first !== undefined && ev.t - first > GIVE_UP_MS) return undefined;
+      if (first !== undefined && ev.t - first > GIVE_UP_MS) return GAVE_UP;
       while (pending[0] && pending[0].end + GAP_MS <= reached) {
         const found = await judge(pending.shift() as Candidate);
-        if (found) return found;
-        if (++tried >= CANDIDATES) return undefined;
+        if (found) return { outcome: 'found', found };
+        if (++tried >= CANDIDATES) return GAVE_UP;
       }
     }
   }
-  return undefined;
+  return { outcome: 'none' };
 }
 
 type Entry = { at: number; final: boolean; value: Promise<Frame | undefined> };
 type Ask = { id: string; dir: string; sessionKey: number; outline: string; ended: boolean };
 
 /**
- * The frames by recording id, one cache per api. A found frame is final, and so is none for an ended recording; an
- * open one without a frame is fitted again (re-read from its start) once AGAIN_MS have passed since its last run
- * ended, and concurrent callers share a run. A rejection is not cached: it is logged as its code and gives undefined.
- * Each run logs one `playback fit` line, fixed fields only.
+ * The frames by recording id, one cache per api. A found frame is final, and so is a give-up, and none for an ended
+ * recording; an open one whose lines ended without a frame is fitted again (re-read from its start) once AGAIN_MS
+ * have passed since its last run ended, and concurrent callers share a run. The runs go one at a time per process
+ * (they run outside the 8-stream cap, and a closed stream does not stop one; findFrame's budget bounds each). A
+ * rejection is not cached: it is logged as its code and gives undefined. Each run logs one `playback fit` line,
+ * fixed fields only.
  * ponytail: per process and unbounded, a few hundred recordings at about 100 B each; P7b's telemetry_session (A§7)
  * can replace it.
  */
@@ -286,6 +296,7 @@ export function createFrames(log: Pick<Logger, 'error' | 'info'>): {
   get(ask: Ask): Promise<Frame | undefined>;
 } {
   const cache = new Map<string, Entry>();
+  let queue: Promise<unknown> = Promise.resolve(); // the last run asked for: the next one starts after it
   const run = async (entry: Entry, { id, dir, sessionKey, outline, ended }: Ask) => {
     const [zc, t0] = [zCounts(), performance.now()];
     let read = 0;
@@ -296,11 +307,11 @@ export function createFrames(log: Pick<Logger, 'error' | 'info'>): {
       }
     }
     try {
-      const found = await findFrame(counted(), sessionKey, outline, zc);
+      const { outcome, found } = await findFrame(counted(), sessionKey, outline, zc);
       const ms = Math.round(performance.now() - t0);
       const [samples, rms_m] = found ? [found.samples, Math.round(found.rms * 10) / 10] : [0, null];
-      log.info({ outcome: found ? 'found' : 'none', ms, lines: read, samples, rms_m, ...zc }, 'playback fit');
-      [entry.final, entry.at] = [found !== undefined || ended, Date.now()];
+      log.info({ outcome, ms, lines: read, samples, rms_m, ...zc }, 'playback fit');
+      [entry.final, entry.at] = [outcome !== 'none' || ended, Date.now()];
       return found?.frame;
     } catch (err) {
       if (cache.get(id) === entry) cache.delete(id);
@@ -314,7 +325,8 @@ export function createFrames(log: Pick<Logger, 'error' | 'info'>): {
       if (hit && (hit.final || Date.now() - hit.at < AGAIN_MS)) return hit.value; // a running one has at = ∞
       const entry: Entry = { at: Number.POSITIVE_INFINITY, final: false, value: Promise.resolve(undefined) };
       cache.set(ask.id, entry);
-      entry.value = run(entry, ask);
+      entry.value = queue.then(() => run(entry, ask));
+      queue = entry.value.catch(() => undefined); // run never rejects; even so, one failure must not stop the queue
       return entry.value;
     },
   };
