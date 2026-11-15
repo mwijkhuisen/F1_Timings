@@ -1,0 +1,26 @@
+{
+ "ready": true,
+ "errs": [],
+ "url": "/2026",
+ "viewport": "390x1500",
+ "scrollWidth": 390,
+ "clientWidth": 390,
+ "hScroll": false,
+ "docH": 12469,
+ "fcWords": [
+  "Forecast: rain 51 %, 15 °C @33,357",
+  "Forecast: rain 51 %, 14 °C @33,357",
+  "Forecast: rain 5 %, 15 °C @33,357",
+  "Forecast: rain 5 %, 14 °C @33,357",
+  "Forecast: rain 0 %, 15 °C @33,357"
+ ],
+ "fcsrc": [
+  "Forecast (model), updated 09:00. Weather data by Open-Meteo.com (CC BY 4.0). Modelled, not measured; hourly values rounded and summarised. |324x50"
+ ],
+ "fcLinks": [
+  "Open-Meteo.com 301x33 inline",
+  "CC BY 4.0 50x16 inline"
+ ],
+ "tiles": [],
+ "overflowers": []
+}

@@ -1,0 +1,25 @@
+{
+ "ready": true,
+ "errs": [],
+ "url": "/2026/1300-las-vegas/11413-practice-1/weather",
+ "viewport": "390x1700",
+ "scrollWidth": 390,
+ "clientWidth": 390,
+ "hScroll": false,
+ "docH": 1700,
+ "fcWords": [],
+ "fcsrc": [
+  "Weather data by Open-Meteo.com (CC BY 4.0). Modelled, not measured; hourly values rounded and summarised. |332x34"
+ ],
+ "fcLinks": [
+  "Open-Meteo.com 94x16 inline",
+  "CC BY 4.0 50x16 inline"
+ ],
+ "tiles": [
+  "Rain chance51 %highest",
+  "Rain0.0 mmtotal",
+  "Air15 °C",
+  "Wind4.6 m/shighest"
+ ],
+ "overflowers": []
+}
