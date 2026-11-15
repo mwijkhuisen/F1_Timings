@@ -139,6 +139,17 @@ describe('standings (A§9)', () => {
     expect(points(standings(s, 2))).toEqual({ Ben: 25, Eli: 6 });
   });
 
+  it('sums two championship rows of one person in a session', () => {
+    // Should OpenF1 split Eli's standing over his two numbers: 4 + 2, neither row alone (A§9).
+    const s = season({
+      sessions: [session(1), session(2)],
+      drivers: [driver(1, 38, 'Eli'), driver(2, 50, 'Eli')],
+      results: [result(1, 38, 7, 6)],
+      championship_drivers: [start(2, 38, 4), start(2, 50, 2)],
+    });
+    expect(points(standings(s, 1))).toEqual({ Eli: 6 });
+  });
+
   it('credits team points to the session team', () => {
     // Fay and Gus swap teams between race 1 and the sprint.
     const s = season({

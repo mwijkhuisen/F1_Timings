@@ -37,6 +37,10 @@ export type StandingsSeason = {
   championship_drivers: readonly ChampionshipDriverRow[];
   championship_teams: readonly ChampionshipTeamRow[];
 };
+/** What `standingsMismatches` reads (drivers only, A§10): no display fields, no team rows. */
+export type MismatchSeason = Omit<StandingsSeason, 'drivers' | 'championship_teams'> & {
+  drivers: readonly Omit<StandingsDriver, 'acronym' | 'team_colour'>[];
+};
 export type StandingsMismatch = {
   session_key: number;
   year: number;
@@ -75,7 +79,10 @@ const count = (m: Map<string, number[]>, k: string, place: number, n: number) =>
   m.set(k, p);
 };
 
-function kinds(season: StandingsSeason): { drivers: Kind; teams: Kind } {
+function kinds(season: MismatchSeason & { championship_teams: readonly ChampionshipTeamRow[] }): {
+  drivers: Kind;
+  teams: Kind;
+} {
   // A number maps to a person through the season's driver rows, never the session's alone (A§6.1).
   const person = new Map<number, string>();
   const team = new Map<string, string>(); // `${session_key}:${number}` → that session's team_name
@@ -244,9 +251,9 @@ export function standings(season: StandingsSeason, sessionKey: number): Standing
  * session N, how many people's N points_start − S points_start differs from S's session_result points, newest first.
  * Only people in both S's and N's rows count: the absent-person rule carries the others (A§9).
  */
-export function standingsMismatches(season: StandingsSeason): StandingsMismatch[] {
+export function standingsMismatches(season: MismatchSeason): StandingsMismatch[] {
   const all = counted(season);
-  const { drivers } = kinds(season);
+  const { drivers } = kinds({ ...season, championship_teams: [] });
   const out: StandingsMismatch[] = [];
   all.forEach((s, i) => {
     const start = drivers.start(s);

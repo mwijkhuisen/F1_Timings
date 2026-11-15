@@ -607,7 +607,8 @@ export function createApp({
     const rc_unmatched = [...unmatched.values()]
       .sort((a, b) => b.date_start.getTime() - a.date_start.getTime() || a.session_key - b.session_key)
       .map(({ date_start, ...item }) => item);
-    // Computed on read like rc_unmatched (A§10): every season from 2023 on, one query per table, grouped by year here.
+    // Computed on read like rc_unmatched (A§10): every season from 2023 on, one query per table, grouped by year here,
+    // only the columns standingsMismatches reads (drivers only: no team rows).
     const seasonKeys = (raceOnly: boolean) => {
       const q = db
         .selectFrom('session as s')
@@ -633,7 +634,7 @@ export function createApp({
       .execute();
     const drivers = await db
       .selectFrom('driver')
-      .select(['session_key', 'driver_number', 'full_name', 'acronym', 'team_name', 'team_colour'])
+      .select(['session_key', 'driver_number', 'full_name', 'team_name']) // what standingsMismatches reads
       .where('session_key', 'in', seasonKeys(false))
       .execute();
     const results = await db
@@ -644,10 +645,7 @@ export function createApp({
     const championshipDrivers = await db
       .selectFrom('championship_driver')
       .select(['session_key', 'driver_number', 'points_start'])
-      .execute();
-    const championshipTeams = await db
-      .selectFrom('championship_team')
-      .select(['session_key', 'team_name', 'points_start'])
+      .where('session_key', 'in', seasonKeys(true))
       .execute();
     const yearOf = new Map(seasons.map((s) => [s.session_key, s.year]));
     const standings_mismatch = [...new Set(yearOf.values())]
@@ -661,7 +659,6 @@ export function createApp({
           drivers: of(drivers),
           results: of(results),
           championship_drivers: of(championshipDrivers),
-          championship_teams: of(championshipTeams),
         });
       });
     const body = {
