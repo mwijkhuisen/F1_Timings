@@ -1096,7 +1096,8 @@ describe('qualifying by phase in the player', () => {
 
   it('shows the tiles and By phase on the stream rows, and a seek back drops the later phase', () => {
     show(state(2), [...q1, ...q2]);
-    expect(pressedButtons()).toEqual(['Laps', 'By phase']);
+    // The speed table's Phase switch (#114) opens on the latest phase: its Q2 is pressed too.
+    expect(pressedButtons()).toEqual(['Laps', 'By phase', 'Q2']);
     expect(heads()).toEqual(['Driver', 'Q1', 'Q2', 'To fastest', 'Timed laps']);
     expect(tiles()).toEqual(['Fastest in Q2', 'Q1 cut-off (P2)']);
     expect(host.textContent).toContain('1:19.123');
@@ -2937,6 +2938,148 @@ describe('Compare, Stints and the Laps tab in the player (#112)', () => {
     for (let i = 0; i < 3; i++) await act(async () => {});
     expect(host.querySelector('.strip .lw')?.textContent).toBe('Track clear');
     expect(chart.options.length).toBe(mark);
+  });
+
+  // #114: the session page's pace table, run plan, track evolution and speed table on the stream's rows up to T.
+  describe('pace, run plan, evolution and speeds (#114)', () => {
+    /** Lap n starts at T − 600 s + 90 s × (n − 1) and takes 80.00n s: laps 1–7 end before T + 30 s. */
+    const prow = (d: number, n: number, extra: Partial<Lap> = {}): Lap => ({
+      ...lap(d, n),
+      date_start: iso(T - 600_000 + (n - 1) * 90_000),
+      ...extra,
+    });
+    const asType = (type: string, name: string) => ({ ...detail, session: { ...detail.session, type, name } });
+    const typed = (type: string, name: string, ...entries: [number, 'SessionStatus' | 'TrackStatus', string][]) => ({
+      ...state(...entries),
+      SessionInfo: { Key: 9100, Type: type, Name: name },
+    });
+    const W = { AirTemp: '22.4', TrackTemp: '43.1', Rainfall: '0', Humidity: '40.0' };
+    const open = (
+      type: string,
+      name: string,
+      st: object,
+      laps: Lap[],
+      rows: Stints,
+      weather = [weatherRow(W, T - 700_000)],
+    ) => {
+      render({ recording: ended, start: T, sessionKey: 9100, detail: asType(type, name) });
+      last().emit('snapshot', { t: T, state: st, laps, stints: rows, weather });
+      advance(250);
+    };
+    const h2s = () => [...host.querySelectorAll('h2')].map((h) => h.textContent);
+    const paceRows = () =>
+      [...host.querySelectorAll('table.pace tbody tr')].map((tr) =>
+        [...tr.children].map((c) => c.querySelector('.note')?.textContent ?? c.textContent),
+      );
+    /** One driver's run 1: an out-lap, laps 2–6 and an in-lap on 7, from 19:50 on. */
+    const run = (...ns: number[]) => ns.map((n) => prow(1, n, { is_pit_out: n === 1, is_pit_in: n === 7 }));
+    const reds = () => [...host.querySelectorAll('.redband')].length;
+
+    it('practice Stints: the run plan and the pace table at T; a red flag from the status series is banded and its lap left out', () => {
+      // Red from T − 335 s to T − 250 s: lap 4 (T − 330 s, 80.004 s) is under it, laps 3 and 5 are not.
+      open(
+        'Practice',
+        'Practice 1',
+        typed(
+          'Practice',
+          'Practice 1',
+          [T - 335_000, 'SessionStatus', 'Aborted'],
+          [T - 250_000, 'SessionStatus', 'Started'],
+        ),
+        run(1, 2, 3, 4, 5, 6, 7),
+        stints([1, 1, 1, 7, 'MEDIUM']),
+      );
+      button('Stints');
+      expect(h2s()).toContain('Run plan');
+      expect(h2s()).toContain('Pace per run');
+      expect(reds()).toBe(1);
+      expect($('ul[aria-label="Run plan legend"]').textContent).toContain('RED: red flag');
+      expect(host.querySelectorAll('ol.stints')).toHaveLength(2); // the stint bars and the run plan
+      // VER's run: laps 2, 3, 5, 6 count; the out-lap, the in-lap and the red-flag lap are left out; the track is 43 °C.
+      expect(paceRows()).toEqual([
+        ['VER', expect.any(String), expect.any(String), '4', '1:20.004', '1:20.002', '3', '43'],
+      ]);
+      expect($('table.pace tbody .note[title*="under SC, VSC or red flag"]').getAttribute('title')).toBe(
+        '1 out-lap, 1 in-lap, 1 under SC, VSC or red flag',
+      );
+      // The run plan's axis ends at T, never at the scheduled end two hours later: a lane's run is a fraction of it.
+      const seg = $<HTMLElement>('ol.stints .seg[style*="--w"]');
+      expect(Number.parseFloat(seg.style.getPropertyValue('--w'))).toBeGreaterThan(40);
+    });
+
+    it('race Stints: the pace per stint, with an SC lap left out and no run plan', () => {
+      // The SC from T − 320 s to T − 250 s, all in the leader's lap 4: lap 4 is left out, with lap 1 and the in-lap 7.
+      open(
+        'Race',
+        'Race',
+        typed('Race', 'Race', [T - 320_000, 'TrackStatus', 'SCDeployed'], [T - 250_000, 'TrackStatus', 'AllClear']),
+        run(1, 2, 3, 4, 5, 6, 7),
+        stints([1, 1, 1, 7, 'MEDIUM']),
+      );
+      button('Stints');
+      expect(h2s()).not.toContain('Run plan');
+      expect(h2s()).toContain('Pace per run');
+      expect(paceRows()).toEqual([['VER', '1', expect.any(String), '4', '1:20.004', '1:20.002', '3']]);
+      expect($('table.pace tbody .note[title*="under SC"]').getAttribute('title')).toBe(
+        'lap 1, 1 in-lap, 1 under SC, VSC or red flag',
+      );
+    });
+
+    it('moving T earlier takes the later laps out of the pace table', () => {
+      open(
+        'Practice',
+        'Practice 1',
+        typed('Practice', 'Practice 1'),
+        run(1, 2, 3, 4, 5, 6, 7),
+        stints([1, 1, 1, 7, 'MEDIUM']),
+      );
+      button('Stints');
+      expect(paceRows()[0]?.[3]).toBe('5'); // laps 2–6
+      seekTo(T - 300_000);
+      snapshot(T - 300_000, typed('Practice', 'Practice 1'), run(1, 2, 3, 4), stints([1, 1, 1, 4, 'MEDIUM']));
+      expect(paceRows()[0]?.[3]).toBe('3'); // laps 2–4: the run is still being driven
+    });
+
+    it('Compare: the Track evolution card for practice; a laps event with equal content does not redraw it', async () => {
+      const both = [...run(1, 2, 3, 4, 5, 6, 7), ...[1, 2, 3].map((n) => prow(44, n))];
+      const rows = stints([1, 1, 1, 7, 'MEDIUM'], [44, 1, 1, 3, 'HARD']);
+      open('Practice', 'Practice 1', typed('Practice', 'Practice 1'), both, rows);
+      await compare();
+      expect(h2s()).toContain('Track evolution');
+      const mark = chart.options.length;
+      last().emit('laps', { t: T + 1_000, laps: [prow(44, 3)], stints: [] });
+      advance(250);
+      for (let i = 0; i < 3; i++) await act(async () => {});
+      expect(chart.options.length).toBe(mark);
+      expect(h2s()).toContain('Track evolution');
+    });
+
+    it.each([
+      ['Qualifying', true],
+      ['Race', false],
+    ])('Compare: a %s replay shows the Track evolution card: %s', async (type, card) => {
+      const both = [...run(1, 2, 3), ...[1, 2, 3].map((n) => prow(44, n))];
+      open(type, type, typed(type, type), both, stints([1, 1, 1, 3, 'MEDIUM'], [44, 1, 1, 3, 'HARD']));
+      await compare();
+      expect(h2s().includes('Track evolution')).toBe(card);
+    });
+
+    it('Laps: the speed table under the lap table', () => {
+      open(
+        'Race',
+        'Race',
+        typed('Race', 'Race'),
+        [prow(1, 2, { st_kph: 311, i1_kph: 290 }), prow(44, 2, { st_kph: 305 })],
+        [],
+      );
+      button('Laps');
+      expect(h2s()).toContain('Speed traps and own bests');
+      const rows = [...host.querySelectorAll('table.speeds tbody tr')].map((tr) =>
+        [...tr.children].map((c) => c.textContent),
+      );
+      expect(rows[0]?.slice(0, 2)).toEqual(['VER', '290, fastestL2']);
+      expect(rows.map((r) => r[3])).toEqual(['311, fastestL2', '305L2']); // by ST, the top boxed
+    });
   });
 
   describe('the picks', () => {

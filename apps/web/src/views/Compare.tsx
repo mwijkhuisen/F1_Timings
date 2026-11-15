@@ -205,7 +205,10 @@ export function TrackEvolution({
     (n: number) => detail.drivers.find((d) => d.driver_number === n)?.acronym ?? String(n),
     [detail.drivers],
   );
-  const option = useCallback((t: ChartTokens) => evolutionChartOption(evo, t, acronym), [evo, acronym]);
+  // What the chart draws, by content: the player's lap rows are a new array on each `laps` event (#112).
+  const drawn = JSON.stringify([evo, detail.drivers.map((d) => [d.driver_number, d.acronym])]);
+  // biome-ignore lint/correctness/useExhaustiveDependencies: `drawn` stands for the evolution and the acronyms.
+  const option = useCallback((t: ChartTokens) => evolutionChartOption(evo, t, acronym), [drawn]);
   const phased = slots.some((s) => s.phase !== null);
   return (
     <section className="card evo">

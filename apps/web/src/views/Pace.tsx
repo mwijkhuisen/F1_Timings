@@ -36,7 +36,7 @@ const spoken = (r: Run, year: number | null) =>
 
 /**
  * The practice run plan: a lane per driver over the session's clock, from the earlier of its start and the first run
- * to the later of its end and the last run. A run without a start or an end is listed in the popover, not drawn.
+ * to the later of its end (`end`) and the last run. A run without a start or an end is listed in the popover, not drawn.
  */
 export function RunPlan({
   detail,
@@ -45,6 +45,7 @@ export function RunPlan({
   clock,
   weather,
   weatherFailed = false,
+  end,
 }: {
   detail: SessionDetail;
   laps: Laps;
@@ -53,11 +54,13 @@ export function RunPlan({
   weather: Weather;
   /** The weather query failed: a missing temperature says so. */
   weatherFailed?: boolean;
+  /** The axis' end in epoch ms where the session's `date_end` is only a schedule (the player: T); default `date_end`. */
+  end?: number;
 }) {
   const year = detail.meeting.year;
   const known = (t: number | null): t is number => t !== null;
   const from = Math.min(Date.parse(detail.session.date_start), ...runs.map((r) => r.start).filter(known));
-  const to = Math.max(Date.parse(detail.session.date_end), ...runs.map((r) => r.end).filter(known));
+  const to = Math.max(end ?? Date.parse(detail.session.date_end), ...runs.map((r) => r.end).filter(known));
   const plan = runPlan(orderDrivers(detail, laps), runs, from, to, clock, weather, year);
   const used = new Set(plan.lanes.flatMap((l) => l.segments.map((s) => s.compound?.key ?? null)));
   const compounds = [...compoundsOf(year).filter((c) => used.has(c.key)), ...(used.has(null) ? [null] : [])];

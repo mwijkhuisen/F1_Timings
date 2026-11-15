@@ -1,6 +1,7 @@
 import type { Obj } from '@f1/contracts';
 import { describe, expect, it } from 'vitest';
 import {
+  feedClock,
   feedRaceControl,
   lapPeriods,
   lastStop,
@@ -239,6 +240,30 @@ describe('lapPeriods', () => {
     const s = series([{ Utc: '2026-10-25T20:04:00', TrackStatus: 'SCDeployed' }]);
     expect(lapPeriods(s, laps, hm('20:12:00'), T0, 'Practice')).toEqual([]);
     expect(lapPeriods(s, laps, hm('20:12:00'), T0, null)).toEqual([]);
+  });
+});
+
+describe('feedClock (#114)', () => {
+  const hm = (s: string) => at(`2026-10-25T${s}Z`);
+  const s = series([
+    { Utc: '2026-10-25T20:00:00', SessionStatus: 'Started' },
+    { Utc: '2026-10-25T20:10:00', SessionStatus: 'Aborted' },
+    { Utc: '2026-10-25T20:15:00', SessionStatus: 'Started' },
+    { Utc: '2026-10-25T20:30:00', TrackStatus: 'VSCDeployed' },
+  ]);
+
+  it('maps the bands at or before T to clock periods: a closed one ends at its end, an open one at T', () => {
+    expect(feedClock(s, hm('20:40:00'), hm('20:00:00'))).toEqual([
+      { kind: 'red', from: hm('20:10:00'), to: hm('20:15:00') },
+      { kind: 'vsc', from: hm('20:30:00'), to: hm('20:40:00') },
+    ]);
+  });
+
+  it('shows nothing after T, and no start or chequered mark', () => {
+    expect(feedClock(s, hm('20:05:00'), hm('20:00:00'))).toEqual([]);
+    expect(feedClock(s, hm('20:12:00'), hm('20:00:00'))).toEqual([
+      { kind: 'red', from: hm('20:10:00'), to: hm('20:12:00') },
+    ]);
   });
 });
 
