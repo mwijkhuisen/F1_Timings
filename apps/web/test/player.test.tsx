@@ -3275,6 +3275,61 @@ describe('the Map tab in the player (P7a)', () => {
     expect(host.querySelector('g.car')).toBeNull();
   });
 
+  it('glides a car between two samples of one run, and jumps after a gap of over 1.5 s', () => {
+    render({ recording: ended, start: T, detail: mapDetail });
+    last().emit('snapshot', snapshot({ t: T - 500, cars: { 1: [100, 50] } }));
+    advance(250);
+    button('Map');
+    const cls = () => $('g.car').getAttribute('class');
+    expect(cls()).toBe('car'); // the first sample
+    last().emit('pos', { t: T, cars: { 1: [110, 55] } });
+    advance(250);
+    expect(cls()).toBe('car move'); // 500 ms on: the same run
+    last().emit('pos', { t: T + 2_500, cars: { 1: [150, 60] } });
+    advance(250);
+    expect(cls()).toBe('car'); // 2.5 s on: a new run
+  });
+
+  it("withPos: a car's run goes on across samples 500 ms apart and starts again after a 2 s gap", () => {
+    const seen: Feed['pos'][] = [];
+    const h = { onData: (f: Feed) => seen.push(f.pos), onError() {}, onStale() {}, onEnd() {} };
+    const s = openStream({ recording: 7, at: T, delay: 0, pos: true }, h, FakeES as unknown as typeof EventSource);
+    last().emit('snapshot', { ...snapshot(), pos: { t: T, cars: { 1: [0, 0] } } });
+    last().emit('pos', { t: T + 500, cars: { 1: [10, 0] } });
+    last().emit('pos', { t: T + 2_500, cars: { 1: [20, 0] } });
+    expect(seen.map((p) => p?.cars['1'])).toEqual([
+      { x: 0, y: 0, t: T, run: T },
+      { x: 10, y: 0, t: T + 500, run: T },
+      { x: 20, y: 0, t: T + 2_500, run: T + 2_500 },
+    ]);
+    expect(seen.map((p) => p?.at)).toEqual([T, T + 500, T + 2_500]);
+    s.close();
+  });
+
+  it('a pos event flushes the positions channel alone: the Snap stays the same object', () => {
+    const store = createStore();
+    const feed: Feed = { t: T, state: {}, laps: new Map(), stints: new Map(), weather: [], pos: { at: T, cars: {} } };
+    store.update(feed, 'snapshot');
+    vi.advanceTimersByTime(250);
+    const first = store.get();
+    expect(store.pos.get()).toBe(feed.pos);
+    const calls = { snap: 0, pos: 0 };
+    const off = [store.subscribe(() => calls.snap++), store.pos.subscribe(() => calls.pos++)];
+    feed.pos = { at: T + 500, cars: { 1: { x: 0, y: 0, t: T + 500, run: T + 500 } } };
+    store.update(feed, 'pos');
+    vi.advanceTimersByTime(250);
+    expect(store.get()).toBe(first);
+    expect(store.pos.get()).toBe(feed.pos);
+    expect(calls).toEqual({ snap: 0, pos: 1 });
+    // A snapshot (a new feed) updates both.
+    store.update({ ...feed, pos: null }, 'snapshot');
+    vi.advanceTimersByTime(250);
+    expect(store.get()).not.toBe(first);
+    expect(store.pos.get()).toBeNull();
+    expect(calls).toEqual({ snap: 1, pos: 2 });
+    for (const f of off) f();
+  });
+
   it('a pos event leaves the clock, T and the state where they were', () => {
     render({ recording: ended, start: T, detail: mapDetail });
     last().emit('snapshot', snapshot({ t: T - 500, cars: { 1: [0, 0] } }));

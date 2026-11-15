@@ -35,11 +35,13 @@ afterEach(() => {
 });
 
 const car = (x: number, y: number, t: number, run = t) => ({ x, y, t, run });
+/** The store's positions channel, holding `pos`. */
+const channel = (pos: Positions | null | undefined) => ({ get: () => pos, subscribe: () => () => {} });
 const render = (pos: Positions | null | undefined, { circuit = 'Interlagos', now = T } = {}) =>
   act(() =>
     root.render(
       <QueryClientProvider client={client}>
-        <TrackMap circuit={circuit} pos={pos} drivers={drivers} now={() => now} playing={false} />
+        <TrackMap circuit={circuit} positions={channel(pos)} drivers={drivers} now={() => now} playing={false} />
       </QueryClientProvider>,
     ),
   );

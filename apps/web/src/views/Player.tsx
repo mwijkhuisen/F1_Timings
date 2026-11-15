@@ -1048,14 +1048,14 @@ export function Player({
   }, [snap, sessionKey]);
   // The tab shown: Order falls back to the Tower when the session is not (or no longer) a race.
   const shown = tab === 'order' && !wall?.race ? 'tower' : tab;
-  // The running order (races only) from the stream's lap rows up to T, built only on its tab and, as the lap table, only
-  // when the lap rows change (the DriverList and the grid it reads are set before the first lap). Its drivers are the
-  // whole DriverList: the Grid row names a car that never set a lap.
   // The map's drivers: the DriverList, read only while the map is shown and once per flush.
   const drivers = useMemo(
     () => (shown === 'map' && snap.feed ? (view(snap.feed.state, 'DriverList') ?? {}) : {}),
     [shown, snap],
   );
+  // The running order (races only) from the stream's lap rows up to T, built only on its tab and, as the lap table, only
+  // when the lap rows change (the DriverList and the grid it reads are set before the first lap). Its drivers are the
+  // whole DriverList: the Grid row names a car that never set a lap.
   const onOrder = shown === 'order';
   const order = useMemo(() => {
     const s = feed?.state;
@@ -1188,7 +1188,7 @@ export function Player({
         ) : shown === 'map' ? (
           <TrackMap
             circuit={detail?.meeting.circuit_short_name}
-            pos={snap.pos}
+            positions={store.pos}
             drivers={drivers}
             now={now}
             playing={playing}

@@ -243,7 +243,7 @@ export const utc = (v: string | undefined) =>
 /**
  * What React renders: a new object per flush, so it is the key for everything derived from the state. `laps` and
  * `stints` are new arrays only when the rows changed (a snapshot or a `laps` event); `weather` a new pair only when the
- * weather rows changed.
+ * weather rows changed. The positions are not in it (P7a review): a `pos` event leaves it as it was.
  */
 export type Snap = {
   rev: number;
@@ -251,39 +251,54 @@ export type Snap = {
   laps: Lap[];
   stints: Stint[];
   weather: { rows: Weather; laps: Lap[] };
-  /** The feed's positions: a new reference only on a snapshot or a `pos` event. */
-  pos: Positions | null | undefined;
 };
 
-/** Holds the latest feed and notifies at most every `everyMs`, so a burst of deltas is one render. */
+/** The store's positions channel (P7a): the feed's positions as of the last flush, for `useSyncExternalStore`. */
+export type PosChannel = { get(): Positions | null | undefined; subscribe(f: () => void): () => void };
+
+const subscriber = (subs: Set<() => void>) => (f: () => void) => {
+  subs.add(f);
+  return () => {
+    subs.delete(f);
+  };
+};
+
+/**
+ * Holds the latest feed and notifies at most every `everyMs`, so a burst of deltas is one render. The positions have
+ * their own channel on the same flush: a `pos` event (2–4 a second) renders the map only, never what `Snap` keys.
+ */
 export function createStore(everyMs = 250) {
-  let snap: Snap = { rev: 0, feed: undefined, laps: [], stints: [], weather: { rows: [], laps: [] }, pos: undefined };
+  let snap: Snap = { rev: 0, feed: undefined, laps: [], stints: [], weather: { rows: [], laps: [] } };
+  let pos: Positions | null | undefined;
   let pending: Feed | undefined;
-  let lapsDirty = false;
+  let [snapDirty, lapsDirty] = [false, false];
   let timer: ReturnType<typeof setTimeout> | undefined;
-  const subs = new Set<() => void>();
+  const [subs, posSubs] = [new Set<() => void>(), new Set<() => void>()];
   const flush = () => {
     timer = undefined;
+    if (pending?.pos !== pos) {
+      pos = pending?.pos; // a new object per `pos` event or snapshot
+      for (const f of posSubs) f();
+    }
+    if (!snapDirty) return;
+    snapDirty = false;
     const laps = lapsDirty && pending ? [...pending.laps.values()] : snap.laps;
     const stints = lapsDirty && pending ? [...pending.stints.values()] : snap.stints;
     // The Weather tab's chart option is rebuilt only when the rows change (about once a minute), not on every `laps`
     // event (up to one a second in a race): its lap rows are those as of the last row change.
     const rows = pending?.weather ?? snap.weather.rows;
     const weather = rows === snap.weather.rows ? snap.weather : { rows, laps };
-    snap = { rev: snap.rev + 1, feed: pending, laps, stints, weather, pos: pending?.pos };
+    snap = { rev: snap.rev + 1, feed: pending, laps, stints, weather };
     lapsDirty = false;
     for (const f of subs) f();
   };
   return {
     get: () => snap,
-    subscribe(f: () => void) {
-      subs.add(f);
-      return () => {
-        subs.delete(f);
-      };
-    },
+    subscribe: subscriber(subs),
+    pos: { get: () => pos, subscribe: subscriber(posSubs) } satisfies PosChannel,
     update(feed: Feed, kind: 'snapshot' | 'delta' | 'laps' | 'pos') {
       pending = feed;
+      snapDirty ||= kind !== 'pos';
       lapsDirty ||= kind === 'snapshot' || kind === 'laps';
       if (timer === undefined) timer = setTimeout(flush, everyMs);
     },

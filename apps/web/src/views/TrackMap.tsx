@@ -1,8 +1,8 @@
 import { CIRCUITS, type Views } from '@f1/contracts';
-import { useEffect, useMemo, useRef } from 'react';
+import { useEffect, useMemo, useRef, useSyncExternalStore } from 'react';
 import { useCircuitMap } from '../lib/api.ts';
 import { teamStyle } from '../lib/session.ts';
-import { type Positions, RUN_GAP_MS } from '../lib/stream.ts';
+import { type PosChannel, RUN_GAP_MS } from '../lib/stream.ts';
 import { fmtClock } from '../lib/time.ts';
 import { Pending } from '../ui/ErrorView.tsx';
 import { vars } from './Pace.tsx';
@@ -39,15 +39,19 @@ function viewBoxOf(outline: string): [number, number, number, number] | null {
 type Props = {
   /** The meeting's circuit_short_name; undefined while the session is not loaded. */
   circuit: string | null | undefined;
-  /** The feed's positions: undefined when not asked, null while there is no fitted frame. */
-  pos: Positions | null | undefined;
+  /**
+   * The store's positions channel: undefined when not asked, null while there is no fitted frame. Read here, so a `pos`
+   * event renders the map alone (P7a review).
+   */
+  positions: PosChannel;
   drivers: Views['DriverList'];
   /** T, in epoch ms. */
   now: () => number;
   playing: boolean;
 };
 
-export function TrackMap({ circuit, pos, drivers, now, playing }: Props) {
+export function TrackMap({ circuit, positions, drivers, now, playing }: Props) {
+  const pos = useSyncExternalStore(positions.subscribe, positions.get);
   const name = circuit ?? '';
   const id = Object.hasOwn(CIRCUITS, name) ? (CIRCUITS[name]?.id ?? null) : null;
   const map = useCircuitMap(id);
