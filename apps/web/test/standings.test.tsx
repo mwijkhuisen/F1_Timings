@@ -132,9 +132,18 @@ const rows = (html: string, label: string) => {
 describe('the standings section', () => {
   const html = render(standings);
 
-  it('is headed by the session: race or sprint', () => {
-    expect(html).toContain('<h2>Standings after this race</h2>');
-    expect(render(standings, true)).toContain('<h2>Standings after this sprint</h2>');
+  it('heads each table on one line, at the level of the classification, by the session: race or sprint', () => {
+    const heads = (h: string) => [...h.matchAll(/<h(\d)>([^<]*)<\/h\d>/g)].map(([, level, text]) => `${level} ${text}`);
+    expect(heads(html)).toEqual([
+      '2 Drivers after this race',
+      '2 Constructors after this race',
+      '2 Points progression',
+    ]);
+    expect(heads(render(standings, true))).toEqual([
+      '2 Drivers after this sprint',
+      '2 Constructors after this sprint',
+      '2 Points progression',
+    ]);
   });
 
   it('has the drivers table: place, change in words, driver and team, points and this session', () => {
@@ -158,9 +167,23 @@ describe('the standings section', () => {
     ]);
   });
 
-  it('puts each table in a named scroll box', () => {
-    expect(html).toContain('<div class="scroll" tabindex="0" role="region" aria-label="Drivers&#x27; standings">');
-    expect(html).toContain('<div class="scroll" tabindex="0" role="region" aria-label="Constructors&#x27; standings">');
+  it('shows every row in the page: no scroll box, region or tab stop (#202)', () => {
+    expect(html).not.toContain('class="scroll"');
+    expect(html).not.toContain('role="region"');
+    expect(html).not.toContain('tabindex');
+    expect(html).toContain(
+      '<section><h2>Drivers after this race</h2><table class="result" aria-label="Drivers&#x27; standings">',
+    );
+    expect(html).toContain(
+      '<section><h2>Constructors after this race</h2><table class="result" aria-label="Constructors&#x27; standings">',
+    );
+  });
+
+  it('ends in the full-width foot: the Provisional caption, the chart head and switch, the line and the chart', () => {
+    const foot = /<div class="result-foot">([\s\S]*)<\/div>$/.exec(render({ ...standings, provisional: true }))?.[1];
+    expect(foot).toMatch(
+      /^<p class="muted">Provisional: [^<]*<\/p><div class="panel-title"><h2>Points progression<\/h2><fieldset class="segmented" aria-label="Chart">[\s\S]*<\/fieldset><\/div><p class="muted">After each race and sprint[^<]*<\/p><div role="img" aria-label="Points after each race and sprint"><\/div>$/,
+    );
   });
 
   it("says Provisional only when the standing is from the session's own classification", () => {
@@ -199,7 +222,7 @@ describe('the Result tab and the standings request', () => {
   const mount = (
     type: string,
     name: string,
-    answer: () => Response,
+    answer: () => Response | Promise<Response>,
     source: SessionDetail['session']['source'] = 'openf1',
   ) => {
     const urls: string[] = [];
@@ -220,20 +243,58 @@ describe('the Result tab and the standings request', () => {
     );
     return urls;
   };
+  const heads = () => [...host.querySelectorAll('.result-grid h2')].map((h) => h.textContent);
+  const standingsTables = () => host.querySelectorAll('table[aria-label$="standings"]');
 
-  it('asks for a race and shows its section', async () => {
+  it('asks for a race and shows its columns beside the classification, then the chart', async () => {
     const urls = mount('Race', 'Race', () => HttpResponse.json(standings));
-    await vi.waitFor(() => expect(host.querySelector('.standings h2')?.textContent).toBe('Standings after this race'));
+    await vi.waitFor(() =>
+      expect(heads()).toEqual([
+        'Classification',
+        'Drivers after this race',
+        'Constructors after this race',
+        'Points progression',
+      ]),
+    );
     expect(urls).toEqual([`/api/v1/sessions/11000/standings?v=${REVISION}`]);
-    // The classification stays above it.
-    expect(host.querySelector('table[aria-label="Result"]')).not.toBeNull();
+    // One grid, in order: the classification, the drivers, the constructors, the foot.
+    const grid = host.querySelector('.result-grid');
+    expect(
+      [...(grid?.children ?? [])].map((c) => c.querySelector('table')?.getAttribute('aria-label') ?? c.className),
+    ).toEqual(['Result', "Drivers' standings", "Constructors' standings", 'result-foot']);
   });
 
   it('words a sprint', async () => {
     mount('Race', 'Sprint', () => HttpResponse.json(standings));
-    await vi.waitFor(() =>
-      expect(host.querySelector('.standings h2')?.textContent).toBe('Standings after this sprint'),
-    );
+    await vi.waitFor(() => expect(heads()).toContain('Drivers after this sprint'));
+    expect(heads()).toContain('Constructors after this sprint');
+  });
+
+  // The issue's no-jump rule: the standings arrive after the classification and only append grid items after it.
+  it('never moves the classification when the standings arrive', async () => {
+    let release = () => {};
+    const held = new Promise<void>((r) => {
+      release = r;
+    });
+    const urls = mount('Race', 'Race', async () => {
+      await held;
+      return HttpResponse.json(standings);
+    });
+    await vi.waitFor(() => expect(urls).toHaveLength(1));
+    const grid = host.querySelector('.result-grid');
+    const table = host.querySelector('table[aria-label="Result"]');
+    const before = [...host.children];
+    expect(grid?.children).toHaveLength(1);
+    expect(grid?.firstElementChild?.contains(table ?? null)).toBe(true);
+    release();
+    await vi.waitFor(() => expect(standingsTables()).toHaveLength(2));
+    expect(host.querySelector('table[aria-label="Result"]')).toBe(table);
+    expect(host.querySelector('.result-grid')).toBe(grid);
+    expect(grid?.firstElementChild?.contains(table ?? null)).toBe(true);
+    // Nothing was inserted before the grid (the caption) or before the classification in it.
+    expect([...host.children]).toEqual(before);
+    expect(before.at(-1)).toBe(grid);
+    expect(grid?.children).toHaveLength(4);
   });
 
   it('never asks for a qualifying or a practice', async () => {
@@ -241,7 +302,7 @@ describe('the Result tab and the standings request', () => {
     await vi.waitFor(() => expect(host.querySelector('table[aria-label="Result"]')).not.toBeNull());
     await new Promise((r) => setTimeout(r, 20));
     expect(urls).toEqual([]);
-    expect(host.querySelector('.standings')).toBeNull();
+    expect(host.querySelector('.result-grid')).toBeNull();
   });
 
   it.each(['f1-archive', 'jolpica'] as const)(
@@ -251,24 +312,53 @@ describe('the Result tab and the standings request', () => {
       await vi.waitFor(() => expect(host.querySelector('table[aria-label="Result"]')).not.toBeNull());
       await new Promise((r) => setTimeout(r, 20));
       expect(urls).toEqual([]);
-      expect(host.querySelector('.standings')).toBeNull();
+      expect(host.querySelector('.result-grid')).toBeNull();
+      expect(standingsTables()).toHaveLength(0);
     },
   );
 
-  it('shows no section for empty arrays', async () => {
+  it('shows no standings for empty arrays', async () => {
     const urls = mount('Race', 'Race', () =>
       HttpResponse.json({ drivers: [], teams: [], rounds: [], provisional: false }),
     );
     await vi.waitFor(() => expect(urls).toHaveLength(1));
     await new Promise((r) => setTimeout(r, 20));
-    expect(host.querySelector('.standings')).toBeNull();
+    expect(standingsTables()).toHaveLength(0);
+    expect(host.querySelector('.result-grid')?.children).toHaveLength(1);
     expect(host.querySelector('table[aria-label="Result"]')).not.toBeNull();
   });
 
-  it('keeps the classification and says so when the standings fail', async () => {
+  it("keeps the classification and says so in the drivers' column when the standings fail", async () => {
     mount('Race', 'Race', () => new HttpResponse(null, { status: 500 }));
     await vi.waitFor(() => expect(host.textContent).toContain('Standings did not load.'));
-    expect(host.querySelector('table[aria-label="Result"]')).not.toBeNull();
+    const grid = host.querySelector('.result-grid');
+    expect(grid?.children[1]?.textContent).toBe('Standings did not load.');
+    expect(grid?.firstElementChild?.querySelector('table[aria-label="Result"]')).not.toBeNull();
+  });
+});
+
+// The grid in styles.css (#202): one column, or three side by side from the breakpoint (never two), the chart below.
+describe('the Result grid (styles.css)', () => {
+  const css = readFileSync(join(dirname(fileURLToPath(import.meta.url)), '../src/styles.css'), 'utf8');
+  /** The declarations of the rule whose selector is exactly `selector`, from `from`. */
+  const rule = (selector: string, from = 0) => {
+    const at = css.indexOf(`\n${selector} {`, from);
+    expect(at, selector).toBeGreaterThanOrEqual(0);
+    return css.slice(at, css.indexOf('}', at));
+  };
+
+  it('is one column, and from the breakpoint three tracks of their own tables, then the foot across all of them', () => {
+    expect(rule('.result-grid')).toContain('grid-template-columns: minmax(0, 1fr);');
+    const wide = /\n@media \(min-width: (\d+)px\) \{\n {2}\.result-grid \{/.exec(css);
+    expect(wide).not.toBeNull();
+    // The first track is the classification's own max-content, so the standings never move it.
+    expect(rule('  .result-grid', wide?.index)).toContain('grid-template-columns: repeat(3, max-content) 1fr;');
+    expect(rule('.result-foot')).toContain('grid-column: 1 / -1;');
+  });
+
+  it('gives a table outside a box a static head and the containing block of its .vh words', () => {
+    expect(rule(':not(.scroll) > .result thead th')).toContain('position: static;');
+    expect(rule('.result')).toContain('position: relative;');
   });
 });
 
@@ -471,7 +561,8 @@ describe('the spoiler rule', () => {
   it('has the standings query used by views/Result.tsx alone', () => {
     expect(using(/useStandings/)).toEqual(['lib/api.ts', 'views/Result.tsx']);
     expect(using(/standings-chart-option/)).toEqual(['views/Result.tsx']);
-    expect(using(/Standings after/)).toEqual(['views/Result.tsx']);
+    // The headings "Drivers after this race" and the like (#202).
+    expect(using(/after this \$\{sprint/)).toEqual(['views/Result.tsx']);
   });
 
   it('keeps the Result tab out of the season page, the live pages and the player: only Session.tsx uses it', () => {

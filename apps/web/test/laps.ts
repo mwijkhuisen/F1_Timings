@@ -1,3 +1,4 @@
+import { readFileSync } from 'node:fs';
 import { type Lap, type RaceControl, SessionDetail } from '@f1/contracts';
 
 // Synthetic rows for the lib and view tests: everything null or false unless given.
@@ -55,6 +56,41 @@ export const result = (driver_number: number, position: number | null = null, gr
   durations_ms: null,
   gaps_ms: null,
 });
+
+type RawResult = {
+  driver_number: number;
+  position: number | null;
+  number_of_laps: number | null;
+  dnf: boolean | null;
+  dns: boolean | null;
+  dsq: boolean | null;
+  duration: number | (number | null)[] | null;
+  gap_to_leader: number | string | (number | null)[] | null;
+};
+const ms = (s: number | null) => (s === null ? null : Math.round(s * 1000));
+const perPhase = (v: RawResult['duration'] | RawResult['gap_to_leader']) =>
+  v === null ? null : typeof v === 'string' ? [null] : Array.isArray(v) ? v.map(ms) : [ms(v)];
+
+/** A server fixture `session_result-<name>` as ingest stores it (`perPhase` in ingest/normalise.ts: seconds as ms, a string gap such as "+1 LAP" as [null], Q1–Q3 per phase). */
+export const resultFixture = (name: string): Result[] =>
+  (
+    JSON.parse(
+      readFileSync(
+        new URL(`../../server/src/openf1/fixtures/session_result-${name}.golden.json`, import.meta.url),
+        'utf8',
+      ),
+    ) as RawResult[]
+  ).map((r) => ({
+    driver_number: r.driver_number,
+    position: r.position,
+    laps: r.number_of_laps,
+    grid: null,
+    dnf: r.dnf,
+    dns: r.dns,
+    dsq: r.dsq,
+    durations_ms: perPhase(r.duration),
+    gaps_ms: perPhase(r.gap_to_leader),
+  }));
 
 /** Qualifying: car d's best in phase p is (81 − p) s + 10·d ms, so car 1 is fastest everywhere. */
 export const time = (d: number, p: number) => (81 - p) * 1000 + 10 * d;
