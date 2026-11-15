@@ -414,7 +414,13 @@ thead th,
 
 /* The pit stops table (#111): left-aligned text columns. */
 .pits td,
-.pits th {
+.pits th,
+.pace td,
+.pace th,
+.speeds td,
+.speeds th,
+.evo-slots td,
+.evo-slots th {
   text-align: left;
 }
 
@@ -2748,4 +2754,48 @@ section.rainmap .raintime input[type="range"] {
   display: inline;
   min-width: 0;
   min-height: 0;
+}
+
+/* The practice run plan (#114): a red flag is a band behind the lanes, in --live at low opacity with a border on each
+   edge, which forced colours keep. The legend's swatch is the same two edges. */
+.rules .redband {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: var(--x);
+  width: var(--w);
+  background: color-mix(in srgb, var(--live) 15%, transparent);
+  border-left: 1px solid var(--live);
+  border-right: 1px solid var(--live);
+}
+
+.dash.red {
+  border-color: var(--live);
+}
+
+/* A second line under a pace or speed cell (the lap of a reading, the gap to the own best lap). */
+.under {
+  display: block;
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 400;
+}
+
+/* Track evolution (#114): the chart on a wide screen, the fastest lap per 5 minutes under 640 px. */
+.evo {
+  margin-top: 16px;
+}
+
+.evo-narrow {
+  display: none;
+}
+
+@media (max-width: 640px) {
+  .evo-wide {
+    display: none;
+  }
+
+  .evo-narrow {
+    display: block;
+  }
 }

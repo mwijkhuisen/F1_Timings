@@ -115,6 +115,26 @@ describe('LapsTab', () => {
     expect(calls).toBe(1);
   });
 
+  it('puts the speed traps and own bests after the lap table and before the race-control log, for every type', async () => {
+    answer();
+    const follows = (a: Element | null, b: Element | null) =>
+      Boolean(a && b && a.compareDocumentPosition(b) & Node.DOCUMENT_POSITION_FOLLOWING);
+    for (const [type, name, rows, table] of [
+      ['Race', 'Race', undefined, 'table.laps'],
+      ['Practice', 'Practice 1', undefined, 'table.laps'],
+      ['Qualifying', 'Qualifying', field([3, 2, 1]), 'table.quali'],
+    ] as const) {
+      act(() => root.unmount());
+      root = createRoot(host);
+      render(type, name, rows);
+      await vi.waitFor(() => expect(host.querySelector('.rclog')).not.toBeNull());
+      expect(follows(host.querySelector(table), host.querySelector('table.speeds')), type).toBe(true);
+      expect(follows(host.querySelector('table.speeds'), host.querySelector('.rclog')), type).toBe(true);
+    }
+    // Qualifying has the Phase switch, the other types none.
+    expect(host.querySelector('fieldset[aria-label="Phase"]')).not.toBeNull();
+  });
+
   it('shows the Δ legend when switched', async () => {
     answer();
     render('Practice', 'Practice 2');

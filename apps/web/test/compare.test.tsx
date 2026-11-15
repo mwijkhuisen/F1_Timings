@@ -5,14 +5,17 @@ import { SVGRenderer } from 'echarts/renderers';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, expect, it } from 'vitest';
 import { init } from '../src/lib/echarts.ts';
+import { evolution, evolutionSlots } from '../src/lib/evolution.ts';
 import type { Driver } from '../src/lib/session.ts';
 import { fmtDelta } from '../src/lib/time.ts';
+import { clockPeriods } from '../src/lib/track.ts';
 import { Compare, PitCycles } from '../src/views/Compare.tsx';
 import { DeltaTable, Duel, deltaReason } from '../src/views/DeltaTable.tsx';
 import { DriverPicker } from '../src/views/DriverPicker.tsx';
+import { evolutionChartOption, evolutionWindow } from '../src/views/evolution-chart-option.ts';
 import { gapChartLabel } from '../src/views/gap-chart-option.ts';
 import { type ChartTokens, lapChartOption, lineStyles } from '../src/views/lap-chart-option.ts';
-import { sessionDetail } from './laps.ts';
+import { rc, sessionDetail } from './laps.ts';
 
 // The comparison (E1–E4, D2, D4, D5) on hand-built laps, rendered statically (A§15).
 
@@ -805,7 +808,8 @@ const compare = (drivers: Driver[]) =>
 
 describe('the comparison', () => {
   it('asks for a second driver', () => {
-    expect(compare([VER])).toBe('<p>Pick at least 2 drivers.</p>');
+    // The track evolution of a practice needs no picks (#114), so its card follows the line.
+    expect(compare([VER])).toMatch(/^<p>Pick at least 2 drivers\.<\/p><section class="card evo"><h2>Track evolution/);
   });
 
   it('shows the lap chart beside the gap chart and the duel, then the delta table', () => {
@@ -1004,5 +1008,234 @@ describe('the driver picker', () => {
       ['PER', 'false'],
     ]);
     expect(add).toContain('class="drv" style="--team:#3671C6;--team-l:#3671C6"');
+  });
+});
+
+// Track evolution (#114, D2): the option's series, the chart laid out at 390 px, and the card on the session page.
+describe('track evolution', () => {
+  use([SVGRenderer]);
+  const T0 = Date.parse('2026-10-24T12:00:00Z'); // 14:00 in Amsterdam (CEST)
+  const MIN = 60_000;
+  const start = (min: number) => new Date(T0 + min * MIN).toISOString();
+  // Q1: VER's out-lap (not a point), VER 80.000, NOR 81.000, VER 79.000 deleted. Q2: VER 78.500, NOR 78.000 (the best),
+  // PER 100.000 (above 107 %). NOR's lap 9 has a time but no start.
+  const evoLaps = [
+    lap(1, 1, 100000, [], null, { date_start: start(0), is_pit_out: true, quali_phase: 1 }),
+    lap(1, 2, 80000, [], null, { date_start: start(2), quali_phase: 1 }),
+    lap(4, 2, 81000, [], null, { date_start: start(3), quali_phase: 1 }),
+    lap(1, 3, 79000, [], null, { date_start: start(5), quali_phase: 1, deleted: true }),
+    lap(1, 5, 78500, [], null, { date_start: start(20), quali_phase: 2 }),
+    lap(4, 4, 78000, [], null, { date_start: start(21), quali_phase: 2 }),
+    lap(11, 4, 100000, [], null, { date_start: start(22), quali_phase: 2 }),
+    lap(4, 9, 79000, [], null, { quali_phase: 2 }),
+  ];
+  const evo = evolution(evoLaps, 'Qualifying', 'Qualifying', []);
+  const name = (n: number) => ({ 1: 'VER', 4: 'NOR', 11: 'PER' })[n] ?? String(n);
+  const option = evolutionChartOption(evo, tokens, name);
+  const [dots, best, bands] = option.series;
+
+  it('plots a dot per timed lap on a time axis in UTC, and the deleted one as a ring filled with --bg', () => {
+    expect(option).toMatchObject({ useUTC: true, xAxis: { type: 'time' } });
+    expect(option.xAxis.axisLabel.formatter(T0 + 5 * MIN)).toBe('14:05');
+    expect(dots).toMatchObject({ type: 'scatter', color: tokens.muted, clip: true });
+    expect(dots?.data).toHaveLength(6);
+    expect(dots?.data[0]).toEqual([T0 + 2 * MIN, 80000]);
+    // Not `emptyCircle`: ECharts fills that white.
+    expect(dots?.data[2]).toEqual({
+      value: [T0 + 5 * MIN, 79000],
+      symbol: 'circle',
+      symbolSize: 10,
+      itemStyle: { color: tokens.bg, borderColor: tokens.muted, borderWidth: 2 },
+    });
+    expect(JSON.stringify(option)).not.toContain('emptyCircle');
+  });
+
+  it('draws the running best as a --fg step line that holds to the next improvement', () => {
+    expect(best).toMatchObject({ type: 'line', step: 'end', color: tokens.fg, symbol: 'none' });
+    expect(best?.data).toEqual([
+      [T0 + 2 * MIN, 80000],
+      [T0 + 20 * MIN, 78500],
+      [T0 + 21 * MIN, 78000],
+      [T0 + 22 * MIN, 78000],
+    ]);
+  });
+
+  it('puts the phases on a data-less, silent series, so a hidden series keeps them', () => {
+    expect(bands).toMatchObject({ type: 'line', data: [], silent: true, tooltip: { show: false } });
+    const areas = (bands as { markArea: { data: { name?: string; xAxis: number }[][] } }).markArea.data;
+    expect(areas.map(([from, to]) => [from?.name, from?.xAxis, to?.xAxis])).toEqual([
+      ['Q1', T0, T0 + 5 * MIN + 79000],
+      ['Q2', T0 + 20 * MIN, T0 + 22 * MIN + 100000],
+    ]);
+    expect(option.series).toHaveLength(3);
+  });
+
+  it('colours a practice red flag --live and draws no band without one', () => {
+    const red = evolution(evoLaps, 'Practice', 'Practice 1', [{ kind: 'red', from: T0 + 10 * MIN, to: T0 + 15 * MIN }]);
+    const [, , area] = evolutionChartOption(red, tokens, name).series;
+    expect(area).toMatchObject({
+      markArea: { data: [[{ name: 'RED', itemStyle: { color: tokens.live } }, { xAxis: T0 + 15 * MIN }]] },
+    });
+    expect(evolutionChartOption(evolution(evoLaps, 'Practice', 'Practice 1', []), tokens, name).series).toHaveLength(2);
+  });
+
+  it('reads a practice red flag from the race-control rows the card is given, into the red markArea', () => {
+    // What `Compare` does for practice: `clockPeriods` of the rows (green light closes the red), then `evolution`.
+    const rows: RaceControl = [
+      rc(null, 'RED FLAG', { category: 'Flag', flag: 'RED', date: start(10) }),
+      rc(null, 'GREEN LIGHT - PIT EXIT OPEN', { category: 'Flag', flag: 'GREEN', date: start(15) }),
+    ];
+    const clock = clockPeriods(rows, T0 + 60 * MIN);
+    const [, , area] = evolutionChartOption(evolution(evoLaps, 'Practice', 'Practice 1', clock), tokens, name).series;
+    expect(area).toMatchObject({
+      markArea: {
+        data: [[{ name: 'RED', itemStyle: { color: tokens.live }, xAxis: T0 + 10 * MIN }, { xAxis: T0 + 15 * MIN }]],
+      },
+    });
+  });
+
+  it('windows the y axis from the best − 1 s to 107 %, and counts the laps above it', () => {
+    // 78.000 s: from 77 s, 107 % is 83.46 s, ceiled to 84 s; PER's 100 s is above.
+    expect(evolutionWindow(evo)).toEqual({ min: 77000, max: 84000, above: 1, below: 0 });
+    expect(option.yAxis).toMatchObject({ min: 77000, max: 84000, interval: 1000 });
+    expect(option.yAxis.axisLabel.formatter(77000)).toBe('1:17');
+    // Only deleted laps: no window, and the axis is left to ECharts.
+    const deleted = evolution(
+      [lap(1, 2, 80000, [], null, { date_start: start(2), deleted: true })],
+      'Practice',
+      null,
+      [],
+    );
+    expect(evolutionWindow(deleted)).toBeNull();
+  });
+
+  it('reads one lap in the tooltip: the time, the driver and lap, the lap time and whether it was deleted', () => {
+    const { formatter } = option.tooltip;
+    expect(option.tooltip).toMatchObject({ trigger: 'item', confine: true });
+    expect(formatter({ dataIndex: 0 })).toBe('14:02 · VER L2 1:20.000');
+    expect(formatter({ dataIndex: 2 })).toBe('14:05 · VER L3 1:19.000 · deleted');
+    expect(formatter({ dataIndex: 99 })).toBe('');
+  });
+
+  describe('at 390 px', () => {
+    type Drawn = { shape?: { symbolType?: string }; style: { fill?: string; stroke?: string } };
+    const drawn = (o: object) => {
+      const chart = init(null, null, { renderer: 'svg', ssr: true, width: 390, height: 300 });
+      try {
+        chart.setOption({ ...o, animation: false });
+        return chart
+          .getZr()
+          .storage.getDisplayList()
+          .map((el) => el as unknown as Drawn);
+      } finally {
+        chart.dispose();
+      }
+    };
+
+    it('draws 4 dots in --muted, 1 hollow ring, the step line and 2 phase bands; the lap above the window is clipped', () => {
+      const list = drawn(option);
+      const circles = list.filter((e) => e.shape?.symbolType === 'circle');
+      expect(circles.filter((e) => e.style.fill === tokens.muted)).toHaveLength(4);
+      expect(circles.filter((e) => e.style.fill === tokens.bg && e.style.stroke === tokens.muted)).toHaveLength(1);
+      expect(list.filter((e) => e.style.fill === tokens.line)).toHaveLength(2);
+    });
+  });
+
+  describe('the card on the session page', () => {
+    const detail = (type: string, name: string) =>
+      sessionDetail(type, name, [
+        [1, 'VER'],
+        [4, 'NOR'],
+        [11, 'PER'],
+      ]);
+    const html = (type: string, name: string) =>
+      renderToStaticMarkup(
+        <QueryClientProvider client={new QueryClient()}>
+          <Compare
+            session={11000}
+            detail={detail(type, name)}
+            drivers={[VER, NOR]}
+            laps={evoLaps}
+            onReference={() => {}}
+          />
+        </QueryClientProvider>,
+      );
+
+    it('shows for qualifying and practice, without picks, and not for a race', () => {
+      expect(html('Qualifying', 'Qualifying')).toContain('<h2>Track evolution</h2>');
+      expect(html('Practice', 'Practice 1')).toContain('<h2>Track evolution</h2>');
+      expect(html('Race', 'Race')).not.toContain('Track evolution');
+      const none = renderToStaticMarkup(
+        <QueryClientProvider client={new QueryClient()}>
+          <Compare
+            session={11000}
+            detail={detail('Practice', 'Practice 1')}
+            drivers={[]}
+            laps={evoLaps}
+            onReference={() => {}}
+          />
+        </QueryClientProvider>,
+      );
+      expect(none).toContain('<h2>Track evolution</h2>');
+    });
+
+    it('renders both the chart and the phone table, and counts what it left out', () => {
+      const card = html('Qualifying', 'Qualifying');
+      expect(card).toMatch(
+        /<div class="evo-wide">(<p class="muted">Loading…<\/p>)?<div class="chart" role="img" aria-label="Track evolution/,
+      );
+      expect(card).toContain('<div class="evo-narrow">');
+      expect(card).toContain('<p class="muted">1 lap without a start time left out · 1 above 107 % not drawn</p>');
+      expect(card).not.toContain('below the window');
+    });
+
+    it('lists the fastest lap per phase and 5-minute slot, a new best in words', () => {
+      const card = html('Qualifying', 'Qualifying');
+      expect(
+        [...card.matchAll(/<tr><td>(.*?)<\/td><td>(.*?)<\/td><td>(.*?)<\/td><td>(.*?)<\/td><\/tr>/g)].map((m) =>
+          m.slice(1),
+        ),
+      ).toEqual([
+        ['Q1', '14:00–14:05', '1:20.000, new best', 'VER L2'],
+        ['Q2', '14:20–14:25', '1:18.000, new best', 'NOR L4'],
+      ]);
+      expect(card).toContain('<th scope="col">Phase</th>');
+      // Practice laps carry no phase, so there is no phase column and a slot holds the fastest of all cars.
+      const practice = evoLaps.map((l) => ({ ...l, quali_phase: null }));
+      const slots = evolutionSlots(evolution(practice, 'Practice', null, []).points);
+      expect(slots.map((x) => [x.slot, x.point.ms])).toEqual([
+        [T0, 80000],
+        [T0 + 20 * MIN, 78000],
+      ]);
+      const page = renderToStaticMarkup(
+        <QueryClientProvider client={new QueryClient()}>
+          <Compare
+            session={11000}
+            detail={detail('Practice', 'Practice 1')}
+            drivers={[VER, NOR]}
+            laps={practice}
+            onReference={() => {}}
+          />
+        </QueryClientProvider>,
+      );
+      expect(page).toContain('<th scope="col">Slot</th>');
+      expect(page).not.toContain('<th scope="col">Phase</th>');
+    });
+
+    it('says when no lap has a start time', () => {
+      const bare = renderToStaticMarkup(
+        <QueryClientProvider client={new QueryClient()}>
+          <Compare
+            session={11000}
+            detail={detail('Practice', 'Practice 1')}
+            drivers={[VER, NOR]}
+            laps={[lap(1, 2, 80000, [], null)]}
+            onReference={() => {}}
+          />
+        </QueryClientProvider>,
+      );
+      expect(bare).toContain('<p class="muted">No timed lap with a start time.</p>');
+      expect(bare).toContain('1 lap without a start time left out');
+    });
   });
 });
