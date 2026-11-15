@@ -453,7 +453,18 @@ export async function processSession(deps: Deps, key: number, refetch = false): 
         if (!got) continue;
         let outcome: StandingLog | undefined;
         let failure: { error: ErrorCode; issues?: ShapeError['issues'] } | undefined;
-        if (got.ok) {
+        const stored = async () =>
+          (
+            await trx
+              .selectFrom(table)
+              .select(sql<number>`count(*)::int`.as('n'))
+              .where('session_key', '=', key)
+              .executeTakeFirstOrThrow()
+          ).n;
+        // Owner, 2026-11-15 (P8 review): an answer without rows where rows are stored fails, as the grid's does.
+        if (got.ok && got.value.rows.length === 0 && (had.some((r) => r.endpoint === endpoint) || (await stored()) > 0))
+          failure = { error: 'empty' };
+        else if (got.ok) {
           await sql`SAVEPOINT standing`.execute(trx);
           try {
             await trx
@@ -484,14 +495,7 @@ export async function processSession(deps: Deps, key: number, refetch = false): 
             failure = { error: 'schema' };
           }
         } else failure = { error: got.error.last_error, ...(got.error.issues && { issues: got.error.issues }) };
-        if (failure) {
-          const stored = await trx
-            .selectFrom(table)
-            .select(sql<number>`count(*)::int`.as('n'))
-            .where('session_key', '=', key)
-            .executeTakeFirstOrThrow();
-          outcome = { ...failure, kept: stored.n };
-        }
+        if (failure) outcome = { ...failure, kept: await stored() };
         if (outcome) championship[endpoint === 'championship_drivers' ? 'drivers' : 'teams'] = outcome;
       }
       const next = afterSuccess(row, now());

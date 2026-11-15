@@ -748,7 +748,8 @@ describe('ingest (fixtures through msw, f1_ingest login)', { timeout: 120_000 },
 
   // P8 (A§8): the ninth and tenth endpoints, fetched for Race-type sessions under their own key after the grid. Like the
   // grid they fail on their own: a failure keeps the stored raw row and rows, never counts toward fail_count, never
-  // fails the session. A 404 "No results found." is an empty answer: stored as 404 with [] and no rows.
+  // fails the session. A 404 "No results found." is an empty answer: stored as 404 with [] and no rows, unless rows
+  // are stored (then it fails, as the grid's, owner 2026-11-15).
   describe('the championship endpoints (P8)', () => {
     type Endpoint = 'championship_drivers' | 'championship_teams';
     const ENDPOINTS = ['championship_drivers', 'championship_teams'] as const;
@@ -856,11 +857,55 @@ describe('ingest (fixtures through msw, f1_ingest login)', { timeout: 120_000 },
       },
     );
 
-    it('a 404 "No results found." or a 200 [] is an empty answer: stored as given, the rows replaced with none', async () => {
+    // Owner, 2026-11-15 (P8 review): an empty answer where rows are stored is a failure, as the grid's.
+    it.each(ENDPOINTS)(
+      '%s: a 404 "No results found." or a 200 [] where rows are stored keeps them, like the grid; the other is replaced',
+      async (endpoint) => {
+        const other = ENDPOINTS.find((e) => e !== endpoint) as Endpoint;
+        const rows = answers[endpoint];
+        for (const answer of [() => fixture(`${endpoint}-empty`), () => HttpResponse.json([])]) {
+          const before = { raw: await storedRaw(11388, endpoint), rows: await rowsOf(endpoint) };
+          const next = answers[other].slice(0, -1);
+          await due();
+          openf1(serve({ [endpoint]: answer, [other]: () => HttpResponse.json(next) }));
+          expect(await processSession(deps, 11388)).toEqual({ ok: true, value: 'final' });
+          expect(await session(11388)).toMatchObject({ ingest_state: 'final', fail_count: 0, last_error: null });
+          expect(await storedRaw(11388, endpoint)).toEqual(before.raw);
+          expect(await rowsOf(endpoint)).toEqual(before.rows);
+          expect(await rowsOf(other)).toHaveLength(next.length);
+          expect(lastLine().championship).toEqual({
+            [part[endpoint]]: { error: 'empty', kept: rows.length },
+            [part[other]]: { rows: next.length, skipped: 0 },
+          });
+          await restore();
+        }
+        // A stored raw row with rows keeps too, though its table has none.
+        await db
+          .deleteFrom(endpoint === 'championship_drivers' ? 'championship_driver' : 'championship_team')
+          .where('session_key', '=', 11388)
+          .execute();
+        const raw = await storedRaw(11388, endpoint);
+        await due();
+        openf1(serve({ [endpoint]: () => HttpResponse.json([]) }));
+        expect(await processSession(deps, 11388)).toEqual({ ok: true, value: 'final' });
+        expect(await storedRaw(11388, endpoint)).toEqual(raw);
+        expect(lastLine().championship[part[endpoint]]).toEqual({ error: 'empty', kept: 0 });
+        await restore();
+      },
+    );
+
+    it('a 404 "No results found." or a 200 [] with nothing stored is stored as given, with no rows', async () => {
       for (const [status, answer] of [
         [404, (e: Endpoint) => fixture(`${e}-empty`)],
         [200, () => HttpResponse.json([])],
       ] as const) {
+        await db
+          .deleteFrom('raw_response')
+          .where('session_key', '=', 11388)
+          .where('endpoint', 'like', 'championship_%')
+          .execute();
+        await db.deleteFrom('championship_driver').where('session_key', '=', 11388).execute();
+        await db.deleteFrom('championship_team').where('session_key', '=', 11388).execute();
         await due();
         openf1((endpoint) => (endpoint.startsWith('championship_') ? answer(endpoint as Endpoint) : undefined));
         expect(await processSession(deps, 11388)).toEqual({ ok: true, value: 'final' }); // the empty guard ignores them

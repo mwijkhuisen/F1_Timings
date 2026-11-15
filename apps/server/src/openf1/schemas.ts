@@ -183,8 +183,8 @@ export const schemas = {
   session_result: z.array(SessionResult),
   weather: z.array(Weather),
   starting_grid: z.array(StartingGrid).max(100), // an over-long answer is a grid schema failure on its own (O1)
-  championship_drivers: z.array(ChampionshipDrivers), // a failure of either is its own (O1, A§8)
-  championship_teams: z.array(ChampionshipTeams),
+  championship_drivers: z.array(ChampionshipDrivers).max(100), // a failure of either is its own (O1, A§8)
+  championship_teams: z.array(ChampionshipTeams).max(100),
 };
 
 export type Endpoint = keyof typeof schemas;

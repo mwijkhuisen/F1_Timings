@@ -264,6 +264,19 @@ describe('points and the championship schemas', () => {
     ]);
   });
 
+  it.each(['championship_drivers', 'championship_teams'] as const)(
+    '%s: at most 100 rows, like the grid',
+    (endpoint) => {
+      const [row] = rows(`${endpoint}-normal.raw`);
+      const many = Array.from({ length: 101 }, () => row);
+      expect(issues(endpoint, many.slice(0, 100))).toEqual([]);
+      expect(parse(endpoint, many)).toEqual({
+        ok: false,
+        error: { code: 'shape', issues: [{ path: '', code: 'too_big' }] },
+      });
+    },
+  );
+
   it('team_name: text without NUL, at most 200 characters (it is a key)', () => {
     const [row] = rows('championship_teams-normal.raw');
     const at = (team_name: unknown) => issues('championship_teams', [{ ...row, team_name }]);
