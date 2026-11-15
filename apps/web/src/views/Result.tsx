@@ -1,11 +1,15 @@
-import type { Laps, Live, SessionDetail } from '@f1/contracts';
-import type { ReactNode } from 'react';
+import type { Laps, Live, SessionDetail, Standings } from '@f1/contracts';
+import { type ReactNode, useCallback, useState } from 'react';
+import { useStandings } from '../lib/api.ts';
 import { phaseName } from '../lib/quali.ts';
-import { orderDrivers, plural, sourceWords, statusOf, teamStyle } from '../lib/session.ts';
+import { orderDrivers, plural, sourceWords, statusOf, teamColour, teamStyle } from '../lib/session.ts';
 import { fmtDuration, fmtGap, fmtLap } from '../lib/time.ts';
 import { NoData } from '../ui/NoData.tsx';
 import { Note } from '../ui/Note.tsx';
 import { Scroll } from '../ui/Scroll.tsx';
+import { Chart } from './Chart.tsx';
+import type { ChartTokens } from './lap-chart-option.ts';
+import { fmtPoints, standingsChartOption, type Who } from './standings-chart-option.ts';
 
 // The Result tab (#110, A§13): the classification as stored, only inside an opened session, never the default tab.
 // Position, driver, team and laps, then the winner's time and the gaps (Q1–Q3 in qualifying), then DNF, DNS or DSQ.
@@ -128,6 +132,124 @@ export function ResultTable({ detail, laps }: { detail: SessionDetail; laps: Lap
   );
 }
 
+const upDown = (change: number) => (change > 0 ? `▲ ${change}` : change < 0 ? `▼ ${-change}` : '–');
+const upDownWords = (change: number) => (change > 0 ? `up ${change}` : change < 0 ? `down ${-change}` : 'no change');
+
+/** Place change (positive = up): the cue, with its words for a screen reader; nothing without a previous place. */
+function ChangeCell({ change }: { change: number | null }) {
+  if (change === null) return <td />;
+  return (
+    <td>
+      <span aria-hidden="true">{upDown(change)}</span>
+      <span className="vh">{upDownWords(change)}</span>
+    </td>
+  );
+}
+
+type Place = { position: number; change: number | null; points: number; session_points: number };
+
+function StandingsTable({
+  label,
+  head,
+  rows,
+}: {
+  label: string;
+  head: string;
+  rows: { id: string; name: string; sub?: string; title?: string; colour: string | null; r: Place }[];
+}) {
+  return (
+    <Scroll label={label}>
+      <table className="result" aria-label={label}>
+        <thead>
+          <tr>
+            <th scope="col">Pos</th>
+            <th scope="col">Change</th>
+            <th scope="col">{head}</th>
+            <th scope="col">Points</th>
+            <th scope="col">This session</th>
+          </tr>
+        </thead>
+        <tbody>
+          {rows.map(({ id, name, sub, title, colour, r }) => (
+            <tr key={id}>
+              <td>{r.position}</td>
+              <ChangeCell change={r.change} />
+              <th
+                scope="row"
+                className="drv"
+                style={teamStyle({ number: 0, acronym: name, name: null, team: teamColour(colour) })}
+                title={title}
+              >
+                {name}
+                {sub && <small className="margin">{sub}</small>}
+              </th>
+              <td>{fmtPoints(r.points)}</td>
+              <td>+{fmtPoints(r.session_points)}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </Scroll>
+  );
+}
+
+/**
+ * The standings after a race or sprint (P8, A§13), under the classification: the drivers' and constructors' tables
+ * and the points chart (the tables are its text alternative). Nothing when the answer has no rows.
+ */
+export function StandingsSection({ standings, sprint }: { standings: Standings; sprint: boolean }) {
+  const [who, setWho] = useState<Who>('drivers');
+  const option = useCallback((t: ChartTokens) => standingsChartOption(standings, who, t), [standings, who]);
+  if (standings.drivers.length === 0 && standings.teams.length === 0) return null;
+  return (
+    <section className="standings">
+      <h2>Standings after this {sprint ? 'sprint' : 'race'}</h2>
+      {standings.provisional && (
+        <p className="muted">Provisional: from this session's classification until OpenF1's next standings.</p>
+      )}
+      <h3>Drivers</h3>
+      <StandingsTable
+        label="Drivers' standings"
+        head="Driver"
+        rows={standings.drivers.map((d) => ({
+          id: d.full_name,
+          name: d.acronym ?? d.full_name,
+          sub: d.team_names.join(' / '),
+          title: d.full_name,
+          colour: d.team_colour,
+          r: d,
+        }))}
+      />
+      <h3>Constructors</h3>
+      <StandingsTable
+        label="Constructors' standings"
+        head="Team"
+        rows={standings.teams.map((t) => ({ id: t.team_name, name: t.team_name, colour: t.team_colour, r: t }))}
+      />
+      <div className="panel-title">
+        <h3>Points progression</h3>
+        <fieldset className="segmented" aria-label="Chart">
+          <button type="button" aria-pressed={who === 'drivers'} onClick={() => setWho('drivers')}>
+            Drivers
+          </button>
+          <button type="button" aria-pressed={who === 'teams'} onClick={() => setWho('teams')}>
+            Constructors
+          </button>
+        </fieldset>
+      </div>
+      <p className="muted">After each race and sprint of the season so far, in order.</p>
+      <Chart label="Points after each race and sprint" option={option} />
+    </section>
+  );
+}
+
+/** Asks for the standings of a race-type session, which the tab renders only for those; a failure is a short line. */
+function StandingsLoader({ detail }: { detail: SessionDetail }) {
+  const q = useStandings(detail.session.session_key);
+  if (q.data) return <StandingsSection standings={q.data} sprint={detail.session.name === 'Sprint'} />;
+  return q.isError ? <p className="muted">Standings did not load.</p> : null;
+}
+
 /** The tab: the table, or why there is no result (`noDataText`). `laps` is null while they load. */
 export function ResultTab({
   detail,
@@ -141,5 +263,10 @@ export function ResultTab({
   now: number;
 }) {
   if (detail.results.length === 0) return <NoData session={detail.session} live={live} what="results" now={now} />;
-  return <ResultTable detail={detail} laps={laps} />;
+  return (
+    <>
+      <ResultTable detail={detail} laps={laps} />
+      {detail.session.type === 'Race' && <StandingsLoader detail={detail} />}
+    </>
+  );
 }
