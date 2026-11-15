@@ -1413,7 +1413,8 @@ header .links {
 
 /* Outside a box (#202 D1) the table is the containing block of the .vh words that .scroll was, and the head row
    never sticks to the page. To fit 390 px (#202, measured), a column that has to narrow wraps at a space: a team name
-   (the line under a driver, a team's row), then a head label ("THIS / SESSION"). */
+   (the line under a driver, a team's row), then a head label ("THIS / SESSION"), then, under 600 px, 6 px cell padding
+   as in .deltas (a 360 px phone has 328 px of content). Qualifying's boxed table keeps all of it as it was. */
 .result {
   position: relative;
 }
@@ -1423,8 +1424,14 @@ header .links {
   white-space: normal;
 }
 
-.result th.drv {
+:not(.scroll) > .result th.drv {
   white-space: normal;
+}
+
+@media (max-width: 600px) {
+  :not(.scroll) > .result :is(th, td) {
+    padding: 0 6px;
+  }
 }
 
 .quali .margin,
