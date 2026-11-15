@@ -253,17 +253,65 @@ Checked against the live APIs on 2026-10-25 (Austin quali `11392`, Marina Bay ra
 - Since ~15 Oct 2026 it returns 401 without a token. It needs F1 TV Access/Pro/Premium (the owner has Pro). Seasons 2018+.
 - **How far back** (research, 2026-11-10; P3 decisions H1–H16, sources in ADR-0009):
   - FastF1's maintainer: "the lap timing isn't available either before 2018 on the F1 API" (FastF1 discussion #550). The docs say timing, car and position data are "available from 2018 onwards".
-  - Without a token every year answers 401, 2016, 2017 and even 2099 (checked from a datacenter IP, which also gets CloudFront's 403 with a token). So whether `static/2017/Index.json` exists is **[U]**, for P3d's probe with the token.
+  - Without a token every year answers 401, 2016, 2017 and even 2099 (checked from a datacenter IP, which also gets CloudFront's 403 with a token). So whether `static/2017/Index.json` exists was [U], for P3d's probe with the token.
+  - **Settled by the P3d probe** (WSL, 2026-11-15, with the owner's token): 2011–2017 each answer **403**, and the 2018 control answers 200 (20 meetings, 100 sessions, 95 with a `Path`). The archive answers 403 for what it does not serve (a topic a session lacks, all of 2022), so **it has no Index before 2018**, and H1 stands.
   - FastF1's public mirror answers 404 for 2017–2019 and 200 for 2021, which shows only what the mirror holds.
   - The per-session `Index.json`, which lists a session's topics, exists from the 2018 US GP FP1 on (FastF1 #248, which lists 31 topic names).
   - Testing sessions are in the archive, but "hasn't always been replay data available" (FastF1 #688). Its path code has `Day_N` fixes for the 2025 and 2026 tests.
-- **Known 2018 gaps** (FastF1 issues; **[U]** until P3d counts them):
-  - Australia FP2 has about 2 s of position data in all (#677).
-  - The Italian GP race has phantom stint messages (#930, open).
-  - Delayed tyre data dropped stints, for example Azerbaijan (#863).
-  - `CountryCode` and `HeadshotUrl` are empty (#668).
-  - 2018–2020 stints were reported wrong, then judged plausible (#841).
-- **What the archive has beyond OpenF1 for 2023 on** (from the #248 topic list and FastF1's `_api`; **[U]**):
+- **Testing in the year Indexes** (P3d [box], WSL, 2026-11-15; the sessions with a `Path`, as `fetch-archive.ts <year> 0` lists them):
+  - **2018–2021 list no pre-season testing:** no `Type`, `Name` or `Path` holds `Test` or `Day_`. 2022 answers 403. The one `Test` entry in the 2021 Index is the `../uat/…_FOM_High_Speed_Track_Test/` path dated 2022 (Key 12001, `bad_index` since P3a). So the Indexes give H5 no testing session for 2018–2022, and P3e's 2018–2022 testing rows have no source in them. Whether a test can be fetched by a path outside its Index, as Australia FP2 2018 can (below), is **[U]**.
+  - 2023: one test of 3 sessions, `<year>/<date>_Pre-Season_Testing/<date>_Practice_1/` to `_3/`.
+  - 2024: none.
+  - 2025: one test of 3 sessions, `…_Pre-Season_Testing/<date>_Day_1/` to `_3/`.
+  - 2026: two tests (13 and 20 Feb) of 3 sessions each, `…_Day_1/` to `_3/`.
+  - Every test session has Type `Practice`.
+- **Sessions with a `Path` per year Index** (the same listings): 2018 95, 2019 104, 2020 83, 2021 110, 2023 113, 2024 75, 2025 123, 2026 106 (to date). The 2024 Index has sessions with a `Path` only from the Spanish GP (23 Jun) on, 15 meetings; Bahrain to Canada and the test are missing. 2024 is OpenF1's (H3), so this limits only the archive files P3e downloads for 2024.
+- **Topics per session `Index.json`** (P3d [box], WSL, 2026-11-15; `feed-keys.ts <dir>/Index.json`, key paths only):
+  - **Sampled:** 29 sessions, all 200:
+    - the 2018 US GP FP1, qualifying and race (5203, 5206 and 5202), the first sessions with a session Index;
+    - the Italian GP FP1, qualifying and race of 2019–2021 and 2023–2026, plus the 2021 sprint qualifying 6272;
+    - the first test day of 2023, 2025 and both 2026 tests.
+
+    The 2018 Italian GP race 5170, before the US GP, answers 403 for its `Index.json`, as FastF1 #248 says.
+  - **35 topics in all.** 22 are in every sampled session: `ArchiveStatus`, `AudioStreams`, `CarData.z`, `CurrentTyres`, `DriverList`, `ExtrapolatedClock`, `Heartbeat`, `LapSeries`, `Position.z`, `RaceControlMessages`, `SessionInfo`, `SessionStatus`, `TimingAppData`, `TimingData`, `TimingDataF1`, `TimingStats`, `TlaRcm`, `TopThree`, `TrackStatus`, `TyreStintSeries`, `WeatherData`, `WeatherDataSeries`.
+  - **The other 13:**
+    - `LapCount` and `DriverRaceInfo`: races only (the 2021 sprint qualifying too), in every year;
+    - `ChampionshipPrediction`: races from 2019 on;
+    - `OvertakeSeries`, `PitStop` and `PitStopSeries`: the 2025 and 2026 races only;
+    - `SessionData`: from 2020 on, and the 2023 test, never in 2018–2019 (as P3a found);
+    - `ContentStreams`: from 2019 on;
+    - `DriverScore`: 2018–2021 only;
+    - `SPFeed`: 2018–2021, and the 2023 test;
+    - `DriverTracker`: from 2025 on, the tests included;
+    - `PitLaneTimeCollection`: every sampled session but the 2023 test;
+    - `TeamRadio`: every sampled session but the tests.
+  - **Topics per race:** 2018 28, 2019 30, 2020 31, 2021 31, 2023 29, 2024 29, 2025 33, 2026 33. A qualifying or FP1 of the same weekend has 2 to 6 fewer, and a test day 25 (2023) or 26 (2025, 2026).
+- **Known 2018 gaps** (FastF1 issues): `CountryCode` and `HeadshotUrl` are empty (#668), and 2018–2020 stints were reported wrong, then judged plausible (#841).
+- **The 2018 gaps, counted** (P3d [box], WSL, 2026-11-15). The tools: `feed-keys.ts` on the streams and final states, and the archive job's own `archiveRows` on its 10 topics, so the rows are the ones the VM import wrote. Counts only.
+  - **Australia FP2 (#677): confirmed, and nothing fills it.**
+    - The 2018 Index has no Australian GP, but FastF1's path `2018/2018-03-25_Australian_Grand_Prix/2018-03-23_Practice_2/` answers 200 for 24 of the 35 topics, and its SessionInfo Key is 5068. **A session missing from an Index can still be fetched by its path** (P3e).
+    - `Position.z` has 4 lines over 2.4 s, and no other file has car positions. That gap stays (P7).
+    - Its timing is whole: 682 laps of 20 drivers, no lap-number hole, and 103 stints in our rows, `TimingAppData.json` and `TyreStintSeries` alike.
+  - **Italian GP race 5170 (#930): confirmed, and `TyreStintSeries` fills it.**
+    - Our rows and `TimingAppData.json` have 43 stints, `TyreStintSeries` 41: one driver has 2 more in TimingAppData.
+    - `DriverRaceInfo.json` `PitStops` equals our stints − 1 on 17 of the 19 drivers with laps.
+  - **Azerbaijan race 5090 (#863): not in our rows.** Our rows, `TimingAppData.json` and `TyreStintSeries` all have 56 stints and agree per driver on 20 of 20, and `PitStops` equals our stints − 1 on 18 of 18. The drop FastF1 reports comes from its own processing, not from the files.
+  - **New: lap 2 is missing from our 2018 rows. The files have it.**
+    - Every driver with laps lacks lap 2 in the races 5170 (19 drivers) and 5090 (18), and 10 of the 20 drivers lack it in the Italian GP qualifying 5174.
+    - FP2 5068 has no hole, nor do the 2019 race 5498 and the 2021 race 6675 (from P3a's [box]).
+    - The 2018 TimingData stream carries `NumberOfLaps` 2 for each of those drivers (5170: 19 messages, 5174: 20), and LapSeries has a lap-2 position. So the gap is in our lap reconstruction for the 2018 format, cause [U], a follow-up of P3d.
+  - **What the other files hold** (key paths and leaf counts from the final `.json`, message counts from the stream):
+    - `LapSeries`: `#.LapPosition.#`, one position per lap and driver, lap 0 included (5068: ours + 1 on 20 of 20). It has 17 (5170) and 13 (5090) more positions than our rows + 1, which is lap 2 among others.
+    - `PitLaneTimeCollection` is in the stream only. 5170 has 42 messages, with `PitTimes.#.Duration`, `PitTimes.#.Lap` and `PitTimes.#.RacingNumber` 21 times each, each entry later `_deleted`, and the final `.json` is an empty `PitTimes`. So 2018 pit-lane times need the stream, and the archive job does not fetch this topic until P3e.
+    - `TimingStats` (final): `PersonalBestLapTime`, `BestSectors` and `BestSpeeds` per driver, the H13 bests panel.
+    - `DriverRaceInfo` (races only): `Position`, `Gap`, `Interval`, `PitStops`, `Catching`, `IsOut` and `OvertakeState` per driver.
+    - `CurrentTyres`: one `Compound` and `New` per driver.
+    - `TyreStintSeries`: `Stints.#.#` with `Compound`, `New`, `StartLaps`, `TotalLaps` and `TyresNotChanged`, the same fields as TimingAppData's stints, without `LapNumber` and `LapTime`.
+  - **Topics before the 2018 US GP** (there is no session Index, so this is the list P3e uses there): the 200 and 403 answers over the 35 topics, `.jsonStream`:
+    - the races 5170 and 5090: 29 and 28 topics answer 200. `ChampionshipPrediction`, `DriverTracker`, `OvertakeSeries`, `PitStop`, `PitStopSeries` and `SessionData` answer 403 on both, and `ContentStreams` answers 200 on 5170 only;
+    - the qualifying 5174: 26 (the races' list without `LapCount`, `DriverRaceInfo` and `ContentStreams`);
+    - FP2 5068: 24 (the qualifying's list without `AudioStreams` and `DriverScore`).
+- **What the archive has beyond OpenF1 for 2023 on** (from the #248 topic list and FastF1's `_api`. P3d found every topic named below in the 2023–2026 race Indexes, so their presence is settled. What they hold, the finish-line speed and the race mini-sectors are still **[U]**):
   - `TimingStats` (best sectors, speed-trap ranks), the finish-line speed (`FL`; OpenF1 has none), `TyreStintSeries`, `CurrentTyres`, `DriverRaceInfo`, `LapSeries`, `PitLaneTimeCollection`, `ChampionshipPrediction`, `TopThree`, `SessionData` and the full `TeamRadio` list;
   - mini-sectors in races (OpenF1: "Segments are not available during races").
 - Structure: `static/<year>/Index.json` → meetings → sessions (`Path`) → `<Path><Topic>.jsonStream` (and `.json`). The topics are the same as the live feed (A§11.1), with a session-relative timestamp on each line.
