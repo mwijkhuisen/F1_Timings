@@ -31,6 +31,8 @@ describe('run', () => {
     [['rain-refetch', 'x']],
     [['accept-empty', '1']],
     [['accept-empty', '1', 'starting_grid']],
+    [['accept-empty', '1', 'championship_drivers']], // P8: not one of the seven
+    [['accept-empty', '1', 'championship_teams']],
     [['accept-empty', '1', 'meetings']],
     [['accept-empty', 'x', 'pit']],
     [['accept-empty', '1', 'pit', 'extra']],

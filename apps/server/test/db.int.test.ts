@@ -20,6 +20,8 @@ const TABLES = [
   'result',
   'raw_response',
   'weather',
+  'championship_driver',
+  'championship_team',
   'rain_grid',
   'rain_frame',
   'forecast',

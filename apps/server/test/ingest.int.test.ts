@@ -50,6 +50,8 @@ const TABLES = [
   'race_control',
   'result',
   'weather',
+  'championship_driver',
+  'championship_team',
   'raw_response',
 ] as const;
 
@@ -222,8 +224,8 @@ describe('ingest (fixtures through msw, f1_ingest login)', { timeout: 120_000 },
     const before = beats;
     at = new Date('2026-10-25T12:00:00Z');
     expect(await tick(deps)).toBe(95);
-    // After each OpenF1 call (11388 fails at its 2nd; the 22 other past races and sprints add their grid), each session, the tick.
-    expect(beats - before).toBe(94 * 7 + 22 + 2 + 95 + 1);
+    // After each OpenF1 call (11388 fails at its 2nd; the 22 other past races and sprints add their grid and the two championship endpoints), each session, the tick.
+    expect(beats - before).toBe(94 * 7 + 22 + 44 + 2 + 95 + 1);
     expect(logged('live session: over')).toBe(1);
     expect(await states()).toEqual({ final: 92, fetched: 2, due: 1, scheduled: 36 });
     expect(await session(11388)).toMatchObject({
@@ -242,6 +244,8 @@ describe('ingest (fixtures through msw, f1_ingest login)', { timeout: 120_000 },
       race_control: 0,
       result: 0,
       weather: 0,
+      championship_driver: 0,
+      championship_team: 0,
       raw_response: 0,
     });
     expect(await session(11392)).toMatchObject({
@@ -298,7 +302,9 @@ describe('ingest (fixtures through msw, f1_ingest login)', { timeout: 120_000 },
       race_control: 155,
       result: 22,
       weather: 160,
-      raw_response: 8,
+      championship_driver: 23,
+      championship_team: 11,
+      raw_response: 10,
     });
     expect(await rowCounts(11392)).toEqual({
       driver: 4,
@@ -309,6 +315,8 @@ describe('ingest (fixtures through msw, f1_ingest login)', { timeout: 120_000 },
       race_control: 39,
       result: 22,
       weather: 77,
+      championship_driver: 0,
+      championship_team: 0,
       raw_response: 7,
     });
     expect(await rowCounts(11383)).toEqual({
@@ -320,7 +328,9 @@ describe('ingest (fixtures through msw, f1_ingest login)', { timeout: 120_000 },
       race_control: 159,
       result: 22,
       weather: 127,
-      raw_response: 8,
+      championship_driver: 23,
+      championship_team: 11,
+      raw_response: 10,
     });
     expect(await rowCounts(EMPTY)).toEqual({
       driver: 0,
@@ -331,6 +341,8 @@ describe('ingest (fixtures through msw, f1_ingest login)', { timeout: 120_000 },
       race_control: 0,
       result: 0,
       weather: 0,
+      championship_driver: 0,
+      championship_team: 0,
       raw_response: 7,
     });
     expect(await session(EMPTY)).toMatchObject({ ingest_state: 'final', fetch_count: 2 });
@@ -358,6 +370,16 @@ describe('ingest (fixtures through msw, f1_ingest login)', { timeout: 120_000 },
     expect(await per('result', 'cardinality(durations_ms) = 3')).toEqual([0, 22, 0]);
     // #115: the race and the sprint take their qualifying's grid (22 cars each); the qualifying itself has none.
     expect(await per('result', 'grid IS NOT NULL')).toEqual([22, 0, 22]);
+    // P8: result.points from session_result (null in qualifying), and the race and the sprint take both standings
+    // under their own key (200); the qualifying and the test session ask for neither.
+    expect(await per('result', 'points IS NOT NULL')).toEqual([22, 0, 22]);
+    expect(await per('result', 'points = 25 AND position = 1')).toEqual([1, 0, 0]);
+    expect(await per('result', 'points = 8 AND position = 1')).toEqual([0, 0, 1]);
+    expect(await per('raw_response', "endpoint = 'championship_drivers' AND http_status = 200")).toEqual([1, 0, 1]);
+    expect(await per('raw_response', "endpoint = 'championship_teams' AND http_status = 200")).toEqual([1, 0, 1]);
+    expect(requests.filter((r) => /^championship_.*session_key=(11392|11465)$/.test(r))).toEqual([]);
+    expect(requests).toContain('championship_drivers?session_key=11388');
+    expect(requests).toContain('championship_teams?session_key=11383');
     expect(await per('raw_response', "endpoint = 'starting_grid' AND http_status = 200")).toEqual([1, 0, 1]);
     const grid = (key: number) =>
       db
@@ -456,7 +478,7 @@ describe('ingest (fixtures through msw, f1_ingest login)', { timeout: 120_000 },
     const changed = [{ ...laps[0], lap_duration: 99.999 }, ...laps.slice(1, -2)];
     openf1((endpoint, key) => (endpoint === 'laps' && key === 11388 ? HttpResponse.json(changed) : undefined));
     expect(await processSession(deps, 11388, true)).toEqual({ ok: true, value: 'final' });
-    expect(await rowCounts(11388)).toMatchObject({ lap: 60, raw_response: 8 });
+    expect(await rowCounts(11388)).toMatchObject({ lap: 60, raw_response: 10 });
     const lap = (driver: number, n: number) =>
       db
         .selectFrom('lap')
@@ -489,7 +511,7 @@ describe('ingest (fixtures through msw, f1_ingest login)', { timeout: 120_000 },
     const twice = [...weather, { ...first, date: '2026-10-11T11:07:56.727+00:00', air_temperature: 99.5, rainfall: 1 }];
     openf1((endpoint, key) => (endpoint === 'weather' && key === 11388 ? HttpResponse.json(twice) : undefined));
     expect(await processSession(deps, 11388, true)).toEqual({ ok: true, value: 'final' });
-    expect(await rowCounts(11388)).toMatchObject({ weather: 160, raw_response: 8 });
+    expect(await rowCounts(11388)).toMatchObject({ weather: 160, raw_response: 10 });
     expect(await firstRow()).toEqual([{ air_temperature: 99.5, rainfall: 1 }]);
     expect(JSON.parse(lines.at(-1) ?? '{}')).toMatchObject({ session_key: 11388, rows: { weather: 160 }, skipped: 1 });
 
@@ -498,10 +520,10 @@ describe('ingest (fixtures through msw, f1_ingest login)', { timeout: 120_000 },
       endpoint === 'weather' && key === 11388 ? fixture('weather-empty') : undefined;
     openf1(empty);
     expect(await processSession(deps, 11388, true)).toEqual({ ok: false, error: 'empty' });
-    expect(await rowCounts(11388)).toMatchObject({ weather: 160, raw_response: 8 });
+    expect(await rowCounts(11388)).toMatchObject({ weather: 160, raw_response: 10 });
     expect(await processSession(deps, 11388)).toEqual({ ok: false, error: 'empty' });
     expect(await session(11388)).toMatchObject({ ingest_state: 'due', fail_count: 1, last_error: 'empty' });
-    expect(await rowCounts(11388)).toMatchObject({ weather: 160, raw_response: 8 });
+    expect(await rowCounts(11388)).toMatchObject({ weather: 160, raw_response: 10 });
     expect(await firstRow()).toEqual([{ air_temperature: 99.5, rainfall: 1 }]);
 
     // A weather schema failure fails the session's fetch like any endpoint: the path and code, never the value.
@@ -601,7 +623,7 @@ describe('ingest (fixtures through msw, f1_ingest login)', { timeout: 120_000 },
       );
       expect(await processSession(deps, 11388)).toEqual({ ok: true, value: 'final' });
       expect(await session(11388)).toMatchObject({ ingest_state: 'final', fail_count: 0, last_error: null });
-      expect(await rowCounts(11388)).toMatchObject({ lap: 60, result: 22, raw_response: 8 }); // the laps replaced
+      expect(await rowCounts(11388)).toMatchObject({ lap: 60, result: 22, raw_response: 10 }); // the laps replaced
       const after = await gridRaw();
       expect(after).toEqual(before.raw);
       expect(after?.fetched_at).toEqual(before.raw?.fetched_at);
@@ -643,7 +665,7 @@ describe('ingest (fixtures through msw, f1_ingest login)', { timeout: 120_000 },
       await rename(11378, 'Qualifying');
       openf1();
       expect(await processSession(deps, 11388, true)).toEqual({ ok: true, value: 'final' });
-      expect(requests.at(-1)).toBe('starting_grid?session_key=11378');
+      expect(requests.filter((r) => r.startsWith('starting_grid?')).at(-1)).toBe('starting_grid?session_key=11378');
       expect(await grids()).toEqual(before);
       expect(lastLine().grid).toEqual({ error: 'empty', kept: 22 });
       await rename(11378, 'Practice 1');
@@ -660,7 +682,7 @@ describe('ingest (fixtures through msw, f1_ingest login)', { timeout: 120_000 },
       await db.updateTable('result').set({ grid: null }).where('session_key', '=', 11388).execute();
       openf1(gridAnswer(down500));
       expect(await processSession(deps, 11388, true)).toEqual({ ok: true, value: 'final' });
-      expect(await rowCounts(11388)).toMatchObject({ lap: 62, raw_response: 7 });
+      expect(await rowCounts(11388)).toMatchObject({ lap: 62, raw_response: 9 });
       expect((await grids()).filter((r) => r.grid !== null)).toEqual([]);
       expect(lastLine().grid).toEqual({ error: 'http_500', kept: 0 });
     });
@@ -694,7 +716,7 @@ describe('ingest (fixtures through msw, f1_ingest login)', { timeout: 120_000 },
         openf1();
         expect(await processSession(deps, key, true)).toEqual({ ok: true, value: 'final' });
         expect(gridRequests()).toBe(sent);
-        expect(await countWhere('raw_response', key)).toBe(stored ? 8 : 7);
+        expect(await countWhere('raw_response', key)).toBe(stored ? 10 : 9);
         expect(await countWhere('raw_response', key, "endpoint = 'starting_grid'")).toBe(stored ? 1 : 0);
         expect(await storedRaw()).toEqual(before); // untouched, or still none
         expect(await countWhere('result', key, 'grid IS NOT NULL')).toBe(stored ? 22 : 0);
@@ -719,8 +741,202 @@ describe('ingest (fixtures through msw, f1_ingest login)', { timeout: 120_000 },
       for (const key of [11388, 11383]) {
         expect(await processSession(deps, key, true)).toEqual({ ok: true, value: 'final' });
         expect(await countWhere('result', key, 'grid IS NOT NULL')).toBe(22);
-        expect(await countWhere('raw_response', key)).toBe(8);
+        expect(await countWhere('raw_response', key)).toBe(10);
       }
+    });
+  });
+
+  // P8 (A§8): the ninth and tenth endpoints, fetched for Race-type sessions under their own key after the grid. Like the
+  // grid they fail on their own: a failure keeps the stored raw row and rows, never counts toward fail_count, never
+  // fails the session. A 404 "No results found." is an empty answer: stored as 404 with [] and no rows.
+  describe('the championship endpoints (P8)', () => {
+    type Endpoint = 'championship_drivers' | 'championship_teams';
+    const ENDPOINTS = ['championship_drivers', 'championship_teams'] as const;
+    const part = { championship_drivers: 'drivers', championship_teams: 'teams' } as const;
+    const answers = Object.fromEntries(
+      ENDPOINTS.map((e) => [e, raw(`${e}-normal`) as Record<string, unknown>[]]),
+    ) as Record<Endpoint, Record<string, unknown>[]>;
+    const storedRaw = (key: number, endpoint: Endpoint) =>
+      db
+        .selectFrom('raw_response')
+        .selectAll()
+        .where('session_key', '=', key)
+        .where('endpoint', '=', endpoint)
+        .executeTakeFirst();
+    const rowsOf = (endpoint: Endpoint, key = 11388): Promise<Record<string, unknown>[]> =>
+      endpoint === 'championship_drivers'
+        ? db
+            .selectFrom('championship_driver')
+            .selectAll()
+            .where('session_key', '=', key)
+            .orderBy('driver_number')
+            .execute()
+        : db.selectFrom('championship_team').selectAll().where('session_key', '=', key).orderBy('team_name').execute();
+    const lastLine = () => JSON.parse(lines.at(-1) ?? '{}');
+    const laps = raw('laps-normal') as Lap[];
+    const down500 = () => new HttpResponse(null, { status: 500 });
+    /** `answer` for one endpoint, the laps short by two (so the session's own tables visibly change). */
+    const serve = (answer: Partial<Record<Endpoint, () => Response>>) => (endpoint: string, key: number) =>
+      answer[endpoint as Endpoint]?.() ??
+      (endpoint === 'laps' && key === 11388 ? HttpResponse.json(laps.slice(0, -2)) : undefined);
+    const due = () => {
+      at = new Date(at.getTime() + 3_600_000);
+      return db
+        .updateTable('session')
+        .set({ ingest_state: 'due', fail_count: 1, last_error: 'timeout' })
+        .where('session_key', '=', 11388)
+        .execute();
+    };
+    const restore = async () => {
+      openf1();
+      expect(await processSession(deps, 11388, true)).toEqual({ ok: true, value: 'final' });
+      expect(lastLine().championship).toEqual({
+        drivers: { rows: 23, skipped: 0 },
+        teams: { rows: 11, skipped: 0 },
+      });
+    };
+
+    it('the normal answer: both replaced from the session own rows, the line carries counts', async () => {
+      await restore();
+      expect((await rowsOf('championship_drivers')).find((r) => r.driver_number === 12)).toEqual({
+        session_key: 11388,
+        source: 'openf1',
+        driver_number: 12,
+        position_start: 1,
+        position_current: 1,
+        points_start: 325,
+        points_current: 340,
+      });
+      expect(await rowsOf('championship_teams')).toHaveLength(11);
+      expect((await rowsOf('championship_teams')).find((r) => r.team_name === 'Mercedes')).toMatchObject({
+        points_start: 561,
+        points_current: 578,
+      });
+    });
+
+    it.each(ENDPOINTS)(
+      '%s: a failure keeps its raw row and rows, never counts, never fails the session; the other is replaced',
+      async (endpoint) => {
+        const other = ENDPOINTS.find((e) => e !== endpoint) as Endpoint;
+        const rows = answers[endpoint];
+        const failures: [string, () => Response, object][] = [
+          ['http_500', down500, { error: 'http_500' }],
+          [
+            'schema',
+            () => HttpResponse.json([{ ...rows[0], position_current: 'P1' }, ...rows.slice(1)]),
+            { error: 'schema', issues: [{ path: '[0].position_current', code: 'invalid_type' }] },
+          ],
+          // A NUL in a field the schema strips passes parse, but jsonb refuses it: the savepoint keeps the session.
+          [
+            'schema (a NUL jsonb refuses)',
+            () => HttpResponse.json([{ ...rows[0], note: '\u0000' }, ...rows.slice(1)]),
+            { error: 'schema' },
+          ],
+        ];
+        for (const [, answer, log] of failures) {
+          const before = { raw: await storedRaw(11388, endpoint), rows: await rowsOf(endpoint) };
+          const next = answers[other].slice(0, -1); // one row fewer
+          expect(before.raw).toMatchObject({ http_status: 200 });
+          await due();
+          openf1(serve({ [endpoint]: answer, [other]: () => HttpResponse.json(next) }));
+          expect(await processSession(deps, 11388)).toEqual({ ok: true, value: 'final' });
+          expect(await session(11388)).toMatchObject({ ingest_state: 'final', fail_count: 0, last_error: null });
+          expect(await rowCounts(11388)).toMatchObject({ lap: 60, result: 22 }); // the other endpoints committed
+          expect(await storedRaw(11388, endpoint)).toEqual(before.raw); // untouched, fetched_at too
+          expect(await rowsOf(endpoint)).toEqual(before.rows);
+          expect((await storedRaw(11388, other))?.body).toEqual(next);
+          expect(await rowsOf(other)).toHaveLength(next.length);
+          expect(lastLine().championship).toEqual({
+            [part[endpoint]]: { ...log, kept: rows.length },
+            [part[other]]: { rows: next.length, skipped: 0 },
+          });
+          expect(lines.join('')).not.toContain('P1');
+          await restore();
+        }
+      },
+    );
+
+    it('a 404 "No results found." or a 200 [] is an empty answer: stored as given, the rows replaced with none', async () => {
+      for (const [status, answer] of [
+        [404, (e: Endpoint) => fixture(`${e}-empty`)],
+        [200, () => HttpResponse.json([])],
+      ] as const) {
+        await due();
+        openf1((endpoint) => (endpoint.startsWith('championship_') ? answer(endpoint as Endpoint) : undefined));
+        expect(await processSession(deps, 11388)).toEqual({ ok: true, value: 'final' }); // the empty guard ignores them
+        expect(await session(11388)).toMatchObject({ ingest_state: 'final', fail_count: 0, last_error: null });
+        for (const endpoint of ENDPOINTS) {
+          expect(await storedRaw(11388, endpoint)).toMatchObject({ http_status: status, body: [] });
+          expect(await rowsOf(endpoint)).toEqual([]);
+        }
+        expect(lastLine().championship).toEqual({ drivers: { rows: 0, skipped: 0 }, teams: { rows: 0, skipped: 0 } });
+        await restore();
+      }
+    });
+
+    it('rows of another session and a duplicate key are skipped (the last wins), and counted', async () => {
+      await due();
+      const [d] = answers.championship_drivers;
+      const [t] = answers.championship_teams;
+      openf1(
+        serve({
+          championship_drivers: () =>
+            HttpResponse.json([
+              ...answers.championship_drivers,
+              { ...d, points_current: 1 },
+              { ...d, session_key: 11379 },
+            ]),
+          championship_teams: () =>
+            HttpResponse.json([...answers.championship_teams, { ...t, points_current: 2 }, { ...t, session_key: 1 }]),
+        }),
+      );
+      expect(await processSession(deps, 11388)).toEqual({ ok: true, value: 'final' });
+      expect(lastLine().championship).toEqual({ drivers: { rows: 23, skipped: 2 }, teams: { rows: 11, skipped: 2 } });
+      expect((await rowsOf('championship_drivers')).find((r) => r.driver_number === 12)).toMatchObject({
+        points_current: 1,
+      });
+      expect((await rowsOf('championship_teams')).find((r) => r.team_name === 'Mercedes')).toMatchObject({
+        points_current: 2,
+      });
+      await restore();
+    });
+
+    it('a session that is not a Race type asks for neither and stores none; a refetch of the race asks for both once', async () => {
+      const sent = requests.length;
+      openf1();
+      for (const key of [11392, EMPTY]) {
+        expect(await processSession(deps, key, true)).toEqual({ ok: true, value: 'final' });
+        expect(await countWhere('championship_driver', key)).toBe(0);
+        expect(await countWhere('championship_team', key)).toBe(0);
+        expect(await countWhere('raw_response', key, "endpoint LIKE 'championship_%'")).toBe(0);
+        expect(lastLine()).not.toHaveProperty('championship');
+      }
+      expect(requests.slice(sent).filter((r) => r.startsWith('championship_'))).toEqual([]);
+      const before = requests.length;
+      await restore();
+      expect(requests.slice(before).filter((r) => r.startsWith('championship_'))).toEqual([
+        'championship_drivers?session_key=11388',
+        'championship_teams?session_key=11388',
+      ]);
+    });
+
+    it('a Race type of 404 on a first fetch stores the 404 and no rows', async () => {
+      await db
+        .deleteFrom('raw_response')
+        .where('session_key', '=', 11388)
+        .where('endpoint', 'like', 'championship_%')
+        .execute();
+      await db.deleteFrom('championship_driver').where('session_key', '=', 11388).execute();
+      await db.deleteFrom('championship_team').where('session_key', '=', 11388).execute();
+      openf1(serve({ championship_drivers: down500, championship_teams: () => fixture('championship_teams-empty') }));
+      expect(await processSession(deps, 11388, true)).toEqual({ ok: true, value: 'final' });
+      expect(lastLine().championship).toEqual({
+        drivers: { error: 'http_500', kept: 0 },
+        teams: { rows: 0, skipped: 0 },
+      });
+      expect(await storedRaw(11388, 'championship_drivers')).toBeUndefined(); // nothing stored to keep
+      expect(await storedRaw(11388, 'championship_teams')).toMatchObject({ http_status: 404, body: [] });
+      await restore();
     });
   });
 
@@ -1132,6 +1348,7 @@ describe('ingest (fixtures through msw, f1_ingest login)', { timeout: 120_000 },
     const keyOf = (r: string) => Number(new URLSearchParams(r.split('?')[1]).get('session_key'));
     const keysOf = (asked: string[]) => [...new Set(asked.map(keyOf))];
     const isGrid = (r: string) => r.startsWith('starting_grid?');
+    const isStanding = (r: string) => r.startsWith('championship_'); // P8: the ninth and tenth endpoints
     const rawHashes = (key: number) =>
       db
         .selectFrom('raw_response')
@@ -1283,6 +1500,70 @@ describe('ingest (fixtures through msw, f1_ingest login)', { timeout: 120_000 },
       ]);
     });
 
+    // P8 (A§8): rederive derives result.points and the two championship tables from their raw rows; a missing
+    // championship raw row is not `incomplete` and leaves its table; a body that no longer parses writes nothing.
+    it('rederive derives the championship rows and result.points; a missing championship raw row leaves its table', async () => {
+      openf1();
+      expect(await processSession(deps, 11388, true)).toEqual({ ok: true, value: 'final' });
+      server.resetHandlers();
+      const state = async () => ({
+        drivers: await db.selectFrom('championship_driver').selectAll().where('session_key', '=', 11388).execute(),
+        teams: await db.selectFrom('championship_team').selectAll().where('session_key', '=', 11388).execute(),
+        points: await db
+          .selectFrom('result')
+          .select(['driver_number', 'points'])
+          .where('session_key', '=', 11388)
+          .orderBy('driver_number')
+          .execute(),
+      });
+      const before = await state();
+      expect([before.drivers.length, before.teams.length]).toEqual([23, 11]);
+      expect(before.points.filter((r) => r.points !== null)).toHaveLength(22);
+      const sent = requests.length;
+      await db.deleteFrom('championship_driver').where('session_key', '=', 11388).execute();
+      await db.deleteFrom('championship_team').where('session_key', '=', 11388).execute();
+      await db.updateTable('result').set({ points: null }).where('session_key', '=', 11388).execute();
+      expect(await rederive(rederiving(), [11388])).toBe(true);
+      expect(await state()).toEqual(before);
+      expect(lastOf('rederive', 11388)).toMatchObject({
+        level: 30,
+        rows: { result: 22, championship_driver: 23, championship_team: 11 },
+      });
+
+      // A missing raw row: not incomplete, the table stays as it is (here emptied by hand), the other is derived.
+      await db
+        .deleteFrom('raw_response')
+        .where('session_key', '=', 11388)
+        .where('endpoint', '=', 'championship_teams')
+        .execute();
+      await db.deleteFrom('championship_team').where('session_key', '=', 11388).execute();
+      expect(await rederive(rederiving(), [11388])).toBe(true);
+      expect(lastOf('rederive', 11388)).toMatchObject({ level: 30, rows: { championship_driver: 23 } });
+      expect(lastOf('rederive', 11388)?.skipped).not.toBe('incomplete');
+      expect(lastOf('rederive', 11388)?.rows).not.toHaveProperty('championship_team');
+      expect((await state()).teams).toEqual([]);
+      expect((await state()).drivers).toEqual(before.drivers);
+
+      // Only the seven count for `incomplete` and `no_raw`: a session with championship raw rows alone is `no_raw`.
+      await db.deleteFrom('championship_driver').where('session_key', '=', 11388).execute();
+      await setBody(11388, 'championship_drivers', [
+        { ...(raw('championship_drivers-normal') as object[])[0], position_start: 'P1' },
+      ]);
+      const stored = await hashes();
+      expect(await rederive(rederiving(), [11388])).toBe(false); // schema: nothing written
+      expect(lastOf('rederive', 11388)).toMatchObject({
+        level: 50,
+        error: 'schema',
+        endpoint: 'championship_drivers',
+        issues: [{ path: '[0].position_start', code: 'invalid_type' }],
+      });
+      expect(await hashes()).toEqual(stored);
+      expect(requests.length).toBe(sent);
+      openf1();
+      expect(await processSession(deps, 11388, true)).toEqual({ ok: true, value: 'final' }); // back to normal
+      expect(await state()).toEqual(before);
+    });
+
     it('refetch --failed takes the failed sessions, newest first, on one limiter: at most 25 requests in any 60 s', async () => {
       const failed = [11388, 11392, 11383, EMPTY];
       await db
@@ -1296,8 +1577,13 @@ describe('ingest (fixtures through msw, f1_ingest login)', { timeout: 120_000 },
       const sent = requests.length;
       expect(await refetch(deps, 'failed')).toBe(true);
       const asked = requests.slice(sent);
-      expect(asked).toHaveLength(30); // 4 × 7, and the race's and the sprint's grid: above 25 a minute
-      expect(keysOf(asked.filter((r) => !isGrid(r)))).toEqual([11392, 11388, 11383, EMPTY]);
+      expect(asked).toHaveLength(34); // 4 × 7, the race's and the sprint's grid and their two standings: above 25 a minute
+      expect(keysOf(asked.filter((r) => !isGrid(r) && !isStanding(r)))).toEqual([11392, 11388, 11383, EMPTY]);
+      expect(asked.filter(isStanding).toSorted()).toEqual(
+        ['championship_drivers', 'championship_teams'].flatMap((e) =>
+          [11383, 11388].map((k) => `${e}?session_key=${k}`),
+        ),
+      );
       expect(keysOf(asked.filter(isGrid))).toEqual([11384, 11379]);
       for (const key of failed)
         expect(await session(key)).toMatchObject({ ingest_state: 'final', fail_count: 0, last_error: null });
@@ -1308,7 +1594,7 @@ describe('ingest (fixtures through msw, f1_ingest login)', { timeout: 120_000 },
 
       expect(await refetch(deps, 'failed')).toBe(true); // none left
       expect(lastLine()).toMatchObject({ msg: 'refetch_done', sessions: 0, done: 0, failed: 0 });
-      expect(requests.length).toBe(sent + 30);
+      expect(requests.length).toBe(sent + 34);
     });
 
     it('refetch --meeting takes its ended, not cancelled sessions, and the race and sprint grids', async () => {
@@ -1324,7 +1610,7 @@ describe('ingest (fixtures through msw, f1_ingest login)', { timeout: 120_000 },
       const sent = requests.length;
       expect(await refetch(deps, { meeting: 1296 })).toBe(true);
       const asked = requests.slice(sent);
-      expect(keysOf(asked.filter((r) => !isGrid(r)))).toEqual([11388, 11384, 11383]);
+      expect(keysOf(asked.filter((r) => !isGrid(r) && !isStanding(r)))).toEqual([11388, 11384, 11383]);
       expect(asked.filter(isGrid)).toEqual(['starting_grid?session_key=11384', 'starting_grid?session_key=11379']);
       expect(lastLine()).toMatchObject({ msg: 'refetch_done', sessions: 3, done: 3, failed: 0 });
       await db.updateTable('session').set({ is_cancelled: false }).where('session_key', '=', 11378).execute();
@@ -1395,11 +1681,11 @@ describe('ingest (fixtures through msw, f1_ingest login)', { timeout: 120_000 },
       expect(await rawHashes(11388)).toEqual(before.filter((r) => r.endpoint !== 'pit'));
       expect((await rowCounts(11388)).pit).toBe(5); // the data rows stay until the next fetch
       expect(await processSession(deps, 11388, true)).toEqual({ ok: true, value: 'final' });
-      expect(await rowCounts(11388)).toMatchObject({ pit: 0, raw_response: 8 });
+      expect(await rowCounts(11388)).toMatchObject({ pit: 0, raw_response: 10 });
 
       openf1();
       expect(await processSession(deps, 11388, true)).toEqual({ ok: true, value: 'final' });
-      expect(await rowCounts(11388)).toMatchObject({ pit: 5, raw_response: 8 });
+      expect(await rowCounts(11388)).toMatchObject({ pit: 5, raw_response: 10 });
     });
 
     it('accept-empty refuses while OpenF1 has rows, for a stored [] (no request), in a live window, off OpenF1', async () => {
