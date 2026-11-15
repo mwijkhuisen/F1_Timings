@@ -116,13 +116,22 @@ describe('archiveProbe', () => {
     for (const leak of [FRESH, 'secret', 'livetiming', 'static/', 'Index.json']) expect(out).not.toContain(leak);
   });
 
-  it('fails when the control is not 200, after one request', async () => {
-    for (const status of [401, 403]) {
+  it('fails when the control is no 200 Index with sessions, after one request', async () => {
+    const answers = [
+      [new HttpResponse('secret body', { status: 401 }), '2018 401 (control)'],
+      [new HttpResponse('secret body', { status: 403 }), '2018 403 (control)'],
+      [new HttpResponse('secret body'), '2018 200 index_format (control)'],
+      [
+        HttpResponse.json({ Meetings: [{ Sessions: [{ Name: 'secret name' }] }] }),
+        '2018 200 meetings 1 sessions 1 paths 0 (control)',
+      ],
+    ] as const;
+    for (const [answer, line] of answers) {
       const asked: string[] = [];
       server.use(
         http.get(`${ORIGIN}/static/:year/Index.json`, ({ params }) => {
           asked.push(String(params.year));
-          return new HttpResponse('secret body', { status });
+          return answer.clone();
         }),
       );
       const lines: string[] = [];
@@ -137,8 +146,8 @@ describe('archiveProbe', () => {
       ).toBe(1);
       expect(asked).toEqual(['2018']);
       expect(lines.slice(1)).toEqual([
-        `2018 ${status} (control)`,
-        'archive-probe: control 2018 not 200, the token is not proven',
+        line,
+        'archive-probe: control 2018 is no 200 Index with sessions, the token is not proven',
       ]);
     }
   });
@@ -148,7 +157,7 @@ describe('archiveProbe', () => {
     server.use(
       http.get(`${ORIGIN}/static/:year/Index.json`, ({ params }) => {
         asked.push(String(params.year));
-        return new HttpResponse(index([]));
+        return new HttpResponse(index([[{ Path: 'x/y/' }]]));
       }),
     );
     expect(

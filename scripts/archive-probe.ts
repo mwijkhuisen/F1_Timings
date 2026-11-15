@@ -84,21 +84,19 @@ export async function archiveProbe(
     if (year !== CONTROL) await sleep(GAP_MS);
     const mark = year === CONTROL ? ' (control)' : '';
     const got = await download(`${ORIGIN}/static/${year}/Index.json`, token);
-    if (!got.ok) {
-      log(`${year} ${describe(got.error)}${mark}`);
-      if (year === CONTROL) {
-        // A year before 2018 answering 401 or 403 would prove nothing if the token itself is refused.
-        log(`archive-probe: control ${CONTROL} not 200, the token is not proven`);
-        return 1;
-      }
-      continue;
-    }
-    const counts = indexCounts(got.value.bytes.toString('utf8'));
+    const counts = got.ok ? indexCounts(got.value.bytes.toString('utf8')) : undefined;
     log(
-      counts === undefined
-        ? `${year} ${got.value.status} index_format${mark}`
-        : `${year} ${got.value.status} meetings ${counts.meetings} sessions ${counts.sessions} paths ${counts.paths}${mark}`,
+      !got.ok
+        ? `${year} ${describe(got.error)}${mark}`
+        : counts === undefined
+          ? `${year} ${got.value.status} index_format${mark}`
+          : `${year} ${got.value.status} meetings ${counts.meetings} sessions ${counts.sessions} paths ${counts.paths}${mark}`,
     );
+    // Only an Index with sessions proves the token: else a 401 or 403 for an older year would prove nothing.
+    if (year === CONTROL && !(counts !== undefined && counts.paths > 0)) {
+      log(`archive-probe: control ${CONTROL} is no 200 Index with sessions, the token is not proven`);
+      return 1;
+    }
   }
   return 0;
 }
