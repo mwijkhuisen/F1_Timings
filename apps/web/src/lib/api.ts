@@ -1,4 +1,5 @@
 import {
+  Forecast,
   Laps,
   Live,
   Pits,
@@ -239,4 +240,14 @@ export const useRecordings = (refetchMs: number | false = false, enabled = true)
     staleTime: STALE_MS,
     refetchInterval: refetchMs,
     enabled,
+  });
+
+/** A meeting's weekend forecast (#120): null until the server has one; the server refreshes it every 3 h. */
+export const useForecast = (meetingKey: number | null) =>
+  useQuery({
+    queryKey: ['forecast', meetingKey],
+    enabled: meetingKey !== null,
+    queryFn: ({ signal }) => getJson(`/api/v1/meetings/${meetingKey}/forecast`, Forecast, signal),
+    staleTime: STALE_MS,
+    refetchInterval: 15 * 60_000,
   });

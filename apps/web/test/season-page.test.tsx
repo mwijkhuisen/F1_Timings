@@ -1,5 +1,5 @@
 // @vitest-environment happy-dom
-import { type Live, Recordings } from '@f1/contracts';
+import { Forecast, type Live, Recordings } from '@f1/contracts';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { HttpResponse, http } from 'msw';
 import type { ReactNode } from 'react';
@@ -14,6 +14,8 @@ import { live, NOW, recordings, season, seasons } from './season-data.ts';
 
 // The season page (A§13, P4c): this weekend first with every state in words, Up next, the other meetings as cards,
 // and never a result. The static renders run in happy-dom too, which renderToStaticMarkup does not mind.
+
+const noForecast = http.get('*/api/v1/meetings/*/forecast', () => HttpResponse.json(null));
 
 const render = (now: number, l: Live | null = live) =>
   renderToStaticMarkup(<SeasonView year={2026} season={season} live={l} recordings={recordings} now={now} />);
@@ -146,6 +148,103 @@ describe('the season page', () => {
   });
 });
 
+// #120: the weekend meeting's model forecast. Rows are dated by the END of their hour: Qualifying (18:00Z) starts in the
+// row dated 19:00Z, the Race (17:00Z) in the one dated 18:00Z. The Sprint (live) and Practice 3 (started) also have
+// rows, and so has Las Vegas's Race (04:00Z, row 05:00Z), which sits on a card.
+const hourRow = (date: string, p: number | null, t: number | null) => ({
+  date,
+  precipitation_probability: p,
+  precipitation: 0.2,
+  temperature_2m: t,
+  wind_speed_10m: 3,
+});
+const forecastOf = (map_id: string, fetched_at = '2026-11-07T14:10:00.000Z') =>
+  Forecast.parse({
+    map_id,
+    fetched_at,
+    hours: [
+      hourRow('2026-11-07T13:00:00.000Z', 99, 30),
+      hourRow('2026-11-07T15:00:00.000Z', 98, 31),
+      hourRow('2026-11-07T19:00:00.000Z', 40, 18.4),
+      hourRow('2026-11-08T18:00:00.000Z', 70, 17.6),
+      hourRow('2026-11-22T05:00:00.000Z', 55, 12),
+    ],
+  }) as NonNullable<Forecast>;
+const forecast = forecastOf('br-1940');
+const withForecast = (f: Forecast, now = NOW, s = season) =>
+  renderToStaticMarkup(
+    <SeasonView year={2026} season={s} live={live} recordings={recordings} now={now} forecast={f} />,
+  );
+const textOf = (html: string) => html.replace(/<[^>]+>/g, '');
+
+describe('the weekend forecast on the season page', () => {
+  const html = withForecast(forecast);
+  const weekend = html.slice(html.indexOf('<section class="weekend"'), html.indexOf('<h2 class="eyebrow sect">'));
+
+  it('puts a word on the weekend rows that have not started, and on no other', () => {
+    const words = [...weekend.matchAll(/<span class="fc"><span class="vh">Forecast: <\/span>([^<]*)<\/span>/g)];
+    expect(words.map((m) => m[1])).toEqual(['rain 40 %, 18 °C', 'rain 70 %, 18 °C']);
+    // Qualifying (next) and the Race (scheduled), in that order, each after its state; started rows have none.
+    expect(weekend).toMatch(/<span class="state next">next<\/span><span class="fc">/);
+    expect(weekend).toMatch(/<span class="state scheduled">scheduled<\/span><span class="fc">/);
+    const rows = weekend.split('<li>').filter((li) => li.includes('class="fc"'));
+    expect(rows).toHaveLength(2);
+    // The cards of the rest of the season show none, though Las Vegas has a row.
+    expect(html.slice(html.indexOf('<div class="meetings">'))).not.toContain('class="fc"');
+  });
+
+  it('gives no word to a cancelled session, nor without a matching hour, nor on a cancelled weekend', () => {
+    const cancelQuali = season.map((m) => ({
+      ...m,
+      sessions: m.sessions.map((s) => (s.session_key === 9106 ? { ...s, is_cancelled: true } : s)),
+    }));
+    expect([...withForecast(forecast, NOW, cancelQuali).matchAll(/class="fc"/g)]).toHaveLength(1);
+    const noRows = Forecast.parse({ ...forecast, hours: forecast.hours.filter((h) => h.date < '2026-11-08') });
+    expect([...withForecast(noRows).matchAll(/class="fc"/g)]).toHaveLength(1);
+    const nothing = Forecast.parse({ ...forecast, hours: [] });
+    expect(withForecast(nothing)).not.toContain('fcsrc');
+    expect(render(NOW)).not.toContain('class="fc"');
+  });
+
+  it('drops a null part, and the word when both are null', () => {
+    const f = Forecast.parse({
+      ...forecast,
+      hours: [hourRow('2026-11-07T19:00:00.000Z', null, 18.4), hourRow('2026-11-08T18:00:00.000Z', null, null)],
+    });
+    const out = withForecast(f);
+    expect(out).toContain('<span class="vh">Forecast: </span>18 °C</span>');
+    expect([...out.matchAll(/class="fc"/g)]).toHaveLength(1);
+  });
+
+  it('says it is a model forecast, when it was updated, and credits Open-Meteo', () => {
+    const foot = weekend.slice(weekend.indexOf('<p class="foot fcsrc">'));
+    expect(textOf(foot)).toContain(
+      'Forecast (model), updated 15:10. Forecast: Weather data by Open-Meteo.com (CC BY 4.0). Modelled, not measured; hourly values rounded and summarised.',
+    );
+    expect(foot).toContain('<a href="https://open-meteo.com/" rel="noreferrer">Open-Meteo.com</a>');
+    expect(foot).toContain('<a href="https://creativecommons.org/licenses/by/4.0/" rel="noreferrer">CC BY 4.0</a>');
+    expect(foot).not.toContain('Met Office');
+  });
+
+  it("uses the weekday form when the forecast is from another Amsterdam day, so it never reads as today's", () => {
+    const old = withForecast(forecastOf('br-1940', '2026-11-06T09:00:00.000Z'));
+    expect(textOf(old)).toContain('Forecast (model), updated Fri 6 Nov 2026, 10:00. Forecast:');
+  });
+
+  it('adds the UK Met Office line for Silverstone only', () => {
+    const uk = withForecast(forecastOf('gb-1948'));
+    expect(textOf(uk)).toContain('Includes UK Met Office model data (CC BY-SA 4.0).');
+    expect(uk).toContain('<a href="https://creativecommons.org/licenses/by-sa/4.0/" rel="noreferrer">CC BY-SA 4.0</a>');
+    expect(html).not.toContain('Met Office');
+  });
+
+  it('keeps the page free of results', () => {
+    const out = textOf(html);
+    expect(out).not.toMatch(/\d+:\d\d\.\d{3}/);
+    expect(out).not.toMatch(/position|pole|winner|fastest/i);
+  });
+});
+
 describe('the season page renders no result', () => {
   beforeAll(() => {
     vi.useFakeTimers({ now: NOW, toFake: ['Date'] });
@@ -199,17 +298,38 @@ describe('the season page requests', () => {
     return paths;
   };
 
-  it('/2026 requests the season, /live and /recordings only', async () => {
+  it("/2026 requests the season, /live, /recordings and this weekend's forecast only", async () => {
     server.use(
       http.get('*/api/v1/seasons/2026', () => HttpResponse.json(season)),
       http.get('*/api/v1/live', () => HttpResponse.json(live)),
       http.get('*/api/v1/recordings', () => HttpResponse.json(recordings)),
+      noForecast,
     );
     const paths = requested();
     mount(<Season year={2026} />);
     await vi.waitFor(() => expect(host.querySelector('h1')?.textContent).toBe('2026'));
-    await vi.waitFor(() => expect(paths).toHaveLength(3));
-    expect([...paths].sort()).toEqual(['/api/v1/live', '/api/v1/recordings', '/api/v1/seasons/2026']);
+    await vi.waitFor(() => expect(paths).toHaveLength(4));
+    expect([...paths].sort()).toEqual([
+      '/api/v1/live',
+      '/api/v1/meetings/1320/forecast',
+      '/api/v1/recordings',
+      '/api/v1/seasons/2026',
+    ]);
+  });
+
+  it('shows the forecast word on the rows once the forecast answers', async () => {
+    vi.useFakeTimers({ now: NOW, toFake: ['Date'] });
+    onTestFinished(() => {
+      vi.useRealTimers();
+    });
+    server.use(
+      http.get('*/api/v1/seasons/2026', () => HttpResponse.json(season)),
+      http.get('*/api/v1/live', () => HttpResponse.json(live)),
+      http.get('*/api/v1/recordings', () => HttpResponse.json(recordings)),
+      http.get('*/api/v1/meetings/1320/forecast', () => HttpResponse.json(forecast)),
+    );
+    mount(<Season year={2026} />);
+    await vi.waitFor(() => expect(host.querySelector('.weekend .fc')?.textContent).toBe('Forecast: rain 40 %, 18 °C'));
   });
 
   const start = async (recording: Live['recording']) => {
@@ -319,6 +439,7 @@ describe('the season page moves', () => {
 
   it('moves Qualifying from next to live now, and Up next on to the Race, without a remount', async () => {
     server.use(
+      noForecast,
       http.get('*/api/v1/seasons/2026', () => HttpResponse.json(season)),
       http.get('*/api/v1/live', () => HttpResponse.json(liveOf(null))),
       http.get('*/api/v1/recordings', () => HttpResponse.json(ended)),
@@ -340,6 +461,7 @@ describe('the season page moves', () => {
 
   const answer = (liveBody: Parameters<typeof HttpResponse.json>[0]) =>
     server.use(
+      noForecast,
       http.get('*/api/v1/seasons/2026', () => HttpResponse.json(season)),
       http.get('*/api/v1/live', () => HttpResponse.json(liveBody)),
       http.get('*/api/v1/recordings', () => HttpResponse.json(ended)),
@@ -356,6 +478,7 @@ describe('the season page moves', () => {
 
   it('turns a recording that ends into a replay link after the 5 min poll, without a remount', async () => {
     server.use(
+      noForecast,
       http.get('*/api/v1/seasons/2026', () => HttpResponse.json(season)),
       http.get('*/api/v1/live', () =>
         HttpResponse.json(liveOf({ id: 45, started_at: '2026-11-07T17:00:00.000Z', ended_at: null, complete: false })),
