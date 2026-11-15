@@ -6,6 +6,7 @@ import {
   PlaybackEnd,
   PlaybackLaps,
   PlaybackPing,
+  PlaybackPos,
   PlaybackSnapshot,
   type Stints,
   view,
@@ -23,19 +24,38 @@ import {
 
 export type Stint = Stints[number];
 /** `still`: a still frame (a paused seek, or a load that resumes at `?t`, A§13), which the server only logs (#101). */
-export type StreamParams = { recording: number; at: number | 'live'; delay: number; still?: boolean };
-/** Mutated in place by every event; a snapshot starts a new one. `weather` is a new array per row. */
-export type Feed = { t: number; state: Obj; laps: Map<string, Lap>; stints: Map<string, Stint>; weather: Weather };
+export type StreamParams = { recording: number; at: number | 'live'; delay: number; still?: boolean; pos?: boolean };
+/**
+ * The car positions (P7a, A§11.3), one sample per car: x and y in integer metres of the circuit outline's frame, `t` on
+ * the receive axis and `run` the first t of the car's gap-free run (a gap over RUN_GAP_MS between its samples starts a
+ * new one). `at` is the newest t. A new object per `pos` event or snapshot.
+ */
+export type Positions = { at: number; cars: Record<string, { x: number; y: number; t: number; run: number }> };
+/** A car's samples further apart than this are not one run (T3, A§11.3): the dot jumps instead of gliding. */
+export const RUN_GAP_MS = 1500;
+/**
+ * Mutated in place by every event; a snapshot starts a new one. `weather` is a new array per row. `pos`: undefined when
+ * the stream did not ask for positions, null while the session has no fitted frame. A `pos` event replaces it and never
+ * touches `t`: its t sits behind the newest receive time.
+ */
+export type Feed = {
+  t: number;
+  state: Obj;
+  laps: Map<string, Lap>;
+  stints: Map<string, Stint>;
+  weather: Weather;
+  pos?: Positions | null;
+};
 export type Handlers = {
-  onData(feed: Feed, kind: 'snapshot' | 'delta' | 'laps'): void;
+  onData(feed: Feed, kind: 'snapshot' | 'delta' | 'laps' | 'pos'): void;
   onError(): void;
   /** An event failed its contract: the build and the server differ, and a reconnect cannot fix that (A§13). */
   onStale(): void;
   onEnd(t: number): void;
 };
 
-export const streamUrl = ({ recording, at, delay, still }: StreamParams): string =>
-  `/api/v1/playback/${recording}/stream?${at === 'live' ? `at=live&delay=${delay}` : `at=${at}${still ? '&still=1' : ''}`}`;
+export const streamUrl = ({ recording, at, delay, still, pos }: StreamParams): string =>
+  `/api/v1/playback/${recording}/stream?${at === 'live' ? `at=live&delay=${delay}` : `at=${at}${still ? '&still=1' : ''}`}${pos ? '&pos=1' : ''}`;
 
 export type Probe = 'expired' | 'offline' | 'missing' | 'up' | 'error';
 
@@ -154,6 +174,7 @@ export function openStream(params: StreamParams, h: Handlers, ES: typeof EventSo
   on('snapshot', PlaybackSnapshot, (d) => {
     // merge copies into prototype-free objects and drops unsafe keys, as on the server.
     feed = { t: d.t, state: Object.create(null), laps: new Map(), stints: new Map(), weather: [...d.weather] };
+    if (d.pos !== undefined) feed.pos = d.pos && withPos(null, d.pos);
     merge(feed.state, d.state);
     putRows(feed, d);
     h.onData(feed, 'snapshot');
@@ -173,6 +194,11 @@ export function openStream(params: StreamParams, h: Handlers, ES: typeof EventSo
     feed.t = d.t;
     putRows(feed, d);
     h.onData(feed, 'laps');
+  });
+  on('pos', PlaybackPos, (d) => {
+    if (!feed) return;
+    feed.pos = withPos(feed.pos ?? null, d); // not feed.t: the position's t is behind the newest receive time
+    h.onData(feed, 'pos');
   });
   on('ping', PlaybackPing, () => {}, false); // liveness only
   on(
@@ -200,6 +226,16 @@ export function openStream(params: StreamParams, h: Handlers, ES: typeof EventSo
   };
 }
 
+/** `prev` with the event's cars put in, as a new object; a car's run goes on while its samples are within RUN_GAP_MS. */
+function withPos(prev: Positions | null, d: PlaybackPos): Positions {
+  const cars = { ...prev?.cars };
+  for (const [n, [x, y]] of Object.entries(d.cars)) {
+    const was = cars[n];
+    cars[n] = { x, y, t: d.t, run: was && d.t - was.t <= RUN_GAP_MS ? was.run : d.t };
+  }
+  return { at: d.t, cars };
+}
+
 /** A feed Utc in epoch ms, read as UTC with or without its Z; NaN when absent or unparsable. */
 export const utc = (v: string | undefined) =>
   v === undefined ? Number.NaN : Date.parse(v.endsWith('Z') ? v : `${v}Z`);
@@ -215,11 +251,13 @@ export type Snap = {
   laps: Lap[];
   stints: Stint[];
   weather: { rows: Weather; laps: Lap[] };
+  /** The feed's positions: a new reference only on a snapshot or a `pos` event. */
+  pos: Positions | null | undefined;
 };
 
 /** Holds the latest feed and notifies at most every `everyMs`, so a burst of deltas is one render. */
 export function createStore(everyMs = 250) {
-  let snap: Snap = { rev: 0, feed: undefined, laps: [], stints: [], weather: { rows: [], laps: [] } };
+  let snap: Snap = { rev: 0, feed: undefined, laps: [], stints: [], weather: { rows: [], laps: [] }, pos: undefined };
   let pending: Feed | undefined;
   let lapsDirty = false;
   let timer: ReturnType<typeof setTimeout> | undefined;
@@ -232,7 +270,7 @@ export function createStore(everyMs = 250) {
     // event (up to one a second in a race): its lap rows are those as of the last row change.
     const rows = pending?.weather ?? snap.weather.rows;
     const weather = rows === snap.weather.rows ? snap.weather : { rows, laps };
-    snap = { rev: snap.rev + 1, feed: pending, laps, stints, weather };
+    snap = { rev: snap.rev + 1, feed: pending, laps, stints, weather, pos: pending?.pos };
     lapsDirty = false;
     for (const f of subs) f();
   };
@@ -244,9 +282,9 @@ export function createStore(everyMs = 250) {
         subs.delete(f);
       };
     },
-    update(feed: Feed, kind: 'snapshot' | 'delta' | 'laps') {
+    update(feed: Feed, kind: 'snapshot' | 'delta' | 'laps' | 'pos') {
       pending = feed;
-      lapsDirty ||= kind !== 'delta';
+      lapsDirty ||= kind === 'snapshot' || kind === 'laps';
       if (timer === undefined) timer = setTimeout(flush, everyMs);
     },
   };

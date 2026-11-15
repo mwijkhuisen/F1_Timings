@@ -11,7 +11,7 @@
  * boxed on --purple-wash, green bold, in- and out-laps --dim, a --line rule at a new run, an --amber (SC,
  * VSC) or --live (red) header band, the --heat steps behind a Δ, and a frozen Driver (72 px) and Best
  * column; the tiles are a grid of --panel cells; qualifying's knock-out lines are 2 px --fg.
- * No inline styles anywhere: React sets only the custom properties --team, --team-l, --x and --w,
+ * No inline styles anywhere: React sets only the custom properties --team, --team-l, --x, --y and --w,
  * through CSSOM.
  */
 :root {
@@ -75,6 +75,7 @@
 
 /* Every team colour goes through .drv and --tc: --team in the dark theme, --team-l in the light one. */
 .drv,
+.car,
 .duel .fill {
   --tc: var(--team, var(--muted));
 }
@@ -119,6 +120,7 @@
 /* The light theme's team colour: a copy darkened to 3:1 on --bg, hue kept (lib/session.ts clampForLight). */
 /* :where keeps the specificity of the dark rule above, so source order decides. */
 :where([data-theme="light"]) .drv,
+:where([data-theme="light"]) .car,
 :where([data-theme="light"]) .duel .fill {
   --tc: var(--team-l, var(--muted));
 }
@@ -1599,6 +1601,7 @@ header .links {
   .cmp,
   .seg,
   .rainfield,
+  .trackmap,
   .rainlegend svg {
     forced-color-adjust: none;
   }
@@ -2612,6 +2615,8 @@ dl.duel > div {
 .rainfield .map-rings circle,
 .rainfield .map-halo,
 .rainfield .map-outline,
+.trackmap .map-halo,
+.trackmap .map-outline,
 .rainfield .map-scale path {
   fill: none;
   vector-effect: non-scaling-stroke;
@@ -2634,12 +2639,14 @@ dl.duel > div {
   stroke-width: 1px;
 }
 
-.rainfield .map-halo {
+.rainfield .map-halo,
+.trackmap .map-halo {
   stroke: var(--bg);
   stroke-width: 6px;
 }
 
-.rainfield .map-outline {
+.rainfield .map-outline,
+.trackmap .map-outline {
   stroke: var(--fg);
   stroke-width: 3px;
 }
@@ -2815,4 +2822,53 @@ section.rainmap .raintime input[type="range"] {
 
 .standings .panel-title h3 {
   margin: 0;
+}
+
+/* The Map tab (P7a): the outline reuses .map-halo and .map-outline (widened above); a car is a dot in --tc and its acronym.
+   --x and --y are km, so `* 1px` is user units. A transition runs only between two samples of one run (.move); a car with
+   no recent position is hollow and never moves. */
+.trackmap {
+  display: block;
+  width: 100%;
+  height: auto;
+  max-height: 80vh;
+  background: var(--bg);
+  border: 1px solid var(--line);
+  border-radius: 4px;
+}
+
+.car {
+  transform: translate(calc(var(--x) * 1px), calc(var(--y) * 1px));
+}
+
+.car.move {
+  transition: transform 1s linear;
+}
+
+.trackmap .car circle {
+  fill: var(--tc);
+  stroke: var(--bg);
+  stroke-width: 1.5px;
+  vector-effect: non-scaling-stroke;
+}
+
+.trackmap .car.stale circle {
+  fill: var(--bg);
+  stroke: var(--tc);
+  stroke-width: 2px;
+}
+
+.trackmap .car text {
+  fill: var(--fg);
+  paint-order: stroke;
+  stroke: var(--bg);
+  stroke-width: 0.25em;
+  stroke-linejoin: round;
+  pointer-events: none;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .car.move {
+    transition: none;
+  }
 }
