@@ -14,6 +14,7 @@ import {
 import { markStale } from '../lib/api.ts';
 import { closingAt } from '../lib/crossings.ts';
 import {
+  bestsSoFar,
   fastestSoFar,
   fmtLeft,
   LIGHT,
@@ -24,6 +25,7 @@ import {
   stripOf,
   withinASecond,
 } from '../lib/pitwall.ts';
+import { feedReached, qualiPhases } from '../lib/quali.ts';
 import {
   feedRaceControl,
   lapPeriods,
@@ -50,16 +52,17 @@ import {
   streamUrl,
 } from '../lib/stream.ts';
 import { fmtClock, parseT } from '../lib/time.ts';
-import { KIND_LABEL, KIND_NAME, type Kind } from '../lib/track.ts';
+import { KIND_LABEL, KIND_NAME, type Kind, type Track } from '../lib/track.ts';
 import { ErrorBoundary, ErrorView, OFFLINE } from '../ui/ErrorView.tsx';
 import { Comparison, PitCycles } from './Compare.tsx';
 import { DriverPicker, picksOf } from './DriverPicker.tsx';
+import { QualiSwitch } from './LapsTab.tsx';
 import { LapTable } from './LapTable.tsx';
 import { Order } from './Order.tsx';
 import { Panel, Strip, useTick } from './PitWall.tsx';
 import { RainMapCard } from './RainMap.tsx';
 import { StintBars } from './Stints.tsx';
-import { SessionTiles } from './Tiles.tsx';
+import { QualiTiles, SessionTiles } from './Tiles.tsx';
 import { driverOf, gridOf, Tower, towerRows } from './Tower.tsx';
 import { WeatherPanels } from './Weather.tsx';
 
@@ -70,11 +73,11 @@ import { WeatherPanels } from './Weather.tsx';
 // paused T and closes on its snapshot. Only the clock line, the seek bar, the Back to chips and the strip's LEFT cell
 // (and, on the Weather tab, the rain map) tick each second, from values derived per flush (no state parsing per tick);
 // the tower, the pit wall and everything else derived from the state render on a store flush. The tabs are Tower ·
-// Laps · Order (races) · Compare · Stints · Weather, each in its own error boundary, the replay's in the URL (`?tab=`,
-// #100); the Weather tab shows the feed's weather rows up to T (P5b), redrawn only when a row arrives, and the
-// rain map's frames up to T (P5c). Laps (with the session tiles), Compare and Stints (#112) read the stream's rows up
-// to T, and their SC, VSC and red bands come from the feed's status series (`lapPeriods`): the player never asks
-// `/race-control` or `/stints`, so nothing after T reaches the page.
+// Laps (in qualifying By phase | Every lap, #113) · Order (races) · Compare · Stints · Weather, each in its own error
+// boundary, the replay's in the URL (`?tab=`, #100); the Weather tab shows the feed's weather rows up to T (P5b),
+// redrawn only when a row arrives, and the rain map's frames up to T (P5c). Laps (with the session tiles), Compare and
+// Stints (#112) read the stream's rows up to T, and their SC, VSC and red bands come from the feed's status series
+// (`lapPeriods`): the player never asks `/race-control` or `/stints`, so nothing after T reaches the page.
 
 /** A SessionDetail whose drivers and results come from the stream: OpenF1 has no drivers during a live session. */
 function streamDetail(detail: SessionDetail, state: Obj): SessionDetail {
@@ -113,10 +116,42 @@ function streamDetail(detail: SessionDetail, state: Obj): SessionDetail {
 const Laps = memo(LapTable);
 
 /**
+ * The Laps tab as the session page lays it out, on the stream's rows up to T: in qualifying the phase tiles and By phase
+ * | Every lap (#113), the session tiles, and the lap table with its bands (#112).
+ */
+function PlayerLaps({
+  detail,
+  laps,
+  reached,
+  track,
+}: {
+  detail: SessionDetail;
+  laps: Lap[];
+  reached: Map<number, number>;
+  track: Track;
+}) {
+  const quali = detail.session.type === 'Qualifying' ? qualiPhases(laps, detail.results, reached) : null;
+  const table = <Laps detail={detail} laps={laps} track={track} />;
+  return (
+    <>
+      {quali && <QualiTiles detail={detail} quali={quali} />}
+      <SessionTiles detail={detail} laps={laps} />
+      {quali ? (
+        <QualiSwitch detail={detail} quali={quali}>
+          {table}
+        </QualiSwitch>
+      ) : (
+        table
+      )}
+    </>
+  );
+}
+
+/**
  * The Laps, Compare and Stints tabs (#112), from the stream's rows up to T, shown inside the tab's error boundary. A
- * `memo` whose props change only on a snapshot or a `laps` event (or a pick), so a delta renders nothing here. What
- * they read is rebuilt with the rows: the drivers and results from the stream, and the bands up to T as the leader's
- * laps, in races only. A SessionData change brings no `laps` event by itself, so a band shows with the next row change
+ * `memo` whose props change only on a snapshot, a `laps` event, a knock-out (qualifying) or a pick, so other deltas
+ * render nothing here. What they read is rebuilt with the rows: the drivers and results from the stream, and the bands
+ * up to T as the leader's laps, in races only. A SessionData change brings no `laps` event by itself, so a band shows with the next row change
  * (A§13). The state holds only applied events, so nothing is after T.
  */
 const SessionTabs = memo(function SessionTabs({
@@ -126,6 +161,7 @@ const SessionTabs = memo(function SessionTabs({
   laps,
   stints,
   lo,
+  reached,
   chosen,
   onPick,
 }: {
@@ -135,6 +171,8 @@ const SessionTabs = memo(function SessionTabs({
   laps: Lap[];
   stints: Stint[];
   lo: number;
+  /** The feed's knock-outs as a JSON key (`feedReached`), so an equal set keeps the memo. */
+  reached: string;
   /** Compare's picks: page state held by the player, so they survive a tab switch, and never in the URL. */
   chosen: number[] | null;
   onPick: (numbers: number[]) => void;
@@ -152,10 +190,12 @@ const SessionTabs = memo(function SessionTabs({
   );
   if (tab === 'laps')
     return (
-      <>
-        <SessionTiles detail={rows.detail} laps={laps} />
-        <Laps detail={rows.detail} laps={laps} track={rows.track} />
-      </>
+      <PlayerLaps
+        detail={rows.detail}
+        laps={laps}
+        reached={new Map(reached ? (JSON.parse(reached) as [number, number][]) : [])}
+        track={rows.track}
+      />
     );
   // Stints: the stream's stint rows, the SC and VSC bands (red flags are not drawn there, as on the session page).
   if (tab === 'stints')
@@ -880,6 +920,17 @@ export function Player({
   const stateNow = () => (playing ? now() : stood.current);
   const feed = snap.feed;
   const state = feed?.state;
+  // The feed's knock-outs, per flush: a part switch moves By phase while no lap row changes. The key keeps the lap table
+  // tabs rebuilt only on row or knock-out changes. They count once the feed shows this recording's session (as `wall` waits).
+  const reachedKey = useMemo(
+    () =>
+      detail?.session.type === 'Qualifying' &&
+      snap.feed &&
+      (sessionKey === undefined || view(snap.feed.state, 'SessionInfo')?.Key === sessionKey)
+        ? JSON.stringify([...feedReached(snap.feed.state)])
+        : '',
+    [snap, detail, sessionKey],
+  );
   // The series is parsed once per flush; the ticking bar only filters it at T.
   const series = useMemo(() => (snap.feed ? statusSeries(snap.feed.state) : []), [snap]);
   const year = detail?.meeting.year ?? null;
@@ -913,6 +964,7 @@ export function Player({
       rc: raceControl(s),
       pairs: withinASecond(s),
       fastest: fastestSoFar(s),
+      bests: bestsSoFar(s),
     };
   }, [snap, sessionKey]);
   // The tab shown: Order falls back to the Tower when the session is not (or no longer) a race.
@@ -1057,6 +1109,7 @@ export function Player({
             laps={snap.laps}
             stints={snap.stints}
             lo={lo}
+            reached={reachedKey}
             chosen={chosen}
             onPick={setChosen}
           />
@@ -1075,7 +1128,7 @@ export function Player({
         ) : wall ? (
           <div className="pitwall">
             <div>{tower}</div>
-            <Panel rc={wall.rc} pairs={wall.pairs} fastest={wall.fastest} race={wall.race} />
+            <Panel rc={wall.rc} pairs={wall.pairs} fastest={wall.fastest} bests={wall.bests} race={wall.race} />
           </div>
         ) : (
           tower

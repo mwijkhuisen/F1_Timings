@@ -411,6 +411,12 @@ thead th,
   text-align: right;
 }
 
+/* The pit stops table (#111): left-aligned text columns. */
+.pits td,
+.pits th {
+  text-align: left;
+}
+
 /* The driver: acronym plus a 4 px team-colour bar (D9), in --tc (set at the top). */
 .drv {
   border-left: 4px solid var(--tc);
@@ -1393,12 +1399,19 @@ header .links {
   vertical-align: middle;
 }
 
-.quali tr.cut > * {
+:is(.quali, .tower) tr.cut > * {
   border-bottom: 2px solid var(--fg);
 }
 
-.quali tr.cutlabel td {
+:is(.quali, .tower) tr.cutlabel td {
   text-align: left;
+}
+
+/* The tower's label cell is no Pos cell: no 48 px width, no sticky left. */
+.tower tr.cutlabel td:first-child {
+  width: auto;
+  min-width: 0;
+  position: static;
 }
 
 .cutlabel span {
@@ -2155,8 +2168,7 @@ header .theme[aria-pressed="true"] {
   list-style: none;
 }
 
-.card .rows li,
-.card p.rows {
+.card .rows li {
   display: flex;
   align-items: baseline;
   justify-content: space-between;
@@ -2173,7 +2185,8 @@ header .theme[aria-pressed="true"] {
   border: 0;
 }
 
-.side .chips button {
+.side .chips button,
+.rclog .chips button {
   padding: 0 10px;
   border-radius: 999px;
   font-size: 13px;
@@ -2204,7 +2217,8 @@ header .theme[aria-pressed="true"] {
   list-style: none;
 }
 
-.side .feed li {
+.side .feed li,
+.rclog .feed li {
   display: grid;
   grid-template-columns: 3em minmax(0, 1fr);
   gap: 8px;
@@ -2213,6 +2227,16 @@ header .theme[aria-pressed="true"] {
   font-size: 13px;
   white-space: normal;
   overflow-wrap: anywhere;
+}
+
+/* The log (#111): time, lap, text. */
+.rclog .feed li {
+  grid-template-columns: 4.5em 3em minmax(0, 1fr);
+}
+
+.rclog .scroll {
+  max-height: 32rem;
+  scroll-padding: 0;
 }
 
 .feed li:first-child {

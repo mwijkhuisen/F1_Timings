@@ -188,20 +188,20 @@ export function Compare({
   laps: Laps;
   onReference: (driver: number) => void;
 }) {
-  const rc = useRaceControl(session, detail.session.type === 'Race' && laps.length > 0);
-  const periods = useMemo(() => (rc.data ? trackPeriods(rc.data).periods : []), [rc.data]);
+  const race = detail.session.type === 'Race';
+  const rc = useRaceControl(session, race && laps.length > 0);
+  // A cached answer from the Laps tab comes back even when disabled: only a race uses it.
+  const periods = useMemo(() => (race && rc.data ? trackPeriods(rc.data).periods : []), [race, rc.data]);
   return (
     <Comparison
       detail={detail}
       drivers={drivers}
       laps={laps}
       periods={periods}
-      rcFailed={rc.error != null}
+      rcFailed={race && rc.error != null}
       onReference={onReference}
     >
-      {detail.session.type === 'Race' && (
-        <StoredPitCycles session={session} drivers={drivers} laps={laps} periods={periods} rc={rc} />
-      )}
+      {race && <StoredPitCycles session={session} drivers={drivers} laps={laps} periods={periods} rc={rc} />}
     </Comparison>
   );
 }

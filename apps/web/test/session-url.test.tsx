@@ -156,6 +156,7 @@ describe('Session without laps: the reason, no dead end (#99)', () => {
     history.replaceState(null, '', `${PATH}/${view}`);
     client = new QueryClient({ defaultOptions: { queries: { retry: false, staleTime: Infinity } } });
     client.setQueryData(['race-control', KEY], []);
+    client.setQueryData(['pits', KEY], []);
     const d = sessionDetail('Race', 'Race', [[1, 'VER']]);
     client.setQueryData(['session', KEY], { ...d, session: { ...d.session, ...session } });
     client.setQueryData(['laps', KEY], laps);
@@ -228,9 +229,9 @@ describe('Session without laps: the reason, no dead end (#99)', () => {
   });
 });
 
-describe('Session: a new fetch refetches its laps, stints and weather (#99)', () => {
+describe('Session: a new fetch refetches its laps, stints, pits, race control and weather (#99, #111)', () => {
   const d = sessionDetail('Race', 'Race', [[1, 'VER']]);
-  const asked = { laps: 0, stints: 0, weather: 0 };
+  const asked = { laps: 0, stints: 0, pits: 0, 'race-control': 0, weather: 0 };
   const count = (what: keyof typeof asked, body: unknown[]) =>
     http.get(`*/api/v1/sessions/${KEY}/${what}`, () => {
       asked[what]++;
@@ -238,8 +239,14 @@ describe('Session: a new fetch refetches its laps, stints and weather (#99)', ()
     });
 
   it('on a changed fetch_count, once each; not on an answer with the same fetch_count', async () => {
-    server.use(count('laps', [lap(1, 1)]), count('stints', []), count('weather', []));
-    asked.laps = asked.stints = asked.weather = 0;
+    server.use(
+      count('laps', [lap(1, 1)]),
+      count('stints', []),
+      count('pits', []),
+      count('race-control', []),
+      count('weather', []),
+    );
+    for (const k of Object.keys(asked) as (keyof typeof asked)[]) asked[k] = 0;
     history.replaceState(null, '', `${PATH}/stints`);
     const client = new QueryClient({ defaultOptions: { queries: { retry: false, staleTime: Infinity } } });
     const due = { ...d, session: { ...d.session, ingest_state: 'due', fetch_count: 1 } } as const;
@@ -248,6 +255,7 @@ describe('Session: a new fetch refetches its laps, stints and weather (#99)', ()
     client.setQueryData(['stints', KEY], []);
     client.setQueryData(['weather', KEY], []);
     client.setQueryData(['race-control', KEY], []);
+    client.setQueryData(['pits', KEY], []);
     client.setQueryData(['season', 2026], null);
     client.setQueryData(['recordings'], null);
     client.setQueryData(['live'], null);
@@ -263,17 +271,17 @@ describe('Session: a new fetch refetches its laps, stints and weather (#99)', ()
     // A poll whose answer changed, but not its fetch_count: nothing else is asked.
     act(() => client.setQueryData(['session', KEY], { ...due, session: { ...due.session, ingest_state: 'fetched' } }));
     await new Promise((r) => setTimeout(r, 50));
-    expect(asked).toEqual({ laps: 0, stints: 0, weather: 0 });
+    expect(asked).toEqual({ laps: 0, stints: 0, pits: 0, 'race-control': 0, weather: 0 });
 
-    // A new fetch: the laps, the stints (this tab) and the weather (the head) are asked once each.
+    // A new fetch: the laps, the stints, pits and race control (this tab) and the weather (the head) are asked once each.
     act(() =>
       client.setQueryData(['session', KEY], {
         ...due,
         session: { ...due.session, ingest_state: 'final', fetch_count: 2 },
       }),
     );
-    await vi.waitFor(() => expect(asked).toEqual({ laps: 1, stints: 1, weather: 1 }));
+    await vi.waitFor(() => expect(asked).toEqual({ laps: 1, stints: 1, pits: 1, 'race-control': 1, weather: 1 }));
     await new Promise((r) => setTimeout(r, 50));
-    expect(asked).toEqual({ laps: 1, stints: 1, weather: 1 });
+    expect(asked).toEqual({ laps: 1, stints: 1, pits: 1, 'race-control': 1, weather: 1 });
   });
 });
