@@ -10,6 +10,7 @@ import {
   Season,
   Seasons,
   SessionDetail,
+  Standings,
   Status,
   Stints,
   sectorDeltas,
@@ -134,6 +135,37 @@ const cases = [
       },
     ],
     null,
+  ],
+  [
+    'Standings',
+    Standings,
+    {
+      drivers: [
+        {
+          position: 1,
+          change: null,
+          full_name: 'Ana TESTER',
+          acronym: null,
+          team_names: ['Team A', 'Team B'],
+          team_colour: null,
+          points: 26.5,
+          session_points: 8,
+        },
+      ],
+      teams: [{ position: 1, change: 2, team_name: 'Team A', team_colour: '3671C6', points: 26.5, session_points: 8 }],
+      rounds: [
+        {
+          session_key: 9000,
+          meeting_name: null,
+          session_name: 'Sprint',
+          date_start: iso,
+          drivers: [{ full_name: 'Ana TESTER', points: 26.5 }],
+          teams: [{ team_name: 'Team A', points: 26.5 }],
+        },
+      ],
+      provisional: true,
+    },
+    'provisional',
   ],
   [
     'Status',
