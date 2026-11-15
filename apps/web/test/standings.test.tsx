@@ -2,7 +2,7 @@
 import { readdirSync, readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { Standings } from '@f1/contracts';
+import { type SessionDetail, Standings } from '@f1/contracts';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { use } from 'echarts/core';
 import { SVGRenderer } from 'echarts/renderers';
@@ -76,7 +76,7 @@ const standings = Standings.parse({
       team_names: ['Nobody'],
       team_colour: null,
       points: 0,
-      session_points: 0,
+      session_points: -2, // docked by a later correction
     },
   ],
   teams: [
@@ -143,7 +143,7 @@ describe('the standings section', () => {
       ['1', '▲ 1up 1', 'VERRed Bull Racing / Racing Bulls', '33', '+25'],
       ['2', '▼ 2down 2', 'NORMcLaren', '18.5', '+0'],
       ['3', '–no change', 'PERRed Bull Racing', '8', '+8'],
-      ['4', '', 'No ColourNobody', '0', '+0'],
+      ['4', '', 'No ColourNobody', '0', '−2'],
     ]);
     // The session's team comes first, in the cell and the team bar is the team colour.
     expect(html).toContain('class="drv" style="--team:#3671C6;--team-l:#3671C6" title="Max Verstappen"');
@@ -182,7 +182,7 @@ describe('the standings section', () => {
   });
 });
 
-// The tab asks for the standings in a race-type session only, and shows what it gets.
+// The tab asks for the standings in an OpenF1 race-type session only, and shows what it gets.
 describe('the Result tab and the standings request', () => {
   let root: Root;
   let host: HTMLElement;
@@ -196,7 +196,12 @@ describe('the Result tab and the standings request', () => {
     host.remove();
   });
 
-  const mount = (type: string, name: string, answer: () => Response) => {
+  const mount = (
+    type: string,
+    name: string,
+    answer: () => Response,
+    source: SessionDetail['session']['source'] = 'openf1',
+  ) => {
     const urls: string[] = [];
     server.use(
       http.get('*/api/v1/sessions/*/standings', ({ request }) => {
@@ -206,7 +211,8 @@ describe('the Result tab and the standings request', () => {
     );
     const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
     onTestFinished(() => client.clear());
-    const detail = sessionDetail(type, name, [[1, 'VER']], [result(1, 1)]);
+    const base = sessionDetail(type, name, [[1, 'VER']], [result(1, 1)]);
+    const detail = { ...base, session: { ...base.session, source } };
     root.render(
       <QueryClientProvider client={client}>
         <ResultTab detail={detail} laps={null} live={null} now={0} />
@@ -237,6 +243,17 @@ describe('the Result tab and the standings request', () => {
     expect(urls).toEqual([]);
     expect(host.querySelector('.standings')).toBeNull();
   });
+
+  it.each(['f1-archive', 'jolpica'] as const)(
+    'never asks for a race from %s (only OpenF1 has standings, #189)',
+    async (source) => {
+      const urls = mount('Race', 'Race', () => HttpResponse.json(standings), source);
+      await vi.waitFor(() => expect(host.querySelector('table[aria-label="Result"]')).not.toBeNull());
+      await new Promise((r) => setTimeout(r, 20));
+      expect(urls).toEqual([]);
+      expect(host.querySelector('.standings')).toBeNull();
+    },
+  );
 
   it('shows no section for empty arrays', async () => {
     const urls = mount('Race', 'Race', () =>
@@ -296,11 +313,25 @@ describe('standingsChartOption', () => {
 });
 
 // The chart laid out by ECharts itself at phone width (the lap chart's method, compare.test.tsx): a full grid of
-// ten teams in 24 rounds.
+// eleven teams in 24 rounds.
 describe('the standings chart at 390 px', () => {
   use([SVGRenderer]);
-  const COLOURS = ['3671C6', 'FF8000', 'E80020', '27F4D2', '229971', '0093CC', '6692FF', 'B6BABD', '52E252', 'FF87BC'];
-  const names = ['Red Bull', 'McLaren', 'Ferrari', 'Mercedes', 'Aston', 'Alpine', 'Williams', 'Haas', 'Sauber', 'RB'];
+  const COLOURS = [
+    ...['3671C6', 'FF8000', 'E80020', '27F4D2', '229971', '0093CC', '6692FF', 'B6BABD', '52E252', 'FF87BC', 'AAAAAD'],
+  ];
+  const names = [
+    'Red Bull',
+    'McLaren',
+    'Ferrari',
+    'Mercedes',
+    'Aston',
+    'Alpine',
+    'Williams',
+    'Haas',
+    'Sauber',
+    'RB',
+    'Cadillac',
+  ];
   const big = Standings.parse({
     drivers: names.flatMap((team, t) =>
       [0, 1].map((k) => ({
@@ -328,14 +359,38 @@ describe('the standings chart at 390 px', () => {
       session_name: 'Race',
       date_start: '2026-03-01T15:00:00.000Z',
       drivers: names.flatMap((_, t) =>
-        [0, 1].map((k) => ({ full_name: `Driver ${t}-${k}`, points: (n + 1) * (20 - 2 * t - k) })),
+        [0, 1].map((k) => ({ full_name: `Driver ${t}-${k}`, points: (n + 1) * (22 - 2 * t - k) })),
       ),
-      teams: names.map((team, t) => ({ team_name: `${team} Racing Team`, points: (n + 1) * (40 - 4 * t) })),
+      teams: names.map((team, t) => ({ team_name: `${team} Racing Team`, points: (n + 1) * (44 - 4 * t) })),
     })),
     provisional: false,
   });
 
   type Box = { x: number; y: number; width: number; height: number };
+  type Bounded = { getBoundingRect(): { clone(): Box & { applyTransform(m: number[]): void } }; transform?: number[] };
+  const placed = (e: Bounded) => {
+    const box = e.getBoundingRect().clone();
+    if (e.transform) box.applyTransform(e.transform);
+    return box;
+  };
+  /** The legend's box and the plot's, from ECharts' own components. */
+  const frame = (o: object) => {
+    const chart = init(null, null, { renderer: 'svg', ssr: true, width: 390, height: 320 });
+    try {
+      chart.setOption({ ...o, animation: false });
+      const c = chart as unknown as {
+        getModel(): { getComponent(type: string): { coordinateSystem?: { getRect(): Box } } };
+        getViewOfComponentModel(m: unknown): { group: Bounded };
+      };
+      const model = c.getModel();
+      return {
+        legend: placed(c.getViewOfComponentModel(model.getComponent('legend')).group),
+        plot: model.getComponent('grid').coordinateSystem?.getRect() as Box,
+      };
+    } finally {
+      chart.dispose();
+    }
+  };
   const draw = (o: object) => {
     const chart = init(null, null, { renderer: 'svg', ssr: true, width: 390, height: 320 });
     try {
@@ -344,14 +399,24 @@ describe('the standings chart at 390 px', () => {
         .getZr()
         .storage.getDisplayList()
         .map((el) => {
-          const e = el as unknown as {
+          const e = el as unknown as Bounded & {
             type: string;
             style: { text?: string; stroke?: string; lineDash?: unknown };
-            transform?: number[];
-            getBoundingRect(): { clone(): Box & { applyTransform(m: number[]): void } };
+            __clipPaths?: Bounded[];
           };
-          const box = e.getBoundingRect().clone();
-          if (e.transform) box.applyTransform(e.transform);
+          // What shows: the box cut to its clip paths (the scrolling legend clips the items past its page).
+          let box: Box = placed(e);
+          for (const clip of e.__clipPaths ?? []) {
+            const c = placed(clip);
+            const x = Math.max(box.x, c.x);
+            const y = Math.max(box.y, c.y);
+            box = {
+              x,
+              y,
+              width: Math.min(box.x + box.width, c.x + c.width) - x,
+              height: Math.min(box.y + box.height, c.y + c.height) - y,
+            };
+          }
           return { el: e, box };
         });
     } finally {
@@ -362,16 +427,19 @@ describe('the standings chart at 390 px', () => {
   for (const who of ['drivers', 'teams'] as const) {
     it(`lays out the ${who} lines, legend and axes inside the box`, () => {
       const list = draw(standingsChartOption(big, who, tokens));
-      const n = who === 'drivers' ? 20 : 10;
+      const n = who === 'drivers' ? 22 : 11;
       const polylines = list.filter(({ el }) => el.type === 'ec-polyline');
       expect(polylines.length).toBeGreaterThanOrEqual(n);
       // Nothing is drawn past the 390 px width or the 320 px height (legend text wraps, end labels fit the margin).
       for (const { el, box } of list) {
-        if (!Number.isFinite(box.width) || !Number.isFinite(box.x)) continue;
+        if (!Number.isFinite(box.width) || !Number.isFinite(box.x) || box.width < 0 || box.height < 0) continue; // clipped away
         expect(box.x, el.style.text ?? el.type).toBeGreaterThanOrEqual(-1);
         expect(box.x + box.width, el.style.text ?? el.type).toBeLessThanOrEqual(391);
         expect(box.y + box.height, el.style.text ?? el.type).toBeLessThanOrEqual(321);
       }
+      // The legend ends above the plot: one scrolling row, never wrapped into the lines (P8 review).
+      const { legend, plot } = frame(standingsChartOption(big, who, tokens));
+      expect(legend.y + legend.height).toBeLessThanOrEqual(plot.y);
     });
   }
 

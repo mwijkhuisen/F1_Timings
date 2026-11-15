@@ -134,6 +134,8 @@ export function ResultTable({ detail, laps }: { detail: SessionDetail; laps: Lap
 
 const upDown = (change: number) => (change > 0 ? `▲ ${change}` : change < 0 ? `▼ ${-change}` : '–');
 const upDownWords = (change: number) => (change > 0 ? `up ${change}` : change < 0 ? `down ${-change}` : 'no change');
+/** Points won in the session, signed: `+25`, `+0`, `−2` (a minus sign; a later correction can dock points). */
+const signedPoints = (n: number) => `${n < 0 ? '−' : '+'}${fmtPoints(Math.abs(n))}`;
 
 /** Place change (positive = up): the cue, with its words for a screen reader; nothing without a previous place. */
 function ChangeCell({ change }: { change: number | null }) {
@@ -184,7 +186,7 @@ function StandingsTable({
                 {sub && <small className="margin">{sub}</small>}
               </th>
               <td>{fmtPoints(r.points)}</td>
-              <td>+{fmtPoints(r.session_points)}</td>
+              <td>{signedPoints(r.session_points)}</td>
             </tr>
           ))}
         </tbody>
@@ -243,7 +245,10 @@ export function StandingsSection({ standings, sprint }: { standings: Standings; 
   );
 }
 
-/** Asks for the standings of a race-type session, which the tab renders only for those; a failure is a short line. */
+/**
+ * Asks for the standings of an OpenF1 race-type session, which the tab renders only for those (an archive or Jolpica
+ * race answers empty until #189); a failure is a short line.
+ */
 function StandingsLoader({ detail }: { detail: SessionDetail }) {
   const q = useStandings(detail.session.session_key);
   if (q.data) return <StandingsSection standings={q.data} sprint={detail.session.name === 'Sprint'} />;
@@ -266,7 +271,7 @@ export function ResultTab({
   return (
     <>
       <ResultTable detail={detail} laps={laps} />
-      {detail.session.type === 'Race' && <StandingsLoader detail={detail} />}
+      {detail.session.type === 'Race' && detail.session.source === 'openf1' && <StandingsLoader detail={detail} />}
     </>
   );
 }

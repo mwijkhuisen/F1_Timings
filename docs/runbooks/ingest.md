@@ -61,6 +61,21 @@ time sudo docker compose -p f1 -f /etc/f1/compose.yaml --env-file /srv/f1/state/
 - Failures (exit 1): `unknown_session`, `not_openf1` (an archive session), `schema` (a stored body no longer parses: the line names the endpoint and zod's paths and codes, and nothing is written for that session), or a thrown error's code (a SQLSTATE, else `unknown`).
 - The last line is `rederive_done {sessions, rederived, skipped, failed, ms}`. Expect 0 `failed`; the skipped sessions are the future and cancelled ones.
 
+## The standings check (P8) [owner] [box]
+
+After the deploy of the standings migration (A§7), once:
+
+1. `rederive --all` as above.
+2. Wait for the re-queue to drain (A§8, about 45 min outside live windows): `/status` shows no extra `fetched` sessions.
+3. Run the facts script from a checkout of the release (read-only: it runs as `f1_api` in a READ ONLY transaction that is rolled back, and prints counts and session keys only):
+
+   ```bash
+   sudo docker compose -p f1 -f /etc/f1/compose.yaml --env-file /srv/f1/state/current.env exec -T db \
+     psql -U postgres -d f1 -X -v ON_ERROR_STOP=1 -f - < scripts/standings-facts.sql
+   ```
+
+4. `/status` "Standings that differ from OpenF1" lists 7779 (1 row) and 9213 (9 rows), and nothing else (A§6.1).
+
 ## Accept an emptied endpoint [owner]
 
 The empty guard (A§8) fails a session with `empty` when an endpoint answers `[]` where its stored response had rows. When OpenF1 has removed those rows for good (the `pit` case of 2026-11-09), `accept-empty` clears the guard for that one session and endpoint. It accepts the loss of those rows, so it is your call each time.

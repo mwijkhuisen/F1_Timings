@@ -60,7 +60,17 @@ export function standingsChartOption(standings: Standings, who: Who, tokens: Cha
     backgroundColor: 'transparent',
     textStyle: { color: tokens.fg },
     grid,
-    legend: { top: 0, data: lines.map((l) => l.name), itemWidth: 36, textStyle: { color: tokens.fg } },
+    // One scrolling row: 22 drivers or 11 team names wrap to five rows on a phone, into the plot (P8 review).
+    legend: {
+      type: 'scroll' as const,
+      top: 0,
+      data: lines.map((l) => l.name),
+      itemWidth: 36,
+      textStyle: { color: tokens.fg },
+      pageTextStyle: { color: tokens.muted },
+      pageIconColor: tokens.fg,
+      pageIconInactiveColor: tokens.muted,
+    },
     xAxis: lapAxis(standings.rounds.length, tokens),
     yAxis: {
       type: 'value' as const,

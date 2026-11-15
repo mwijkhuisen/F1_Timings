@@ -91,10 +91,10 @@ function FailedTable({ rows, view, label }: { rows: Failed; view: 'laps' | 'weat
   );
 }
 
-type Unmatched = StatusData['rc_unmatched'];
+type SessionCounts = StatusData['rc_unmatched'];
 
 /** Sessions with a row count (race control in an unknown form, standings that differ); the name links to its laps. */
-function SessionRows({ rows, label }: { rows: Unmatched; label: string }) {
+function SessionRows({ rows, label }: { rows: SessionCounts; label: string }) {
   if (rows.length === 0) return <p>None.</p>;
   return (
     <Scroll label={label}>
