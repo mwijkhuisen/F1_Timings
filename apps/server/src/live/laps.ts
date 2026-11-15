@@ -383,9 +383,9 @@ export function createLaps(
           if (!isObj(line)) continue;
           // Laps ignore TimingData until a TimingAppData line has stints (OpenF1).
           if (ev.topic === 'TimingAppData' && truthy(line.Stints)) open = true;
-          // The archive's first lap count opens it too (#198): 2018 sends its first Stints 138 to 189 s after the first
-          // count, which dropped every race driver's lap 2. Not the gate itself: PitOut lines come before any count.
-          if (source === 'f1-archive' && ev.topic === 'TimingData' && int16(line.NumberOfLaps) !== null) open = true;
+          // The archive's first count of 1 or more opens it too (#198): 2018 sends its first Stints 138 to 189 s after
+          // the first count, which dropped lap 2. Not the gate itself: PitOut lines, and counts of 0, come before it.
+          if (source === 'f1-archive' && ev.topic === 'TimingData' && (int16(line.NumberOfLaps) ?? 0) >= 1) open = true;
           const driver = index(key, 32_768);
           if (driver === null) continue;
           if (ev.topic === 'TimingAppData') tyres(driver, line.Stints, t);

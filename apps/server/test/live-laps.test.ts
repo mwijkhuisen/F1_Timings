@@ -519,11 +519,12 @@ describe('createLaps', () => {
     it("the archive's first lap count opens the gate (#198)", () => {
       const race = [
         ev(-600, 'SessionInfo', { Key: 9002, Type: 'Race' }),
-        ev(0, 'SessionData', { StatusSeries: [{ Utc: '2026-01-11T14:00:00', SessionStatus: 'Started' }] }),
         ev(-300, 'TimingAppData', { Lines: { 7: { GridPos: '1' }, 8: { GridPos: '2' } } }),
+        ev(0, 'SessionData', { StatusSeries: [{ Utc: '2026-01-11T14:00:00', SessionStatus: 'Started' }] }),
         timing(60, { 7: count(1), 8: count(1) }),
         stints,
-        timing(150, { 7: count(2), 8: count(2) }),
+        // The end of lap 2, 90 s after its count: its time belongs to lap 2; lap 1 keeps Started to lap 2's start.
+        timing(150, { 7: { ...count(2), LastLapTime: { Value: '1:30.000' } }, 8: count(2) }),
       ];
       // Lap 2 starts at its count; a race counts one lower.
       expect(numbers(race, 'f1-archive')).toEqual([
@@ -532,10 +533,16 @@ describe('createLaps', () => {
       ]);
       const lap2 = build(race, 9002, 'f1-archive').laps.filter((l) => l.lap_number === 2);
       expect(lap2.map((l) => l.date_start)).toEqual(Array(2).fill('2026-01-11T14:01:00.000Z'));
+      const times = build(race, 9002, 'f1-archive').laps.filter((l) => l.driver_number === 7);
+      expect(times.map((l) => [l.lap_number, l.lap_ms])).toEqual([
+        [1, 60_000], // Started to lap 2's start
+        [2, 90_000],
+        [3, null],
+      ]);
       // Live and playback keep OpenF1's gate: the counts before the first Stints are dropped, lap 2 never exists (lap 1
-      // is not shown, as it never changed).
+      // is shown only for driver 7, whose lap time lands on it).
       expect(numbers(race, 'f1-live')).toEqual([
-        [7, [3]],
+        [7, [1, 3]],
         [8, [3]],
       ]);
 
@@ -550,6 +557,21 @@ describe('createLaps', () => {
       ];
       expect(numbers(quali, 'f1-archive')).toEqual([[7, [1, 2, 3]]]);
       expect(numbers(quali, 'f1-live')).toEqual([[7, [3]]]);
+    });
+
+    it('a count of 0 does not open the gate in the archive', () => {
+      const { laps } = build(
+        [
+          ev(-600, 'SessionInfo', { Key: 9002, Type: 'Qualifying' }),
+          ev(-300, 'TimingAppData', { Lines: { 7: { GridPos: '1' } } }),
+          timing(-200, { 7: count(0) }),
+          timing(-100, { 7: { PitOut: true } }),
+          timing(60, { 7: { Sectors: { 0: { Value: '30.000' } }, ...count(1) } }),
+        ],
+        9002,
+        'f1-archive',
+      );
+      expect(laps.map((l) => [l.lap_number, l.is_pit_out])).toEqual([[1, false]]);
     });
 
     it('a PitOut before the first count stays gated in the archive', () => {
