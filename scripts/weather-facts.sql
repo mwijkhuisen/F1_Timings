@@ -1,12 +1,13 @@
 -- P5a [box]: the facts of OpenF1's weather endpoint over every session in the database, once the re-queue of
--- 20261109000001_weather.sql has drained (/status shows no extra `fetched`). Written into A§6.1.
+-- 20261109000001_weather.sql has drained (/status shows no extra `due`: the first tick turns the re-queued
+-- `fetched` into `due`). Written into A§6.1.
 --
 -- Read-only: it runs as f1_api (SELECT only) inside a READ ONLY transaction that is rolled back. It prints counts,
 -- intervals, the distinct rainfall values and the wind direction's range; no sample is printed.
 --
--- On the VM:
---   sudo docker compose -p f1 -f /etc/f1/compose.yaml --env-file /srv/f1/state/current.env exec -T db \
---     psql -U postgres -d f1 -X -v ON_ERROR_STOP=1 -f - < weather-facts.sql
+-- On the VM, which has no checkout (<revision> is the release's commit, `revision` in `sudo f1-status`):
+--   curl -fsSL -o weather-facts.sql https://raw.githubusercontent.com/mwijkhuisen/F1_Timings/<revision>/scripts/weather-facts.sql
+--   sudo f1-psql -q -v ON_ERROR_STOP=1 -f - < weather-facts.sql
 
 SET ROLE f1_api;
 BEGIN READ ONLY;

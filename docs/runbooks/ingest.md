@@ -66,13 +66,20 @@ time sudo docker compose -p f1 -f /etc/f1/compose.yaml --env-file /srv/f1/state/
 After the deploy of the standings migration (A§7), once:
 
 1. `rederive --all` as above.
-2. Wait for the re-queue to drain (A§8, about 45 min outside live windows): `/status` shows no extra `fetched` sessions.
-3. Run the facts script from a checkout of the release (read-only: it runs as `f1_api` in a READ ONLY transaction that is rolled back, and prints counts and session keys only):
+2. Wait for the re-queue to drain (A§8, about 45 min outside live windows). The daemon's first tick turns the re-queued `fetched` sessions into `due`, so a count of `fetched` reads 0 at once; drained means no `due` or `failed` left (the `scheduled` ones are races still to come):
 
    ```bash
-   sudo docker compose -p f1 -f /etc/f1/compose.yaml --env-file /srv/f1/state/current.env exec -T db \
-     psql -U postgres -d f1 -X -v ON_ERROR_STOP=1 -f - < scripts/standings-facts.sql
+   sudo f1-psql -c "SELECT s.ingest_state, count(*) FROM session s JOIN meeting m USING (meeting_key) WHERE s.source = 'openf1' AND s.type = 'Race' AND NOT s.is_cancelled AND m.year >= 2023 GROUP BY 1 ORDER BY 1"
    ```
+
+3. Run the facts script (read-only: it runs as `f1_api` in a READ ONLY transaction that is rolled back, and prints counts and session keys only). The VM has no checkout, so fetch it from the release's commit (`revision` in `sudo f1-status`):
+
+   ```bash
+   curl -fsSL -o standings-facts.sql https://raw.githubusercontent.com/mwijkhuisen/F1_Timings/<revision>/scripts/standings-facts.sql
+   sudo f1-psql -q -v ON_ERROR_STOP=1 -f - < standings-facts.sql
+   ```
+
+   Queries 1 and 2 show 0 in every `without_` column, and query 3 lists no session (2026-11-15: 2,328 result rows, 114 counted sessions).
 
 4. `/status` "Standings that differ from OpenF1" lists 7779 (1 row) and 9213 (9 rows), and nothing else (A§6.1).
 
