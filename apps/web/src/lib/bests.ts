@@ -63,6 +63,16 @@ export function colouredBests<L extends Pick<Lap, 'driver_number' | 'lap_ms' | '
   return out;
 }
 
+export type Speed = 'i1_kph' | 'i2_kph' | 'st_kph';
+
+/** The fastest speed-trap reading on valid laps (A§9 tie order), or null: a driver's own top, or the session's. */
+export const ownTop = (laps: readonly Lap[], field: Speed): Lap | null =>
+  first(
+    laps,
+    (l) => isValid(l) && l[field] !== null,
+    (a, b) => (b[field] ?? 0) - (a[field] ?? 0) || tie(a, b),
+  );
+
 /** `sum`: best S1 + best S2 + best S3 (the sum of best sectors, never an "ideal lap"); `top`: the speed trap. */
 export type SessionBests = {
   lap: Lap | null;
@@ -79,12 +89,7 @@ export function sessionBests(laps: readonly Lap[]): SessionBests {
   const s3 = bestOf(laps, 's3_ms');
   const [a, b, c] = [s1?.s1_ms ?? null, s2?.s2_ms ?? null, s3?.s3_ms ?? null];
   const sum = a === null || b === null || c === null ? null : a + b + c;
-  const top = first(
-    laps,
-    (l) => isValid(l) && l.st_kph !== null,
-    (a, b) => (b.st_kph ?? 0) - (a.st_kph ?? 0) || tie(a, b),
-  );
-  return { lap: bestOf(laps, 'lap_ms'), s1, s2, s3, sum, top };
+  return { lap: bestOf(laps, 'lap_ms'), s1, s2, s3, sum, top: ownTop(laps, 'st_kph') };
 }
 
 /** Owner D3: the Δ to the driver's own best as a step, 0 below 0.5 %, 1 below 1 %, 2 below 2 %, else 3. */
@@ -92,4 +97,53 @@ export function deltaStep(diffMs: number, bestMs: number): 0 | 1 | 2 | 3 {
   if (diffMs <= 0) return 0;
   const r = diffMs / bestMs;
   return r < 0.005 ? 0 : r < 0.01 ? 1 : r < 0.02 ? 2 : 3;
+}
+
+/** The session's top lap per speed column: the one boxed cell, or null when no valid lap has a reading. */
+export const speedTops = (laps: readonly Lap[]): Record<Speed, Lap | null> => ({
+  i1_kph: ownTop(laps, 'i1_kph'),
+  i2_kph: ownTop(laps, 'i2_kph'),
+  st_kph: ownTop(laps, 'st_kph'),
+});
+
+/** `i1`, `i2`, `st`: the driver's top lap per speed; `lap`: own best lap; `sum`: own best S1 + S2 + S3, null unless all three exist. */
+export type SpeedRow = {
+  driver: number;
+  i1: Lap | null;
+  i2: Lap | null;
+  st: Lap | null;
+  lap: Lap | null;
+  sum: number | null;
+};
+
+/**
+ * One row per driver with laps: speeds from the whole session, `lap` and `sum` from the laps of `phase` when given
+ * (qualifying). By ST descending (null last), then driver number. A cell is boxed when it is `speedTops(laps)`'s lap.
+ */
+export function speedTable(laps: readonly Lap[], phase: number | null): SpeedRow[] {
+  const inPhase = phase === null ? laps : laps.filter((l) => l.quali_phase === phase);
+  const [lap, s1, s2, s3] = [
+    ownBests(inPhase, 'lap_ms'),
+    ownBests(inPhase, 's1_ms'),
+    ownBests(inPhase, 's2_ms'),
+    ownBests(inPhase, 's3_ms'),
+  ];
+  const byDriver = new Map<number, Lap[]>();
+  for (const l of laps) {
+    const own = byDriver.get(l.driver_number);
+    if (own) own.push(l);
+    else byDriver.set(l.driver_number, [l]);
+  }
+  const rows = [...byDriver].map(([driver, own]): SpeedRow => {
+    const [a, b, c] = [s1.get(driver)?.s1_ms, s2.get(driver)?.s2_ms, s3.get(driver)?.s3_ms];
+    return {
+      driver,
+      i1: ownTop(own, 'i1_kph'),
+      i2: ownTop(own, 'i2_kph'),
+      st: ownTop(own, 'st_kph'),
+      lap: lap.get(driver) ?? null,
+      sum: a == null || b == null || c == null ? null : a + b + c,
+    };
+  });
+  return rows.sort((a, b) => (b.st?.st_kph ?? -1) - (a.st?.st_kph ?? -1) || a.driver - b.driver);
 }

@@ -121,6 +121,20 @@ export function leaderLap(
   return best;
 }
 
+/**
+ * The track temperature of the last sample dated at or before `at` (epoch ms), through `reading` (a 0 dropout is
+ * null), or null before the first sample. The same "at or before" join as `leaderLap`; never interpolated.
+ */
+export function trackAt(rows: readonly WeatherRow[], at: number): number | null {
+  let held: WeatherRow | null = null;
+  let heldAt = Number.NEGATIVE_INFINITY;
+  for (const r of rows) {
+    const t = Date.parse(r.date);
+    if (t <= at && t >= heldAt) [held, heldAt] = [r, t];
+  }
+  return held === null ? null : reading(held).track_temperature;
+}
+
 /** "24.1–27.3", or one value when both ends read the same at that precision. */
 export const fmtRange = (r: Range, digits: number): string => {
   const [lo, hi] = [r.min.toFixed(digits), r.max.toFixed(digits)];

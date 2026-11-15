@@ -87,3 +87,60 @@ export function trackPeriods(rows: RaceControl): Track {
 /** The kinds covering a lap, most severe first: red, sc, vsc. */
 export const kindsAt = (periods: readonly Period[], lap: number): Kind[] =>
   KINDS.filter((kind) => periods.some((p) => p.kind === kind && p.from <= lap && lap <= p.to));
+
+/** A period on the clock, epoch ms, for sessions whose race-control rows carry no lap numbers (practice). */
+export type ClockPeriod = { kind: Kind; from: number; to: number };
+
+const GREEN_LIGHT = /^GREEN LIGHT - PIT EXIT OPEN/;
+
+/**
+ * Periods by parsed `date` (A§6.1, practice): the green light `GREEN LIGHT - PIT EXIT OPEN` or `resume` ends a red,
+ * `end` (the chequered flag) closes everything and a period still open closes at `end`. Rows without a date are
+ * skipped. For non-race sessions; a race keeps `trackPeriods`.
+ */
+export function clockPeriods(rows: RaceControl, end: number): ClockPeriod[] {
+  const periods: ClockPeriod[] = [];
+  const open = new Map<Kind, number>();
+  const close = (kind: Kind, at: number) => {
+    const from = open.get(kind);
+    if (from === undefined) return;
+    periods.push({ kind, from, to: Math.max(from, at) });
+    open.delete(kind);
+  };
+  const start = (kind: Kind, at: number) => {
+    if (!open.has(kind)) open.set(kind, at); // a repeated start keeps the first
+  };
+  for (const row of rows) {
+    if (row.date === null) continue;
+    const at = Date.parse(row.date);
+    const form = formOf(row);
+    if (form === null && GREEN_LIGHT.test(row.message ?? '')) close('red', at);
+    switch (form) {
+      case 'sc+':
+        close('vsc', at);
+        start('sc', at);
+        break;
+      case 'sc-':
+        close('sc', at);
+        break;
+      case 'vsc+':
+        start('vsc', at);
+        break;
+      case 'vsc-':
+        close('vsc', at);
+        break;
+      case 'red':
+        close('sc', at);
+        close('vsc', at);
+        start('red', at);
+        break;
+      case 'resume':
+        close('red', at);
+        break;
+      case 'end':
+        for (const kind of KINDS) close(kind, at);
+    }
+  }
+  for (const kind of KINDS) close(kind, end);
+  return periods.sort((a, b) => a.from - b.from || KINDS.indexOf(a.kind) - KINDS.indexOf(b.kind));
+}

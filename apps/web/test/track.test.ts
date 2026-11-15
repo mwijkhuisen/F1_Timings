@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { KIND_LABEL, KIND_NAME, kindsAt, trackPeriods } from '../src/lib/track.ts';
+import { clockPeriods, KIND_LABEL, KIND_NAME, kindsAt, trackPeriods } from '../src/lib/track.ts';
 import { rc } from './laps.ts';
 
 // The S0 forms (scripts/race-control-forms.sql) and their transitions, synthetic rows only.
@@ -157,5 +157,71 @@ describe('kindsAt', () => {
       'Red flag',
       'SC',
     ]);
+  });
+});
+
+describe('clockPeriods', () => {
+  const T0 = Date.parse('2026-10-25T12:00:00Z');
+  const END = T0 + 3_600_000;
+  const at = (min: number) => new Date(T0 + min * 60_000).toISOString();
+  const row = (min: number, message: string, extra: Parameters<typeof rc>[2] = {}) =>
+    rc(null, message, { date: at(min), ...extra });
+  const red = (min: number) => row(min, 'RED FLAG', { category: 'Flag', flag: 'RED' });
+  const green = (min: number) => row(min, 'GREEN LIGHT - PIT EXIT OPEN');
+  const p = (kind: 'sc' | 'vsc' | 'red', from: number, to: number) => ({
+    kind,
+    from: T0 + from * 60_000,
+    to: T0 + to * 60_000,
+  });
+
+  it('closes a red at the green light, ignoring TRACK CLEAR before it', () => {
+    expect(clockPeriods([red(10), row(13, 'TRACK CLEAR'), green(17)], END)).toEqual([p('red', 10, 17)]);
+  });
+
+  it('closes a red at a resume row too', () => {
+    expect(clockPeriods([red(10), row(16, 'RACE WILL RESUME AT 15:05')], END)).toEqual([p('red', 10, 16)]);
+  });
+
+  it('keeps the first of a repeated red', () => {
+    expect(clockPeriods([red(10), red(12), green(20)], END)).toEqual([p('red', 10, 20)]);
+  });
+
+  it('closes everything at the chequered flag', () => {
+    const chq = row(50, 'CHEQUERED FLAG', { category: 'Flag', flag: 'CHEQUERED' });
+    expect(clockPeriods([red(10), row(20, 'VSC DEPLOYED'), chq], END)).toEqual([p('red', 10, 50), p('vsc', 20, 50)]);
+  });
+
+  it('closes a period still open at `end`', () => {
+    expect(clockPeriods([red(40)], END)).toEqual([p('red', 40, 60)]);
+  });
+
+  it('skips rows without a date', () => {
+    expect(clockPeriods([rc(null, 'RED FLAG', { flag: 'RED' }), green(5)], END)).toEqual([]);
+    expect(clockPeriods([red(10), rc(null, 'GREEN LIGHT - PIT EXIT OPEN'), green(12)], END)).toEqual([
+      p('red', 10, 12),
+    ]);
+  });
+
+  it('lets a safety car close an open VSC, and a red close both', () => {
+    expect(
+      clockPeriods(
+        [
+          row(5, 'VIRTUAL SAFETY CAR DEPLOYED'),
+          row(8, 'SAFETY CAR DEPLOYED'),
+          red(12),
+          row(15, 'SAFETY CAR IN THIS LAP'),
+        ],
+        END,
+      ),
+    ).toEqual([p('vsc', 5, 8), p('sc', 8, 12), p('red', 12, 60)]);
+    expect(clockPeriods([row(5, 'VSC DEPLOYED'), row(6, 'VSC ENDING')], END)).toEqual([p('vsc', 5, 6)]);
+  });
+
+  it('reads the dates parsed, whatever their spelling', () => {
+    const [a, b] = [
+      rc(null, 'RED FLAG', { flag: 'RED', date: '2026-10-25T12:10:00.095000+00:00' }),
+      rc(null, 'GREEN LIGHT - PIT EXIT OPEN', { date: '2026-10-25T12:20:00+00:00' }),
+    ];
+    expect(clockPeriods([a, b], END)).toEqual([{ kind: 'red', from: T0 + 600_095, to: T0 + 1_200_000 }]);
   });
 });
