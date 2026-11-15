@@ -57,9 +57,11 @@ const fields = (c: Compound | null) => {
 export function stintLayout(drivers: readonly Driver[], laps: Laps, stints: Stints, year: number | null): StintLayout {
   // The session's highest lap number; a stint that runs past it still fits.
   const total = Math.max(...laps.map((l) => l.lap_number), ...stints.map((s) => s.lap_end ?? 0));
-  // Every 10 laps, but none within 3 laps of the total, whose label would crowd it (51: …, 40, 51).
+  // Every 10 laps, but none within 3 laps of the total, whose label would crowd it (51: …, 40, 51). Past 500 laps
+  // (a malformed lap number) the step grows in tens, so there are never more than 50 ticks.
+  const step = 10 * Math.max(1, Math.ceil(total / 500));
   const ticks = [];
-  for (let k = 10; k < total - 3; k += 10) ticks.push(k);
+  for (let k = step; k < total - 3; k += step) ticks.push(k);
   ticks.push(total);
   const last = new Map<number, number>();
   for (const l of laps) last.set(l.driver_number, Math.max(last.get(l.driver_number) ?? 0, l.lap_number));
