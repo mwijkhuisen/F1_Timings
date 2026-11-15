@@ -30,6 +30,7 @@ export function SpeedTable({ detail, laps }: { detail: SessionDetail; laps: Laps
   const tops = speedTops(laps);
   const drivers = new Map(orderDrivers(detail, laps).map((d) => [d.number, d]));
   const own = phase === null ? '' : `${phaseName(detail.session.name, phase)} `;
+  const where = phase === null ? '' : ` in ${phaseName(detail.session.name, phase)}`;
   const lapText = (l: Lap) => `L${l.lap_number}`;
   return (
     <>
@@ -101,7 +102,10 @@ export function SpeedTable({ detail, laps }: { detail: SessionDetail; laps: Laps
                   })}
                   <td>
                     {r.lap?.lap_ms == null ? (
-                      <Note id={`speed-${r.driver}-lap`} text="No valid lap with a time">
+                      <Note
+                        id={`speed-${r.driver}-lap`}
+                        text={phase === null ? 'No valid lap with a time' : `No valid lap${where}`}
+                      >
                         —
                       </Note>
                     ) : (
@@ -113,7 +117,7 @@ export function SpeedTable({ detail, laps }: { detail: SessionDetail; laps: Laps
                   </td>
                   <td>
                     {r.sum === null ? (
-                      <Note id={`speed-${r.driver}-sum`} text="Needs a valid time in S1, S2 and S3">
+                      <Note id={`speed-${r.driver}-sum`} text={`Needs a valid time in S1, S2 and S3${where}`}>
                         —
                       </Note>
                     ) : (

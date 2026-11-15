@@ -111,10 +111,10 @@ describe('SpeedTable', () => {
       '— (No speed-trap reading on a valid lap)',
       '— (No speed-trap reading on a valid lap)',
       '1:22.000L7',
-      '— (Needs a valid time in S1, S2 and S3)',
+      '— (Needs a valid time in S1, S2 and S3 in Q2)',
     ]);
-    // On Q2, RUS has no lap: both own-best cells are —.
-    expect(rows()[0]?.slice(4)).toEqual(['— (No valid lap with a time)', '— (Needs a valid time in S1, S2 and S3)']);
+    // On Q2, RUS has no lap: both own-best cells are — and say which phase.
+    expect(rows()[0]?.slice(4)).toEqual(['— (No valid lap in Q2)', '— (Needs a valid time in S1, S2 and S3 in Q2)']);
   });
 
   it('opens qualifying on the latest phase with laps, and names it in the own-best headers', () => {
@@ -141,13 +141,14 @@ describe('SpeedTable', () => {
     expect(rows()[0]?.slice(4)).toEqual(['1:21.300L4', '1:21.000−0.300 to own best lap']);
     expect(rows()[1]?.slice(4)).toEqual(['1:21.000L2', '1:20.950−0.050 to own best lap']);
     // PIA has no Q1 lap.
-    expect(rows()[2]?.slice(4)).toEqual(['— (No valid lap with a time)', '— (Needs a valid time in S1, S2 and S3)']);
+    expect(rows()[2]?.slice(4)).toEqual(['— (No valid lap in Q1)', '— (Needs a valid time in S1, S2 and S3 in Q1)']);
   });
 
   it('names sprint qualifying phases SQ', () => {
     show('Qualifying', 'Sprint Qualifying');
     expect([...host.querySelectorAll('fieldset button')].map((b) => b.textContent)).toEqual(['SQ1', 'SQ2']);
     expect(heads()[4]).toBe('SQ2 Best lap');
+    expect(rows()[0]?.[4]).toBe('— (No valid lap in SQ2)');
   });
 
   it('has no phase switch and plain headers outside qualifying, and the own bests cover every lap', () => {
@@ -156,5 +157,9 @@ describe('SpeedTable', () => {
     expect(heads()).toEqual(['Driver', 'I1', 'I2', 'ST', 'Best lap', 'Sum of best sectors']);
     // ANT's best lap of the session is lap 5, not lap 2.
     expect(rows()[1]?.slice(4)).toEqual(['1:20.500L5', '1:20.600+0.100 to own best lap']);
+    // Outside qualifying the reasons keep their wording, naming no phase.
+    expect(rows()[2]?.[5]).toBe('— (Needs a valid time in S1, S2 and S3)');
+    show('Practice', 'Practice 1', [lap(12, 2, { lap_ms: null })]);
+    expect(rows()[0]?.[4]).toBe('— (No valid lap with a time)');
   });
 });

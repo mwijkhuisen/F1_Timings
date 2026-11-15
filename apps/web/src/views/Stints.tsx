@@ -459,7 +459,14 @@ export function StintsTab({
       {(race || practice) && !rc.isPending && (
         <>
           {practice && runs.length > 0 && (
-            <RunPlan detail={detail} laps={laps} runs={runs} clock={clock} weather={weather.data ?? NO_WEATHER} />
+            <RunPlan
+              detail={detail}
+              laps={laps}
+              runs={runs}
+              clock={clock}
+              weather={weather.data ?? NO_WEATHER}
+              weatherFailed={weather.error != null}
+            />
           )}
           <PaceTable
             detail={detail}
@@ -467,6 +474,8 @@ export function StintsTab({
             runs={runs}
             weather={weather.data ?? NO_WEATHER}
             failed={rc.error != null}
+            weatherFailed={weather.error != null}
+            unnumbered={race ? stints.data.filter((s) => s.lap_start === null || s.lap_end === null).length : 0}
           />
         </>
       )}

@@ -144,7 +144,7 @@ describe('PaceTable', () => {
       '6',
       '1:30.000',
       '1:30.000',
-      '2 (2 in- or out-laps)',
+      '2 (1 out-lap, 1 in-lap)',
       '41',
     ]);
     // VER: 4 of 7 laps counted; an unknown age shows nothing; no start time, no track temperature.
@@ -155,7 +155,7 @@ describe('PaceTable', () => {
       '4',
       '1:28.000',
       '1:28.000',
-      "3 (2 in- or out-laps, 1 over 107 % of the run's median (a cool-down or traffic))",
+      "3 (1 out-lap, 1 in-lap, 1 over 107 % of the run's median (a cool-down or traffic))",
       '— (No track temperature at the start of the run)',
     ]);
   });
@@ -169,7 +169,7 @@ describe('PaceTable', () => {
       '2',
       '— (Too few clean laps)',
       '— (Too few clean laps)',
-      '2 (2 in- or out-laps)',
+      '2 (1 out-lap, 1 in-lap)',
       '43',
     ]);
   });
@@ -180,6 +180,56 @@ describe('PaceTable', () => {
     expect(table().replace(/&#x27;/g, "'")).toContain(`<p class="muted">${caveat}</p>`);
     expect(table()).not.toContain('Race control did not load');
     expect(table(weather, true)).toContain('<p class="muted">Race control did not load: periods are not left out.</p>');
+  });
+
+  it('splits the pit reason by flag, a lap that is both counting as an out-lap', () => {
+    const race = sessionDetail('Race', 'Race', [[4, 'NOR']]);
+    const rows = [
+      lap(4, 2, { lap_ms: 100_000, is_pit_out: true, is_pit_in: true }),
+      lap(4, 3, { lap_ms: 100_000, is_pit_out: true }),
+      lap(4, 4, { lap_ms: 100_000, is_pit_in: true }),
+      lap(4, 5, { lap_ms: 100_000, is_pit_in: true }),
+      ...[6, 7, 8].map((n) => lap(4, n, { lap_ms: 90_000 })),
+    ];
+    const st: Stints = [
+      { driver_number: 4, stint_number: 1, lap_start: 2, lap_end: 8, compound: 'MEDIUM', tyre_age_at_start: 0 },
+    ];
+    const html = renderToStaticMarkup(
+      <PaceTable detail={race} laps={rows} runs={paceRuns(rows, st, 'Race')} weather={[]} failed={false} />,
+    );
+    expect(cells(html)[0]?.[6]).toBe('4 (2 out-laps, 2 in-laps)');
+  });
+
+  it('says the weather did not load, in the cells and the popover, only after a failure', () => {
+    const failed = renderToStaticMarkup(
+      <PaceTable detail={practice} laps={laps} runs={runs} weather={[]} failed={false} weatherFailed />,
+    );
+    expect(cells(failed).map((r) => r[7])).toEqual([
+      '— (Weather did not load)',
+      '— (Weather did not load)',
+      '— (Weather did not load)',
+    ]);
+    expect(cells(table([])).map((r) => r[7])).toEqual(
+      Array(3).fill('— (No track temperature at the start of the run)'),
+    );
+    const html = (f: boolean) =>
+      renderToStaticMarkup(
+        <RunPlan detail={practice} laps={laps} runs={runs} clock={red} weather={[]} weatherFailed={f} />,
+      );
+    expect(html(true)).toContain(
+      '3 laps old at the start (may be wrong for a used set), track —, weather did not load</li>',
+    );
+    expect(html(false)).not.toContain('weather did not load');
+  });
+
+  it('says how many race stints have no lap numbers and are not shown', () => {
+    const line = (n: number) =>
+      renderToStaticMarkup(
+        <PaceTable detail={practice} laps={laps} runs={runs} weather={weather} failed={false} unnumbered={n} />,
+      );
+    expect(line(0)).not.toContain('without lap numbers');
+    expect(line(1)).toContain('<p class="muted">1 stint without lap numbers is not shown.</p>');
+    expect(line(3)).toContain('<p class="muted">3 stints without lap numbers are not shown.</p>');
   });
 
   it('is a race: stints in driver order, the run number, no track column', () => {
@@ -206,6 +256,6 @@ describe('PaceTable', () => {
       ['NOR', '1', '3', '1:30.000'],
       ['NOR', '2', '4', '1:30.000'],
     ]);
-    expect(cells(html)[1]?.[6]).toBe('1 (1 lap 1)');
+    expect(cells(html)[1]?.[6]).toBe('1 (lap 1)');
   });
 });

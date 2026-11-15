@@ -8,13 +8,14 @@ import { init } from '../src/lib/echarts.ts';
 import { evolution, evolutionSlots } from '../src/lib/evolution.ts';
 import type { Driver } from '../src/lib/session.ts';
 import { fmtDelta } from '../src/lib/time.ts';
+import { clockPeriods } from '../src/lib/track.ts';
 import { Compare, PitCycles } from '../src/views/Compare.tsx';
 import { DeltaTable, Duel, deltaReason } from '../src/views/DeltaTable.tsx';
 import { DriverPicker } from '../src/views/DriverPicker.tsx';
 import { evolutionChartOption, evolutionWindow } from '../src/views/evolution-chart-option.ts';
 import { gapChartLabel } from '../src/views/gap-chart-option.ts';
 import { type ChartTokens, lapChartOption, lineStyles } from '../src/views/lap-chart-option.ts';
-import { sessionDetail } from './laps.ts';
+import { rc, sessionDetail } from './laps.ts';
 
 // The comparison (E1–E4, D2, D4, D5) on hand-built laps, rendered statically (A§15).
 
@@ -1076,6 +1077,21 @@ describe('track evolution', () => {
       markArea: { data: [[{ name: 'RED', itemStyle: { color: tokens.live } }, { xAxis: T0 + 15 * MIN }]] },
     });
     expect(evolutionChartOption(evolution(evoLaps, 'Practice', 'Practice 1', []), tokens, name).series).toHaveLength(2);
+  });
+
+  it('reads a practice red flag from the race-control rows the card is given, into the red markArea', () => {
+    // What `Compare` does for practice: `clockPeriods` of the rows (green light closes the red), then `evolution`.
+    const rows: RaceControl = [
+      rc(null, 'RED FLAG', { category: 'Flag', flag: 'RED', date: start(10) }),
+      rc(null, 'GREEN LIGHT - PIT EXIT OPEN', { category: 'Flag', flag: 'GREEN', date: start(15) }),
+    ];
+    const clock = clockPeriods(rows, T0 + 60 * MIN);
+    const [, , area] = evolutionChartOption(evolution(evoLaps, 'Practice', 'Practice 1', clock), tokens, name).series;
+    expect(area).toMatchObject({
+      markArea: {
+        data: [[{ name: 'RED', itemStyle: { color: tokens.live }, xAxis: T0 + 10 * MIN }, { xAxis: T0 + 15 * MIN }]],
+      },
+    });
   });
 
   it('windows the y axis from the best − 1 s to 107 %, and counts the laps above it', () => {

@@ -86,6 +86,13 @@ describe('paceRuns, race', () => {
     ]);
   });
 
+  it('applies "period" before "untimed": an untimed lap under the SC is a period lap', () => {
+    const laps = [lap(1, 2, { lap_ms: null }), lap(1, 3, { lap_ms: null })];
+    const [run] = paceRuns(laps, [stint(1, 1, 1, 5)], 'Race', { periods: [{ kind: 'sc', from: 2, to: 2 }] });
+    expect(run?.left.period).toEqual([laps[0]]);
+    expect(run?.left.untimed).toEqual([laps[1]]);
+  });
+
   it('leaves lap 1 out in a race', () => {
     expect(counted(lapsOf(1, 1, 4), [stint(1, 1, 1, 4)], 'Race')).toEqual([[2, 3, 4]]);
   });
@@ -178,6 +185,26 @@ describe('paceRuns, practice', () => {
       [2, [3, 4, 5, 6, 7]],
       [3, [8, 9, 10]],
     ]);
+  });
+
+  it('splits where the covering stint changes, when a missing out-lap row lost the in-lap mark', () => {
+    // Laps 1–5 are a run (the in-lap 5 is not flagged: the out-lap 6 row is missing), laps 7–10 are on stint 2.
+    const laps = [
+      ...run(1, 1, 0).map((l) => (l.lap_number === 5 ? { ...l, is_pit_in: false } : l)),
+      ...[7, 8, 9, 10].map((n) => lap(1, n, { date_start: at(900 + n * 100), lap_ms: 100_000 })),
+    ];
+    const two: Stints = [
+      stint(1, 1, 1, 6, { compound: 'SOFT', tyre_age_at_start: 0 }),
+      stint(1, 2, 7, 10, { compound: 'HARD', tyre_age_at_start: 2 }),
+    ];
+    const runs = paceRuns(laps, two, 'Practice');
+    expect(runs.map((r) => [r.laps.map((l) => l.lap_number), r.compound, r.age])).toEqual([
+      [[1, 2, 3, 4, 5], 'SOFT', 0],
+      [[7, 8, 9, 10], 'HARD', 2],
+    ]);
+    // A lap that no stint covers never splits: a hole in the stints leaves the run whole.
+    expect(paceRuns(laps, [stint(1, 1, 1, 6)], 'Practice')).toHaveLength(1);
+    expect(paceRuns(laps, [stint(1, 1, 1, 5), stint(1, 2, 8, 10)], 'Practice')).toHaveLength(1);
   });
 
   it('starts a run at an out-lap that follows an in-lap, and runs per driver', () => {
@@ -292,6 +319,38 @@ describe('paceRuns, property', () => {
   });
 });
 
+describe('paceRuns, practice property', () => {
+  it('partitions each driver’s laps: every lap in exactly one run, none repeated', () => {
+    const anyLap = fc.record({
+      in: fc.boolean(),
+      out: fc.option(fc.boolean(), { nil: null }),
+      driver: fc.constantFrom(1, 2, 3),
+    });
+    const anyStints = fc.array(
+      fc.record({
+        driver: fc.constantFrom(1, 2, 3),
+        lo: fc.option(fc.integer({ min: 1, max: 20 }), { nil: null }),
+        len: fc.integer({ min: 0, max: 10 }),
+      }),
+      { maxLength: 6 },
+    );
+    fc.assert(
+      fc.property(fc.array(anyLap, { maxLength: 40 }), anyStints, (specs, ss) => {
+        const next = new Map<number, number>();
+        const laps = specs.map((x) => {
+          const n = (next.get(x.driver) ?? 0) + 1;
+          next.set(x.driver, n);
+          return lap(x.driver, n, { lap_ms: 90_000, is_pit_in: x.in, is_pit_out: x.out });
+        });
+        const st = ss.map((x, i) => stint(x.driver, i + 1, x.lo, x.lo === null ? null : x.lo + x.len));
+        const got = paceRuns([...laps].reverse(), st, 'Practice').flatMap((r) => r.laps);
+        expect(got).toHaveLength(laps.length);
+        for (const l of laps) expect(got.filter((g) => g === l)).toHaveLength(1);
+      }),
+    );
+  });
+});
+
 describe('runPlan', () => {
   const drivers: Driver[] = [
     { number: 4, acronym: 'NOR', name: null, team: null },
@@ -372,6 +431,21 @@ describe('runPlan', () => {
     expect(runPlan(drivers, [], from, to, [], []).ticks.map((t) => t.label)).toHaveLength(9); // 14:00 … 16:00
     const hourly = runPlan(drivers, [], from, to + 1, [], []);
     expect(hourly.ticks.map((t) => t.label)).toEqual(['14:00', '15:00', '16:00']);
+  });
+
+  it('clamps a red band to the span and drops one entirely outside', () => {
+    const red: ClockPeriod[] = [
+      { kind: 'red', from: from - 600_000, to: from + 450_000 },
+      { kind: 'red', from: to - 450_000, to: to + 600_000 },
+      { kind: 'red', from: from - 900_000, to: from - 600_000 },
+      { kind: 'red', from: to + 600_000, to: to + 900_000 },
+    ];
+    const { red: bands } = runPlan(drivers, [], from, to, red, []);
+    expect(bands.map((b) => [b.from, b.to])).toEqual([
+      [from, from + 450_000],
+      [to - 450_000, to],
+    ]);
+    for (const b of bands) expect(b.x >= 0 && b.x + b.w <= 1 + 1e-9 && b.w >= 0).toBe(true);
   });
 
   it('gives the red bands’ x and w, and only red ones', () => {

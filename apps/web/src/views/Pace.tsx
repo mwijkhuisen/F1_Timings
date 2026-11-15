@@ -21,14 +21,14 @@ const when = (r: Run) => (r.start === null || r.end === null ? 'time unknown' : 
 const degrees = (t: number | null) => (t === null ? '—' : `${t.toFixed(0)} °C`);
 
 /** "14:05–14:17, Medium, 8 laps (5 counted), 3 laps old at the start (may be wrong for a used set), track 41 °C". */
-function describeRun(r: Run, year: number | null, track: number | null): string {
+function describeRun(r: Run, year: number | null, track: number | null, weatherFailed: boolean): string {
   const set =
     r.age === null
       ? ''
       : r.age > 0
         ? `, ${plural(r.age, 'lap')} old at the start (may be wrong for a used set)`
         : ', new set';
-  return `${when(r)}, ${compoundName(compoundOf(r.compound, year))}, ${plural(r.laps.length, 'lap')} (${r.counted.length} counted)${set}, track ${degrees(track)}`;
+  return `${when(r)}, ${compoundName(compoundOf(r.compound, year))}, ${plural(r.laps.length, 'lap')} (${r.counted.length} counted)${set}, track ${degrees(track)}${track === null && weatherFailed ? ', weather did not load' : ''}`;
 }
 
 const spoken = (r: Run, year: number | null) =>
@@ -44,12 +44,15 @@ export function RunPlan({
   runs,
   clock,
   weather,
+  weatherFailed = false,
 }: {
   detail: SessionDetail;
   laps: Laps;
   runs: readonly Run[];
   clock: readonly ClockPeriod[];
   weather: Weather;
+  /** The weather query failed: a missing temperature says so. */
+  weatherFailed?: boolean;
 }) {
   const year = detail.meeting.year;
   const known = (t: number | null): t is number => t !== null;
@@ -71,7 +74,7 @@ export function RunPlan({
           </li>
         ))}
         {plan.red.map((b) => (
-          <li key={b.from}>
+          <li key={`red-${b.from}`}>
             <span className="dash red" aria-hidden="true" />
             RED: red flag, {fmtHm(b.from)}–{fmtHm(b.to)}
           </li>
@@ -93,10 +96,10 @@ export function RunPlan({
         <div className="lanes">
           <div className="rules" aria-hidden="true">
             {plan.ticks.map((t) => (
-              <i key={t.t} className="rule" style={vars({ '--x': pct(t.x) })} />
+              <i key={`tick-${t.t}`} className="rule" style={vars({ '--x': pct(t.x) })} />
             ))}
             {plan.red.map((b) => (
-              <i key={b.from} className="redband" style={vars({ '--x': pct(b.x), '--w': pct(b.w) })} />
+              <i key={`red-${b.from}`} className="redband" style={vars({ '--x': pct(b.x), '--w': pct(b.w) })} />
             ))}
           </div>
           <ol className="stints">
@@ -135,7 +138,7 @@ export function RunPlan({
                     {undrawn.length > 0 && <p>{plural(undrawn.length, 'run')} without a time of day, not drawn.</p>}
                     <ul>
                       {own.map((r) => (
-                        <li key={r.n}>{describeRun(r, year, trackOf.get(r) ?? null)}</li>
+                        <li key={r.n}>{describeRun(r, year, trackOf.get(r) ?? null, weatherFailed)}</li>
                       ))}
                     </ul>
                   </div>
@@ -149,11 +152,23 @@ export function RunPlan({
   );
 }
 
-/** "2 in- or out-laps, 1 deleted": the left-out laps by reason (REASON_WORDS; only the pit words take a plural). */
-const leftOut = (r: Run) =>
-  REASONS.filter((k) => r.left[k].length > 0)
-    .map((k) => `${r.left[k].length} ${REASON_WORDS[k]}${k === 'pit' && r.left[k].length > 1 ? 's' : ''}`)
-    .join(', ');
+/**
+ * "1 lap 1, 1 out-lap, 2 in-laps, 1 deleted": the left-out laps by reason (REASON_WORDS). Lap 1 takes no count; the
+ * pit reason is split by the laps' own flags, a lap that is both counting as an out-lap.
+ */
+const leftOut = (r: Run) => {
+  const out = r.left.pit.filter((l) => l.is_pit_out).length;
+  const inn = r.left.pit.length - out;
+  return REASONS.flatMap((k) =>
+    r.left[k].length === 0
+      ? []
+      : k === 'lap1'
+        ? [REASON_WORDS.lap1]
+        : k === 'pit'
+          ? [out > 0 ? plural(out, 'out-lap') : '', inn > 0 ? plural(inn, 'in-lap') : ''].filter(Boolean)
+          : [`${r.left[k].length} ${REASON_WORDS[k]}`],
+  ).join(', ');
+};
 
 /** A practice run of this many counted laps or more is a long run (listed first). */
 const LONG_RUN = 5;
@@ -168,12 +183,18 @@ export function PaceTable({
   runs,
   weather,
   failed,
+  weatherFailed = false,
+  unnumbered = 0,
 }: {
   detail: SessionDetail;
   laps: Laps;
   runs: readonly Run[];
   weather: Weather;
   failed: boolean;
+  /** The weather query failed: a missing track temperature says so. */
+  weatherFailed?: boolean;
+  /** The race stints without a lap bound, which have no run. */
+  unnumbered?: number;
 }) {
   const year = detail.meeting.year;
   const practice = detail.session.type === 'Practice';
@@ -251,7 +272,12 @@ export function PaceTable({
                     {practice && (
                       <td>
                         {track === null ? (
-                          <Note id={`${id}-track`} text="No track temperature at the start of the run">
+                          <Note
+                            id={`${id}-track`}
+                            text={
+                              weatherFailed ? 'Weather did not load' : 'No track temperature at the start of the run'
+                            }
+                          >
                             —
                           </Note>
                         ) : (
@@ -265,6 +291,12 @@ export function PaceTable({
             </tbody>
           </table>
         </Scroll>
+      )}
+      {unnumbered > 0 && (
+        <p className="muted">
+          {unnumbered === 1 ? '1 stint without lap numbers is' : `${unnumbered} stints without lap numbers are`} not
+          shown.
+        </p>
       )}
       <p className="muted">
         Fuel loads and engine modes are unknown; yellow flags and traffic are not removed; bands mark the leader's lap.

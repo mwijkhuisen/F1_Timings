@@ -114,7 +114,7 @@ function build(driver: number, n: number, laps: Lap[], compound: string | null, 
 
 /**
  * Race type: one run per stint with both lap bounds. Practice: per driver, from an out-lap (or the first row) to an
- * in-lap (or the last row). Qualifying and the rest: none. `periods` are the race's lap periods, `clock` the
+ * in-lap (or the last row), or to where the covering stint changes. Qualifying and the rest: none. `periods` are the race's lap periods, `clock` the
  * practice's clock periods.
  */
 export function paceRuns(
@@ -144,23 +144,31 @@ export function paceRuns(
   } else if (type === 'Practice') {
     for (const [driver, rows] of byDriver) {
       rows.sort(byNumber);
-      const groups: Lap[][] = [];
-      for (const l of rows) {
-        const cur = groups.at(-1);
-        if (cur === undefined || l.is_pit_out || cur.at(-1)?.is_pit_in) groups.push([l]);
-        else cur.push(l);
-      }
-      groups.forEach((g, i) => {
-        const first = g[0];
-        if (first === undefined) return;
-        const stint = stints.find(
+      const cover = (l: Lap) =>
+        stints.find(
           (s) =>
             s.driver_number === driver &&
             s.lap_start !== null &&
             s.lap_end !== null &&
-            s.lap_start <= first.lap_number &&
-            first.lap_number <= s.lap_end,
+            s.lap_start <= l.lap_number &&
+            l.lap_number <= s.lap_end,
         );
+      // A new run at an out-lap, after an in-lap, or when the covering stint changes (a missing out-lap row loses
+      // the in-lap mark too: 61 of 232 practice sessions on the dev DB have such a hole).
+      const groups: Lap[][] = [];
+      let before: Stints[number] | undefined;
+      for (const l of rows) {
+        const cur = groups.at(-1);
+        const now = cover(l);
+        if (cur === undefined || l.is_pit_out || cur.at(-1)?.is_pit_in || (now && before && now !== before))
+          groups.push([l]);
+        else cur.push(l);
+        before = now;
+      }
+      groups.forEach((g, i) => {
+        const first = g[0];
+        if (first === undefined) return;
+        const stint = cover(first);
         const age =
           stint?.tyre_age_at_start == null || stint.lap_start === null
             ? null
@@ -237,7 +245,10 @@ export function runPlan(
     lanes,
     ticks,
     red: red
-      .filter((p) => p.kind === 'red')
-      .map((p) => ({ from: p.from, to: p.to, x: x(p.from), w: (p.to - p.from) / size })),
+      .filter((p) => p.kind === 'red' && p.to > from && p.from < to)
+      .map((p) => {
+        const [a, b] = [Math.max(p.from, from), Math.min(p.to, to)];
+        return { from: a, to: b, x: x(a), w: (b - a) / size };
+      }),
   };
 }
