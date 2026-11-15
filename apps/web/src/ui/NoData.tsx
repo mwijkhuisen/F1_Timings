@@ -1,6 +1,6 @@
 import type { Live, SessionDetail } from '@f1/contracts';
 import { Link } from '../lib/routes.ts';
-import { LIVE_TEXT, noDataText } from '../lib/session.ts';
+import { LIVE_TEXT, type NoDataWhat, noDataText } from '../lib/session.ts';
 
 /** A tab without data says why (`noDataText`, #99); live now, "follow it" links to `/live`. */
 export function NoData({
@@ -11,7 +11,7 @@ export function NoData({
 }: {
   session: SessionDetail['session'];
   live: Live | null;
-  what: 'laps' | 'stints' | 'weather';
+  what: NoDataWhat;
   now?: number;
 }) {
   const text = noDataText(session, live, now, what);

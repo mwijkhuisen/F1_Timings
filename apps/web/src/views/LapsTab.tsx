@@ -53,7 +53,7 @@ export function LapsTab({ session, detail, laps }: { session: number; detail: Se
           <LapTable detail={detail} laps={laps} track={track} />
         </QualiSwitch>
       ) : (
-        <LapTable detail={detail} laps={laps} track={track} />
+        <LapTable detail={detail} laps={laps} track={track} marks />
       )}
       {rc.data && <RaceControlLog detail={detail} laps={laps} rows={rc.data} />}
       {!race && rc.error && <p className="muted">Race control did not load.</p>}

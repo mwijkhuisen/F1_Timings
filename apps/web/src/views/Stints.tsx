@@ -4,7 +4,7 @@ import { useMemo } from 'react';
 import { usePits, useRaceControl, useStints } from '../lib/api.ts';
 import { type Compound, compoundOf, compoundsOf, UNKNOWN_COMPOUND } from '../lib/compound.ts';
 import { startsStint } from '../lib/crossings.ts';
-import { type Driver, orderDrivers, sourceWords, teamStyle } from '../lib/session.ts';
+import { type Driver, orderDrivers, plural, sourceWords, teamStyle } from '../lib/session.ts';
 import { fmtClock } from '../lib/time.ts';
 import { KIND_LABEL, kindsAt, type Period, trackPeriods } from '../lib/track.ts';
 import { Pending } from '../ui/ErrorView.tsx';
@@ -36,7 +36,15 @@ export type Seg = {
 };
 /** A stint without a lap bound: listed, not drawn. */
 export type Unplaced = { stint: number; compound: string | null; letter: string; name: string; age: number | null };
-export type StintRow = { driver: Driver; track: number; segs: Seg[]; unplaced: Unplaced[]; stops: number };
+/** `last`: the driver's last lap number. */
+export type StintRow = {
+  driver: Driver;
+  track: number;
+  last: number;
+  segs: Seg[];
+  unplaced: Unplaced[];
+  stops: number;
+};
 export type StintLayout = { total: number; ticks: number[]; rows: StintRow[] };
 
 const fields = (c: Compound | null) => {
@@ -77,6 +85,7 @@ export function stintLayout(drivers: readonly Driver[], laps: Laps, stints: Stin
     return {
       driver,
       track: (last.get(driver.number) ?? 0) / total,
+      last: last.get(driver.number) ?? 0,
       segs,
       unplaced,
       stops: Math.max(0, own.length - 1),
@@ -87,7 +96,6 @@ export function stintLayout(drivers: readonly Driver[], laps: Laps, stints: Stin
 
 const pct = (x: number) => `${(x * 100).toFixed(3)}%`;
 const vars = (o: Record<string, string>) => o as CSSProperties;
-const plural = (n: number, word: string) => `${n} ${word}${n === 1 ? '' : 's'}`;
 const range = (s: Seg) => `${s.from}–${s.to}`;
 
 const inOrder = (row: StintRow) => [...row.segs, ...row.unplaced].sort((a, b) => a.stint - b.stint);
@@ -201,6 +209,10 @@ export function StintBars({
 }) {
   const year = detail.meeting.year;
   const drivers = orderDrivers(detail, laps);
+  // A race retirement says where it ended instead of its stops (#110): "out L48".
+  const retired = new Set(
+    detail.session.type === 'Race' ? detail.results.filter((r) => r.dnf).map((r) => r.driver_number) : [],
+  );
   const { total, ticks, rows } = stintLayout(drivers, laps, stints, year);
   const used = new Set(rows.flatMap((r) => inOrder(r).map((s) => s.compound)));
   // The season's compounds in use, softest first, then an unknown one.
@@ -250,9 +262,11 @@ export function StintBars({
             ))}
           </div>
           <ol className="stints">
-            {rows.map(({ driver: d, track, segs, unplaced, stops }) => {
-              const own = inOrder({ driver: d, track, segs, unplaced, stops });
+            {rows.map((row) => {
+              const { driver: d, track, last, segs, stops } = row;
+              const own = inOrder(row);
               const id = `stints-${d.number}`;
+              const out = retired.has(d.number);
               const ownPits = pitRows.filter((r) => r.driver.number === d.number);
               return (
                 <li key={d.number}>
@@ -260,7 +274,7 @@ export function StintBars({
                     type="button"
                     className="row"
                     popoverTarget={id}
-                    aria-label={`${d.acronym}, ${plural(stops, 'stop')}: ${own.map(spoken).join(', ') || 'no stints'}`}
+                    aria-label={`${d.acronym}, ${out ? `out on lap ${last}` : plural(stops, 'stop')}: ${own.map(spoken).join(', ') || 'no stints'}`}
                   >
                     <span className="drv" style={teamStyle(d)}>
                       {d.acronym}
@@ -281,9 +295,11 @@ export function StintBars({
                         </span>
                       ))}
                     </span>
-                    <span className="stop">{plural(stops, 'stop')}</span>
+                    <span className="stop">{out ? `out L${last}` : plural(stops, 'stop')}</span>
                   </button>
                   <div popover="auto" id={id} className="pop">
+                    {/* `.stop` is hidden under 640 px, so the popover says it too. */}
+                    {out && <p>Out on lap {last}</p>}
                     {own.length === 0 && ownPits.length === 0 ? (
                       <p>No stints.</p>
                     ) : (

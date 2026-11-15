@@ -2,7 +2,8 @@ import type { Lap, Laps, SessionDetail } from '@f1/contracts';
 import { type ReactNode, useState } from 'react';
 import { deltaStep, ownBests } from '../lib/bests.ts';
 import { type Compound, compoundOf, tyresWords, UNKNOWN_COMPOUND } from '../lib/compound.ts';
-import { type Driver, orderDrivers, teamStyle } from '../lib/session.ts';
+import { phaseName } from '../lib/quali.ts';
+import { type Driver, orderDrivers, sourceWords, statusOf, teamStyle } from '../lib/session.ts';
 import { fmtClock, fmtDelta, fmtLap, fmtSector } from '../lib/time.ts';
 import { KIND_LABEL, KIND_NAME, type Kind, kindsAt, type Period, type Track } from '../lib/track.ts';
 import { Note } from '../ui/Note.tsx';
@@ -12,6 +13,9 @@ import { Scroll } from '../ui/Scroll.tsx';
 // colour: purple boxed and tinted, green bold, "other" plain. In- and out-laps are dimmed, a new run gets a
 // rule, SC, VSC and red-flag laps get a header band, and the driver's own best is a frozen column (rows) or
 // a sticky row (columns). "Δ to own best" swaps each value for its gap to that best, in steps (owner D3).
+// #110: a driver's first lap of a qualifying phase gets its Q badge (O1); with `marks` (the session page, never the
+// player), a hole before the driver's last lap says so, and in a race RET, DSQ or DNS follows the last lap, or sits
+// under the acronym when the driver ran to the table's last lap (O3).
 
 export type Metric = 'lap' | 's1' | 's2' | 's3';
 export type Show = 'times' | 'delta';
@@ -47,14 +51,14 @@ export function missingReason(
   return 'No time in the OpenF1 data';
 }
 
-/** `stint`: a run start after the driver's first lap, drawn as a rule. */
-type Entry = { lap: Lap; dot: Compound | null; stint: boolean };
+/** `stint`: a run start after the driver's first lap, drawn as a rule; `phase`: "Q2" on the driver's first lap of a phase. */
+type Entry = { lap: Lap; dot: Compound | null; stint: boolean; phase: string | null };
 
 /**
  * Laps per driver per lap number. The compound dot marks a run start: a new compound, or new tyres out of the pits.
- * `year` picks the season's compounds (lib/compound.ts).
+ * `year` picks the season's compounds (lib/compound.ts), `session` names the phases (SQ1 in a sprint qualifying).
  */
-function entries(laps: Laps, year: number): Map<number, Map<number, Entry>> {
+function entries(laps: Laps, year: number, session: string | null): Map<number, Map<number, Entry>> {
   const out = new Map<number, Map<number, Entry>>();
   const sorted = laps.toSorted((a, b) => a.driver_number - b.driver_number || a.lap_number - b.lap_number);
   let prev: Lap | undefined;
@@ -62,8 +66,10 @@ function entries(laps: Laps, year: number): Map<number, Map<number, Entry>> {
     if (prev?.driver_number !== lap.driver_number) prev = undefined;
     const start = lap.compound !== prev?.compound || lap.is_pit_out === true;
     const dot = start ? compoundOf(lap.compound, year) : null;
+    const p = lap.quali_phase;
+    const phase = p !== null && p !== prev?.quali_phase ? phaseName(session, p) : null;
     const mine = out.get(lap.driver_number) ?? new Map<number, Entry>();
-    out.set(lap.driver_number, mine.set(lap.lap_number, { lap, dot, stint: start && prev !== undefined }));
+    out.set(lap.driver_number, mine.set(lap.lap_number, { lap, dot, stint: start && prev !== undefined, phase }));
     prev = lap;
   }
   return out;
@@ -93,7 +99,7 @@ function Cell({
   kind: Kind | undefined;
 }) {
   if (!entry) return <td />;
-  const { lap, dot, stint } = entry;
+  const { lap, dot, stint, phase } = entry;
   const value = lap[FIELD[metric]];
   const colour = lap.colour[metric];
   const text = value === null ? '—' : fmt(metric, value);
@@ -157,6 +163,7 @@ function Cell({
       {show === 'times' && lap.is_pit_in && <span className="badge">IN</span>}
       {/* An out-lap that starts a run already shows the new set's dot. */}
       {show === 'times' && lap.is_pit_out && !dot && <span className="badge">OUT</span>}
+      {phase && <span className="badge">{phase}</span>}
     </td>
   );
 }
@@ -195,11 +202,33 @@ function LapHead({ n, periods, scope }: { n: number; periods: readonly Period[];
   );
 }
 
-const DriverHead = ({ driver, scope }: { driver: Driver; scope: 'row' | 'col' }) => (
-  <th scope={scope} className="drv" style={teamStyle(driver)} title={driver.name ?? undefined}>
+/** `mark`: the race result's word under the acronym, its reason in the title (O3); no button, so the 72 px column holds. */
+const DriverHead = ({
+  driver,
+  scope,
+  mark,
+}: {
+  driver: Driver;
+  scope: 'row' | 'col';
+  mark?: { word: string; reason: string } | undefined;
+}) => (
+  <th
+    scope={scope}
+    className="drv"
+    style={teamStyle(driver)}
+    title={[driver.name, mark?.reason].filter(Boolean).join(' · ') || undefined}
+  >
     {driver.acronym}
+    {mark && <small className="margin">{` ${mark.word}`}</small>}
   </th>
 );
+
+/** A race result's mark after the last lap (#110, D3): the word and its reason. */
+const END = {
+  DNF: { word: 'RET', reason: (last: number) => `Retired: no lap after lap ${last}` },
+  DSQ: { word: 'DSQ', reason: () => 'Disqualified' },
+  DNS: { word: 'DNS', reason: () => 'Did not start' },
+} as const;
 
 const tableName = (metric: Metric, show: Show) => `${LABEL[metric]} ${show === 'delta' ? 'Δ to own best' : 'times'}`;
 
@@ -211,6 +240,7 @@ export function LapGrid({
   columns,
   show = 'times',
   periods = [],
+  marks = false,
 }: {
   detail: SessionDetail;
   laps: Laps;
@@ -218,23 +248,65 @@ export function LapGrid({
   columns: boolean;
   show?: Show;
   periods?: readonly Period[];
+  /** The holes' reasons and the race result's marks (#110): the session page only, never the player. */
+  marks?: boolean;
 }) {
   const drivers = orderDrivers(detail, laps);
-  const byDriver = entries(laps, detail.meeting.year);
+  const byDriver = entries(laps, detail.meeting.year, detail.session.name);
   const own = ownBests(laps, FIELD[metric]);
   const last = laps.reduce((n, l) => Math.max(n, l.lap_number), 0);
   const lapNumbers = Array.from({ length: last }, (_, i) => i + 1);
-  const cell = (d: Driver, n: number) => (
-    <Cell
-      key={`${d.number}-${n}`}
-      entry={byDriver.get(d.number)?.get(n)}
-      metric={metric}
-      sessionType={detail.session.type}
-      show={show}
-      own={own.get(d.number)}
-      kind={kindsAt(periods, n)[0]}
-    />
+  const lastLaps = new Map(drivers.map((d) => [d.number, Math.max(0, ...(byDriver.get(d.number)?.keys() ?? []))]));
+  const lastOf = (d: Driver) => lastLaps.get(d.number) ?? 0;
+  const status = new Map(
+    marks && detail.session.type === 'Race'
+      ? detail.results.flatMap((r) => {
+          const s = statusOf(r);
+          return s ? [[r.driver_number, END[s]] as const] : [];
+        })
+      : [],
   );
+  const endMark = (d: Driver, shown: ReactNode) => {
+    const end = status.get(d.number);
+    return (
+      end && (
+        <Note id={`e-${d.number}-${metric}`} text={end.reason(lastOf(d))}>
+          {shown}
+        </Note>
+      )
+    );
+  };
+  // A driver who ran to the table's last lap has no cell after it: the mark sits under the acronym (O3).
+  const headMark = (d: Driver) => {
+    const end = status.get(d.number);
+    return end && lastOf(d) >= last ? { word: end.word, reason: end.reason(lastOf(d)) } : undefined;
+  };
+  const cell = (d: Driver, n: number) => {
+    const entry = byDriver.get(d.number)?.get(n);
+    if (!entry && marks) {
+      const end = lastOf(d);
+      const body =
+        n < end ? (
+          <Note id={`h-${d.number}-${n}-${metric}`} text={`No lap in ${sourceWords(detail.session.source)}`}>
+            —
+          </Note>
+        ) : n === end + 1 ? (
+          endMark(d, <span className="muted">{status.get(d.number)?.word}</span>)
+        ) : null;
+      return <td key={`${d.number}-${n}`}>{body}</td>;
+    }
+    return (
+      <Cell
+        key={`${d.number}-${n}`}
+        entry={entry}
+        metric={metric}
+        sessionType={detail.session.type}
+        show={show}
+        own={own.get(d.number)}
+        kind={kindsAt(periods, n)[0]}
+      />
+    );
+  };
   const best = (d: Driver) => <BestCell key={d.number} own={own.get(d.number)} metric={metric} driver={d.number} />;
   const name = tableName(metric, show);
   return (
@@ -246,7 +318,7 @@ export function LapGrid({
               <tr>
                 <th scope="col">Lap</th>
                 {drivers.map((d) => (
-                  <DriverHead key={d.number} driver={d} scope="col" />
+                  <DriverHead key={d.number} driver={d} scope="col" mark={headMark(d)} />
                 ))}
               </tr>
               <tr>
@@ -281,7 +353,7 @@ export function LapGrid({
             <tbody>
               {drivers.map((d) => (
                 <tr key={d.number}>
-                  <DriverHead driver={d} scope="row" />
+                  <DriverHead driver={d} scope="row" mark={headMark(d)} />
                   {best(d)}
                   {lapNumbers.map((n) => cell(d, n))}
                 </tr>
@@ -300,7 +372,18 @@ const STEPS = ['< 0.5 %', '< 1 %', '< 2 %', '≥ 2 % slower than own best'];
  * What the styles mean, so colour is never the only cue (A§13). The new-stint dot is the season's hard tyre, so its
  * colour and letter are never another compound's in that season (white is Medium in 2018).
  */
-export function Legend({ show, periods, year }: { show: Show; periods: readonly Period[]; year: number }) {
+export function Legend({
+  show,
+  periods,
+  year,
+  phase = null,
+}: {
+  show: Show;
+  periods: readonly Period[];
+  year: number;
+  /** The first phase's name ("Q1", "SQ1") when any lap has a phase, for the Q badge. */
+  phase?: string | null;
+}) {
   const has = (...kinds: Kind[]) => periods.some((p) => kinds.includes(p.kind));
   const sample = compoundOf('HARD', year) ?? UNKNOWN_COMPOUND;
   return (
@@ -346,12 +429,29 @@ export function Legend({ show, periods, year }: { show: Show; periods: readonly 
           </li>
         ))
       )}
+      {/* The Q badge shows in Times and Δ alike. */}
+      {phase && (
+        <li>
+          <span className="badge">{phase}</span> first lap in the phase
+        </li>
+      )}
     </ul>
   );
 }
 
 /** The metric switch, Times | Δ and the orientation toggle are component state, not URL state (D1). */
-export function LapTable({ detail, laps, track }: { detail: SessionDetail; laps: Laps; track?: Track | null }) {
+export function LapTable({
+  detail,
+  laps,
+  track,
+  marks = false,
+}: {
+  detail: SessionDetail;
+  laps: Laps;
+  track?: Track | null;
+  /** The holes' reasons and the race result's marks (#110): the session page only. */
+  marks?: boolean;
+}) {
   const [metric, setMetric] = useState<Metric>('lap');
   const [show, setShow] = useState<Show>('times');
   const [columns, setColumns] = useState(false);
@@ -379,8 +479,21 @@ export function LapTable({ detail, laps, track }: { detail: SessionDetail; laps:
           Drivers as columns
         </button>
       </div>
-      <Legend show={show} periods={periods} year={detail.meeting.year} />
-      <LapGrid detail={detail} laps={laps} metric={metric} columns={columns} show={show} periods={periods} />
+      <Legend
+        show={show}
+        periods={periods}
+        year={detail.meeting.year}
+        phase={laps.some((l) => l.quali_phase !== null) ? phaseName(detail.session.name, 1) : null}
+      />
+      <LapGrid
+        detail={detail}
+        laps={laps}
+        metric={metric}
+        columns={columns}
+        show={show}
+        periods={periods}
+        marks={marks}
+      />
       {track && track.unplaced.length > 0 && (
         <div className="muted">
           <p>No lap number in the data, not banded:</p>

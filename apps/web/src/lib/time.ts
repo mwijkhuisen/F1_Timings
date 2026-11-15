@@ -21,6 +21,12 @@ const pad = (n: number, width: number) => String(n).padStart(width, '0');
 export const fmtLap = (ms: number): string =>
   `${Math.floor(ms / 60_000)}:${pad(Math.floor((ms % 60_000) / 1000), 2)}.${pad(ms % 1000, 3)}`;
 
+/** A race or session time as `h:mm:ss.SSS` from 1 h up, else as a lap time (`m:ss.SSS`). */
+export const fmtDuration = (ms: number): string =>
+  ms < 3_600_000
+    ? fmtLap(ms)
+    : `${Math.floor(ms / 3_600_000)}:${pad(Math.floor((ms % 3_600_000) / 60_000), 2)}:${pad(Math.floor((ms % 60_000) / 1000), 2)}.${pad(ms % 1000, 3)}`;
+
 /** A sector time as `ss.SSS`, or `m:ss.SSS` from 60 s up. */
 export const fmtSector = (ms: number): string =>
   ms < 60_000 ? `${pad(Math.floor(ms / 1000), 2)}.${pad(ms % 1000, 3)}` : fmtLap(ms);
@@ -28,6 +34,10 @@ export const fmtSector = (ms: number): string =>
 /** A time difference as signed seconds: `+0.123`, `−0.045` (a minus sign, not a hyphen), `+0.000`; `digits` 2 gives `+0.12`. */
 export const fmtDelta = (ms: number, digits = 3): string =>
   `${ms < 0 ? '−' : '+'}${(Math.abs(ms) / 1000).toFixed(digits)}`;
+
+/** A classification gap: `fmtDelta` under a minute, `+1:21.666` from it (the Result tab, #110). */
+export const fmtGap = (ms: number): string =>
+  Math.abs(ms) < 60_000 ? fmtDelta(ms) : `${ms < 0 ? '−' : '+'}${fmtLap(Math.abs(ms))}`;
 
 const clock = new Intl.DateTimeFormat('en-GB', {
   timeZone: 'Europe/Amsterdam',

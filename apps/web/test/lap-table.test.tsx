@@ -6,7 +6,7 @@ import { describe, expect, it } from 'vitest';
 import { teamColour } from '../src/lib/session.ts';
 import type { Period } from '../src/lib/track.ts';
 import { LapGrid, LapTable, Legend, type Metric, missingReason, type Show } from '../src/views/LapTable.tsx';
-import { fetched, rc } from './laps.ts';
+import { fetched, lap as plain, rc, sessionDetail } from './laps.ts';
 
 // D10's cell rules on a hand-built race: 2 drivers × 3 laps, rendered statically (D4).
 
@@ -604,5 +604,149 @@ describe('teamColour', () => {
     [null, null],
   ])('%s → %s', (colour, css) => {
     expect(teamColour(colour)).toBe(css);
+  });
+});
+
+describe('#110: holes, the race result after the last lap, and the Q badge', () => {
+  const timed = (d: number, n: number, extra: Partial<Lap> = {}) => plain(d, n, { lap_ms: 90_000 + n, ...extra });
+  // VER finishes laps 1–5; NOR retires after lap 2; LEC has no lap 3; HAM runs all 5 and is disqualified.
+  const rows = Laps.parse([
+    ...[1, 2, 3, 4, 5].map((n) => timed(1, n)),
+    ...[1, 2].map((n) => timed(4, n)),
+    ...[1, 2, 4, 5].map((n) => timed(16, n)),
+    ...[1, 2, 3, 4, 5].map((n) => timed(44, n)),
+  ]);
+  const results = [result(1, 1), result(16, 2), { ...result(4, null), dnf: true }, { ...result(44, null), dsq: true }];
+  const drivers: [number, string][] = [
+    [1, 'VER'],
+    [4, 'NOR'],
+    [16, 'LEC'],
+    [44, 'HAM'],
+  ];
+  const render = (type: string, marks: boolean, metric: Metric = 'lap') =>
+    renderToStaticMarkup(
+      <LapGrid
+        detail={sessionDetail(type, type, drivers, results)}
+        laps={rows}
+        metric={metric}
+        columns={false}
+        marks={marks}
+      />,
+    );
+  /** One driver's row: the head cell, then the lap cells without Best. */
+  const rowOf = (html: string, acronym: string) => {
+    const tr = new RegExp(`<tr><th scope="row"[^>]*>${acronym}([\\s\\S]*?)</th>([\\s\\S]*?)</tr>`).exec(html);
+    return { head: tr?.[1] ?? '', laps: cells(tr?.[2] ?? '').map((c) => c.body) };
+  };
+  const race = render('Race', true);
+
+  it('marks RET in the cell after a retirement, with its reason, and leaves the rest empty', () => {
+    const nor = rowOf(race, 'NOR').laps;
+    expect(nor[2]).toBe(
+      '<button type="button" class="note" popoverTarget="e-4-lap" aria-describedby="e-4-lap" title="Retired: no lap after lap 2"><span class="muted">RET</span></button><div popover="auto" id="e-4-lap" class="pop">Retired: no lap after lap 2</div>',
+    );
+    expect(nor.slice(3)).toEqual(['', '']);
+  });
+
+  it('puts the mark under the acronym, its reason in the title, when the driver ran to the last lap (O3)', () => {
+    // Small text, not a button: the 72 px Driver column and the Best column's offset hold.
+    expect(rowOf(race, 'HAM').head).toBe('<small class="margin"> DSQ</small>');
+    expect(race).toContain('<th scope="row" class="drv" title="Disqualified">HAM<small');
+    expect(rowOf(race, 'VER').head).toBe('');
+    expect(rowOf(race, 'NOR').head).toBe('');
+    const named = sessionDetail('Race', 'Race', drivers, results);
+    named.drivers[3] = { ...named.drivers[3], full_name: 'Lewis Hamilton', team_name: 'Ferrari' } as never;
+    const html = renderToStaticMarkup(<LapGrid detail={named} laps={rows} metric="lap" columns={false} marks />);
+    expect(html).toContain('title="Lewis Hamilton · Ferrari · Disqualified">HAM<small');
+  });
+
+  it('words a DSQ or DNS after the last lap by its own reason', () => {
+    const after = (status: 'dsq' | 'dns') => {
+      const other = results.map((r) => (r.driver_number === 4 ? { ...result(4, null), [status]: true } : r));
+      const html = renderToStaticMarkup(
+        <LapGrid
+          detail={sessionDetail('Race', 'Race', drivers, other)}
+          laps={rows}
+          metric="lap"
+          columns={false}
+          marks
+        />,
+      );
+      return rowOf(html, 'NOR').laps[2];
+    };
+    expect(after('dsq')).toContain('title="Disqualified"><span class="muted">DSQ</span>');
+    expect(after('dns')).toContain('title="Did not start"><span class="muted">DNS</span>');
+  });
+
+  it('gives a hole before the last lap — with its reason', () => {
+    expect(rowOf(race, 'LEC').laps[2]).toBe(
+      '<button type="button" class="note" popoverTarget="h-16-3-lap" aria-describedby="h-16-3-lap" title="No lap in the OpenF1 data">—</button><div popover="auto" id="h-16-3-lap" class="pop">No lap in the OpenF1 data</div>',
+    );
+  });
+
+  it('marks no result outside a race, but still the hole', () => {
+    const quali = render('Qualifying', true);
+    expect(rowOf(quali, 'NOR').laps.slice(2)).toEqual(['', '', '']);
+    expect(rowOf(quali, 'HAM').head).toBe('');
+    expect(rowOf(quali, 'LEC').laps[2]).toContain('No lap in the OpenF1 data');
+  });
+
+  it('without marks (the player) keeps bare cells: no hole reason, no result', () => {
+    const player = render('Race', false);
+    expect(rowOf(player, 'NOR').laps.slice(2)).toEqual(['', '', '']);
+    expect(rowOf(player, 'LEC').laps[2]).toBe('');
+    expect(player).not.toMatch(/RET|DSQ|No lap in/);
+  });
+
+  it('gives every note a unique id', () => {
+    const ids = [...render('Race', true, 's2').matchAll(/ id="([^"]+)"/g)].map(([, id]) => id);
+    expect(new Set(ids).size).toBe(ids.length);
+  });
+
+  describe('Every lap: the phase badge on the first lap of each phase per driver (O1)', () => {
+    const phased = Laps.parse([
+      timed(1, 1, { quali_phase: 1 }),
+      timed(1, 2, { quali_phase: 1 }),
+      timed(1, 3, { quali_phase: 2 }),
+      timed(1, 4, { quali_phase: 2 }),
+      timed(4, 1, { quali_phase: 1 }),
+      timed(4, 2, { quali_phase: null }),
+      timed(4, 3, { quali_phase: 1 }),
+    ]);
+    const badges = (name: string, show: Show = 'times') => {
+      const html = renderToStaticMarkup(
+        <LapGrid
+          detail={sessionDetail('Qualifying', name, drivers, results)}
+          laps={phased}
+          metric="lap"
+          columns={false}
+          show={show}
+        />,
+      );
+      return ['VER', 'NOR'].map((a) =>
+        rowOf(html, a).laps.map((b) => /<span class="badge">(S?Q\d)<\/span>/.exec(b)?.[1] ?? null),
+      );
+    };
+
+    it('tags the first lap of each phase only, in Times and in Δ', () => {
+      expect(badges('Qualifying')).toEqual([
+        ['Q1', null, 'Q2', null],
+        // A lap without a phase shows none, and the phase after it starts again.
+        ['Q1', null, 'Q1', null],
+      ]);
+      expect(badges('Qualifying', 'delta')).toEqual(badges('Qualifying'));
+      expect(badges('Sprint Qualifying')[0]).toEqual(['SQ1', null, 'SQ2', null]);
+    });
+
+    it('explains the badge in the legend only when a lap has a phase', () => {
+      const legend = (l: Laps) =>
+        renderToStaticMarkup(<LapTable detail={sessionDetail('Qualifying', 'Qualifying', drivers)} laps={l} />);
+      expect(legend(phased)).toContain('<li><span class="badge">Q1</span> first lap in the phase</li>');
+      expect(legend(rows)).not.toContain('first lap in the phase');
+      // Δ shows the badge too, so its legend explains it.
+      expect(renderToStaticMarkup(<Legend show="delta" periods={[]} year={2026} phase="SQ1" />)).toContain(
+        '<li><span class="badge">SQ1</span> first lap in the phase</li>',
+      );
+    });
   });
 });

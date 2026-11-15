@@ -73,6 +73,18 @@ describe('the session switcher', () => {
     expect(html).not.toMatch(/href="[^"]*9102/);
   });
 
+  it('never carries Result to another session: the steps and both menus link its Laps (#110)', () => {
+    const result = header({ id: 'session', year: 2026, meeting: 1320, session: 9104, view: 'result' });
+    expect(tag(result, 'aria-label="Previous session"')).toContain(`href="${SP}/9103-sprint-qualifying/laps"`);
+    expect(tag(result, 'aria-label="Next session"')).toContain(`href="${SP}/9105-sprint/laps"`);
+    expect(result).toContain('<a href="/2026/1310-mexico-city/9001-qualifying/laps">Mexico City</a>');
+    expect(result).toContain(`<a href="${SP}/9107-race/laps">Race</a>`);
+    // The current session's own entries keep Result (aria-current, no jump); no other href does.
+    expect(result).toContain(`<a aria-current="page" href="${SP}/9104-practice-3/result">São Paulo</a>`);
+    expect(result).toContain(`<a aria-current="page" href="${SP}/9104-practice-3/result">Practice 3</a>`);
+    expect(result.match(/href="[^"]*\/result"/g)).toHaveLength(2);
+  });
+
   it('shows only the season menu on a year page, and "Season" elsewhere', () => {
     const year = header({ id: 'year', year: 2026 });
     expect(year).toContain('<a aria-current="page" href="/2026">2026</a>');
@@ -288,6 +300,15 @@ describe('the session head', () => {
     expect(order).toContain(`<a href="${SP}/9107-race/order">Race</a>`);
     expect(order).toContain(`<a href="${SP}/9101-practice-1/laps">FP1</a>`);
     expect(order).toContain(`<a aria-current="page" href="${SP}/9103-sprint-qualifying/laps">SQ</a>`);
+  });
+
+  it('never carries Result on the pills to another session: each links its Laps (#110)', () => {
+    const result = head({ view: 'result' });
+    expect(result).toContain(`<a href="${SP}/9105-sprint/laps">Sprint</a>`);
+    expect(result).toContain(`<a href="${SP}/9101-practice-1/laps">FP1</a>`);
+    // Only the current session's own pill keeps Result.
+    expect(result).toContain(`<a aria-current="page" href="${SP}/9103-sprint-qualifying/result">SQ</a>`);
+    expect(result.match(/href="[^"]*\/result"/g)).toHaveLength(1);
   });
 
   it('links the replay only when the session has a recording', () => {

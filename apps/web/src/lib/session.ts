@@ -37,18 +37,26 @@ const SOURCE_WORDS: Record<Session['source'], string> = {
 /** Where a session's rows come from, for the reasons: "the OpenF1 data", "the F1 archive", … */
 export const sourceWords = (source: Session['source']): string => SOURCE_WORDS[source];
 
-const ARRIVE = { laps: 'Laps arrive', stints: 'Stints arrive', weather: 'Weather arrives' } as const;
+const ARRIVE = {
+  laps: 'Laps arrive',
+  stints: 'Stints arrive',
+  weather: 'Weather arrives',
+  results: 'Results arrive',
+} as const;
+
+/** What a tab lacks, for `noDataText`. */
+export type NoDataWhat = keyof typeof ARRIVE;
 
 /** `noDataText` for a session live right now; `ui/NoData.tsx` links "follow it" to `/live`. */
 export const LIVE_TEXT = 'Live now: follow it.';
 
 /**
- * Why a tab has no laps, stints or weather (A§13), the first rule that holds: cancelled; live now; after a fetch that
- * succeeded (`fetch_count` > 0), none in the session's source (the head's "data provisional" says the rest); in
- * back-off (with the next try in Amsterdam time, or a retry due); failed; `fetched` or `due` past date_end + 24 h; not
- * started; still to come (`scheduled`, `due`); else none in the session's source.
+ * Why a tab has no laps, stints, weather or results (A§13), the first rule that holds: cancelled; live now; after a
+ * fetch that succeeded (`fetch_count` > 0), none in the session's source (the head's "data provisional" says the rest);
+ * in back-off (with the next try in Amsterdam time, or a retry due); failed; `fetched` or `due` past date_end + 24 h;
+ * not started; still to come (`scheduled`, `due`); else none in the session's source.
  */
-export function noDataText(s: Session, live: Live | null, now: number, what: 'laps' | 'stints' | 'weather'): string {
+export function noDataText(s: Session, live: Live | null, now: number, what: NoDataWhat): string {
   if (s.is_cancelled) return `No ${what}: the session was cancelled.`;
   if (isLiveNow(s.session_key, live)) return LIVE_TEXT;
   const none = `No ${what} in ${sourceWords(s.source)}.`;
@@ -77,6 +85,15 @@ export const pollMs = (s: Pick<Session, 'is_cancelled' | 'ingest_state'>): 60_00
     ? 60_000
     : false;
 
+/** "1 stop", "2 stops": a count and its noun. */
+export const plural = (n: number, word: string): string => `${n} ${word}${n === 1 ? '' : 's'}`;
+
+/** A result's status word, DSQ before DNS before DNF (#110); null for none. */
+export const statusOf = (
+  r: Pick<SessionDetail['results'][number], 'dnf' | 'dns' | 'dsq'>,
+): 'DSQ' | 'DNS' | 'DNF' | null => (r.dsq ? 'DSQ' : r.dns ? 'DNS' : r.dnf ? 'DNF' : null);
+
+/** `name` is the driver cells' title (full name · team); `team` the team colour. */
 export type Driver = { number: number; acronym: string; name: string | null; team: string | null };
 
 const HEX = /^[0-9A-Fa-f]{6}$/;
@@ -132,7 +149,8 @@ export function orderDrivers(
       return {
         number: n,
         acronym: d?.acronym ?? String(n),
-        name: d?.full_name ?? null,
+        // The cells' title (#110): "Lando Norris · McLaren", whichever of the two is known.
+        name: [d?.full_name, d?.team_name].filter(Boolean).join(' · ') || null,
         team: teamColour(d?.team_colour ?? null),
       };
     });

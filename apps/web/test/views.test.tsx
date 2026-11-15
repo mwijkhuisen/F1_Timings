@@ -5,7 +5,7 @@ import { sessionPath } from '../src/lib/routes.ts';
 import { Next, PlayerHead, RecordingsList } from '../src/views/Live.tsx';
 import { RecorderWarnings, StatusPanel } from '../src/views/Status.tsx';
 import { StintBars, stintLayout } from '../src/views/Stints.tsx';
-import { fetched } from './laps.ts';
+import { fetched, result } from './laps.ts';
 
 // The stints bars (D11) and the status panel (D12), on hand-built data.
 
@@ -198,6 +198,35 @@ describe('the stints bars', () => {
     expect(html).toContain('aria-label="NOR, 1 stop: medium laps 1 to 10, hard laps 11 to 40"');
     expect(html).toContain('aria-label="81, 1 stop: unknown compound laps 1 to 30, hard laps unknown"');
     expect(html).toContain('<span class="stop">1 stop</span>');
+  });
+
+  it('says where a race retirement ended instead of its stops (#110), and keeps the stops elsewhere', () => {
+    const out = (type: string) =>
+      renderToStaticMarkup(
+        <StintBars
+          detail={{
+            ...detail,
+            session: { ...detail.session, type },
+            results: [{ ...result(4), dnf: true }, result(81, 1)],
+          }}
+          laps={Laps.parse([...lapsOf(81, 50), ...lapsOf(4, 48)])}
+          stints={Stints.parse([
+            stint(4, 1, 1, 20, 'MEDIUM'),
+            stint(4, 2, 21, 48, 'HARD'),
+            stint(81, 1, 1, 50, 'HARD'),
+          ])}
+        />,
+      );
+    const race = out('Race');
+    expect(race).toContain('<span class="stop">out L48</span>');
+    expect(race).toContain('aria-label="NOR, out on lap 48: medium laps 1 to 20, hard laps 21 to 48"');
+    expect(race).toContain('aria-label="81, 0 stops: hard laps 1 to 50"');
+    // `.stop` is hidden under 640 px: the popover says it first.
+    expect(race).toContain('<div popover="auto" id="stints-4" class="pop"><p>Out on lap 48</p><ul>');
+    expect(race).toContain('<div popover="auto" id="stints-81" class="pop"><ul>');
+    const quali = out('Qualifying');
+    expect(quali).toContain('aria-label="NOR, 1 stop: medium laps 1 to 20, hard laps 21 to 48"');
+    expect(quali).not.toContain('Out on lap');
   });
 
   it('lists the stints in the popover', () => {
