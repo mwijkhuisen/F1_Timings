@@ -3,6 +3,7 @@ import { join } from 'node:path';
 import { createInterface } from 'node:readline';
 import { parseArgs } from 'node:util';
 import { archiveEvents, readStreams, reconstruct, safe } from '../apps/server/src/archive/files.ts';
+import { TOPICS } from '../apps/server/src/archive/job.ts';
 import { normaliseSession } from '../apps/server/src/ingest/normalise.ts';
 import { type FeedEvent, parseFeedLine } from '../apps/server/src/live/read.ts';
 import { recordingLines, SEGMENT } from '../apps/server/src/live/recording.ts';
@@ -143,7 +144,8 @@ export type Input = { events: FeedEvent[]; archiveDir?: string; skipped: number 
 
 /**
  * A recording (a feed.jsonl, or a recorder directory: its segments, gzipped or plain, in order, then feed.jsonl) or
- * an archive directory → events. A plain file can be a pipe, such as `<(zcat …)`.
+ * an archive directory → events. A plain file can be a pipe, such as `<(zcat …)`. Of an archive directory only the
+ * archive job's TOPICS are read, as the job reads them: never a raw-only file such as a `.z` topic (P3e).
  */
 export async function readInput(input: string): Promise<Input | undefined> {
   try {
@@ -158,7 +160,7 @@ export async function readInput(input: string): Promise<Input | undefined> {
       for await (const line of recordingLines(input)) events.push(...parseFeedLine(line.text));
       return { events, skipped: 0 };
     }
-    const archive = archiveEvents(readStreams(input));
+    const archive = archiveEvents(readStreams(input, new Set(TOPICS)));
     return archive && { events: archive.events, archiveDir: input, skipped: archive.skipped };
   } catch {
     return undefined;
@@ -253,7 +255,7 @@ export async function compare(
     for (const d of stints) log(line(d, 'stint'));
     if (input.archiveDir !== undefined) {
       for (const f of readdirSync(input.archiveDir)
-        .filter((f) => f.endsWith('.json'))
+        .filter((f) => f.endsWith('.json') && f !== 'Index.json') // the session's topic list, no state
         .sort()) {
         try {
           const json: unknown = JSON.parse(readFileSync(join(input.archiveDir, f), 'utf8').replace(/^﻿/, ''));

@@ -3,7 +3,7 @@ import { join, resolve, sep } from 'node:path';
 import { view } from '@f1/contracts';
 import { createLaps } from '../live/laps.ts';
 import { createFeed } from '../live/merge.ts';
-import { archiveT0, type FeedEvent, parseJsonStream, type T0From } from '../live/read.ts';
+import { archiveT0, type FeedEvent, isObj, parseJsonStream, type T0From } from '../live/read.ts';
 import type { Result } from '../openf1/schemas.ts';
 
 // The F1 archive (A§6.2): downloads from livetiming.formula1.com/static and the reading of a session's
@@ -15,6 +15,14 @@ export const ORIGIN = 'https://livetiming.formula1.com';
 const TIMEOUT_MS = 60_000;
 /** One download, buffered twice (the parts and their concat); the largest file seen is about 7 MB. */
 export const MAX_BYTES = 64 * 1024 * 1024;
+/** A session's own `Index.json` (P3e): a topic list, 35 topics known (A§6.2). */
+export const INDEX_MAX_BYTES = 1024 * 1024;
+/**
+ * One raw-only topic file (P3e, A§6.2): written, never read, so only the download's double buffer counts against the
+ * job's 512m. [H14: a placeholder until the 2021 measurement; S6 sets it to about 3 times the largest raw file seen,
+ * kept at or under 32 MiB unless the measurement says otherwise. The largest `.z` file seen so far is 10.0 MB, #122.]
+ */
+export const RAW_MAX_BYTES = 32 * 1024 * 1024;
 /**
  * A session's topic files in all, before the job reads and parses them: this, not MAX_BYTES, bounds its memory.
  * WSL [box] peak RSS: 157 MB at 0.41 MB of input and 271 MB at 6.61 MB, about 18 MB of RSS per MB above a ~150 MB
@@ -27,6 +35,14 @@ export const MAX_SESSION_BYTES = 16 * 1024 * 1024;
 export type Failure =
   | { code: 'http'; status: number }
   | { code: 'network' | 'timeout' | 'too_large' | 'host' | 'empty' };
+
+/**
+ * A topic name is a URL path segment and a file name: an ASCII letter, then up to 63 letters and digits, an optional
+ * final `.z`; never `/`, `.`, `%` or `?` (the archive job, fetch-archive.ts `--topic`).
+ */
+const TOPIC = /^[A-Za-z][A-Za-z0-9]{0,63}(\.z)?$/;
+
+export const isTopic = (name: string): boolean => TOPIC.test(name);
 
 /** Letters and digits of any script (São Paulo), `_` and `-`: never `.`, `/`, `%`, a space or a control character. */
 const PATH = /^\d{4}\/[\p{L}\p{N}_-]+\/[\p{L}\p{N}_-]+\/$/u;
@@ -51,6 +67,9 @@ export type IndexSession = {
   Key: unknown;
   Type: unknown;
   Name: unknown;
+  StartDate?: unknown;
+  EndDate?: unknown;
+  GmtOffset?: unknown;
   Path: string;
   meeting: Record<string, unknown>;
 };
@@ -77,10 +96,40 @@ export function indexSessions(text: string): IndexSession[] | undefined {
   );
 }
 
-/** One GET to the F1 host with the token. No redirects, a 60 s deadline, a 64 MiB cap. Never throws. */
+/**
+ * A session missing from its year's Index, or listed there without a Path (P3e, owner decision D1): its SessionInfo
+ * stream → the session as the Index would list it. The Key and the Path are the caller's (the job's OFF_INDEX table),
+ * never the payload's, so a wrong table key is a `key_mismatch` in archiveRows. Fields the payload lacks stay
+ * undefined, and planSessions counts such a session as `bad_index`.
+ */
+export function offIndexSession(text: string, key: number, path: string): IndexSession {
+  const feed = createFeed();
+  for (const ev of parseJsonStream(text, 'SessionInfo', 0).events) feed.apply(ev);
+  const info = isObj(feed.state.SessionInfo) ? feed.state.SessionInfo : {};
+  const { Type, Name, StartDate, EndDate, GmtOffset, Meeting } = info;
+  return { Key: key, Type, Name, StartDate, EndDate, GmtOffset, Path: path, meeting: isObj(Meeting) ? Meeting : {} };
+}
+
+/**
+ * A session's own `Index.json` (`{Feeds: {<Topic>: …}}`) → its topic names that pass isTopic, without `Index` (its
+ * `.missing` marker would be the session Index's own). Undefined when the text is no such object.
+ */
+export function indexTopics(text: string): string[] | undefined {
+  let index: unknown;
+  try {
+    index = JSON.parse(text.replace(/^\uFEFF/, ''));
+  } catch {
+    return undefined;
+  }
+  const feeds = isObj(index) ? index.Feeds : undefined;
+  return isObj(feeds) ? Object.keys(feeds).filter((t) => isTopic(t) && t !== 'Index') : undefined;
+}
+
+/** One GET to the F1 host with the token. No redirects, a 60 s deadline, a cap of `max` bytes. Never throws. */
 export async function download(
   target: string,
   token: string,
+  max = MAX_BYTES,
 ): Promise<Result<{ status: number; bytes: Buffer }, Failure>> {
   if (new URL(target).origin !== ORIGIN) return { ok: false, error: { code: 'host' } };
   const signal = AbortSignal.timeout(TIMEOUT_MS);
@@ -102,7 +151,7 @@ export async function download(
       const { done, value } = await reader.read();
       if (done) return { ok: true, value: { status, bytes: Buffer.concat(parts) } };
       size += value.byteLength;
-      if (size > MAX_BYTES) {
+      if (size > max) {
         await reader.cancel();
         return { ok: false, error: { code: 'too_large' } };
       }
@@ -113,11 +162,14 @@ export async function download(
   }
 }
 
-/** Topic → text of every `<Topic>.jsonStream` in a directory. Throws as readdirSync and readFileSync do. */
-export const readStreams = (dir: string): Map<string, string> =>
+/**
+ * Topic → text of every `<Topic>.jsonStream` in a directory, or of the topics in `keep` only (so a raw-only file is
+ * never read). Throws as readdirSync and readFileSync do.
+ */
+export const readStreams = (dir: string, keep?: ReadonlySet<string>): Map<string, string> =>
   new Map(
     readdirSync(dir)
-      .filter((f) => f.endsWith('.jsonStream'))
+      .filter((f) => f.endsWith('.jsonStream') && (keep === undefined || keep.has(f.slice(0, -'.jsonStream'.length))))
       .map((f) => [f.slice(0, -'.jsonStream'.length), readFileSync(join(dir, f), 'utf8')]),
   );
 

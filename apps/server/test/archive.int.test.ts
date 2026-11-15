@@ -5,6 +5,7 @@ import {
   mkdtempSync,
   readdirSync,
   readFileSync,
+  statSync,
   truncateSync,
   writeFileSync,
 } from 'node:fs';
@@ -15,8 +16,16 @@ import { HttpResponse, http } from 'msw';
 import pino from 'pino';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { server } from '../../../test/msw.setup.ts';
-import { MAX_SESSION_BYTES, ORIGIN } from '../src/archive/files.ts';
-import { type ArchiveArgs, type ArchiveDeps, archive, GAP_MS, LOCK_KEY } from '../src/archive/job.ts';
+import { MAX_BYTES, MAX_SESSION_BYTES, ORIGIN, RAW_MAX_BYTES } from '../src/archive/files.ts';
+import {
+  type ArchiveArgs,
+  type ArchiveDeps,
+  archive,
+  GAP_MS,
+  LOCK_KEY,
+  OLD_TOPICS,
+  TOPICS,
+} from '../src/archive/job.ts';
 import { createDb, type DB } from '../src/db/db.ts';
 import { run } from '../src/main.ts';
 import { createTestDb, type TestDb } from './db.ts';
@@ -26,12 +35,83 @@ import { createTestDb, type TestDb } from './db.ts';
 
 const FIXTURES = join(import.meta.dirname, 'fixtures/archive');
 const MEETING = '2019-03-17_Synthetic_Grand_Prix';
+const RACE = `2019/${MEETING}/2019-03-17_Race/`;
+const QUALI = `2019/${MEETING}/2019-03-16_Qualifying/`;
+const FILES_GP = '2023/2023-03-05_Files_Grand_Prix';
+/** A session's archive path, without its final `/` → the fixture directory that serves its topics. */
 const DIRS: Record<string, string> = {
-  [`${MEETING}/2019-03-17_Race`]: 'race',
-  [`${MEETING}/2019-03-16_Qualifying`]: 'quali',
-  '2019-04-14_Old_Grand_Prix/2019-04-13_Qualifying': 'old-quali', // 2019-style: no SessionData
+  [RACE.slice(0, -1)]: 'race',
+  [QUALI.slice(0, -1)]: 'quali',
+  '2019/2019-04-14_Old_Grand_Prix/2019-04-13_Qualifying': 'old-quali', // 2019-style: no SessionData
+  [`2019/${MEETING}/2019-03-15_Sprint`]: 'race', // off-Index (EXTRAS), its own SessionInfo in INFOS
+  '2019/2019-05-01_Extra_Test/2019-04-30_Practice_1': 'quali', // off-Index, its SessionInfo Key is not the table's
+  [`${FILES_GP}/2023-03-04_Qualifying`]: 'quali', // files-only (H3)
+  [`${FILES_GP}/2023-03-05_Race`]: 'race',
 };
 const TABLES = ['driver', 'lap', 'lap_source', 'stint', 'race_control', 'result', 'weather'] as const;
+
+/** A 2023 Index: files only (H3), so the fixtures' SessionInfo Keys (9101, 9102) never matter. */
+const INDEX_2023 = {
+  Meetings: [
+    {
+      Key: 9200,
+      Name: 'Files Grand Prix',
+      Sessions: [
+        ['9201', 'Qualifying', '2023-03-04_Qualifying', '2023-03-04T18:00:00', '2023-03-04T19:00:00'],
+        ['9202', 'Race', '2023-03-05_Race', '2023-03-05T18:00:00', '2023-03-05T20:00:00'],
+        ['9203', 'Practice', '2023-03-03_Practice_1', '2023-03-03T14:00:00', '2023-03-03T15:00:00'], // no files: 403
+      ].map(([key, type, dir, start, end]) => ({
+        Key: Number(key),
+        Type: type,
+        Name: type,
+        StartDate: start,
+        EndDate: end,
+        GmtOffset: '03:00:00',
+        Path: `${FILES_GP}/${dir}/`,
+      })),
+    },
+  ],
+};
+const INDEXES: Record<string, Buffer | string> = {
+  2019: readFileSync(join(FIXTURES, 'index-2019.json')),
+  2023: JSON.stringify(INDEX_2023),
+};
+
+/** The race fixture's SessionInfo with some fields replaced, as one stream line. */
+const RACE_INFO = JSON.parse(readFileSync(join(FIXTURES, 'race/SessionInfo.jsonStream'), 'utf8').slice(13));
+const info = (patch: Record<string, unknown>) => `\uFEFF23:45:00.000${JSON.stringify({ ...RACE_INFO, ...patch })}\r\n`;
+const SPRINT = `2019/${MEETING}/2019-03-15_Sprint/`;
+const EXTRA_TEST = '2019/2019-05-01_Extra_Test/2019-04-30_Practice_1/';
+const GONE = '2019/2019-06-02_Gone_Grand_Prix/2019-06-01_Practice_1/';
+/** Off-Index SessionInfo streams by path; the payload Paths are not the table's. */
+const INFOS: Record<string, string> = {
+  [`${SPRINT}SessionInfo.jsonStream`]: info({
+    Key: 9103,
+    Name: 'Sprint',
+    StartDate: '2019-03-15T12:00:00',
+    EndDate: '2019-03-15T13:00:00',
+    Path: '2019/elsewhere/2019-03-15_Sprint/',
+  }),
+  [`${EXTRA_TEST}SessionInfo.jsonStream`]: info({
+    Key: 9142, // the table says 9141
+    Meeting: { ...RACE_INFO.Meeting, Key: 9140, Name: 'Extra Test' },
+    Type: 'Practice',
+    Name: 'Practice 1',
+    StartDate: '2019-04-30T10:00:00',
+    EndDate: '2019-04-30T18:00:00',
+    GmtOffset: '03:00:00',
+    Path: EXTRA_TEST,
+  }),
+};
+/** OFF_INDEX for 2019 in the tests (the deps seam): a sprint in meeting 9100, a wrong key, a 403, an Index key. */
+const EXTRAS = {
+  2019: [
+    { key: 9103, path: SPRINT },
+    { key: 9141, path: EXTRA_TEST },
+    { key: 9151, path: GONE },
+    { key: 9101, path: `2019/${MEETING}/2019-03-16_Other/` }, // the Index lists 9101 with a Path: it wins
+  ],
+};
 
 let clock = Date.parse('2026-11-10T12:00:00Z');
 const b64 = (o: unknown) => Buffer.from(JSON.stringify(o)).toString('base64url');
@@ -42,10 +122,20 @@ const TOKEN = `${b64({ alg: 'none' })}.${b64({ exp: clock / 1000 + 86_400 })}.${
 const requests: { path: string; at: number; auth: string | null }[] = [];
 const lines: string[] = [];
 const logged = (msg: string) => lines.map((l) => JSON.parse(l)).filter((l) => l.msg === msg);
+const since = (from: number) => requests.slice(from).map((r) => r.path);
+
+/** A session Index.json listing these topics, each with a StreamPath the job must never use. */
+const feeds = (names: readonly string[]) =>
+  HttpResponse.json({
+    Feeds: Object.fromEntries(
+      names.map((n) => [n, { KeyFramePath: `${n}.json`, StreamPath: `../../${n}.jsonStream` }]),
+    ),
+  });
 
 /**
- * Serves the Index and the fixture files; a topic a fixture lacks, and every file of another session, is a 403.
- * `status` can force a status or a whole response.
+ * Serves the year Indexes, the INFOS and the fixture files. A session's own Index.json lists exactly its fixture's
+ * topics, so by default the job asks for the TOPICS only. A topic a fixture lacks, and every file of another session,
+ * is a 403. `status` can force a status or a whole response.
  */
 const f1 = (status?: (path: string) => number | Response | undefined) =>
   server.use(
@@ -55,11 +145,18 @@ const f1 = (status?: (path: string) => number | Response | undefined) =>
       const forced = status?.(path);
       if (typeof forced === 'number') return new HttpResponse(null, { status: forced });
       if (forced !== undefined) return forced;
-      if (path === '2019/Index.json') return new HttpResponse(readFileSync(join(FIXTURES, 'index-2019.json')));
-      const m = /^2019\/(.+)\/([A-Za-z]+\.jsonStream)$/.exec(path);
-      const dir = m && DIRS[m[1] ?? ''];
-      const file = dir && join(FIXTURES, dir, m[2] ?? '');
-      return file && existsSync(file) ? new HttpResponse(readFileSync(file)) : new HttpResponse(null, { status: 403 });
+      const year = /^(\d{4})\/Index\.json$/.exec(path)?.[1];
+      if (year !== undefined)
+        return INDEXES[year] ? new HttpResponse(INDEXES[year]) : new HttpResponse(null, { status: 403 });
+      if (INFOS[path] !== undefined) return new HttpResponse(INFOS[path]);
+      const [, session = '', name = ''] = /^(.+)\/([^/]+)$/.exec(path) ?? [];
+      const dir = DIRS[session];
+      if (dir === undefined) return new HttpResponse(null, { status: 403 });
+      const topics = readdirSync(join(FIXTURES, dir)).filter((f) => f.endsWith('.jsonStream'));
+      if (name === 'Index.json') return feeds(topics.map((f) => f.slice(0, -'.jsonStream'.length)));
+      return topics.includes(name)
+        ? new HttpResponse(readFileSync(join(FIXTURES, dir, name)))
+        : new HttpResponse(null, { status: 403 });
     }),
   );
 
@@ -144,8 +241,9 @@ describe('archive (fixtures through msw, f1_ingest login)', { timeout: 120_000 }
     expect(await count('lap', 'quali_phase = 2')).toBe(6);
     expect(await count('lap', 'session_key = 9121 AND quali_phase IS NULL')).toBe(0);
 
-    // 1 Index + 3 sessions × 10 topics + the all-403 session's SessionInfo, one at a time, 2 s apart, with the token.
-    expect(requests.length).toBe(32);
+    // The year Index; 3 sessions × (their Index + 10 topics); the all-403 session's Index and SessionInfo. One at a
+    // time, 2 s apart, with the token.
+    expect(requests.length).toBe(36);
     for (const [i, r] of requests.entries()) {
       expect(r.auth).toBe(`Bearer ${TOKEN}`);
       if (i > 0) expect(r.at - (requests[i - 1]?.at ?? 0)).toBeGreaterThanOrEqual(GAP_MS);
@@ -154,6 +252,7 @@ describe('archive (fixtures through msw, f1_ingest login)', { timeout: 120_000 }
       'DriverList.jsonStream',
       'ExtrapolatedClock.missing',
       'Heartbeat.jsonStream',
+      'Index.json',
       'RaceControlMessages.jsonStream',
       'SessionData.jsonStream',
       'SessionInfo.jsonStream',
@@ -164,8 +263,8 @@ describe('archive (fixtures through msw, f1_ingest login)', { timeout: 120_000 }
     ]);
     expect(existsSync(join(args.dir, '9101', 'Heartbeat.missing'))).toBe(true);
     expect(existsSync(join(args.dir, '9121', 'SessionData.missing'))).toBe(true);
-    // No marker for SessionInfo or TimingData: a rerun asks again.
-    expect(readdirSync(join(args.dir, '9111'))).toEqual([]);
+    // No marker for SessionInfo or TimingData: a rerun asks again. Its session Index was a 403: the marker.
+    expect(readdirSync(join(args.dir, '9111'))).toEqual(['Index.missing']);
     expect(readFileSync(join(args.dir, 'index-2019.json'))).toEqual(readFileSync(join(FIXTURES, 'index-2019.json')));
 
     const bySession = Object.fromEntries(logged('archive').map((l) => [l.session_key, l]));
@@ -174,7 +273,10 @@ describe('archive (fixtures through msw, f1_ingest login)', { timeout: 120_000 }
       year: 2019,
       type: 'Race',
       files: 8,
+      raw_files: 0,
       skipped_files: 2,
+      topics: 10,
+      topics_from: 'index',
       t0: 'sessiondata',
       t0_heartbeat_delta_ms: -2000,
       laps: 6,
@@ -186,8 +288,10 @@ describe('archive (fixtures through msw, f1_ingest login)', { timeout: 120_000 }
     });
     expect(bySession[9101]).toMatchObject({ files: 7, skipped_files: 3, t0_heartbeat_delta_ms: null, phases: 2 });
     expect(bySession[9121]).toMatchObject({ files: 8, skipped_files: 2, t0: 'clock', laps: 10, phases: 2 });
-    expect(bySession[9111]).toMatchObject({ files: 0, skipped_files: 1, error: 'incomplete' });
+    expect(bySession[9111]).toMatchObject({ files: 0, skipped_files: 1, topics: 30, topics_from: 'fallback' });
+    expect(bySession[9111]).toMatchObject({ error: 'incomplete' });
     expect(logged('archive_done').at(-1)).toMatchObject({
+      downloaded: 3,
       imported: 3,
       failed: 0,
       incomplete: 1,
@@ -262,13 +366,15 @@ describe('archive (fixtures through msw, f1_ingest login)', { timeout: 120_000 }
     const asked = requests.length;
     const fresh = { ...args, dir: mkdtempSync(join(tmpdir(), 'f1-archive-')) };
     expect(await archive(deps, fresh)).toBe(false);
-    // Index, then SessionInfo and Heartbeat of the first session, then its SessionData: 401.
+    // The year Index, the first session's Index, SessionInfo and Heartbeat, then its SessionData: 401.
     expect(requests.slice(asked).map((r) => r.path.split('/').at(-1))).toEqual([
+      'Index.json',
       'Index.json',
       'SessionInfo.jsonStream',
       'Heartbeat.jsonStream',
       'SessionData.jsonStream',
     ]);
+    expect(logged('archive').at(-1)).toMatchObject({ session_key: 9101, error: 'http_401' });
     expect(logged('archive_done').at(-1)).toMatchObject({ error: 'http_401' });
   });
 
@@ -386,24 +492,33 @@ describe('archive (fixtures through msw, f1_ingest login)', { timeout: 120_000 }
   it('a token that expires mid-run stops it before the next request', async () => {
     f1();
     const asked = requests.length;
-    // Valid for 64 s: the Index and one topic, then within 60 s of exp.
+    // Valid for 64 s: the year Index and the first session's Index, then within 60 s of exp.
     const soon = tokenFile(`${b64({ alg: 'none' })}.${b64({ exp: Math.floor(clock / 1000) + 64 })}.${SIGNATURE}`);
     const fresh = { ...args, tokenFile: soon, dir: mkdtempSync(join(tmpdir(), 'f1-archive-')) };
     expect(await archive(deps, fresh)).toBe(false);
-    expect(requests.slice(asked).map((r) => r.path.split('/').at(-1))).toEqual([
-      'Index.json',
-      'SessionInfo.jsonStream',
-    ]);
+    expect(since(asked)).toEqual(['2019/Index.json', `${QUALI}Index.json`]);
     expect(logged('archive').at(-1)).toMatchObject({ session_key: 9101, error: 'token_expired' });
     expect(logged('archive_done').at(-1)).toMatchObject({ error: 'token_expired' });
   });
 
-  it('low disk stops the run before a session', async () => {
+  it('low disk stops the run before the first request', async () => {
     f1();
     const asked = requests.length;
     const fresh = { ...args, dir: mkdtempSync(join(tmpdir(), 'f1-archive-')) };
     expect(await archive({ ...deps, freeBytes: () => 5 * 1024 ** 3 - 1 }, fresh)).toBe(false);
-    expect(requests.slice(asked).map((r) => r.path)).toEqual(['2019/Index.json']);
+    expect(requests.length).toBe(asked);
+    expect(logged('archive_done').at(-1)).toMatchObject({ error: 'disk_low' });
+  });
+
+  it('low disk mid-session stops the run before the next request (the floor is checked before each one)', async () => {
+    f1();
+    const asked = requests.length;
+    let checks = 0;
+    const freeBytes = () => (checks++ < 3 ? 6 : 5) * 1024 ** 3 - 1; // under 5 GiB from the fourth request on
+    const fresh = { ...args, keys: [9102], dir: mkdtempSync(join(tmpdir(), 'f1-archive-')) };
+    expect(await archive({ ...deps, freeBytes }, fresh)).toBe(false);
+    expect(since(asked)).toEqual(['2019/Index.json', `${RACE}Index.json`, `${RACE}SessionInfo.jsonStream`]);
+    expect(logged('archive').at(-1)).toMatchObject({ session_key: 9102, error: 'disk_low' });
     expect(logged('archive_done').at(-1)).toMatchObject({ error: 'disk_low' });
   });
 
@@ -445,6 +560,259 @@ describe('archive (fixtures through msw, f1_ingest login)', { timeout: 120_000 }
     await admin.deleteFrom('meeting').where('meeting_key', '=', 9900).execute();
   });
 
+  describe('P3e: every topic of the session Index', () => {
+    const fresh = (keys: number[]) => ({ ...args, keys, dir: mkdtempSync(join(tmpdir(), 'f1-archive-')) });
+    const garbage = () => new HttpResponse('not a stream line\r\n');
+
+    it('asks for its valid topics once each, the parsed TOPICS first; raw files change no row, and a rerun asks nothing', async () => {
+      f1();
+      const plain = fresh([9102]);
+      expect(await archive(deps, plain)).toBe(true);
+      const before = await hashes();
+
+      const listed = ['CarData.z', 'ContentStreams', 'TimingData', '../x', 'A/B', 'Index', 'Position.z'];
+      const raw = [`${RACE}CarData.z.jsonStream`, `${RACE}ContentStreams.jsonStream`];
+      f1((path) => (path === `${RACE}Index.json` ? feeds(listed) : raw.includes(path) ? garbage() : undefined));
+      const all = fresh([9102]);
+      const asked = requests.length;
+      expect(await archive(deps, all)).toBe(true);
+      expect(since(asked)).toEqual([
+        '2019/Index.json',
+        `${RACE}Index.json`,
+        ...TOPICS.map((t) => `${RACE}${t}.jsonStream`),
+        ...raw,
+        `${RACE}Position.z.jsonStream`, // a 403: a marker
+      ]);
+      // Written, never read: the rows equal the run without them, and no garbage line is counted.
+      expect(await hashes()).toEqual(before);
+      expect(logged('archive').at(-1)).toMatchObject({
+        session_key: 9102,
+        files: 8,
+        raw_files: 2,
+        skipped_files: 3,
+        topics: 13,
+        topics_from: 'index',
+        skipped_lines: 0,
+      });
+      expect(readdirSync(join(all.dir, '9102'))).toEqual(
+        expect.arrayContaining([
+          'Index.json',
+          'CarData.z.jsonStream',
+          'ContentStreams.jsonStream',
+          'Position.z.missing',
+        ]),
+      );
+      expect(logged('archive_done').at(-1)).toMatchObject({ downloaded: 1, imported: 1, failed: 0 });
+
+      const again = requests.length;
+      expect(await archive(deps, all)).toBe(true);
+      expect(since(again)).toEqual(['2019/Index.json']);
+      expect(await hashes()).toEqual(before);
+    });
+
+    it('a session Index of 65 topics fails the session (too_many_topics), another Index failure fails it too', async () => {
+      const many = Array.from({ length: 65 }, (_, i) => `Topic${i}`);
+      f1((path) => (path === `${RACE}Index.json` ? feeds(many) : path === `${QUALI}Index.json` ? 500 : undefined));
+      const asked = requests.length;
+      expect(await archive(deps, fresh([9101, 9102]))).toBe(false);
+      expect(since(asked)).toEqual(['2019/Index.json', `${QUALI}Index.json`, `${RACE}Index.json`]);
+      expect(
+        logged('archive')
+          .slice(-2)
+          .map((l) => [l.session_key, l.error, l.topics]),
+      ).toEqual([
+        [9101, 'http_500', undefined],
+        [9102, 'too_many_topics', 65],
+      ]);
+      expect(logged('archive_done').at(-1)).toMatchObject({ downloaded: 0, imported: 0, failed: 2 });
+    });
+
+    it('a session Index 403 leaves Index.missing and asks for OLD_TOPICS after the TOPICS; the rerun asks again for neither', async () => {
+      f1((path) => (path === `${QUALI}Index.json` ? 403 : undefined));
+      const dir = fresh([9101]);
+      const asked = requests.length;
+      expect(await archive(deps, dir)).toBe(true);
+      const list = [...new Set<string>([...TOPICS, ...OLD_TOPICS])];
+      expect(list).toHaveLength(30);
+      expect(since(asked)).toEqual([
+        '2019/Index.json',
+        `${QUALI}Index.json`,
+        ...list.map((t) => `${QUALI}${t}.jsonStream`),
+      ]);
+      expect(existsSync(join(dir.dir, '9101', 'Index.missing'))).toBe(true);
+      expect(logged('archive').at(-1)).toMatchObject({
+        session_key: 9101,
+        files: 7,
+        raw_files: 0,
+        skipped_files: 23,
+        topics: 30,
+        topics_from: 'fallback',
+      });
+      f1();
+      const again = requests.length;
+      expect(await archive(deps, dir)).toBe(true);
+      expect(since(again)).toEqual(['2019/Index.json']);
+    });
+
+    it('a raw file over RAW_MAX_BYTES fails the session as too_large; a parsed topic keeps MAX_BYTES', async () => {
+      const chunk = new Uint8Array(1024 * 1024);
+      const big = () => {
+        let pulls = 0;
+        return new HttpResponse(
+          new ReadableStream<Uint8Array>({
+            pull(c) {
+              if (pulls++ <= RAW_MAX_BYTES / chunk.length) c.enqueue(chunk);
+              else c.close();
+            },
+          }),
+        );
+      };
+      expect(RAW_MAX_BYTES + chunk.length).toBeLessThan(MAX_BYTES);
+      f1((path) =>
+        path === `${RACE}Index.json`
+          ? feeds(['CarData.z'])
+          : path === `${RACE}CarData.z.jsonStream`
+            ? big()
+            : undefined,
+      );
+      const dir = fresh([9102]);
+      expect(await archive(deps, dir)).toBe(false);
+      expect(logged('archive').at(-1)).toMatchObject({ session_key: 9102, error: 'too_large' });
+      expect(readdirSync(join(dir.dir, '9102')).filter((f) => f.startsWith('CarData'))).toEqual([]);
+      // The same size as a parsed topic (WeatherData) is no failure: MAX_BYTES.
+      f1((path) => (path === `${RACE}WeatherData.jsonStream` ? big() : undefined));
+      const parsed = fresh([9102]);
+      await archive(deps, parsed);
+      expect(logged('archive').at(-1)).toMatchObject({ session_key: 9102, error: 'too_large' }); // MAX_SESSION_BYTES
+      expect(statSync(join(parsed.dir, '9102', 'WeatherData.jsonStream')).size).toBe(RAW_MAX_BYTES + chunk.length);
+    });
+
+    it('a raw file over MAX_SESSION_BYTES on disk is never counted: the session imports', async () => {
+      f1((path) => (path === `${RACE}Index.json` ? feeds(['CarData.z']) : undefined));
+      const dir = fresh([9102]);
+      mkdirSync(join(dir.dir, '9102'));
+      const big = join(dir.dir, '9102', 'CarData.z.jsonStream');
+      writeFileSync(big, '');
+      truncateSync(big, MAX_SESSION_BYTES + 1); // sparse: no bytes written
+      expect(await archive(deps, dir)).toBe(true);
+      expect(logged('archive').at(-1)).toMatchObject({ session_key: 9102, files: 8, raw_files: 1 });
+      expect(logged('archive').at(-1)).not.toHaveProperty('error');
+    });
+  });
+
+  it('2023 on (H3): downloads every file and writes no row, even from a garbage TimingData; downloaded, not imported', async () => {
+    const race = `${FILES_GP}/2023-03-05_Race/`;
+    const quali = `${FILES_GP}/2023-03-04_Qualifying/`;
+    f1((path) =>
+      path === `${race}Index.json`
+        ? feeds(['TimingData', 'CarData.z'])
+        : path === `${race}CarData.z.jsonStream` || path === `${quali}TimingData.jsonStream`
+          ? new HttpResponse('not a stream line\r\n')
+          : undefined,
+    );
+    const dir = { ...args, year: 2023, dir: mkdtempSync(join(tmpdir(), 'f1-archive-')) };
+    const asked = requests.length;
+    expect(await archive(deps, dir)).toBe(true);
+    expect(since(asked)).toContain(`${race}CarData.z.jsonStream`);
+    expect(readFileSync(join(dir.dir, '9201', 'TimingData.jsonStream'), 'utf8')).toBe('not a stream line\r\n');
+    expect(existsSync(join(dir.dir, '9202', 'CarData.z.jsonStream'))).toBe(true);
+    expect(existsSync(join(dir.dir, 'index-2023.json'))).toBe(true);
+    expect(await count('meeting', 'meeting_key = 9200')).toBe(0);
+    expect(await count('session', 'session_key IN (9201, 9202, 9203)')).toBe(0);
+    const bySession = Object.fromEntries(
+      logged('archive')
+        .filter((l) => l.year === 2023)
+        .map((l) => [l.session_key, l]),
+    );
+    expect(bySession[9201]).toMatchObject({ level: 30, files: 7, raw_files: 0, topics: 10 });
+    expect(bySession[9202]).toMatchObject({ level: 30, files: 8, raw_files: 1, topics: 11, topics_from: 'index' });
+    for (const key of [9201, 9202]) {
+      expect(bySession[key]).not.toHaveProperty('error');
+      expect(bySession[key]).not.toHaveProperty('t0');
+    }
+    expect(bySession[9203]).toMatchObject({ files: 0, skipped_files: 1, error: 'incomplete' });
+    expect(logged('archive_done').at(-1)).toMatchObject({
+      year: 2023,
+      downloaded: 2,
+      imported: 0,
+      failed: 0,
+      incomplete: 1,
+    });
+  });
+
+  it('off-Index sessions (D1): SessionInfo first, by the table path; the meeting spans them; a wrong key and a 403', async () => {
+    f1();
+    const off = { ...deps, offIndex: EXTRAS };
+    const dir = { ...args, keys: [9102, 9103, 9141, 9151], dir: mkdtempSync(join(tmpdir(), 'f1-archive-')) };
+    const asked = requests.length;
+    expect(await archive(off, dir)).toBe(false);
+    const paths = since(asked);
+    // The SessionInfo of each extra before the sessions, in table order; none for 9101 (the Index's Path wins).
+    expect(paths.slice(0, 4)).toEqual([
+      '2019/Index.json',
+      `${SPRINT}SessionInfo.jsonStream`,
+      `${EXTRA_TEST}SessionInfo.jsonStream`,
+      `${GONE}SessionInfo.jsonStream`,
+    ]);
+    // Then the race, the sprint (its SessionInfo already on disk) and the test day, every request by the table path.
+    expect(paths.slice(4)).toEqual([
+      `${RACE}Index.json`,
+      ...TOPICS.map((t) => `${RACE}${t}.jsonStream`),
+      `${SPRINT}Index.json`,
+      ...TOPICS.filter((t) => t !== 'SessionInfo').map((t) => `${SPRINT}${t}.jsonStream`),
+      `${EXTRA_TEST}Index.json`,
+      ...TOPICS.filter((t) => t !== 'SessionInfo').map((t) => `${EXTRA_TEST}${t}.jsonStream`),
+    ]);
+    expect(paths.some((p) => p.startsWith('2019/elsewhere/') || p.includes('2019-03-16_Other'))).toBe(false);
+
+    expect(
+      await admin
+        .selectFrom('session')
+        .select(['session_key', 'meeting_key', 'type', 'name', 'date_start', 'date_end'])
+        .where('session_key', 'in', [9103, 9141, 9142, 9151])
+        .execute(),
+    ).toEqual([
+      {
+        session_key: 9103,
+        meeting_key: 9100,
+        type: 'Race',
+        name: 'Sprint',
+        date_start: new Date('2019-03-15T01:00:00Z'),
+        date_end: new Date('2019-03-15T02:00:00Z'),
+      },
+    ]);
+    const span = async () =>
+      admin.selectFrom('meeting').select(['date_start', 'date_end']).where('meeting_key', '=', 9100).executeTakeFirst();
+    expect(await span()).toEqual({
+      date_start: new Date('2019-03-15T01:00:00Z'),
+      date_end: new Date('2019-03-17T07:10:00Z'),
+    });
+    expect(await count('lap', 'session_key = 9103')).toBe(await count('lap', 'session_key = 9102'));
+    expect(
+      logged('archive')
+        .filter((l) => [9141, 9151].includes(l.session_key))
+        .map((l) => [l.session_key, l.error]),
+    ).toEqual([
+      [9151, 'incomplete'],
+      [9141, 'key_mismatch'],
+    ]);
+    expect(existsSync(join(dir.dir, '9151'))).toBe(false); // a 403 there leaves no marker
+    expect(logged('archive_done').at(-1)).toMatchObject({ downloaded: 3, imported: 2, failed: 1, incomplete: 1 });
+
+    // A keyed rerun: the same span, the 403 asked again (a 500 now, so it fails), and no key is not_in_index.
+    f1((path) => (path === `${GONE}SessionInfo.jsonStream` ? 500 : undefined));
+    const again = requests.length;
+    expect(await archive(off, { ...dir, keys: [9102, 9151] })).toBe(false);
+    expect(since(again)).toEqual(['2019/Index.json', `${GONE}SessionInfo.jsonStream`]);
+    expect(await span()).toEqual({
+      date_start: new Date('2019-03-15T01:00:00Z'),
+      date_end: new Date('2019-03-17T07:10:00Z'),
+    });
+    expect(logged('archive').at(-2)).toMatchObject({ session_key: 9151, error: 'http_500' });
+    expect(logged('archive_done').at(-1)).toMatchObject({ imported: 1, failed: 1 });
+    expect(logged('archive').some((l) => l.error === 'not_in_index' && l.session_key === 9151)).toBe(false);
+  });
+
   it('the role exits 1 on an expired token, logged in as f1_ingest, without a request', async () => {
     const asked = requests.length;
     const expired = tokenFile(`${b64({ alg: 'none' })}.${b64({ exp: 1 })}.${SIGNATURE}`);
@@ -462,5 +830,7 @@ describe('archive (fixtures through msw, f1_ingest login)', { timeout: 120_000 }
     expect(all).not.toContain(TOKEN.split('.')[1]);
     expect(all).not.toContain('livetiming');
     expect(all).not.toContain('CHEQUERED FLAG');
+    // Topic names come from untrusted Index text: never logged.
+    for (const name of ['CarData', 'ContentStreams', 'TimingData', '../x']) expect(all).not.toContain(name);
   });
 });
