@@ -10,6 +10,7 @@ import {
   PlaybackEnd,
   PlaybackLaps,
   PlaybackPing,
+  PlaybackPos,
   PlaybackSnapshot,
   Recordings,
   type Stints,
@@ -24,10 +25,13 @@ import { server } from '../../../test/msw.setup.ts';
 import { access } from '../src/api/access.ts';
 import { createApp } from '../src/api/app.ts';
 import { createDb, type DB } from '../src/db/db.ts';
+import type { Frame } from '../src/live/fit.ts';
+import { OUTLINES } from '../src/live/outlines.ts';
 import { openRecording, type Recording } from '../src/live/recording.ts';
 import { run } from '../src/main.ts';
 import { createTestDb, type TestDb } from './db.ts';
 import { AUD, jwt, rsaKey, serveCerts, TEAM } from './jwt.ts';
+import { along, session } from './track.ts';
 
 // The playback routes against a real PostgreSQL 18 (f1_api login), behind the real Access middleware, served by
 // @hono/node-server on a real socket so a client disconnect is a real one. The recordings are synthetic, written
@@ -282,9 +286,10 @@ describe('playback routes (f1_api login, Access JWT, real socket)', { timeout: 6
     await readUntil(warm.res, /event: snapshot/);
     warm.abort.abort();
     const baseline = await quiet();
+    lines.length = 0;
     for (let i = 0; i < 10; i++) {
-      // 10 > the cap of 8: a leaked slot would turn the later ones into 503s
-      const res = await fetch(`${base}${open}`, {
+      // 10 > the cap of 8: a leaked slot would turn the later ones into 503s; every other one with pos=1 (P7a)
+      const res = await fetch(`${base}${open}${i % 2 ? '&pos=1' : ''}`, {
         method: 'HEAD',
         headers: { ...headers, 'cf-access-jwt-assertion': token },
       });
@@ -294,6 +299,7 @@ describe('playback routes (f1_api login, Access JWT, real socket)', { timeout: 6
       expect(res.headers.get('f1-revision')).toBe('dev');
       expect(await res.text()).toBe('');
     }
+    expect(own()).toEqual([]); // no open, pos or fit line
     await backTo(baseline);
     const eight = await Promise.all(Array.from({ length: 8 }, () => call(open)));
     for (const { res } of eight) {
@@ -604,6 +610,10 @@ describe('playback routes (f1_api login, Access JWT, real socket)', { timeout: 6
       `${ids.done}/stream?at=${DONE_AT}&still=`,
       `${ids.done}/stream?at=${DONE_AT}&still=1&still=1`,
       `${ids.done}/stream?at=live&still=1`, // a still frame is a replay at T
+      `${ids.done}/stream?at=${DONE_AT}&pos=0`, // positions are pos=1 or nothing (P7a)
+      `${ids.done}/stream?at=${DONE_AT}&pos=true`,
+      `${ids.done}/stream?at=${DONE_AT}&pos=`,
+      `${ids.done}/stream?at=live&pos=1&pos=1`,
     ];
     lines.length = 0;
     for (const path of bad) {
@@ -678,6 +688,165 @@ describe('playback routes (f1_api login, Access JWT, real socket)', { timeout: 6
         .set({ ended_at: null, complete: false })
         .where('id', '=', ids.open)
         .execute();
+    }
+  });
+
+  it('pos=1 on a synthetic Interlagos session: the api fits it, every event parses, and without pos the stream is the same minus the positions', async () => {
+    // test/track.ts on the P5c outline, put into an F1 frame by a near transform: the api's own fit has to undo it.
+    // The three cars start their last lap at the same receive time, so the stream's one `laps` event is due to no clock.
+    const [MAP_M, MAP_S, MAP_T0] = [9200, 9201, NOW - 6 * 24 * 60 * MIN];
+    const outline = OUTLINES['br-1940'] as string;
+    const frame: Frame = { s: 1.03, theta: (-57 * Math.PI) / 180, m: -1, tx: 210, ty: -140 };
+    const values = session({
+      outline,
+      frame,
+      sessionKey: MAP_S,
+      t0: MAP_T0,
+      cars: [
+        { driver: 4, laps: [80_000, 75_000, 76_000] },
+        { driver: 16, laps: [81_000, 76_000, 74_000] },
+        { driver: 44, laps: [82_000, 74_000, 75_000] },
+      ],
+    });
+    const [first, last] = [values[0]?.[0] ?? 0, values.at(-1)?.[0] ?? 0];
+    const path = `${MAP_S}-${first}`;
+    await admin
+      .insertInto('meeting')
+      .values({
+        meeting_key: MAP_M,
+        source: 'f1-live',
+        year: 2027,
+        name: 'Synthetic',
+        circuit_short_name: 'Interlagos',
+      })
+      .execute();
+    await admin
+      .insertInto('session')
+      .values({
+        session_key: MAP_S,
+        source: 'f1-live',
+        meeting_key: MAP_M,
+        name: 'Practice 1',
+        type: 'Practice',
+        date_start: new Date(first),
+        date_end: new Date(last),
+      })
+      .execute();
+    const { id } = await admin
+      .insertInto('recording')
+      .values({ session_key: MAP_S, path, started_at: new Date(first), ended_at: new Date(last), complete: true })
+      .returning('id')
+      .executeTakeFirstOrThrow();
+    let clock = first;
+    const rec = openRecording({ dir: join(liveDir, path), now: () => clock });
+    for (const [r, topic, payload, ts] of values) {
+      clock = r;
+      rec.feed(r, topic, payload, ts);
+    }
+    await rec.finish();
+
+    const contracts: Record<string, { parse(v: unknown): unknown }> = {
+      snapshot: PlaybackSnapshot,
+      delta: PlaybackDelta,
+      laps: PlaybackLaps,
+      pos: PlaybackPos,
+      end: PlaybackEnd,
+      ping: PlaybackPing,
+    };
+    /** Every event, parsed against its contract. */
+    const parsed = (text: string) =>
+      events(text).map(({ event, data }) => {
+        const contract = contracts[event ?? ''];
+        if (!contract) throw new Error('an event without a contract');
+        return { event, data: contract.parse(data) };
+      });
+    const logged = () => own().map((l) => JSON.parse(l) as Record<string, unknown>);
+    const at = MAP_T0 + 205_000; // the last 34 s of the session at 16×: about 2 s
+    const keys = (line: Record<string, unknown> | undefined) => Object.keys(line ?? {}).sort();
+    const counts = ['bad_base64', 'bad_deflate', 'too_large', 'zlib', 'bad_json'];
+    const openKeys = ['level', 'lines', 'mode', 'msg', 'scan_ms', 'snapshot_bytes', 'time'];
+    const track = along(outline);
+    const dense = Array.from({ length: Math.ceil(track.length) }, (_, i) => track.at(i)); // every metre
+    const off = ([x, y]: [number, number]) => Math.min(...dense.map(([a, b]) => Math.hypot(a - x, b - y)));
+    try {
+      lines.length = 0;
+      const withText = await (await call(stream(id, `at=${at}&speed=16&pos=1`))).res.text();
+      const withLog = logged();
+      lines.length = 0;
+      const withoutText = await (await call(stream(id, `at=${at}&speed=16`))).res.text();
+      const withoutLog = logged();
+      const [withPos, without] = [parsed(withText), parsed(withoutText)];
+
+      // The snapshot's position and every `pos` event: the three cars on the outline (the fit and toOutline).
+      expect(withPos[0]?.event).toBe('snapshot');
+      const snapshot = PlaybackSnapshot.parse(withPos[0]?.data);
+      const pos = withPos.flatMap((e) => (e.event === 'pos' ? [PlaybackPos.parse(e.data)] : []));
+      expect(snapshot.pos?.t).toBeLessThanOrEqual(at);
+      expect(pos.length).toBeGreaterThan(50);
+      for (const p of [snapshot.pos, ...pos]) {
+        expect(Object.keys(p?.cars ?? {}).sort()).toEqual(['16', '4', '44']);
+        for (const xy of Object.values(p?.cars ?? {})) expect(off(xy)).toBeLessThan(3);
+      }
+      expect(withPos.at(-1)?.event).toBe('end');
+      expect(without.map((e) => e.event)).not.toContain('pos');
+
+      // Without pos: the same events, the `pos` events and the snapshot's `pos` key aside (and the end's t, on the clock).
+      const rest = (list: typeof withPos) =>
+        list.flatMap((e): unknown[] => {
+          if (e.event === 'pos') return [];
+          if (e.event === 'end') return [{ event: 'end' }];
+          if (e.event !== 'snapshot') return [e];
+          const { pos: _, ...data } = PlaybackSnapshot.parse(e.data);
+          return [{ event: e.event, data }];
+        });
+      expect(keys(without[0]?.data as Record<string, unknown>)).toEqual(['laps', 'state', 'stints', 't', 'weather']);
+      expect(rest(withPos)).toEqual(rest(without));
+      expect(new Set(without.map((e) => e.event))).toEqual(new Set(['snapshot', 'delta', 'laps', 'end']));
+
+      // The logs: the fit (this api's first ask for the recording), the open line with its four fields either way, and
+      // the pos line for pos=1 only, each with its fixed fields.
+      expect(withLog.map((l) => l.msg)).toEqual(['playback fit', 'playback open', 'playback pos']);
+      expect(withoutLog.map((l) => l.msg)).toEqual(['playback open']);
+      const [fit, open, posLine] = withLog;
+      expect(keys(fit)).toEqual(
+        ['level', 'time', 'msg', 'outcome', 'ms', 'lines', 'samples', 'rms_m', ...counts].sort(),
+      );
+      expect(fit).toMatchObject({ outcome: 'found', samples: expect.any(Number), bad_base64: 0, bad_json: 0 });
+      expect(fit?.rms_m).toBeLessThan(1);
+      expect(keys(open)).toEqual(openKeys);
+      expect(keys(withoutLog[0])).toEqual(openKeys);
+      expect(keys(posLine)).toEqual(['level', 'time', 'msg', 'events', 'bytes', 'span_ms', ...counts].sort());
+      const data = [...withText.matchAll(/^event: pos\ndata: (.*)$/gm)].map((m) => m[1] ?? '');
+      expect(posLine).toMatchObject({
+        events: pos.length,
+        bytes: data.reduce((sum, d) => sum + Buffer.byteLength(d), 0),
+        span_ms: (pos.at(-1)?.t ?? 0) - (pos[0]?.t ?? 0),
+        ...Object.fromEntries(counts.map((c) => [c, 0])),
+      });
+      // The snapshot grows by its `pos` key alone (A§11.3: about 430 B for 22 cars).
+      const grown = Buffer.byteLength(`,"pos":${JSON.stringify(snapshot.pos)}`);
+      expect((open?.snapshot_bytes as number) - (withoutLog[0]?.snapshot_bytes as number)).toBe(grown);
+      for (const secret of [path, String(at), 'Position', 'Interlagos'])
+        expect(JSON.stringify([withLog, withoutLog])).not.toContain(secret);
+
+      // Live on the finished recording: the last line's newest entry. A recording without a circuit: null, no events.
+      lines.length = 0;
+      const live = parsed(await (await call(stream(id, 'at=live&pos=1'))).res.text());
+      expect(live.map((e) => e.event)).toEqual(['snapshot', 'end']);
+      expect(PlaybackSnapshot.parse(live[0]?.data).pos?.t).toBe(values.findLast((v) => v[1] === 'Position.z')?.[0]);
+      const none = parsed(await (await call(stream(ids.done, `at=${DONE_AT}&speed=4&pos=1`))).res.text());
+      expect(none[0]?.event === 'snapshot' && PlaybackSnapshot.parse(none[0].data).pos).toBeNull();
+      expect(none.map((e) => e.event)).not.toContain('pos');
+      expect(logged().map((l) => [l.msg, l.events, l.span_ms])).toEqual([
+        ['playback open', undefined, undefined],
+        ['playback pos', 0, 0],
+        ['playback open', undefined, undefined],
+        ['playback pos', 0, 0],
+      ]);
+    } finally {
+      await admin.deleteFrom('recording').where('id', '=', id).execute();
+      await admin.deleteFrom('session').where('session_key', '=', MAP_S).execute();
+      await admin.deleteFrom('meeting').where('meeting_key', '=', MAP_M).execute();
     }
   });
 });
