@@ -173,11 +173,13 @@ export function parseD(param: string | null, drivers: readonly { number: number 
 /** The value of `?d=`: the numbers in pick order, joined with ','. */
 export const formatD = (numbers: readonly number[]): string => numbers.join(',');
 
-export type PlayerTab = 'tower' | 'laps' | 'order' | 'weather';
+export type PlayerTab = 'tower' | 'laps' | 'order' | 'compare' | 'stints' | 'weather';
 
-/** `?tab=` (#100): laps, order or weather; anything else, or none, is the tower. */
+/** `?tab=` (#100, #112): laps, order, compare, stints or weather; anything else, or none, is the tower. */
 export const parseTab = (param: string | null): PlayerTab =>
-  param === 'laps' || param === 'order' || param === 'weather' ? param : 'tower';
+  param === 'laps' || param === 'order' || param === 'compare' || param === 'stints' || param === 'weather'
+    ? param
+    : 'tower';
 
 const T_PARAM = /^\d{2}:\d{2}:\d{2}$/;
 

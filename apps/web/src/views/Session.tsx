@@ -6,7 +6,7 @@ import { orderDrivers } from '../lib/session.ts';
 import { Pending } from '../ui/ErrorView.tsx';
 import { NoData } from '../ui/NoData.tsx';
 import { Compare } from './Compare.tsx';
-import { DriverPicker } from './DriverPicker.tsx';
+import { DriverPicker, usePicks } from './DriverPicker.tsx';
 import { LapsTab } from './LapsTab.tsx';
 import { MiniSectors } from './MiniSectors.tsx';
 import { Order } from './Order.tsx';
@@ -53,16 +53,9 @@ export function Session({ session, view }: { session: number; view: View }) {
   // It starts from `?d=`, read once; without a valid one it is the top 2 of the lap-table order and stays out of the
   // URL until the first pick. App's key resets it per session.
   const [fromUrl] = useState(() => new URLSearchParams(location.search).get('d'));
-  const [picked, setPicked] = useState<number[] | null>(null);
   const order = useMemo(() => (d && laps.data ? orderDrivers(d, laps.data) : []), [d, laps.data]);
-  const chosen = useMemo(() => picked ?? parseD(fromUrl, order), [picked, fromUrl, order]);
-  const selected = useMemo(
-    () => (chosen === null ? order.slice(0, 2) : chosen.flatMap((n) => order.filter((x) => x.number === n))),
-    [chosen, order],
-  );
-  const numbers = selected.map((x) => x.number);
-  const toggle = (n: number) => setPicked(numbers.includes(n) ? numbers.filter((x) => x !== n) : [...numbers, n]);
-  const setReference = (n: number) => setPicked([n, ...numbers.filter((x) => x !== n)]);
+  const initial = useMemo(() => parseD(fromUrl, order), [fromUrl, order]);
+  const { chosen, selected, numbers, toggle, setReference } = usePicks(order, initial);
   const search = chosen !== null && numbers.length > 0 ? `?d=${formatD(numbers)}` : '';
   const picks = view === 'compare' || view === 'minisectors';
   // Written back on Compare and Mini-sectors only, without a history entry; the other tabs keep their own URL.
