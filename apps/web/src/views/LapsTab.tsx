@@ -5,11 +5,13 @@ import { type Quali, qualiPhases } from '../lib/quali.ts';
 import { trackPeriods } from '../lib/track.ts';
 import { LapTable } from './LapTable.tsx';
 import { QualiTable } from './QualiTable.tsx';
+import { RaceControlLog } from './RaceControlLog.tsx';
 import { QualiTiles, SessionTiles } from './Tiles.tsx';
 
 // The Laps tab (P4b): the tiles, then the lap table, or for qualifying By phase | Every lap (component
-// state, By phase first). Race control is fetched for races and sprints only, for the SC, VSC and red-flag
-// bands; the table shows at once and gains its bands when it arrives.
+// state, By phase first), then the race-control log (#111). Race control is fetched for every session type; only
+// races and sprints draw the SC, VSC and red-flag bands from it. The table shows at once and gains its bands when
+// it arrives.
 
 /** By phase | Every lap (component state, By phase first): the phase table, or `children` for every lap. Also the player's. */
 export function QualiSwitch({ detail, quali, children }: { detail: SessionDetail; quali: Quali; children: ReactNode }) {
@@ -35,8 +37,8 @@ export function LapsTab({ session, detail, laps }: { session: number; detail: Se
   const race = detail.session.type === 'Race';
   const qualifying = detail.session.type === 'Qualifying';
   // The session page shows its reason instead of this tab when there are no laps (#99).
-  const rc = useRaceControl(session, race);
-  const track = useMemo(() => (rc.data ? trackPeriods(rc.data) : null), [rc.data]);
+  const rc = useRaceControl(session);
+  const track = useMemo(() => (race && rc.data ? trackPeriods(rc.data) : null), [race, rc.data]);
   const quali = useMemo(
     () => (qualifying ? qualiPhases(laps, detail.results) : null),
     [qualifying, laps, detail.results],
@@ -45,7 +47,7 @@ export function LapsTab({ session, detail, laps }: { session: number; detail: Se
     <>
       {quali && <QualiTiles detail={detail} quali={quali} />}
       <SessionTiles detail={detail} laps={laps} />
-      {rc.error && <p className="muted">Race control did not load: no SC, VSC or red-flag bands.</p>}
+      {race && rc.error && <p className="muted">Race control did not load: no SC, VSC or red-flag bands.</p>}
       {quali ? (
         <QualiSwitch detail={detail} quali={quali}>
           <LapTable detail={detail} laps={laps} track={track} />
@@ -53,6 +55,8 @@ export function LapsTab({ session, detail, laps }: { session: number; detail: Se
       ) : (
         <LapTable detail={detail} laps={laps} track={track} />
       )}
+      {rc.data && <RaceControlLog detail={detail} laps={laps} rows={rc.data} />}
+      {!race && rc.error && <p className="muted">Race control did not load.</p>}
     </>
   );
 }
