@@ -1,16 +1,17 @@
-import type { Laps, Live, Pits, SessionDetail, Stints } from '@f1/contracts';
-import type { CSSProperties } from 'react';
+import type { Laps, Live, Pits, SessionDetail, Stints, Weather } from '@f1/contracts';
 import { useMemo } from 'react';
-import { usePits, useRaceControl, useStints } from '../lib/api.ts';
+import { usePits, useRaceControl, useStints, useWeather } from '../lib/api.ts';
 import { type Compound, compoundOf, compoundsOf, UNKNOWN_COMPOUND } from '../lib/compound.ts';
 import { startsStint } from '../lib/crossings.ts';
+import { paceRuns } from '../lib/runs.ts';
 import { type Driver, orderDrivers, plural, sourceWords, teamStyle } from '../lib/session.ts';
 import { fmtClock } from '../lib/time.ts';
-import { KIND_LABEL, kindsAt, type Period, trackPeriods } from '../lib/track.ts';
+import { clockPeriods, KIND_LABEL, kindsAt, type Period, trackPeriods } from '../lib/track.ts';
 import { Pending } from '../ui/ErrorView.tsx';
 import { NoData } from '../ui/NoData.tsx';
 import { Note } from '../ui/Note.tsx';
 import { Scroll } from '../ui/Scroll.tsx';
+import { PaceTable, pct, RunPlan, vars } from './Pace.tsx';
 
 // Stints on a real lap scale (P4f, A§13): a lane per driver, a stint at (lap_start − 1) / total and
 // (laps) / total wide, so a hole in the data shows as a gap and no row is stretched to fit. Each row is a
@@ -94,8 +95,6 @@ export function stintLayout(drivers: readonly Driver[], laps: Laps, stints: Stin
   return { total, ticks, rows };
 }
 
-const pct = (x: number) => `${(x * 100).toFixed(3)}%`;
-const vars = (o: Record<string, string>) => o as CSSProperties;
 const range = (s: Seg) => `${s.from}–${s.to}`;
 
 const inOrder = (row: StintRow) => [...row.segs, ...row.unplaced].sort((a, b) => a.stint - b.stint);
@@ -409,6 +408,8 @@ export function PitStops({ detail, rows }: { detail: SessionDetail; rows: readon
   );
 }
 
+const NO_WEATHER: Weather = [];
+
 export function StintsTab({
   session,
   detail,
@@ -425,12 +426,23 @@ export function StintsTab({
 }) {
   const stints = useStints(session);
   const pits = usePits(session);
-  const race = detail.session.type === 'Race';
-  const rc = useRaceControl(session, race && laps.length > 0);
-  // A cached answer from the Laps tab comes back even when disabled: only a race uses it.
-  const periods = useMemo(
-    () => (race && rc.data ? trackPeriods(rc.data).periods.filter((p) => p.kind !== 'red') : []),
-    [race, rc.data],
+  const { type, date_end } = detail.session;
+  const race = type === 'Race';
+  const practice = type === 'Practice';
+  const rc = useRaceControl(session, (race || practice) && laps.length > 0);
+  const weather = useWeather(session);
+  // A cached answer from the Laps tab comes back even when disabled: only a race (the lap periods) and practice (the
+  // clock periods) use it.
+  const lapPeriods = useMemo(() => (race && rc.data ? trackPeriods(rc.data).periods : []), [race, rc.data]);
+  // The stint bars draw SC and VSC only; the pace leaves red laps out too.
+  const periods = useMemo(() => lapPeriods.filter((p) => p.kind !== 'red'), [lapPeriods]);
+  const clock = useMemo(
+    () => (practice && rc.data ? clockPeriods(rc.data, Date.parse(date_end)) : []),
+    [practice, rc.data, date_end],
+  );
+  const runs = useMemo(
+    () => ((race || practice) && stints.data ? paceRuns(laps, stints.data, type, { periods: lapPeriods, clock }) : []),
+    [race, practice, laps, stints.data, type, lapPeriods, clock],
   );
   const pitRows = useMemo(
     () =>
@@ -443,6 +455,21 @@ export function StintsTab({
     <>
       {race && rc.error && <p className="muted">Race control did not load: no SC or VSC lines.</p>}
       <StintBars detail={detail} laps={laps} stints={stints.data} periods={periods} pitRows={pitRows} />
+      {/* The runs wait for race control, so no lap is counted that its periods would have left out. */}
+      {(race || practice) && !rc.isPending && (
+        <>
+          {practice && runs.length > 0 && (
+            <RunPlan detail={detail} laps={laps} runs={runs} clock={clock} weather={weather.data ?? NO_WEATHER} />
+          )}
+          <PaceTable
+            detail={detail}
+            laps={laps}
+            runs={runs}
+            weather={weather.data ?? NO_WEATHER}
+            failed={rc.error != null}
+          />
+        </>
+      )}
       {pits.data &&
         (pits.data.length === 0 ? (
           <p className="muted">{`No pit rows in ${sourceWords(detail.session.source)} for this session.`}</p>

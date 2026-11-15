@@ -2,10 +2,15 @@ import type { Laps, RaceControl, SessionDetail, Stints } from '@f1/contracts';
 import { type ReactNode, useCallback, useMemo, useState } from 'react';
 import { useRaceControl, useStints } from '../lib/api.ts';
 import { cycleText, PIT_WINDOW, pitCycles } from '../lib/crossings.ts';
-import type { Driver } from '../lib/session.ts';
-import { type Period, trackPeriods } from '../lib/track.ts';
+import { evolution, evolutionSlots, SLOT_MS } from '../lib/evolution.ts';
+import { phaseName } from '../lib/quali.ts';
+import { type Driver, plural } from '../lib/session.ts';
+import { fmtHm, fmtLap } from '../lib/time.ts';
+import { type ClockPeriod, clockPeriods, type Period, trackPeriods } from '../lib/track.ts';
+import { Scroll } from '../ui/Scroll.tsx';
 import { Chart } from './Chart.tsx';
 import { DeltaTable, Duel } from './DeltaTable.tsx';
+import { evolutionChartOption, evolutionWindow } from './evolution-chart-option.ts';
 import { gapChartLabel, gapChartOption } from './gap-chart-option.ts';
 import { type ChartTokens, lapChartOption } from './lap-chart-option.ts';
 
@@ -172,8 +177,91 @@ export function Comparison({
 }
 
 /**
- * The session page's comparison: race control (races only, the same query as the Laps tab) bands both charts once it
- * arrives, and in a race the pit cycles close the side column.
+ * Track evolution (#114, A§13), for qualifying and practice, without picks: every timed lap at its start, the running
+ * best as a step line and the phases or red flags as bands. Under 640 px the chart gives way to the fastest lap per
+ * 5 minutes (CSS shows one of `.evo-wide` and `.evo-narrow`). `clock`: the practice's red-flag periods.
+ */
+export function TrackEvolution({
+  detail,
+  laps,
+  clock,
+  rcFailed = false,
+}: {
+  detail: SessionDetail;
+  laps: Laps;
+  clock: readonly ClockPeriod[];
+  rcFailed?: boolean;
+}) {
+  const { type, name } = detail.session;
+  const evo = useMemo(() => evolution(laps, type, name, clock), [laps, type, name, clock]);
+  const slots = useMemo(() => evolutionSlots(evo.points), [evo]);
+  const win = evolutionWindow(evo);
+  const caption = [
+    evo.noStart > 0 && `${plural(evo.noStart, 'lap')} without a start time left out`,
+    win && win.above > 0 && `${win.above} above 107 % not drawn`,
+    win && win.below > 0 && `${win.below} below the window not drawn`,
+  ].filter(Boolean);
+  const acronym = useCallback(
+    (n: number) => detail.drivers.find((d) => d.driver_number === n)?.acronym ?? String(n),
+    [detail.drivers],
+  );
+  const option = useCallback((t: ChartTokens) => evolutionChartOption(evo, t, acronym), [evo, acronym]);
+  const phased = slots.some((s) => s.phase !== null);
+  return (
+    <section className="card evo">
+      <h2>Track evolution</h2>
+      {evo.points.length === 0 ? (
+        <p className="muted">No timed lap with a start time.</p>
+      ) : (
+        <>
+          <p className="keys">
+            <span aria-hidden="true">●</span> lap · <span aria-hidden="true">○</span> deleted · line: best so far
+          </p>
+          <div className="evo-wide">
+            <Chart label="Track evolution: lap times over the session" option={option} />
+          </div>
+          <div className="evo-narrow">
+            <Scroll label="Fastest lap per 5 minutes">
+              <table className="evo-slots" aria-label="Fastest lap per 5 minutes">
+                <thead>
+                  <tr>
+                    {phased && <th scope="col">Phase</th>}
+                    <th scope="col">Slot</th>
+                    <th scope="col">Lap</th>
+                    <th scope="col">Driver</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {slots.map((s) => (
+                    <tr key={`${s.phase}-${s.slot}`}>
+                      {phased && <td>{s.phase === null ? '' : phaseName(name, s.phase)}</td>}
+                      <td>
+                        {fmtHm(s.slot)}–{fmtHm(s.slot + SLOT_MS)}
+                      </td>
+                      <td>
+                        {fmtLap(s.point.ms)}
+                        {s.best && ', new best'}
+                      </td>
+                      <td>
+                        {acronym(s.point.driver)} L{s.point.lap}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </Scroll>
+          </div>
+        </>
+      )}
+      {caption.length > 0 && <p className="muted">{caption.join(' · ')}</p>}
+      {rcFailed && <p className="muted">Race control did not load: no red-flag bands.</p>}
+    </section>
+  );
+}
+
+/**
+ * The session page's comparison: race control (races and practice, the same query as the Laps tab) bands both charts
+ * once it arrives, and in a race the pit cycles close the side column. Outside races the track evolution follows.
  */
 export function Compare({
   session,
@@ -188,20 +276,30 @@ export function Compare({
   laps: Laps;
   onReference: (driver: number) => void;
 }) {
-  const race = detail.session.type === 'Race';
-  const rc = useRaceControl(session, race && laps.length > 0);
-  // A cached answer from the Laps tab comes back even when disabled: only a race uses it.
+  const { type, date_end } = detail.session;
+  const race = type === 'Race';
+  const practice = type === 'Practice';
+  const rc = useRaceControl(session, (race || practice) && laps.length > 0);
+  // A cached answer from the Laps tab comes back even when disabled: a race uses it for its lap periods, practice for
+  // the red-flag clock periods.
   const periods = useMemo(() => (race && rc.data ? trackPeriods(rc.data).periods : []), [race, rc.data]);
+  const clock = useMemo(
+    () => (practice && rc.data ? clockPeriods(rc.data, Date.parse(date_end)) : []),
+    [practice, rc.data, date_end],
+  );
   return (
-    <Comparison
-      detail={detail}
-      drivers={drivers}
-      laps={laps}
-      periods={periods}
-      rcFailed={race && rc.error != null}
-      onReference={onReference}
-    >
-      {race && <StoredPitCycles session={session} drivers={drivers} laps={laps} periods={periods} rc={rc} />}
-    </Comparison>
+    <>
+      <Comparison
+        detail={detail}
+        drivers={drivers}
+        laps={laps}
+        periods={periods}
+        rcFailed={race && rc.error != null}
+        onReference={onReference}
+      >
+        {race && <StoredPitCycles session={session} drivers={drivers} laps={laps} periods={periods} rc={rc} />}
+      </Comparison>
+      {!race && <TrackEvolution detail={detail} laps={laps} clock={clock} rcFailed={practice && rc.error != null} />}
+    </>
   );
 }
