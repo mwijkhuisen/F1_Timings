@@ -13,7 +13,9 @@ Status: approved by the owner (2026-10-25). It builds on `ARCHITECTURE.md` (cite
 | Nov 2026 → Jan 2027 | **P4a–P4f** | The redesign (owner, 2026-11-07): web only, on the API as it is, so it can run next to P2f and the last 2026 weekends |
 | Nov 2026 → Jan 2027 | **P5a–P5c** | Weather (owner, 2026-11-07), next to P4. P5c's live check needs a session (Lusail 27–29 Nov or Yas Marina 4–6 Dec 2026, else 2027 testing) |
 | Nov 2026 → Jan 2027 | **P6a–P6c** | Team radio (owner, 2026-11-09), next to P4 and P5. P6a's live check needs a session (Las Vegas 20–22 Nov, else Lusail or Yas Marina). P6b and P6c start only after their gate checks |
-| After P2 | **P3a–P3g**, then **P7** | History (owner, 2026-11-10): the F1 archive from 2018 (every topic, 2023 on as files only), Jolpica 1950–2017, the FIA PDFs from 2012, the sources combined, old-season views; then telemetry. P3d's probes come first |
+| After P2 | **P3a–P3g** | History (owner, 2026-11-10): the F1 archive from 2018 (every topic, 2023 on as files only), Jolpica 1950–2017, the FIA PDFs from 2012, the sources combined, old-season views. P3d's probes come first |
+| Nov → Dec 2026 | **P7a** | Telemetry, map first (owner, 2026-11-15, #122): the player's car map from the recordings alone, so it needs nothing from P3e. Its [weekend] check needs a session: Yas Marina 4–6 Dec (else Lusail 27–29 Nov if P7a is ready, else 2027 pre-season testing, stated in the PR) |
+| After P3e | **P7b**, **P7c** | Telemetry (owner, 2026-11-15): the stored laps, the route and the per-lap figures (P7b: the VM backfill of recordings first, 2018 on after P3e), then the traces on Compare (P7c) |
 | After the #123 plan PR | **P8** | Championship standings (owner, 2026-11-15), 2023 on; next to P4–P6 |
 
 Remaining 2026 weekends (OpenF1 schedule): Austin (race 25 Oct) · Mexico City 30 Oct–1 Nov · São Paulo 6–8 Nov · Las Vegas 20–22 Nov · Lusail 27–29 Nov · Yas Marina 4–6 Dec.
@@ -26,7 +28,7 @@ Remaining 2026 weekends (OpenF1 schedule): Austin (race 25 Oct) · Mexico City 3
   - **[weekend]** needs a real F1 session.
   - **[owner]** is a manual owner action or judgement.
 - **Per phase:** one issue with the goal, scope, deliverables and acceptance criteria copied from this file. Branch `claude/p<N><x>-<slug>`, conventional commits, and a PR with an evidence checklist (each criterion → test or command output). Agents never merge. The owner merges with a merge commit once `ci` and `security` are green (branch protection on `main` requires both; owner, 2026-10-25).
-- **Reviews:** a fresh-session `/code-review` before merging P1b, P1c, P2b, P2c, P2d, P4e, P5a, P5b, P5c, P6a, P6b and P8 (P8: a migration, two endpoints, a route and a spoiler rule; owner, 2026-11-15, #123). A security review for anything touching secrets, the firewall, Access, the token or the compose hardening (P0 CI, P1f, P2c), for P5c (a new outbound host in the `ingest` daemon and third-party map data in the page), for P6a (a new outbound path in the recorder, a file-serving route and a CSP change), and for P6b (a new container, C++ parsing third-party MP3 files, a host download script and a new route), for P3f (a new outbound host, `fia.com`, and a parser for third-party PDF files) and for P7 if it adds a route over a large table (owner, 2026-11-10). A fresh-session `/code-review` also before merging P3b, P3c, P3e and P3f. For the web-only P4 phases a Sonnet security review is recommended where more feed or URL text is parsed or rendered (P4d, P4e, P4f), and optional elsewhere unless the CSP or the build config changes. For P8 a Sonnet security review is recommended (owner, 2026-11-15, #123): a new route under the same Access and fixed errors, and two new paths on an existing host.
+- **Reviews:** a fresh-session `/code-review` before merging P1b, P1c, P2b, P2c, P2d, P4e, P5a, P5b, P5c, P6a, P6b, P7a, P7b, P7c and P8 (P8: a migration, two endpoints, a route and a spoiler rule; owner, 2026-11-15, #123). A security review for anything touching secrets, the firewall, Access, the token or the compose hardening (P0 CI, P1f, P2c), for P5c (a new outbound host in the `ingest` daemon and third-party map data in the page), for P6a (a new outbound path in the recorder, a file-serving route and a CSP change), and for P6b (a new container, C++ parsing third-party MP3 files, a host download script and a new route), for P3f (a new outbound host, `fia.com`, and a parser for third-party PDF files), for P7a (a decoder for untrusted compressed input in the `api` and a change to the playback stream) and for P7b (a route over a large table, and untrusted inflate in a job) (owner, 2026-11-15, #122; the P7 sentence of 2026-11-10 is replaced). A fresh-session `/code-review` also before merging P3b, P3c, P3e and P3f. For the web-only P4 phases a Sonnet security review is recommended where more feed or URL text is parsed or rendered (P4d, P4e, P4f), and optional elsewhere unless the CSP or the build config changes. For P7c a Sonnet security review is recommended (owner, 2026-11-15, #122): it renders numbers from the API only. For P8 a Sonnet security review is recommended (owner, 2026-11-15, #123): a new route under the same Access and fixed errors, and two new paths on an existing host.
 - **Models and effort** (owner, 2026-10-25; each phase issue has its own table):
   - Build: Opus 5.5 at `xhigh` (`high` for UI and well-specified phases, `max` for P2b's lap reconstruction). Sonnet 5.5 at `high` for small phases (P2f, P3d).
   - Code review: a fresh session with a different model from the build. Sonnet 5.5 at `xhigh` for required reviews and `high`/`medium` otherwise; Opus 5.5 when Sonnet built.
@@ -261,8 +263,8 @@ Remaining 2026 weekends (OpenF1 schedule): Austin (race 25 Oct) · Mexico City 3
   - **H12, Jolpica:** imported from its CSV dump, not the API. The free dump is about 14 days behind, which does not matter for finished seasons.
   - **H13, old-season views:** the views hide per-lap columns a session has no data for, and add a panel with the session's bests (best sectors and top speeds).
   - **H14, measure first:** the first full archive download (all topics, telemetry included) runs on the owner's machine for one season and measures size, time and RSS. The caps and the VM run come after.
-  - **H15, telemetry:** it gets its own phase (P7), after P3e.
-  - **H16, order:** the probes first (P3d), then P3e, P3c, P3f, P3b and P3g. P7 comes after P3e (owner decision D1, 2026-11-12: the P3b merge core comes before P3c; P3b is two PRs).
+  - **H15, telemetry:** it gets its own phase (P7). Since 2026-11-15 (T7) P7a, the player's map from the recordings, needs nothing from P3e; P7b and P7c come after it.
+  - **H16, order:** the probes first (P3d), then P3e, P3c, P3f, P3b and P3g. P7b and P7c come after P3e, and P7a needs nothing from it (T7, owner, 2026-11-15). Owner decision D1, 2026-11-12: the P3b merge core comes before P3c; P3b is two PRs.
 - **Related issues:**
   - #96 (pit-lane topics, its topic check) and #126 (2018 compound names) take facts from P3d;
   - #122 is P7;
@@ -714,17 +716,108 @@ Remaining 2026 weekends (OpenF1 schedule): Austin (race 25 Oct) · Mexico City 3
   3. An ADR on recording F1 TV audio (terms, storage; as ADR-0005), then P6c's scope, sized by those numbers: 20 streams × the session's length, disk per race, CPU on the VM.
 - **Acceptance:** written into this section and the issue once the gate has passed.
 
-### P7: Telemetry (owner, 2026-11-10; after P3e; the plan of #122)
+### P7: Telemetry (owner, 2026-11-10; replanned 2026-11-15; the plan of #122)
 
-- **Goal:** car telemetry (speed, throttle, brake, gear, RPM, DRS) and track position, per lap, in the site (H15). This is the phase that #122 (owner, 2026-11-09: telemetry traces and a car-position map reopen A§1) plans. Its spike is this gate, and its questions are answered in the PR that writes P7's scope.
-- **Sources:** the archive's `CarData.z` and `Position.z` (2018 on, downloaded raw by P3e) and the recordings (P2c, 19 topics with a token). OpenF1's `car_data` and `location` (2023 on, about 3.7 Hz) are the cross-check. Their rows are live-ingested and can have holes (A§11.3).
-- **Gate first** [box], #122's spike:
-  - the `.z` decoder (bounded inflate) and the CarData channel layout;
-  - from P3e's measurements, the rows and bytes per session once parsed;
-  - the PostgreSQL size for 2018 to now, against the A§14.1 disk;
-  - whether a table (perhaps partitioned per season) or compressed files next to the archive serve the views better.
-- **Scope** (written into this section once the gate has passed): a parser for the two `.z` topics on the P2b reader, the storage, `/api/v1/sessions/:key/telemetry?driver=&lap=` with a bounded size, and the views: a speed trace with throttle and brake per lap, two laps compared, and a track position replay in the player.
-- **Acceptance:** written into this section and the issue once the gate has passed.
+- **Goal:** car telemetry and track position in the site (H15): the cars on a map in the player, the top speed and the full-throttle share of each lap, and speed, throttle and brake traces on Compare. #122 (owner, 2026-11-09: telemetry traces and a car-position map reopen A§1) is this plan, and A§1 now lists them.
+- **Gate (passed):** the spike of #122 ran [box] 2026-11-15, on the owner's machine (WSL) and in the f1-server image on the VM. Its numbers are on [#122](https://github.com/mwijkhuisen/F1_Timings/issues/122#issuecomment-6894255124) and in A§6.1, A§6.2, A§7, A§11.3 and A§14. They are counts, sizes, rates and timings only: the scripts and the decoded data stayed on the owner's machine (A§12.1 invariant 3).
+  - **Decoder:** about 180,000 `.z` messages decoded with 0 failures, all raw deflate, the largest 11.7 KB. A 95 min race decodes in 868 ms of CPU on the VM's 1 CPU, and the spike's whole analysis peaked at 236 MB RSS there.
+  - **Storage:** a packed row per driver-lap takes 3.3–3.9 GB and 645 k rows for 2018 to now, and a lap reads in 0.2 ms. A row per sample would take 53–63 GB and about 600 M rows. The disk has 960 GB free.
+  - **Sources:** OpenF1's `car_data` and `location` equal our recordings (99.9–100 % of rows). The 11404 archive is cut off after lap 55, holds about 60 % of the samples, and 15 % of its matched Position samples differ **[U]**. The 11408 archive equals its recordings.
+  - **Map frame:** a similarity transform fitted per session lands a p90 of 7–19 m from the P5c outline, inside the outline's own error of about 25 m. Interlagos' origin moved about 311 m between 2021 and 2026, so the frame is not per circuit.
+  - **Stream:** positions at 2 Hz cost about 3 MB an hour uncompressed, and a snapshot grows by about 430 B.
+- **Decisions** (owner, 2026-11-15, #122; they live in A§6, A§7, A§10, A§11.3 and A§13, T8):
+  - **T1, sources:** a complete token recording first. The archive fills the laps the recording lacks, and covers 2018–2025 and any session without a token recording (2022 only if F1 serves it again, A§6.2). OpenF1's `car_data` and `location` are only a [box] cross-check, never ingested.
+  - **T2, storage:** one PostgreSQL row per session, driver and lap, with packed `bytea` columns (CarData 10 B per sample: a time delta and RPM, the speed as uint16, gear, throttle, brake and DRS as uint8; Position int16 X, Y and Z and the status, with the time and X/Y delta-encoded). A `telemetry` job derives it from the raw files, and it is rederivable (A§2 principle 3). Not a row per sample, and not files (a new format). The player's map needs no table.
+  - **T3, the traces' x-axis:** distance in metres from the lap start along the car's own Position path (CV 0.09–0.13 % across clean laps, against 0.21 % for integrated speed). A sample gap over 1.5 s breaks the line, and nothing is filled or interpolated across it (A§2 principle 4). Gaps over 1 s are normal jitter (the longest is about 1.4 s).
+  - **T4, map transport:** positions travel in the playback SSE stream behind a parameter, `pos=1`, thinned to at most 2 Hz (the first sample per 500 ms bucket). That gives one clock for live and replay, nothing after T by construction, and about 3 MB an hour uncompressed (the SSE route is not compressed). The scan keeps only the last raw `Position.z` line before T and decodes it for the snapshot (one event, about 430 B), and later lines are decoded as they stream. `CarData.z` stays out of the stream.
+  - **T5, map frame:** a similarity transform (rotation, uniform scale, offset and mirror: every spike fit was mirrored, with y flipped), fitted per session from the session's own on-track Position samples onto the P5c outline (km frame, `apps/web/src/map/<id>.json`). It is not stored per circuit. The spike's residual p90 is 7–19 m, inside the outline's own about 25 m (15 m simplification and 10 m rounding). In P7a the api fits from the recording's first complete on-track lap (the implementation, its cache and where it runs are for P7a's plan mode). The map shows no car until a fit exists, also in a live session.
+  - **T6, per-lap figures:** the top speed anywhere on the lap and the share of the lap at full throttle, in the lap views and the API (P7b). There is no DRS figure: 2026 has no DRS channel (channel 45 is present in 2019 and 2021).
+  - **T7, phases, map first:** P7a, the decoder and the player map (recordings only); P7b, storage, the job, the route and the per-lap figures; P7c, the traces on Compare. Traces in the player's Compare tab are out of P7.
+  - **T8:** no new ADR. The choices live in A§7, A§10, A§11.3 and A§13.
+- **Sources:**
+  - **The recordings** (P2c): `CarData.z` and `Position.z` lines of the 19 topics a token gets (A§11.1), read by the playback reader.
+  - **The archive** (P3a, P3e): the same two topics as raw files under `/srv/f1/archive`, 2018 on (A§6.2).
+  - **OpenF1** `car_data` and `location` (2023 on, about 3.7 Hz): the cross-check only (A§6.1).
+  - The facts of the format, the rates, the sizes and the 11404 truncation are in A§6.2.
+- **Rules for every P7 phase** (owner, 2026-11-15, #122):
+  - **Spoiler safety:** the player shows nothing after T (positions come only through the playback stream). On the session pages telemetry shows only inside an opened session.
+  - **Data:** decoded telemetry is F1 data (A§12.1 invariant 3), never committed. The `.z` parser fixtures are synthetic: made in the test with `deflateRawSync` from synthetic JSON. Any committed fixture is a `.jsonl` or `.jsonStream` of at most 32 KiB in `apps/server/test/fixtures/{live,archive}/`. The zip-bomb input is generated in the test, never committed.
+  - **Decoder bound:** base64, then `inflateRawSync` with `maxOutputLength` 256 KiB per message (the largest seen is 11.7 KB), then `JSON.parse`. Every message in the spike was raw deflate (0 of about 180,000 had a zlib header), so a zlib-wrapped payload counts as a failure. A failed message is counted and skipped, never thrown out of a scan.
+  - **Gaps:** never filled, interpolated or extrapolated (A§2 principle 4).
+  - Each phase amends A§6, A§7, A§10, A§11.3 and A§13 for what it proves or changes, marked "(owner, 2026-11-15, #122)", and writes an **[U]** it settles back in the same PR.
+- **Order:** P7a first, now: it needs nothing from P3e. P7b after P7a (it reuses the decoder and the fit) and, for 2018 on, after P3e (#130). P7c after P7b.
+
+### P7a: The decoder and the player map (recordings only)
+
+- **Goal:** the player shows where every car is at T, live and in replay.
+- **Depends on:** P2d and P2e (playback and the player, merged), #101 (the stream-open log line), P5c (the outlines, merged). It needs nothing from P3e. **Owner actions:** none ([weekend] and [owner] checks).
+- **Scope in:**
+  - `decodeZ` (A§11.3): the bounded decoder, a pure function, with its failure counts.
+  - the Position parser: decoded messages to samples (`Position[].{Timestamp, Entries.<n>.{Status, X, Y, Z}}`, A§6.2), `X = Y = 0` dropped, `Status` read as `OnTrack`/`OffTrack` or a number, ids that are not cars left out.
+  - `pos=1` on the playback stream (A§10, A§11.3): thinned to 2 Hz, the snapshot's last position, nothing after T, the HEAD rule, the stream unchanged without it.
+  - the per-session fit (T5): the similarity transform onto the P5c outline from the first complete on-track lap, and where it runs and how it is cached (the plan's decision).
+  - a Map tab in the player (A§13): SVG dots on the outline in team colour, a car without a sample for over 1.5 s drawn hollow at its last position and never moved, a CSS transition only between consecutive samples, no car before the fit, 390 px.
+  - A§6.2, A§11.3 and A§13 amended for what the phase proves.
+- **Scope out:**
+  - the CarData parser, the table, the job and the route (P7b);
+  - the per-lap figures (P7b) and the traces (P7c);
+  - the archive: P7a reads recordings only;
+  - a frame stored per circuit (T5), and the map on the session pages.
+- **Acceptance:**
+  - [CI] `decodeZ`: a raw-deflate payload decodes; a zip bomb generated in the test is refused at the bound without breaking the scan; base64 junk, a zlib-wrapped payload and bad JSON are counted.
+  - [CI] the fixtures are synthetic and `test/no-f1-data.test.ts` is green.
+  - [CI] playback with `pos=1`: no `pos` event after T, at most 2 per second of session time, the HEAD rule, and without `pos=1` the stream is unchanged.
+  - [CI] the fit recovers a synthetic rotated, scaled, mirrored and offset track to under 1 m.
+  - [CI] component tests (happy-dom): the Map tab draws dots at T, a stale car hollow, and no car before the fit.
+  - [box] WSL, the 11404 and 11408 recordings: the fit's p90 is within the spike's (at most 20 m), and the stream-open log line (#101) with and without `pos=1`.
+  - [box] VM, 11412: `scan_ms` and bytes per minute of the stream at 2 Hz (the spike: about 50 KB a minute).
+  - [weekend] Yas Marina 4–6 Dec 2026 (else Lusail 27–29 Nov if P7a is ready; else 2027 pre-season testing, stated in the PR): the live map follows the timing tower, and shows nothing after T.
+  - [owner] a phone check at 390 px.
+- **Models:** build on Opus 5.5 at `xhigh`, plan mode first; code review on Sonnet 5.5 at `xhigh`; security review on Opus 5.5 at `xhigh`; GitHub chores on Haiku 5.5 at `low`. Branch `claude/p7a-player-map`. Issue #192.
+
+### P7b: Storage, the job, the route and the per-lap figures
+
+- **Goal:** every lap with telemetry has its trace and two figures, from the recordings first and from the archive after.
+- **Depends on:** P7a (the decoder, the Position parser and the fit) and, for 2018 on, P3e (#130, the raw `.z` files in `/srv/f1/archive`). The VM backfill of the recordings comes first. **Owner actions:** the `telemetry` runs on the VM.
+- **Scope in:**
+  - the CarData parser: channel ids 0 RPM, 2 speed, 3 gear, 4 throttle, 5 brake, 45 DRS where present. The names of 4, 5 and 45 follow FastF1 (MIT), as a reference only, and their meaning beyond that is **[U]** (A§6.2).
+  - the `telemetry_lap` table and the per-session frame (A§7): a migration, grants (`f1_ingest` replaces, `f1_api` reads), `db:types`.
+  - `telemetry <session_key>… | --all [--archive-dir <path>] [--live-dir <path>]`, the `fill` pattern (A§4): it logs in as `f1_ingest`, reads `/srv/f1/archive` and `/srv/f1/live` read-only, makes no network call, and its directory flags follow the `fill` rule. The laps come from the `lap` table, and the T1 precedence decides the source of each lap. A `jobs`-profile compose service (A§14.2).
+  - `GET /api/v1/sessions/:key/telemetry?driver=&lap=` (A§10): one driver-lap, bounded, a zod contract in `packages/contracts`.
+  - T6 in the laps API and the lap views (A§13): the top speed and the full-throttle share, `—` without telemetry.
+  - A§6, A§7, A§10, A§13 and A§14 amended for what the phase proves.
+- **Scope out:**
+  - the traces on Compare (P7c) and anything in the player beyond P7a;
+  - OpenF1 ingest of `car_data` and `location` (T1: a cross-check only);
+  - a row per sample, and a DRS figure (T2, T6).
+- **Acceptance:**
+  - [CI] the CarData parser and the packing round trip on synthetic fixtures; gaps are never filled.
+  - [CI] the T1 precedence: a complete recording wins, and the archive fills a lap the recording lacks.
+  - [CI] the route: one driver-lap, the size bound, 401 without Access, 404, and the answer parses against its contract.
+  - [CI] `db:types --verify`.
+  - [CI] T6 on synthetic laps, and `—` for a lap without telemetry.
+  - [box] the dev database with 11404 and 11408: rows and bytes per session against the spike (5.8 MB and 1,141 rows for the 11404 archive), the job's time and RSS.
+  - [box] VM: the recordings first, then 2018 on after P3e: rows and GB (the spike: 3.3–3.9 GB), and failures 0 or each listed.
+  - [box] the OpenF1 cross-check on one 2023+ session: at least 99 % of OpenF1's `car_data` rows equal a stored sample.
+- **Models:** build on Opus 5.5 at `xhigh`, plan mode first; code review on Sonnet 5.5 at `xhigh`; security review on Opus 5.5 at `xhigh`; GitHub chores on Haiku 5.5 at `low`. Branch `claude/p7b-telemetry-store`. Issue #193.
+
+### P7c: Traces on Compare
+
+- **Goal:** compare two laps by speed, throttle and brake along the track.
+- **Depends on:** P7b (the route and the stored laps). **Owner actions:** none ([owner] check).
+- **Scope in:**
+  - a telemetry card in `Comparison` (`apps/web/src/views/Compare.tsx`, A§13): speed with throttle and brake (and gear) for two picked laps, by default each driver's fastest.
+  - x = distance (T3), and a gap breaks the line (`connectNulls: false`).
+  - DRS as a thin strip only where the channel exists (2019 and 2021).
+  - ECharts in its lazy chunk, at 390 px.
+  - only inside an opened session (P4c's spoiler rule); A§13 amended.
+- **Scope out:** traces in the player's Compare tab (out of P7), a DRS strip for 2026, any new endpoint.
+- **Acceptance:**
+  - [CI] the trace option builder and its 390 px SVG render (`init(null, null, { renderer: 'svg', ssr: true, width, height })`, as in `compare.test.tsx`).
+  - [CI] a gap breaks the line.
+  - [CI] the ECharts lazy-chunk check in `test/build.test.ts` still passes.
+  - [owner] a phone check of a 2019 lap pair and a 2026 lap pair.
+- **Models:** build on Opus 5.5 at `high`; code review on Sonnet 5.5 at `xhigh`; security review on Sonnet 5.5 at `high` (recommended: it renders API numbers only); GitHub chores on Haiku 5.5 at `low`. Branch `claude/p7c-compare-traces`. Issue #194.
 
 ### P8: Championship standings (owner, 2026-11-15; the plan of #123)
 
