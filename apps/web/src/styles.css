@@ -797,6 +797,14 @@ td.deleted {
   gap: 8px 24px;
 }
 
+/* The status page boxes its counts and empty states with the border of a table's .scroll. */
+.counts,
+p.box {
+  margin: 0 0 12px;
+  padding: 8px 12px;
+  border: 1px solid var(--line);
+}
+
 .counts dd {
   margin: 0;
   font-size: 1.3rem;
