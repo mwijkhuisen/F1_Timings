@@ -37,11 +37,23 @@ afterEach(() => {
 const car = (x: number, y: number, t: number, run = t) => ({ x, y, t, run });
 /** The store's positions channel, holding `pos`. */
 const channel = (pos: Positions | null | undefined) => ({ get: () => pos, subscribe: () => () => {} });
-const render = (pos: Positions | null | undefined, { circuit = 'Interlagos', now = T } = {}) =>
+/** `circuit: undefined` overrides Interlagos: the session not loaded yet. */
+const render = (
+  pos: Positions | null | undefined,
+  { now = T, ...over }: { now?: number; circuit?: string | undefined; ended?: boolean } = {},
+) =>
   act(() =>
     root.render(
       <QueryClientProvider client={client}>
-        <TrackMap circuit={circuit} positions={channel(pos)} drivers={drivers} now={() => now} playing={false} />
+        <TrackMap
+          circuit="Interlagos"
+          ended={false}
+          {...over}
+          positions={channel(pos)}
+          drivers={drivers}
+          now={() => now}
+          playing={false}
+        />
       </QueryClientProvider>,
     ),
   );
@@ -140,6 +152,20 @@ describe('the states', () => {
         'No car positions yet: the map places the cars once the feed has one full lap on track.',
       );
     }
+  });
+
+  it('for an ended recording without a frame, says no lap places the cars, never "once the feed has" one', () => {
+    render(null, { ended: true });
+    expect(cars()).toHaveLength(0);
+    expect(host.textContent).toContain('No car positions: no lap of this recording places the cars on the outline.');
+    expect(host.textContent).not.toContain('once the feed has');
+  });
+
+  it('shows Loading… while the session (its circuit) is not known, never "no outline"', () => {
+    render(null, { circuit: undefined });
+    expect(host.textContent).toContain('Loading…');
+    expect(host.textContent).not.toContain('No circuit outline');
+    expect(host.querySelector('svg')).toBeNull();
   });
 
   it('says so when the fit is there and no car has a position', () => {

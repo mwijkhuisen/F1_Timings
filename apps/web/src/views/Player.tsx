@@ -1189,6 +1189,7 @@ export function Player({
           <TrackMap
             circuit={detail?.meeting.circuit_short_name}
             positions={store.pos}
+            ended={recording.ended_at !== null}
             drivers={drivers}
             now={now}
             playing={playing}

@@ -3266,13 +3266,30 @@ describe('the Map tab in the player (P7a)', () => {
     expect((host.querySelector('g.car') as SVGGElement).style.getPropertyValue('--x')).toBe('0.11');
   });
 
-  it('a snapshot with pos null says there is no fit yet; one without the key says the same', () => {
-    render({ recording: ended, start: T, detail: mapDetail });
-    last().emit('snapshot', { ...snapshot(), pos: null });
+  it('a snapshot with pos null: an open recording waits for a lap, an ended one says no lap places the cars', () => {
+    for (const [recording, text] of [
+      [open, 'No car positions yet: the map places the cars once the feed has one full lap on track.'],
+      [ended, 'No car positions: no lap of this recording places the cars on the outline.'],
+    ] as const) {
+      act(() => root.unmount());
+      root = createRoot(host);
+      render({ recording, start: T, detail: mapDetail });
+      last().emit('snapshot', { ...snapshot(), pos: null });
+      advance(250);
+      button('Map');
+      expect(host.textContent).toContain(text);
+      expect(host.querySelector('g.car')).toBeNull();
+    }
+  });
+
+  it('?tab=map while the session is still loading shows Loading…, not "no outline"', () => {
+    history.replaceState(null, '', '/replay/7?tab=map');
+    render({ recording: ended, start: T, detail: undefined, keepT: true });
+    last().emit('snapshot', snapshot({ t: T, cars: { 1: [0, 0] } }));
     advance(250);
-    button('Map');
-    expect(host.textContent).toContain('No car positions yet');
-    expect(host.querySelector('g.car')).toBeNull();
+    expect(host.textContent).toContain('Loading…');
+    expect(host.textContent).not.toContain('No circuit outline');
+    expect(host.querySelector('svg.trackmap')).toBeNull();
   });
 
   it('glides a car between two samples of one run, and jumps after a gap of over 1.5 s', () => {

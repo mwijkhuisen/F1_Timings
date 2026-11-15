@@ -18,6 +18,7 @@ import { driverOf } from './Tower.tsx';
 
 const NO_OUTLINE = 'No circuit outline for this venue.';
 const NO_FIT = 'No car positions yet: the map places the cars once the feed has one full lap on track.';
+const NO_FIT_ENDED = 'No car positions: no lap of this recording places the cars on the outline.';
 const NO_CARS = 'No car positions in the feed yet.';
 /** A car's sample behind the newest sample by more than this has dropped out (T3, A§11.3). */
 const DROPOUT_MS = RUN_GAP_MS;
@@ -37,20 +38,22 @@ function viewBoxOf(outline: string): [number, number, number, number] | null {
 }
 
 type Props = {
-  /** The meeting's circuit_short_name; undefined while the session is not loaded. */
+  /** The meeting's circuit_short_name; undefined while the session is not loaded (or its query failed). */
   circuit: string | null | undefined;
   /**
    * The store's positions channel: undefined when not asked, null while there is no fitted frame. Read here, so a `pos`
    * event renders the map alone (P7a review).
    */
   positions: PosChannel;
+  /** The recording has ended: no frame now means none for good. */
+  ended: boolean;
   drivers: Views['DriverList'];
   /** T, in epoch ms. */
   now: () => number;
   playing: boolean;
 };
 
-export function TrackMap({ circuit, positions, drivers, now, playing }: Props) {
+export function TrackMap({ circuit, positions, ended, drivers, now, playing }: Props) {
   const pos = useSyncExternalStore(positions.subscribe, positions.get);
   const name = circuit ?? '';
   const id = Object.hasOwn(CIRCUITS, name) ? (CIRCUITS[name]?.id ?? null) : null;
@@ -64,6 +67,7 @@ export function TrackMap({ circuit, positions, drivers, now, playing }: Props) {
   const outline = map.data?.outline ?? null;
   const box = useMemo(() => (outline === null ? null : viewBoxOf(outline)), [outline]);
 
+  if (circuit === undefined) return <Pending error={null} />; // which venue is not known yet
   if (id === null) return <p>{NO_OUTLINE}</p>;
   if (!map.data) return <Pending error={map.error} />;
   if (outline === null || box === null) return <p>{NO_OUTLINE}</p>;
@@ -108,7 +112,7 @@ export function TrackMap({ circuit, positions, drivers, now, playing }: Props) {
           );
         })}
       </svg>
-      {pos == null ? <p>{NO_FIT}</p> : cars.length === 0 && <p>{NO_CARS}</p>}
+      {pos == null ? <p>{ended ? NO_FIT_ENDED : NO_FIT}</p> : cars.length === 0 && <p>{NO_CARS}</p>}
       <p className="foot rainsrc">
         Circuit outline: {ext('https://github.com/bacinger/f1-circuits', 'bacinger/f1-circuits')} (
         {ext('/third-party-licences.txt', 'MIT')}), simplified.
