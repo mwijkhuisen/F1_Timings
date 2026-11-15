@@ -47,7 +47,7 @@ export async function record(
     !/^[a-z]+(-[a-z]+)*$/.test(name) ||
     ![lat0, lon0, start, end].every(Number.isFinite) ||
     (api !== 'forecast' && api !== 'historical') ||
-    (kind === 'forecast' && api !== 'forecast')
+    (kind === 'forecast' && (api !== 'forecast' || (end as number) < (start as number)))
   ) {
     log(USAGE);
     return EXIT_USAGE;

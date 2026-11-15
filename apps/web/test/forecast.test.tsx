@@ -4,6 +4,7 @@ import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, expect, it } from 'vitest';
 import { sessionHours, startRow, startWords, summary, upcoming, updatedWords } from '../src/lib/forecast.ts';
 import { ForecastCard, ForecastCredit, ForecastView } from '../src/views/Forecast.tsx';
+import { WeatherTab } from '../src/views/Weather.tsx';
 import { sessionDetail } from './laps.ts';
 
 // The weekend forecast (#120, A§13): the lib's hour selection and words, and the Weather tab's card from props. Rows are
@@ -167,5 +168,22 @@ describe('the forecast card', () => {
     };
     expect(render()).toBe('');
     expect(render(forecast())).toContain('<h2>Forecast (model)</h2>');
+  });
+
+  it("sits in the Weather tab of a session to come: after the weather view, before the rain map's card", () => {
+    const detail = { ...sessionDetail('Practice', 'Practice 1'), session: session() };
+    const client = new QueryClient({ defaultOptions: { queries: { enabled: false } } });
+    client.setQueryData(['weather', detail.session.session_key], []);
+    client.setQueryData(['forecast', detail.meeting.meeting_key], forecast());
+    const html = renderToStaticMarkup(
+      <QueryClientProvider client={client}>
+        <WeatherTab session={detail.session.session_key} detail={detail} laps={null} live={null} now={now} />
+      </QueryClientProvider>,
+    );
+    const at = ['No weather', '<h2>Forecast (model)</h2>', '<h2>Rain around the circuit</h2>'].map((s) =>
+      html.indexOf(s),
+    );
+    expect(at).not.toContain(-1);
+    expect(at).toEqual([...at].sort((a, b) => a - b));
   });
 });

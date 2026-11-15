@@ -123,7 +123,8 @@ export function leaderLap(
 
 /** "24.1–27.3", or one value when both ends read the same at that precision. */
 export const fmtRange = (r: Range, digits: number): string => {
-  const [lo, hi] = [r.min.toFixed(digits), r.max.toFixed(digits)];
+  const fixed = (v: number) => v.toFixed(digits).replace(/^-(0(\.0+)?)$/, '$1'); // never "-0"
+  const [lo, hi] = [fixed(r.min), fixed(r.max)];
   return lo === hi ? lo : `${lo}–${hi}`;
 };
 

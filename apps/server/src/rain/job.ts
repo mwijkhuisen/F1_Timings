@@ -242,9 +242,9 @@ export function createRainStep(deps: RainDeps) {
       const t = at.getTime();
       if (!seeded) {
         await seed(at);
-        await forecast.seed(at);
         seeded = true;
       }
+      await forecast.seed(at); // once it has worked; a fault is its own, never the rain's seed again
       if (!unmappedLogged) {
         // Every session that has or would have had a grid by now, whose circuit has no outline.
         const { count } = await gridless(db)

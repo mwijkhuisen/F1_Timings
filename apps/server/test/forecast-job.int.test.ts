@@ -1,7 +1,7 @@
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import type { Kysely } from 'kysely';
+import { type Kysely, sql } from 'kysely';
 import { HttpResponse, http } from 'msw';
 import pino from 'pino';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
@@ -465,6 +465,62 @@ describe('weekend forecast (Open-Meteo through msw, f1_ingest login)', { timeout
     await daemon().run();
     expect(seen).toHaveLength(1);
     expect(await row(LV)).toMatchObject({ state: 'final', next_fetch_at: null, attempt_count: 0 });
+  });
+
+  it('a meeting that now spans over 7 days closes its due forecast with no request, and the run falls through', async () => {
+    await meeting(5, 'Singapore');
+    await session(501, 5, 'Practice 1', '2026-11-20T04:00:00Z', '2026-11-20T05:00:00Z');
+    await session(502, 5, 'Race', '2026-11-27T04:00:00Z', '2026-11-27T06:00:00Z'); // 7 days and 2 h from the first start
+    await admin
+      .insertInto('forecast')
+      .values({
+        meeting_key: 5,
+        source: 'open-meteo',
+        map_id: 'us-2023',
+        lat: 36.1167,
+        lon: -115.1666,
+        state: 'live',
+        next_fetch_at: '2026-11-18T00:00:00Z',
+        updated_at: '2026-11-18T00:00:00Z',
+      })
+      .execute();
+    at = d('2026-11-18T00:00:00Z');
+    await daemon().run();
+    expect(seen).toEqual([]);
+    expect(await row(5)).toMatchObject({ state: 'final', next_fetch_at: null, attempt_count: 0 });
+    expect(logged('forecast')).toEqual([expect.objectContaining({ meeting_key: 5, state: 'final', hours: 0 })]);
+  });
+
+  it('a fault of the forecast table is logged as a code and stops neither the rain step nor, once undone, the forecast', async () => {
+    await vegas();
+    await finalGrids([11414, 11415, 11416, 11420]); // FP1's live window opens Fri 00:00
+    const p = daemon();
+    await sql`REVOKE SELECT ON forecast FROM f1_ingest`.execute(admin);
+    try {
+      at = d('2026-11-20T00:00:00Z');
+      await p.run();
+      expect(seen.map((s) => s.kind)).toEqual(['rain']); // the due grid is still fetched
+      expect(p.budget.used()).toEqual({ hour: 49, day: 49, forecast: 0 });
+      at = d('2026-11-20T00:15:00Z');
+      await p.run();
+      expect(seen.map((s) => s.kind)).toEqual(['rain', 'rain']);
+      // A second seed of the rain would add its grid's attempt again.
+      expect(p.budget.used()).toEqual({ hour: 98, day: 98, forecast: 0 });
+    } finally {
+      await sql`GRANT SELECT ON forecast TO f1_ingest`.execute(admin);
+    }
+    const failed = logged('forecast failed');
+    expect(failed.length).toBeGreaterThan(0);
+    for (const l of failed) expect(Object.keys(l).sort()).toEqual(['cause', 'level', 'msg', 'time']);
+    expect(failed.every((l) => l.level === 50 && l.cause === '42501')).toBe(true); // permission denied: a code only
+    expect(logged('rain failed')).toEqual([]);
+
+    at = d('2026-11-20T00:16:00Z');
+    await p.run();
+    expect(seen.map((s) => s.kind)).toEqual(['rain', 'rain', 'forecast']);
+    expect(await row(LV)).toMatchObject({ state: 'live', fetch_count: 1, attempt_count: 1 });
+    expect(p.budget.used()).toEqual({ hour: 99, day: 99, forecast: 1 });
+    expectClean();
   });
 
   it('a restart seeds the forecast share from the attempts of the forecasts touched in the last day and hour, once', async () => {

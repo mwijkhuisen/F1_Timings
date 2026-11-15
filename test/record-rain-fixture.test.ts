@@ -94,6 +94,10 @@ describe('record-rain-fixture', () => {
   it.each([
     ['--forecast with --api historical', ['--api', 'historical', ...VEGAS]],
     ['--forecast with a bad date', VEGAS.map((a) => (a === '2026-11-20T00:30:00Z' ? 'x' : a))],
+    [
+      '--forecast with the end before the start',
+      [...VEGAS.slice(0, -2), '2026-11-22T06:00:00Z', '2026-11-20T00:30:00Z'],
+    ],
     ['--forecast without the end', VEGAS.filter((a) => a !== '2026-11-22T06:00:00Z')],
     ['--forecast with a value', ['--forecast=yes', ...VEGAS.slice(1)]],
     ['a negative coordinate without --', VEGAS.filter((a) => a !== '--')],

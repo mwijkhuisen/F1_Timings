@@ -103,10 +103,10 @@ const countAttempt = (trx: Transaction<DB>, key: number, at: Date) =>
     .returning(['state', 'fetch_count', 'fail_count'])
     .executeTakeFirst();
 
-/** The rain step's forecast part: `seed` and `open` touch the database only, `run` makes at most one request. */
+/** The rain step's forecast part: `seed` and `open` touch the database only, `run` makes at most one request. None rejects. */
 export function createForecastStep({ db, client, budget, log, beat, ping }: RainDeps) {
   /** D3, as the rain's seed: the attempts of every forecast touched in the last 24 h (and hour), as made now. */
-  async function seed(at: Date): Promise<void> {
+  async function seedNow(at: Date): Promise<void> {
     const t = at.getTime();
     const { rows } = await sql<{ day: string | null; hour: string | null }>`
       SELECT sum(attempt_count) AS day,
@@ -116,7 +116,7 @@ export function createForecastStep({ db, client, budget, log, beat, ping }: Rain
   }
 
   /** C1: a live forecast, due now, for each meeting in its window without one (mapped, not cancelled, ≤ 7 days). */
-  async function open(at: Date): Promise<void> {
+  async function openNow(at: Date): Promise<void> {
     const t = at.getTime();
     const meetings = await db
       .selectFrom('meeting')
@@ -159,6 +159,26 @@ export function createForecastStep({ db, client, budget, log, beat, ping }: Rain
         })
         .onConflict((oc) => oc.column('meeting_key').doNothing())
         .execute();
+    }
+  }
+
+  // `seed` (once, retried on a later run after a fault) and `open` never reject: a fault of the forecast's own tables
+  // is logged as a code and must not stop the rain step.
+  let seeded = false;
+  async function seed(at: Date): Promise<void> {
+    if (seeded) return;
+    try {
+      await seedNow(at);
+      seeded = true;
+    } catch (err) {
+      log.error({ cause: codeOf(err) }, 'forecast failed'); // the code only
+    }
+  }
+  async function open(at: Date): Promise<void> {
+    try {
+      await openNow(at);
+    } catch (err) {
+      log.error({ cause: codeOf(err) }, 'forecast failed');
     }
   }
 
