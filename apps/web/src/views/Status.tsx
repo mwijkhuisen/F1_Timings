@@ -8,7 +8,8 @@ import { Scroll } from '../ui/Scroll.tsx';
 // The status page (D12, #105), polled every minute: session counts per state, the ingest daemon (last sync, live
 // window, last report), every session whose last fetch failed, the rain grids the same way, the races whose race
 // control has a wording the bands do not know, the standings that differ from OpenF1's next ones (P8), and the live
-// recorder. A session name links to its laps, a rain grid to its weather.
+// recorder. A session name links to its laps, a rain grid to its weather. Every section's body sits in a box, as its
+// tables do in their scroll box.
 
 const WARNINGS = {
   token_expiring: 'The F1 TV token expires within 24 h and a session is due.',
@@ -38,7 +39,7 @@ export function RecorderWarnings({ recorder: r }: { recorder: StatusData['record
 }
 
 function Recorder({ recorder: r }: { recorder: StatusData['recorder'] }) {
-  if (r === null) return <p>The recorder has not reported yet.</p>;
+  if (r === null) return <p className="box">The recorder has not reported yet.</p>;
   const values: [string, string][] = [
     ['state', r.state],
     ['session', r.session_key !== null ? `${r.meeting_name ?? '—'} ${r.session_name ?? ''}`.trim() : '—'],
@@ -58,7 +59,7 @@ type Failed = StatusData['failed'];
 
 /** Sessions or rain grids whose last attempt failed; the session name links to `view` of that session. */
 function FailedTable({ rows, view, label }: { rows: Failed; view: 'laps' | 'weather'; label: string }) {
-  if (rows.length === 0) return <p>None.</p>;
+  if (rows.length === 0) return <p className="box">None.</p>;
   return (
     <Scroll label={label}>
       <table className="list" aria-label={label}>
@@ -95,7 +96,7 @@ type SessionCounts = StatusData['rc_unmatched'];
 
 /** Sessions with a row count (race control in an unknown form, standings that differ); the name links to its laps. */
 function SessionRows({ rows, label }: { rows: SessionCounts; label: string }) {
-  if (rows.length === 0) return <p>None.</p>;
+  if (rows.length === 0) return <p className="box">None.</p>;
   return (
     <Scroll label={label}>
       <table className="list" aria-label={label}>
@@ -138,7 +139,7 @@ function Counts({ values }: { values: [string, string | number][] }) {
 }
 
 function Daemon({ ingest: i }: { ingest: StatusData['ingest'] }) {
-  if (i === null) return <p>The ingest daemon has not reported yet.</p>;
+  if (i === null) return <p className="box">The ingest daemon has not reported yet.</p>;
   return (
     <>
       {i.stale && <p role="alert">The ingest daemon has not reported for over 5 minutes.</p>}
