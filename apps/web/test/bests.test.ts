@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { bestOf, deltaStep, isValid, ownBests, sessionBests } from '../src/lib/bests.ts';
+import { bestOf, colouredBests, deltaStep, isValid, ownBests, sessionBests } from '../src/lib/bests.ts';
 import { fmtDelta } from '../src/lib/time.ts';
 import { lap } from './laps.ts';
 
@@ -65,6 +65,27 @@ describe('sessionBests', () => {
     expect([...own]).toEqual([
       [1, clean[2]],
       [44, clean[1]],
+    ]);
+  });
+});
+
+describe('colouredBests (#112)', () => {
+  const c = (lap: 'purple' | 'green' | 'yellow' | null) => ({ colour: { lap, s1: null, s2: null, s3: null } });
+  it("keeps each driver's fastest purple or green lap: a lap without a time last, the first of a tie", () => {
+    const laps = [
+      lap(1, 1, { ...c('green'), lap_ms: null }), // coloured, no time: never ahead of a timed one
+      lap(1, 2, { ...c('green'), lap_ms: 90_000 }),
+      lap(1, 3, { ...c('purple'), lap_ms: 89_000 }),
+      lap(1, 4, { ...c('yellow'), lap_ms: 80_000 }), // faster, not coloured
+      lap(44, 2, { ...c('green'), lap_ms: 89_500 }),
+      lap(44, 3, { ...c('green'), lap_ms: 89_500 }),
+      lap(16, 1, { ...c('green'), lap_ms: null }),
+      lap(16, 2, { ...c(null), lap_ms: 85_000 }),
+    ];
+    expect([...colouredBests(laps)].map(([n, l]) => [n, l.lap_number])).toEqual([
+      [1, 3],
+      [44, 2],
+      [16, 1],
     ]);
   });
 });

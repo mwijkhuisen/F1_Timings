@@ -45,6 +45,24 @@ export function ownBests(laps: readonly Lap[], field: Field): Map<number, Lap> {
   return out;
 }
 
+/**
+ * Each driver's own best lap on Compare: its fastest lap coloured purple or green, a lap without a time last and the
+ * first of a tie kept. A§9 colours exactly that lap; the player's progressive colours (A§11.3) colour each improvement,
+ * the last being the fastest (#112).
+ */
+export function colouredBests<L extends Pick<Lap, 'driver_number' | 'lap_ms' | 'colour'>>(
+  laps: readonly L[],
+): Map<number, L> {
+  const ms = (l: L) => l.lap_ms ?? Number.POSITIVE_INFINITY;
+  const out = new Map<number, L>();
+  for (const l of laps) {
+    if (l.colour.lap !== 'purple' && l.colour.lap !== 'green') continue;
+    const held = out.get(l.driver_number);
+    if (held === undefined || ms(l) < ms(held)) out.set(l.driver_number, l);
+  }
+  return out;
+}
+
 /** `sum`: best S1 + best S2 + best S3 (the sum of best sectors, never an "ideal lap"); `top`: the speed trap. */
 export type SessionBests = {
   lap: Lap | null;

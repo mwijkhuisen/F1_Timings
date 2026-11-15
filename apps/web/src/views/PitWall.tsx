@@ -1,5 +1,6 @@
-import { useEffect, useReducer, useState } from 'react';
+import { type ReactNode, useEffect, useReducer, useState } from 'react';
 import {
+  type Best,
   type Clock,
   type Fastest,
   fmtLeft,
@@ -99,49 +100,74 @@ const FILTERS: [Kind | 'all', string][] = [
   ['limits', 'Track limits'],
 ];
 
-/** The side panel: race control with its filter, the cars within a second (races only) and the fastest lap so far. */
+/**
+ * The race-control card: the kind chips with their counts, `filters` (the log's own, #111), then the messages as text.
+ * `yet`: the live panel's empty texts say "yet" (A§13).
+ */
+export function RaceControlCard({
+  rc,
+  yet = false,
+  className = 'card',
+  filters,
+}: {
+  rc: RaceControl;
+  yet?: boolean;
+  className?: string;
+  filters?: ReactNode;
+}) {
+  const [filter, setFilter] = useState<Kind | 'all'>('all');
+  const items = filter === 'all' ? rc.items : rc.items.filter((i) => i.kind === filter);
+  const y = yet ? ' yet' : '';
+  return (
+    <section className={className}>
+      <h2>Race control</h2>
+      <fieldset className="chips" aria-label="Filter">
+        {FILTERS.map(([kind, label]) => (
+          <button key={kind} type="button" aria-pressed={filter === kind} onClick={() => setFilter(kind)}>
+            {label} {rc.counts[kind]}
+          </button>
+        ))}
+      </fieldset>
+      {filters}
+      {items.length === 0 ? (
+        <p className="muted">{rc.items.length === 0 ? `No messages${y}.` : `No messages of this kind${y}.`}</p>
+      ) : (
+        <Scroll label="Race control messages">
+          <ol className="feed">
+            {items.map((i) => (
+              <li key={i.key}>
+                {i.time !== undefined && <span className="time">{i.time}</span>}
+                <span className="lap">{i.lap !== undefined && `L${i.lap}`}</span>
+                <span>
+                  {i.tag && <span className="cat">{i.tag}</span>}
+                  {i.text}
+                </span>
+              </li>
+            ))}
+          </ol>
+        </Scroll>
+      )}
+    </section>
+  );
+}
+
+/** The side panel: race control with its filter, the cars within a second (races only) and the bests so far. */
 export function Panel({
   rc,
   pairs,
   fastest,
+  bests,
   race,
 }: {
   rc: RaceControl;
   pairs: Pair[];
   fastest: Fastest | undefined;
+  bests: Best[];
   race: boolean;
 }) {
-  const [filter, setFilter] = useState<Kind | 'all'>('all');
-  const items = filter === 'all' ? rc.items : rc.items.filter((i) => i.kind === filter);
   return (
     <aside className="side" aria-label="Session details">
-      <section className="card">
-        <h2>Race control</h2>
-        <fieldset className="chips" aria-label="Filter">
-          {FILTERS.map(([kind, label]) => (
-            <button key={kind} type="button" aria-pressed={filter === kind} onClick={() => setFilter(kind)}>
-              {label} {rc.counts[kind]}
-            </button>
-          ))}
-        </fieldset>
-        {items.length === 0 ? (
-          <p className="muted">{rc.items.length === 0 ? 'No messages yet.' : 'No messages of this kind yet.'}</p>
-        ) : (
-          <Scroll label="Race control messages">
-            <ol className="feed">
-              {items.map((i) => (
-                <li key={i.key}>
-                  <span className="lap">{i.lap !== undefined && `L${i.lap}`}</span>
-                  <span>
-                    {i.tag && <span className="cat">{i.tag}</span>}
-                    {i.text}
-                  </span>
-                </li>
-              ))}
-            </ol>
-          </Scroll>
-        )}
-      </section>
+      <RaceControlCard rc={rc} yet />
       {race && (
         <section className="card">
           <h2>Within a second</h2>
@@ -163,20 +189,41 @@ export function Panel({
         </section>
       )}
       <section className="card">
-        <h2>Fastest lap so far</h2>
-        {fastest ? (
-          <p className="rows">
-            <span>
-              <span className="t-purple">
-                {fastest.value}
-                <span className="vh">, overall best</span>
-              </span>{' '}
-              <b>{fastest.driver.acronym}</b>
-            </span>
-            {fastest.lap !== undefined && <span className="muted">L{fastest.lap}</span>}
-          </p>
+        <h2>Bests so far</h2>
+        {fastest || bests.length > 0 ? (
+          <ul className="rows">
+            {fastest && (
+              <li>
+                <span>
+                  Lap <b>{fastest.driver.acronym}</b>
+                </span>
+                <span>
+                  <span className="t-purple">
+                    {fastest.value}
+                    <span className="vh">, overall best</span>
+                  </span>
+                  {fastest.lap !== undefined && <span className="muted"> L{fastest.lap}</span>}
+                </span>
+              </li>
+            )}
+            {bests.map((b) => (
+              <li key={b.label}>
+                <span>
+                  {b.label} <b>{b.driver.acronym}</b>
+                </span>
+                {b.speed ? (
+                  <span>{b.value}</span>
+                ) : (
+                  <span className="t-purple">
+                    {b.value}
+                    <span className="vh">, overall best</span>
+                  </span>
+                )}
+              </li>
+            ))}
+          </ul>
         ) : (
-          <p className="muted">No lap time yet.</p>
+          <p className="muted">No times yet.</p>
         )}
       </section>
     </aside>

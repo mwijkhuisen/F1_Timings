@@ -1,7 +1,8 @@
 import { type Obj, type Views, view } from '@f1/contracts';
-import type { ReactNode } from 'react';
+import { Fragment, type ReactNode } from 'react';
 import { compoundOf, tyresWords, UNKNOWN_COMPOUND } from '../lib/compound.ts';
 import type { Trend } from '../lib/crossings.ts';
+import { phaseName } from '../lib/quali.ts';
 import { type Driver, teamColour, teamStyle } from '../lib/session.ts';
 import { Note } from '../ui/Note.tsx';
 import { Scroll } from '../ui/Scroll.tsx';
@@ -336,6 +337,26 @@ function TyreCell({ tyre, number, year }: { tyre: Stint | undefined; number: str
   );
 }
 
+/**
+ * The knock-out line in qualifying: after the row of the last place through (NoEntries[SessionPart]), with the
+ * session page's line. Undefined outside a part, while the session is Inactive (before Q1, between parts), in the
+ * last part (no entry) and when the line would fall off the table. It never says "knocked out": the flag does not end a
+ * lap in progress, and a part's Finished outlasts the switch.
+ */
+function cutAfter(state: Obj, rows: number): { index: number; label: string } | undefined {
+  const info = view(state, 'SessionInfo');
+  if (info?.Type !== 'Qualifying') return undefined;
+  const timing = view(state, 'TimingData');
+  const part = timing?.SessionPart;
+  const through = part !== undefined && part >= 1 ? timing?.NoEntries?.[String(part)] : undefined;
+  if (part === undefined || through === undefined || through < 1 || through >= rows) return undefined;
+  if (view(state, 'SessionStatus')?.Status === 'Inactive') return undefined;
+  return {
+    index: through - 1,
+    label: `${phaseName(info.Name ?? null, part + 1)} above · drop zone below`,
+  };
+}
+
 export function Tower({
   state,
   sessionKey,
@@ -363,6 +384,9 @@ export function Tower({
   // Places since the start: in races, once any line has a grid position.
   const places = rows.some((r) => typeof r.places === 'number');
   const trends = trend !== undefined && view(state, 'SessionInfo')?.Type === 'Race';
+  // Header cells: Pos, Driver, ±?, Gap, Int, two trends?, and the seven after them.
+  const columns = 4 + 7 + (places ? 1 : 0) + (trends ? 2 : 0);
+  const cut = cutAfter(state, rows.length);
   const head = (h: string) => (
     <th key={h} scope="col">
       {h}
@@ -409,7 +433,7 @@ export function Tower({
             </tr>
           </thead>
           <tbody>
-            {rows.map((r) => {
+            {rows.map((r, i) => {
               const { line } = r;
               const n = String(r.driver.number);
               const last = flag(line.LastLapTime);
@@ -417,55 +441,66 @@ export function Tower({
               const out = line.Retired || line.Stopped;
               // A retired or stopped car has no trend: its cells stay blank.
               const own = out ? undefined : trend?.get(r.driver.number);
-              const cls = [out ? 'out' : '', focused ? 'focus' : ''].filter(Boolean).join(' ');
+              const cls = [out ? 'out' : '', focused ? 'focus' : '', i === cut?.index ? 'cut' : '']
+                .filter(Boolean)
+                .join(' ');
               return (
-                <tr key={n} className={cls || undefined}>
-                  <td>{r.position}</td>
-                  <th scope="row" className="drv" style={teamStyle(r.driver)} title={r.driver.name ?? undefined}>
-                    {onFocus ? (
-                      <button type="button" aria-pressed={focused} onClick={() => onFocus(n)}>
-                        {r.driver.acronym}
-                      </button>
+                <Fragment key={n}>
+                  <tr className={cls || undefined}>
+                    <td>{r.position}</td>
+                    <th scope="row" className="drv" style={teamStyle(r.driver)} title={r.driver.name ?? undefined}>
+                      {onFocus ? (
+                        <button type="button" aria-pressed={focused} onClick={() => onFocus(n)}>
+                          {r.driver.acronym}
+                        </button>
+                      ) : (
+                        r.driver.acronym
+                      )}
+                    </th>
+                    {places && <PlacesCell places={r.places} number={r.driver.number} />}
+                    <GapCell gap={r.gap} id={`tower-gap-${n}`}>
+                      <OutBadge line={line} />
+                    </GapCell>
+                    {r.close && 'value' in r.interval ? (
+                      <td className="int close">
+                        {r.interval.value}
+                        <span className="vh">, within a second</span>
+                      </td>
                     ) : (
-                      r.driver.acronym
+                      <GapCell gap={r.interval} id={`tower-int-${n}`} />
                     )}
-                  </th>
-                  {places && <PlacesCell places={r.places} number={r.driver.number} />}
-                  <GapCell gap={r.gap} id={`tower-gap-${n}`}>
-                    <OutBadge line={line} />
-                  </GapCell>
-                  {r.close && 'value' in r.interval ? (
-                    <td className="int close">
-                      {r.interval.value}
-                      <span className="vh">, within a second</span>
+                    {trends && (
+                      <>
+                        <TrendCell trend={own?.one} id={`tower-t1-${n}`} />
+                        <TrendCell trend={own?.three} id={`tower-t3-${n}`} />
+                      </>
+                    )}
+                    <td className={last?.className}>
+                      {r.last}
+                      <Words f={last} />
                     </td>
-                  ) : (
-                    <GapCell gap={r.interval} id={`tower-int-${n}`} />
+                    <td>{r.best}</td>
+                    {SECTORS.map((i) => (
+                      <Sector key={i} s={line.Sectors?.[i]} />
+                    ))}
+                    <TyreCell tyre={r.tyre} number={n} year={year} />
+                    <td>
+                      {line.NumberOfPitStops}
+                      {line.InPit ? (
+                        <span className="badge">IN PIT</span>
+                      ) : (
+                        line.PitOut && <span className="badge">OUT</span>
+                      )}
+                    </td>
+                  </tr>
+                  {i === cut?.index && (
+                    <tr className="cutlabel">
+                      <td colSpan={columns}>
+                        <span>{cut.label}</span>
+                      </td>
+                    </tr>
                   )}
-                  {trends && (
-                    <>
-                      <TrendCell trend={own?.one} id={`tower-t1-${n}`} />
-                      <TrendCell trend={own?.three} id={`tower-t3-${n}`} />
-                    </>
-                  )}
-                  <td className={last?.className}>
-                    {r.last}
-                    <Words f={last} />
-                  </td>
-                  <td>{r.best}</td>
-                  {SECTORS.map((i) => (
-                    <Sector key={i} s={line.Sectors?.[i]} />
-                  ))}
-                  <TyreCell tyre={r.tyre} number={n} year={year} />
-                  <td>
-                    {line.NumberOfPitStops}
-                    {line.InPit ? (
-                      <span className="badge">IN PIT</span>
-                    ) : (
-                      line.PitOut && <span className="badge">OUT</span>
-                    )}
-                  </td>
-                </tr>
+                </Fragment>
               );
             })}
           </tbody>

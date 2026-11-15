@@ -1,4 +1,4 @@
-import { type Obj, type SessionDetail, view } from '@f1/contracts';
+import { type Lap, type Obj, type SessionDetail, view } from '@f1/contracts';
 import {
   type CSSProperties,
   memo,
@@ -14,6 +14,7 @@ import {
 import { markStale } from '../lib/api.ts';
 import { closingAt } from '../lib/crossings.ts';
 import {
+  bestsSoFar,
   fastestSoFar,
   fmtLeft,
   LIGHT,
@@ -24,7 +25,10 @@ import {
   stripOf,
   withinASecond,
 } from '../lib/pitwall.ts';
+import { feedReached, qualiPhases } from '../lib/quali.ts';
 import {
+  feedRaceControl,
+  lapPeriods,
   lastStop,
   type Mark,
   type MarkKind,
@@ -35,6 +39,7 @@ import {
   statusSeries,
 } from '../lib/replay.ts';
 import { type PlayerTab, parseTab, replayQuery, setTitleWord } from '../lib/routes.ts';
+import { orderDrivers } from '../lib/session.ts';
 import {
   createStore,
   type Feed,
@@ -42,16 +47,22 @@ import {
   type Probe,
   probeStream,
   type Snap,
+  type Stint,
   type Stream,
   streamUrl,
 } from '../lib/stream.ts';
 import { fmtClock, parseT } from '../lib/time.ts';
-import { KIND_LABEL, KIND_NAME, type Kind } from '../lib/track.ts';
+import { KIND_LABEL, KIND_NAME, type Kind, type Track } from '../lib/track.ts';
 import { ErrorBoundary, ErrorView, OFFLINE } from '../ui/ErrorView.tsx';
+import { Comparison, PitCycles } from './Compare.tsx';
+import { DriverPicker, picksOf } from './DriverPicker.tsx';
+import { QualiSwitch } from './LapsTab.tsx';
 import { LapTable } from './LapTable.tsx';
 import { Order } from './Order.tsx';
 import { Panel, Strip, useTick } from './PitWall.tsx';
 import { RainMapCard } from './RainMap.tsx';
+import { StintBars } from './Stints.tsx';
+import { QualiTiles, SessionTiles } from './Tiles.tsx';
 import { driverOf, gridOf, Tower, towerRows } from './Tower.tsx';
 import { WeatherPanels } from './Weather.tsx';
 
@@ -62,9 +73,11 @@ import { WeatherPanels } from './Weather.tsx';
 // paused T and closes on its snapshot. Only the clock line, the seek bar, the Back to chips and the strip's LEFT cell
 // (and, on the Weather tab, the rain map) tick each second, from values derived per flush (no state parsing per tick);
 // the tower, the pit wall and everything else derived from the state render on a store flush. The tabs are Tower ·
-// Laps · Order (races) · Weather, each in its own error boundary, the replay's in the URL (`?tab=`, #100); the
-// Weather tab shows the feed's weather rows up to T (P5b), redrawn only when a row arrives, and the
-// rain map's frames up to T (P5c).
+// Laps (in qualifying By phase | Every lap, #113) · Order (races) · Compare · Stints · Weather, each in its own error
+// boundary, the replay's in the URL (`?tab=`, #100); the Weather tab shows the feed's weather rows up to T (P5b),
+// redrawn only when a row arrives, and the rain map's frames up to T (P5c). Laps (with the session tiles), Compare and
+// Stints (#112) read the stream's rows up to T, and their SC, VSC and red bands come from the feed's status series
+// (`lapPeriods`): the player never asks `/race-control` or `/stints`, so nothing after T reaches the page.
 
 /** A SessionDetail whose drivers and results come from the stream: OpenF1 has no drivers during a live session. */
 function streamDetail(detail: SessionDetail, state: Obj): SessionDetail {
@@ -96,10 +109,149 @@ function streamDetail(detail: SessionDetail, state: Obj): SessionDetail {
         ]
       : [],
   );
-  return { ...detail, drivers: [...drivers.values()], results: lines.length > 0 ? results : detail.results };
+  // Never the API's results: they are the final classification, after T.
+  return { ...detail, drivers: [...drivers.values()], results: lines.length > 0 ? results : [] };
 }
 
 const Laps = memo(LapTable);
+
+/**
+ * The Laps tab as the session page lays it out, on the stream's rows up to T: in qualifying the phase tiles and By phase
+ * | Every lap (#113), the session tiles, and the lap table with its bands (#112).
+ */
+function PlayerLaps({
+  detail,
+  laps,
+  reached,
+  track,
+}: {
+  detail: SessionDetail;
+  laps: Lap[];
+  reached: Map<number, number>;
+  track: Track;
+}) {
+  const quali = detail.session.type === 'Qualifying' ? qualiPhases(laps, detail.results, reached) : null;
+  const table = <Laps detail={detail} laps={laps} track={track} />;
+  return (
+    <>
+      {quali && <QualiTiles detail={detail} quali={quali} />}
+      <SessionTiles detail={detail} laps={laps} />
+      {quali ? (
+        <QualiSwitch detail={detail} quali={quali}>
+          {table}
+        </QualiSwitch>
+      ) : (
+        table
+      )}
+    </>
+  );
+}
+
+/**
+ * The Laps, Compare and Stints tabs (#112), from the stream's rows up to T, shown inside the tab's error boundary. A
+ * `memo` whose props change only on a snapshot, a `laps` event, a knock-out (qualifying) or a pick, so other deltas
+ * render nothing here. What they read is rebuilt with the rows: the drivers and results from the stream, and the bands
+ * up to T as the leader's laps, in races only. A SessionData change brings no `laps` event by itself, so a band shows with the next row change
+ * (A§13). The state holds only applied events, so nothing is after T.
+ */
+const SessionTabs = memo(function SessionTabs({
+  tab,
+  detail,
+  feed,
+  laps,
+  stints,
+  lo,
+  reached,
+  chosen,
+  onPick,
+}: {
+  tab: 'laps' | 'compare' | 'stints';
+  detail: SessionDetail;
+  feed: Feed;
+  laps: Lap[];
+  stints: Stint[];
+  lo: number;
+  /** The feed's knock-outs as a JSON key (`feedReached`), so an equal set keeps the memo. */
+  reached: string;
+  /** Compare's picks: page state held by the player, so they survive a tab switch, and never in the URL. */
+  chosen: number[] | null;
+  onPick: (numbers: number[]) => void;
+}) {
+  const rows = useMemo(
+    () => ({
+      detail: streamDetail(detail, feed.state),
+      track: {
+        periods: lapPeriods(statusSeries(feed.state), laps, feed.t, lo, detail.session.type),
+        unplaced: [],
+        unmatched: 0,
+      },
+    }),
+    [detail, feed, laps, lo],
+  );
+  if (tab === 'laps')
+    return (
+      <PlayerLaps
+        detail={rows.detail}
+        laps={laps}
+        reached={new Map(reached ? (JSON.parse(reached) as [number, number][]) : [])}
+        track={rows.track}
+      />
+    );
+  // Stints: the stream's stint rows, the SC and VSC bands (red flags are not drawn there, as on the session page).
+  if (tab === 'stints')
+    return stints.length === 0 ? (
+      <p className="muted">No stints in the feed yet.</p>
+    ) : laps.length === 0 ? (
+      <p className="muted">No laps in the feed yet.</p>
+    ) : (
+      <StintBars
+        detail={rows.detail}
+        laps={laps}
+        stints={stints}
+        periods={rows.track.periods.filter((p) => p.kind !== 'red')}
+      />
+    );
+  // No laps, no picker (as #99 on the session page).
+  if (laps.length === 0) return <p className="muted">No laps in the feed yet.</p>;
+  // Until the first pick the picks are the top 2 of the order at T. In a race the pit cycles read the stream's stints
+  // and the feed's race-control texts, and list a cycle once its after line is crossed (D1).
+  const order = orderDrivers(rows.detail, laps);
+  const picks = picksOf(order, chosen, onPick);
+  return (
+    <>
+      <DriverPicker drivers={order} selected={picks.numbers} onToggle={picks.toggle} showReference />
+      <Comparison
+        detail={rows.detail}
+        drivers={picks.selected}
+        laps={laps}
+        periods={rows.track.periods}
+        onReference={picks.setReference}
+      >
+        {rows.detail.session.type === 'Race' && (
+          <PitCycles
+            drivers={picks.selected}
+            laps={laps}
+            periods={rows.track.periods}
+            stints={stints}
+            rc={feedRaceControl(feed.state)}
+            failed={false}
+            settled
+          />
+        )}
+      </Comparison>
+    </>
+  );
+});
+
+/** The view switch, in the session page's order; Order only in a race. */
+const TABS: [PlayerTab, string][] = [
+  ['tower', 'Tower'],
+  ['laps', 'Laps'],
+  ['order', 'Order'],
+  ['compare', 'Compare'],
+  ['stints', 'Stints'],
+  ['weather', 'Weather'],
+];
 
 export const MAX_DELAY = 120;
 const DELAY_KEY = 'f1.delay';
@@ -504,6 +656,7 @@ export function Player({
   );
   // The focused driver's number (a tap on the tower's driver cell); page state that the player bar reads.
   const [focus, setFocus] = useState<string | null>(null);
+  const [chosen, setChosen] = useState<number[] | null>(null); // Compare's picks (#112), null until the first one
   const [stale, setStale] = useState(false); // an event failed its contract: reload, no retry
   const [fails, setFails] = useState(0); // errors since the last snapshot
   const failCount = useRef(0); // the same, for the stream's handlers
@@ -767,10 +920,16 @@ export function Player({
   const stateNow = () => (playing ? now() : stood.current);
   const feed = snap.feed;
   const state = feed?.state;
-  // Rebuilt only when the lap rows change (a snapshot or a `laps` event), so the lap table skips deltas.
-  const lapTable = useMemo(
-    () => detail && feed && <Laps detail={streamDetail(detail, feed.state)} laps={snap.laps} />,
-    [detail, feed, snap.laps],
+  // The feed's knock-outs, per flush: a part switch moves By phase while no lap row changes. The key keeps the lap table
+  // tabs rebuilt only on row or knock-out changes. They count once the feed shows this recording's session (as `wall` waits).
+  const reachedKey = useMemo(
+    () =>
+      detail?.session.type === 'Qualifying' &&
+      snap.feed &&
+      (sessionKey === undefined || view(snap.feed.state, 'SessionInfo')?.Key === sessionKey)
+        ? JSON.stringify([...feedReached(snap.feed.state)])
+        : '',
+    [snap, detail, sessionKey],
   );
   // The series is parsed once per flush; the ticking bar only filters it at T.
   const series = useMemo(() => (snap.feed ? statusSeries(snap.feed.state) : []), [snap]);
@@ -805,6 +964,7 @@ export function Player({
       rc: raceControl(s),
       pairs: withinASecond(s),
       fastest: fastestSoFar(s),
+      bests: bestsSoFar(s),
     };
   }, [snap, sessionKey]);
   // The tab shown: Order falls back to the Tower when the session is not (or no longer) a race.
@@ -929,29 +1089,30 @@ export function Player({
         </p>
       )}
       {detail && (
-        <fieldset className="segmented" aria-label="View">
-          <button type="button" aria-pressed={shown === 'tower'} onClick={() => pick('tower')}>
-            Tower
-          </button>
-          <button type="button" aria-pressed={shown === 'laps'} onClick={() => pick('laps')}>
-            Laps
-          </button>
-          {wall?.race && (
-            <button type="button" aria-pressed={shown === 'order'} onClick={() => pick('order')}>
-              Order
+        <fieldset className="segmented views" aria-label="View">
+          {TABS.filter(([t]) => t !== 'order' || wall?.race).map(([t, label]) => (
+            <button key={t} type="button" aria-pressed={shown === t} onClick={() => pick(t)}>
+              {label}
             </button>
-          )}
-          <button type="button" aria-pressed={shown === 'weather'} onClick={() => pick('weather')}>
-            Weather
-          </button>
+          ))}
         </fieldset>
       )}
       {/* A boundary per tab (#100): a crash in one leaves the strip, the bar, the stream and the other tabs; a switch resets it. */}
       <ErrorBoundary key={shown}>
         {!state ? (
           <p className="muted">Connecting…</p>
-        ) : shown === 'laps' && lapTable ? (
-          lapTable
+        ) : detail && feed && (shown === 'laps' || shown === 'compare' || shown === 'stints') ? (
+          <SessionTabs
+            tab={shown}
+            detail={detail}
+            feed={feed}
+            laps={snap.laps}
+            stints={snap.stints}
+            lo={lo}
+            reached={reachedKey}
+            chosen={chosen}
+            onPick={setChosen}
+          />
         ) : order ? (
           order
         ) : shown === 'weather' ? (
@@ -967,7 +1128,7 @@ export function Player({
         ) : wall ? (
           <div className="pitwall">
             <div>{tower}</div>
-            <Panel rc={wall.rc} pairs={wall.pairs} fastest={wall.fastest} race={wall.race} />
+            <Panel rc={wall.rc} pairs={wall.pairs} fastest={wall.fastest} bests={wall.bests} race={wall.race} />
           </div>
         ) : (
           tower
