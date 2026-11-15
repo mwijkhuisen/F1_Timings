@@ -62,10 +62,11 @@ Alternatives:
 - **Non-commercial:** the terms give "Private or non-profit websites or apps that do not have subscriptions or advertising" as non-commercial, and the free tier is under "10'000 API calls per day, 5'000 per hour and 600 per minute". The site is private with no ads or subscriptions, and the budget (D3) stays under those limits. A subscription or ad ever added means a paid plan first.
 - **Committed fixtures:** CC BY 4.0 allows redistribution ("copy and redistribute the material in any medium or format") with attribution, and the terms say nothing against storing responses. Each fixture's `meta.json` carries "Data: Open-Meteo.com, CC BY 4.0" (the plan already has it) and a link `https://open-meteo.com/en/licence`. `apps/server/src/rain/fixtures/README.md` repeats the credit and says the fixtures are test data only. Open-Meteo's licence page lists some sources under their own licences (NOAA, Météo-France) and gives no terms for them. A Central-Europe fixture may use AROME. The risk is small (a few hundred numbers, attributed, noncommercial), and U4 records which model each fixture came from.
 - **UK Met Office (C6):** the licence page lists "UK Met Office | CC-BY-SA". ShareAlike (§3(b)) applies when "You Share Adapted Material You produce", and "Share" means to provide material "to the public". Silverstone's field is shown only on a page behind Access and is never committed or in the image, so ShareAlike is not triggered today. Recommendation: the simplest compliant option is to keep Silverstone on `best_match` and add one credit for `gb-1948` only (section 4). Silverstone never gets a committed fixture. If the site ever becomes public, the Silverstone field would be Adapted Material and must be shared as CC BY-SA 4.0 or be dropped. Alternative: pin a non-UKMO model for Silverstone. That adds a second query shape and a coarser field, for a duty that does not arise. Rejected.
+- **The weekend forecast (#120, owner, 2026-11-15):** the same Open-Meteo data under the same CC BY 4.0 terms, fetched by the same client for one point per meeting (the circuit's centre, 4 variables, `best_match`) and shown, rounded and summarised, as a word per session on the season page and as a card on a future session's Weather tab. It is non-commercial on the same grounds. The forecast's share (D3) is at most 100 location-calls in any 24 h inside the 8,000 total, which keeps the totals under the free tier. Silverstone keeps `best_match` here too and takes the UK line of section 4 (item 4). The forecast has no committed fixture of a UK session (C6 holds); the `forecast-vegas` fixture is Las Vegas, NOAA models, recorded by the owner with the credit in its `meta.json`.
 
 ### 4. The attribution strings (final)
 
-Shown as one line (wrapping allowed) under the map, in both Weather tabs. Every link is `<a href rel="noreferrer">`.
+Shown as one line (wrapping allowed) under the map, in both Weather tabs (item 5 under the forecast, as stated there). Every link is `<a href rel="noreferrer">`.
 
 1. Always: `Rain: Weather data by Open-Meteo.com (CC BY 4.0). Modelled, not radar; 7 × 7 points binned into three steps.`
    - "Open-Meteo.com" → `https://open-meteo.com/`
@@ -78,6 +79,10 @@ Shown as one line (wrapping allowed) under the map, in both Weather tabs. Every 
    - "ODbL" → `https://opendatacommons.org/licenses/odbl/1-0/`
 4. Only when `grid.map_id` is `gb-1948` (Silverstone): `Includes UK Met Office model data (CC BY-SA 4.0).`
    - "CC BY-SA 4.0" → `https://creativecommons.org/licenses/by-sa/4.0/`
+   - It also applies under the forecast (item 5) when the forecast's `map_id` is `gb-1948`.
+5. Under the weekend forecast (the season page's list and the forecast card, #120), always: `Weather data by Open-Meteo.com (CC BY 4.0). Modelled, not measured; hourly values rounded and summarised.`
+   - "Open-Meteo.com" → `https://open-meteo.com/`
+   - "CC BY 4.0" → `https://creativecommons.org/licenses/by/4.0/`
 
 Notes:
 
@@ -100,7 +105,7 @@ It says: PolyForm Strict covers the code and the owner's own files. Third-party 
 
 - Four new notice places: the vendored `LICENSE.md`, the OSM directory README, the licences file in `dist`, and the README section. `build.test.ts` and `map-data.test.ts` assert the last two and the notice fields.
 - OSM files cannot be relicensed or merged into outline files. Any change to them stays ODbL. Anyone may copy them under the ODbL.
-- Credits live in `RainMap.tsx` and are tested for text, hrefs and `rel="noreferrer"`. The Silverstone credit is tested by `map_id`.
+- Credits live in `RainMap.tsx` (and, for the forecast, `Forecast.tsx`) and are tested for text, hrefs and `rel="noreferrer"`. The Silverstone credit is tested by `map_id`.
 - A public site, ads or subscriptions would reopen this ADR: Open-Meteo needs a paid plan, and Silverstone's CC BY-SA field would have to be shared.
 - If the owner picks route A, section 2 reduces to the §4.3 notice and the OSM files go under the code's licence, at the risk stated there.
 

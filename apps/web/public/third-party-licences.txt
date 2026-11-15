@@ -64,6 +64,9 @@ For Silverstone the model data includes UK Met Office data, under the Creative C
 Attribution-ShareAlike 4.0 International licence (CC BY-SA 4.0):
 https://creativecommons.org/licenses/by-sa/4.0/
 
+The weekend forecast (rain chance, rain, air temperature and wind by the hour, for sessions still to come) uses
+the same Open-Meteo.com data under the same licence and credit; hourly values are rounded and summarised.
+
 
 4. History: Jolpica-F1 (CC BY-NC-SA 4.0)
 ----------------------------------------

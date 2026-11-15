@@ -7,7 +7,7 @@ export const floor15 = (ms: number) => Math.floor(ms / QUARTER_MS) * QUARTER_MS;
 export const ceil15 = (ms: number) => Math.ceil(ms / QUARTER_MS) * QUARTER_MS;
 
 /** UTC 'YYYY-MM-DDTHH:mm', the form start_minutely_15 and end_minutely_15 take. */
-const minute = (ms: number) => new Date(ms).toISOString().slice(0, 16);
+export const minute = (ms: number) => new Date(ms).toISOString().slice(0, 16);
 
 /**
  * One call for every point (C1: the same shape for both hosts): precipitation per 15 minutes over

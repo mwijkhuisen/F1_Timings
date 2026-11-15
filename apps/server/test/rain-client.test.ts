@@ -14,6 +14,7 @@ import {
   MAX_PAUSE_MS,
   PER_MINUTE,
 } from '../src/rain/client.ts';
+import { forecastQuery } from '../src/rain/forecast.ts';
 import { ceil15, floor15, rainQuery, toFrames } from '../src/rain/grid.ts';
 
 beforeEach(() => vi.useFakeTimers());
@@ -50,6 +51,39 @@ async function settle<T>(pending: Promise<T>): Promise<T> {
   await vi.runAllTimersAsync();
   return pending;
 }
+
+/**
+ * One byte every 15 s (never idle for undici's 30 s), five in all, then a stall: bounded on purpose. (Not closed:
+ * msw's emulated socket would deliver the end after undici's abort.) Sent with a declared length the drip never
+ * reaches, as a real slow server would send it (without one, the socket's close after the abort would end the
+ * message: an undici assertion).
+ */
+const drip = () => {
+  let sent = 0;
+  const body = new ReadableStream({
+    pull: (controller) =>
+      new Promise<void>((resolve) => {
+        if (sent++ < 5) setTimeout(() => resolve(controller.enqueue(new TextEncoder().encode('['))), 15_000);
+      }),
+  });
+  return new HttpResponse(body, { headers: { 'content-length': '1000' } });
+};
+
+/**
+ * `json`, then (if `padded`) 4 MiB of spaces: finite on purpose. JSON.parse takes trailing white space, so without
+ * the cap a padded answer would parse: only the cap turns it away.
+ */
+const padded = (json: unknown, pad: boolean) => {
+  const spaces = new Uint8Array(1024 * 1024).fill(32);
+  const body = new ReadableStream({
+    start(controller) {
+      controller.enqueue(new TextEncoder().encode(JSON.stringify(json)));
+      if (pad) for (let i = 0; i < MAX_BODY_BYTES / spaces.length; i++) controller.enqueue(spaces.slice());
+      controller.close();
+    },
+  });
+  return new HttpResponse(body);
+};
 
 describe('rain client (msw, fake timers)', () => {
   it('sends the fixed host, the query, user-agent f1-timings and accept json, and parses the answer', async () => {
@@ -155,20 +189,7 @@ describe('rain client (msw, fake timers)', () => {
   });
 
   it('ends a slow drip at the 60 s deadline, as a timeout', async () => {
-    // One byte every 15 s (never idle for undici's 30 s), five in all, then a stall: bounded on purpose.
-    // (Not closed: msw's emulated socket would deliver the end after undici's abort.)
-    const drip = () => {
-      let sent = 0;
-      return new ReadableStream({
-        pull: (controller) =>
-          new Promise<void>((resolve) => {
-            if (sent++ < 5) setTimeout(() => resolve(controller.enqueue(new TextEncoder().encode('['))), 15_000);
-          }),
-      });
-    };
-    // A declared length the drip never reaches, as a real slow server would send it (without one, the
-    // socket's close after the abort would end the message: an undici assertion).
-    forecast(() => new HttpResponse(drip(), { headers: { 'content-length': '1000' } }));
+    forecast(drip);
     const t0 = Date.now();
     let ended = 0;
     const pending = createRainClient()
@@ -182,18 +203,7 @@ describe('rain client (msw, fake timers)', () => {
   });
 
   it('stops reading a body past 4 MiB, as schema; the same answer without the padding parses', async () => {
-    // Finite on purpose: a valid answer and then 4 MiB of spaces is still valid JSON (JSON.parse takes trailing
-    // white space), so without the cap the first call would be ok: only the cap turns it away.
-    const spaces = new Uint8Array(1024 * 1024).fill(32);
-    const body = (padded: boolean) =>
-      new ReadableStream({
-        start(controller) {
-          controller.enqueue(new TextEncoder().encode(JSON.stringify(answer(2))));
-          if (padded) for (let i = 0; i < MAX_BODY_BYTES / spaces.length; i++) controller.enqueue(spaces.slice());
-          controller.close();
-        },
-      });
-    const { seen } = forecast((n) => new HttpResponse(body(n === 1)));
+    const { seen } = forecast((n) => padded(answer(2), n === 1));
     expect(await settle(createRainClient().get('forecast', QUERY, ASKED))).toEqual({
       ok: false,
       error: { code: 'schema' },
@@ -263,6 +273,139 @@ describe('rain client (msw, fake timers)', () => {
   });
 });
 
+// #120: the weekend forecast at one point (C3), Las Vegas 2026 from FP1's hour on.
+const H0 = Date.UTC(2026, 10, 20, 0) / 1000;
+const hourly = (time = [H0, H0 + 3600], values: Record<string, unknown[]> = {}) => ({
+  latitude: 36.12,
+  longitude: -115.17,
+  elevation: 610,
+  hourly_units: { time: 'unixtime', precipitation_probability: '%' },
+  hourly: {
+    time,
+    precipitation_probability: time.map(() => 40),
+    precipitation: time.map(() => 0.2),
+    temperature_2m: time.map(() => -1.5),
+    wind_speed_10m: time.map(() => 3.1),
+    ...values,
+  },
+});
+const F_QUERY = forecastQuery(36.1167, -115.1666, H0 * 1000, (H0 + 3600) * 1000);
+const F_ASKED = { from: H0 * 1000, to: (H0 + 3600) * 1000 };
+
+describe('forecast client (msw, fake timers)', () => {
+  it('sends one point to the Forecast host and returns the hours only', async () => {
+    const { requests } = forecast(() => HttpResponse.json(hourly()));
+    expect(await settle(createRainClient().forecast(F_QUERY, F_ASKED))).toEqual({ ok: true, value: hourly().hourly });
+    const url = new URL(requests[0]?.url ?? '');
+    expect(`${url.origin}${url.pathname}`).toBe('https://api.open-meteo.com/v1/forecast');
+    expect(Object.fromEntries(url.searchParams)).toEqual(F_QUERY);
+    expect(requests[0]?.headers.get('user-agent')).toBe('f1-timings');
+  });
+
+  it('maps 429 to rate_limited and pauses the client; 500 to http, once each', async () => {
+    const { seen } = forecast((n) =>
+      n === 1
+        ? new HttpResponse(null, { status: 429, headers: { 'Retry-After': '120' } })
+        : HttpResponse.json({ error: true, reason: 'body-text' }, { status: 500 }),
+    );
+    const client = createRainClient();
+    expect(await settle(client.forecast(F_QUERY, F_ASKED))).toEqual({ ok: false, error: { code: 'rate_limited' } });
+    expect(client.pausedFor()).toBe(120_000);
+    expect(await settle(client.forecast(F_QUERY, F_ASKED))).toEqual({
+      ok: false,
+      error: { code: 'http', status: 500 },
+    });
+    expect(seen).toEqual([0, 120_000]);
+  });
+
+  it('follows no redirect: network', async () => {
+    let followed = 0;
+    server.use(
+      http.get('https://elsewhere.example/v1/forecast', () => {
+        followed++;
+        return HttpResponse.json(hourly());
+      }),
+    );
+    forecast(
+      () => new HttpResponse(null, { status: 302, headers: { Location: 'https://elsewhere.example/v1/forecast' } }),
+    );
+    expect(await settle(createRainClient().forecast(F_QUERY, F_ASKED))).toEqual({
+      ok: false,
+      error: { code: 'network' },
+    });
+    expect(followed).toBe(0);
+  });
+
+  it('ends a stalled body at the 60 s deadline, as a timeout', async () => {
+    forecast(drip);
+    const t0 = Date.now();
+    expect(await settle(createRainClient().forecast(F_QUERY, F_ASKED))).toEqual({
+      ok: false,
+      error: { code: 'timeout' },
+    });
+    expect(Date.now() - t0).toBeGreaterThanOrEqual(DEADLINE_MS);
+  });
+
+  it('stops reading past 4 MiB, as schema; the same answer without the padding parses', async () => {
+    forecast((n) => padded(hourly(), n === 1));
+    expect(await settle(createRainClient().forecast(F_QUERY, F_ASKED))).toEqual({
+      ok: false,
+      error: { code: 'schema' },
+    });
+    expect((await settle(createRainClient().forecast(F_QUERY, F_ASKED))).ok).toBe(true);
+  });
+
+  it.each([
+    ['a body that is not JSON', HttpResponse.text('<html>')],
+    ['a list (a multi-location answer)', HttpResponse.json([hourly()])],
+    ['no hourly', HttpResponse.json({ latitude: 1, longitude: 1 })],
+    ['a missing variable', HttpResponse.json(hourly(undefined, { wind_speed_10m: undefined as unknown as [] }))],
+    ['a variable of another length', HttpResponse.json(hourly(undefined, { precipitation: [0] }))],
+    ['no time steps', HttpResponse.json(hourly([]))],
+    ['a step after the window', HttpResponse.json(hourly([H0 + 3600, H0 + 7200]))],
+    ['a step before the window', HttpResponse.json(hourly([H0 - 3600, H0]))],
+    ['steps 1800 s apart', HttpResponse.json(hourly([H0, H0 + 1800]))],
+    ['steps out of order', HttpResponse.json(hourly([H0 + 3600, H0]))],
+    ['a probability over 100', HttpResponse.json(hourly(undefined, { precipitation_probability: [40, 101] }))],
+    [
+      'a probability that is not an integer',
+      HttpResponse.json(hourly(undefined, { precipitation_probability: [40, 0.5] })),
+    ],
+    ['a negative precipitation', HttpResponse.json(hourly(undefined, { precipitation: [0, -0.1] }))],
+    ['a temperature over 100 °C', HttpResponse.json(hourly(undefined, { temperature_2m: [18, 101] }))],
+    ['a temperature below −100 °C', HttpResponse.json(hourly(undefined, { temperature_2m: [18, -101] }))],
+    ['a wind over 200 m/s', HttpResponse.json(hourly(undefined, { wind_speed_10m: [3, 201] }))],
+    ['a negative wind', HttpResponse.json(hourly(undefined, { wind_speed_10m: [3, -1] }))],
+    ['a value that is a string', HttpResponse.json(hourly(undefined, { precipitation: [0, '0.1'] }))],
+  ])('maps %s to schema', async (_, reply) => {
+    forecast(() => reply.clone());
+    expect(await settle(createRainClient().forecast(F_QUERY, F_ASKED))).toEqual({
+      ok: false,
+      error: { code: 'schema' },
+    });
+  });
+
+  it('keeps null values and one step; a value PostgreSQL real cannot hold becomes null', async () => {
+    const values = {
+      precipitation_probability: [null],
+      precipitation: [1e-50],
+      temperature_2m: [null],
+      wind_speed_10m: [0],
+    };
+    forecast(() => HttpResponse.json(hourly([H0], values)));
+    expect(await settle(createRainClient().forecast(F_QUERY, F_ASKED))).toEqual({
+      ok: true,
+      value: {
+        time: [H0],
+        precipitation_probability: [null],
+        precipitation: [null],
+        temperature_2m: [null],
+        wind_speed_10m: [0],
+      },
+    });
+  });
+});
+
 describe('recorded fixtures', () => {
   const dir = join(import.meta.dirname, '../src/rain/fixtures');
   const fixture = (name: string) => {
@@ -315,6 +458,21 @@ describe('recorded fixtures', () => {
       ok: false,
       error: { code: 'http', status: 400 },
     });
+  });
+
+  it('forecast-vegas is a recorded Forecast answer: its query matches forecastQuery and it parses over the window', async () => {
+    const meta = JSON.parse(readFileSync(join(dir, 'forecast-vegas.meta.json'), 'utf8'));
+    const raw = readFileSync(join(dir, 'forecast-vegas.raw'), 'utf8');
+    expect(meta).toMatchObject({ api: 'forecast', kind: 'forecast', status: 200 });
+    const from = Date.parse('2026-11-20T00:00:00Z');
+    const to = Date.parse('2026-11-22T06:00:00Z');
+    expect(forecastQuery(meta.location.lat, meta.location.lon, from, to)).toEqual(meta.query);
+    server.use(http.get(FORECAST, () => new HttpResponse(raw, { headers: { 'content-type': 'application/json' } })));
+    const result = await settle(createRainClient().forecast(meta.query, { from, to }));
+    if (!result.ok) throw new Error(JSON.stringify(result.error));
+    expect(result.value.time).toHaveLength(55);
+    expect(new Date((result.value.time[0] ?? 0) * 1000).toISOString()).toBe('2026-11-20T00:00:00.000Z');
+    expect(new Date((result.value.time.at(-1) ?? 0) * 1000).toISOString()).toBe('2026-11-22T06:00:00.000Z');
   });
 });
 
@@ -381,13 +539,13 @@ describe('budget (fake clock)', () => {
   it('refuses past 4,000 in any hour, and takes again once the hour has slid', () => {
     const { clock, budget } = setup();
     expect(fill(budget, 'live')).toBe(81); // 81 × 49 = 3,969
-    expect(budget.used()).toEqual({ hour: 3969, day: 3969 });
+    expect(budget.used()).toEqual({ hour: 3969, day: 3969, forecast: 0 });
     expect(budget.take(31, 'live')).toBe(true); // exactly 4,000
     expect(budget.take(1, 'live')).toBe(false);
     clock.t = HOUR - 1;
     expect(budget.take(1, 'live')).toBe(false);
     clock.t = HOUR;
-    expect(budget.used()).toEqual({ hour: 0, day: 4000 });
+    expect(budget.used()).toEqual({ hour: 0, day: 4000, forecast: 0 });
     expect(budget.take(49, 'live')).toBe(true);
   });
 
@@ -398,7 +556,7 @@ describe('budget (fake clock)', () => {
     expect(fill(budget, 'live')).toBe(81);
     clock.t = 2 * HOUR;
     expect(fill(budget, 'live')).toBe(1); // 163 × 49 = 7,987
-    expect(budget.used()).toEqual({ hour: 49, day: 7987 });
+    expect(budget.used()).toEqual({ hour: 49, day: 7987, forecast: 0 });
     clock.t = 3 * HOUR;
     expect(budget.take(13, 'live')).toBe(true); // exactly 8,000
     expect(budget.take(1, 'live')).toBe(false);
@@ -419,25 +577,61 @@ describe('budget (fake clock)', () => {
     expect(fill(budget, 'live')).toBe(32); // 6,400 + 32 × 49 = 7,968
     expect(budget.take(32, 'live')).toBe(true); // exactly 8,000
     expect(budget.take(1, 'live')).toBe(false);
-    expect(budget.used()).toEqual({ hour: 1600, day: 8000 });
+    expect(budget.used()).toEqual({ hour: 1600, day: 8000, forecast: 0 });
   });
 
   it('a refusal records nothing', () => {
     const { budget } = setup();
     expect(budget.take(4001, 'live')).toBe(false);
     expect(budget.take(6401, 'backfill')).toBe(false);
-    expect(budget.used()).toEqual({ hour: 0, day: 0 });
+    expect(budget.used()).toEqual({ hour: 0, day: 0, forecast: 0 });
+  });
+
+  it('the forecast share: at most 100 in any 24 h, counted toward the hour and the day', () => {
+    const { clock, budget } = setup();
+    let n = 0;
+    while (budget.take(1, 'forecast')) n++;
+    expect(n).toBe(100);
+    expect(budget.used()).toEqual({ hour: 100, day: 100, forecast: 100 });
+    expect(budget.take(3901, 'live')).toBe(false);
+    expect(budget.take(3900, 'live')).toBe(true); // exactly 4,000 in the hour
+    clock.t = 24 * HOUR - 1;
+    expect(budget.take(1, 'forecast')).toBe(false);
+    clock.t = 24 * HOUR;
+    expect(budget.used()).toEqual({ hour: 0, day: 0, forecast: 0 });
+    expect(budget.take(1, 'forecast')).toBe(true);
+  });
+
+  it('a forecast inside its share is still refused by the day total', () => {
+    const clock = { t: 0, now: () => clock.t };
+    const budget = createBudget(clock, { day: 10 });
+    expect(budget.take(9, 'live')).toBe(true);
+    expect(budget.take(1, 'forecast')).toBe(true);
+    expect(budget.take(1, 'forecast')).toBe(false);
+    expect(budget.used()).toEqual({ hour: 10, day: 10, forecast: 1 });
+  });
+
+  it('seed with a kind: forecast calls count toward the share and the totals, the default kind toward the totals only', () => {
+    const { clock, budget } = setup();
+    budget.seed(60, 20, 'forecast');
+    budget.seed(500, 100);
+    expect(budget.used()).toEqual({ hour: 120, day: 560, forecast: 60 });
+    let n = 0;
+    while (budget.take(1, 'forecast')) n++;
+    expect(n).toBe(40);
+    clock.t = 24 * HOUR;
+    expect(budget.used()).toEqual({ hour: 0, day: 0, forecast: 0 }); // the seed slides out as calls made at 0
   });
 
   it('seed counts the calls made before a restart: the day total and, inside it, the last hour', () => {
     const { clock, budget } = setup();
     budget.seed(5000, 3000);
-    expect(budget.used()).toEqual({ hour: 3000, day: 5000 });
+    expect(budget.used()).toEqual({ hour: 3000, day: 5000, forecast: 0 });
     expect(fill(budget, 'live')).toBe(20); // 3,000 + 20 × 49 = 3,980 in the hour
     clock.t = HOUR;
-    expect(budget.used()).toEqual({ hour: 0, day: 5980 });
+    expect(budget.used()).toEqual({ hour: 0, day: 5980, forecast: 0 });
     expect(fill(budget, 'backfill')).toBe(8); // 5,980 + 8 × 49 = 6,372
     clock.t = 24 * HOUR;
-    expect(budget.used()).toEqual({ hour: 0, day: 392 });
+    expect(budget.used()).toEqual({ hour: 0, day: 392, forecast: 0 });
   });
 });

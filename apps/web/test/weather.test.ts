@@ -218,6 +218,8 @@ describe('the words', () => {
     expect(fmtRange({ min: 24.06, max: 27.34 }, 1)).toBe('24.1–27.3');
     expect(fmtRange({ min: 30.04, max: 29.96 }, 1)).toBe('30.0');
     expect(fmtRange({ min: 1009.9, max: 1010 }, 0)).toBe('1010');
+    expect(fmtRange({ min: -0.4, max: 3.2 }, 0)).toBe('0–3'); // never "-0"
+    expect(fmtRange({ min: -0.04, max: -0.02 }, 1)).toBe('0.0');
   });
 
   it('heads the session with air and track rounded and the rain in words; null when nothing is known', () => {

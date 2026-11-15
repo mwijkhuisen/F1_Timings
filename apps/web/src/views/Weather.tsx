@@ -7,6 +7,7 @@ import { Pending } from '../ui/ErrorView.tsx';
 import { NoData } from '../ui/NoData.tsx';
 import { Note } from '../ui/Note.tsx';
 import { Chart } from './Chart.tsx';
+import { ForecastCard } from './Forecast.tsx';
 import type { ChartTokens } from './lap-chart-option.ts';
 import { RainMapCard } from './RainMap.tsx';
 import { Tile } from './Tiles.tsx';
@@ -19,11 +20,13 @@ import { weatherChartOption } from './weather-chart-option.ts';
 type Data = { detail: SessionDetail; laps: Laps | null; live: Live | null };
 
 /** `now`: the clock of the reason, epoch ms. */
-export function WeatherTab({ session, ...data }: Data & { session: number; now: number }) {
+export function WeatherTab({ session, now, ...data }: Data & { session: number; now: number }) {
   const weather = useWeather(session);
   return (
     <>
-      {weather.data ? <WeatherView rows={weather.data} {...data} /> : <Pending error={weather.error} />}
+      {weather.data ? <WeatherView rows={weather.data} now={now} {...data} /> : <Pending error={weather.error} />}
+      {/* A session still to come shows its model forecast (#120). */}
+      <ForecastCard detail={data.detail} now={now} />
       {/* The rain map comes from its own source (Open-Meteo, P5c), so it shows without OpenF1 rows too. */}
       <RainMapCard detail={data.detail} />
     </>

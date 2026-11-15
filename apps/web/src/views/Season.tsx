@@ -1,6 +1,7 @@
-import type { Live, Recordings, Season as SeasonData } from '@f1/contracts';
+import type { Forecast, Live, Recordings, Season as SeasonData } from '@f1/contracts';
 import { useEffect, useState } from 'react';
-import { useLive, useRecordings, useSaved, useSeason, useSeasons } from '../lib/api.ts';
+import { useForecast, useLive, useRecordings, useSaved, useSeason, useSeasons } from '../lib/api.ts';
+import { startRow, startWords, upcoming, updatedWords } from '../lib/forecast.ts';
 import { Link, replace, sessionPath } from '../lib/routes.ts';
 import type { Saved } from '../lib/saved.ts';
 import {
@@ -17,6 +18,7 @@ import {
 import { fmtCountdown, fmtInstant, fmtTrack } from '../lib/time.ts';
 import { Cancelled } from '../ui/Cancelled.tsx';
 import { Pending } from '../ui/ErrorView.tsx';
+import { ForecastCredit } from './Forecast.tsx';
 
 // `/:year` (A§13): this weekend first, then the other meetings, every session with its state in words. A recorded
 // session's name is its replay link, with Laps beside it. Never a result.
@@ -92,12 +94,15 @@ export function SeasonView({
   live,
   recordings,
   now,
+  forecast = null,
 }: {
   year: number;
   season: SeasonData;
   live: Live | null;
   recordings: Recordings;
   now: number;
+  /** The weekend meeting's forecast (#120, D2): a word on its sessions still to come. */
+  forecast?: Forecast;
 }) {
   if (season.length === 0)
     return (
@@ -112,6 +117,9 @@ export function SeasonView({
   const nextKey = next?.session.session_key ?? null;
   const upNext = weekend && next?.meeting.meeting_key === weekend.meeting_key ? next.session : null;
   const tracked = weekend?.sessions.some((s) => fmtTrack(s.date_start, weekend.gmt_offset) !== null);
+  const words = (m: Meeting, s: SeasonSession) =>
+    forecast && !m.is_cancelled && upcoming(s, now) ? startWords(startRow(forecast.hours, s)) : null;
+  const anyWord = !!weekend && weekend.sessions.some((s) => words(weekend, s) !== null);
   return (
     <>
       <h1 tabIndex={-1}>{year}</h1>
@@ -133,6 +141,7 @@ export function SeasonView({
               {weekend.sessions.map((s) => {
                 const track = fmtTrack(s.date_start, weekend.gmt_offset);
                 const state = stateOf(weekend, s, recordings, live, now, nextKey);
+                const word = words(weekend, s);
                 return (
                   <li key={s.session_key}>
                     <Name year={year} meeting={weekend} session={s} state={state} />
@@ -141,10 +150,21 @@ export function SeasonView({
                       {track && ` · ${track} at the track`}
                     </span>
                     <State state={state} />
+                    {word && (
+                      <span className="fc">
+                        <span className="vh">Forecast: </span>
+                        {word}
+                      </span>
+                    )}
                   </li>
                 );
               })}
             </ul>
+            {forecast && anyWord && (
+              <p className="foot fcsrc">
+                Forecast (model), {updatedWords(forecast.fetched_at, now)}. <ForecastCredit map_id={forecast.map_id} />
+              </p>
+            )}
           </div>
           {upNext && (
             <div className="upnext">
@@ -210,6 +230,8 @@ export function Season({ year }: { year: number }) {
   const season = useSeason(year, (data) => (polling(data, Date.now()) ? WEEKEND_POLL_MS : false));
   const live = useLive();
   const recordings = useRecordings(polling(season.data, now) && WEEKEND_POLL_MS);
+  const weekend = season.data ? thisWeekend(season.data, now, live.data ?? null) : null;
+  const forecast = useForecast(weekend?.meeting_key ?? null);
   if (!season.data) return <Pending error={season.error} />;
   return (
     <SeasonView
@@ -218,6 +240,7 @@ export function Season({ year }: { year: number }) {
       live={live.data ?? null}
       recordings={recordings.data ?? []}
       now={now}
+      forecast={forecast.data ?? null}
     />
   );
 }

@@ -3,6 +3,7 @@ import { type Kysely, sql, type Transaction } from 'kysely';
 import type { Logger } from 'pino';
 import { codeOf, type DB } from '../db/db.ts';
 import type { BudgetKind, createBudget, createRainClient } from './client.ts';
+import { createForecastStep } from './forecast.ts';
 import { rainQuery, toFrames } from './grid.ts';
 import {
   afterRainFailure,
@@ -29,7 +30,7 @@ export type RainDeps = {
   now: () => Date;
   log: Pick<Logger, 'info' | 'error'>;
   beat: () => void;
-  /** The daemon's healthchecks.io ping (never throws): `f1-ingest/fail` when a grid newly fails for good (#105). */
+  /** The daemon's healthchecks.io ping (never throws): `f1-ingest/fail` when a grid or forecast fails for good. */
   ping?: (slug: string, body?: string) => Promise<boolean>;
 };
 
@@ -86,13 +87,17 @@ const countAttempt = (trx: Transaction<DB>, key: number, at: Date) =>
     .returning(['state', 'fetch_count', 'fail_count'])
     .executeTakeFirst();
 
-/** The minute job's rain step, with its per-process memory (the budget seed, the unmapped log, the refusal streaks). */
+/**
+ * The minute job's rain step, with its per-process memory (the budget seed, the unmapped log, the refusal streaks),
+ * and the weekend forecast's (#120) on the same client and budget.
+ */
 export function createRainStep(deps: RainDeps) {
   const { db, client, budget, now, log, beat, ping } = deps;
+  const forecast = createForecastStep(deps);
   let seeded = false;
   let unmappedLogged = false; // C5: once per process
   let pausedLogged = false;
-  const refusing: Record<BudgetKind, boolean> = { live: false, backfill: false };
+  const refusing: Record<BudgetKind, boolean> = { live: false, backfill: false, forecast: false };
 
   /**
    * D3: a restart counts the attempts of every grid touched in the last 24 h (and hour) as made now. attempt_count
@@ -117,8 +122,8 @@ export function createRainStep(deps: RainDeps) {
   }
 
   /** A refusal ends the step; it is logged when a streak of them starts, not every minute. */
-  function take(kind: BudgetKind): boolean {
-    const ok = budget.take(POINTS, kind);
+  function take(kind: BudgetKind, n = POINTS): boolean {
+    const ok = budget.take(n, kind);
     if (!ok && !refusing[kind]) log.info({ kind, used: budget.used() }, 'rain_budget');
     refusing[kind] = !ok;
     return ok;
@@ -225,9 +230,10 @@ export function createRainStep(deps: RainDeps) {
   }
 
   /**
-   * New grids for sessions in their live window (database only), then at most one Open-Meteo request (C4): the due
-   * grid with the newest date_end, else one backfill session. So the busy guard never waits on more than one request,
-   * and none while a 429's pause lasts. Never rejects: the busy guard's precondition.
+   * New grids for sessions in their live window and new forecasts for meetings in theirs (database only), then at most
+   * one Open-Meteo request (C4): the due grid with the newest date_end, else the due forecast (#120), else one backfill
+   * session. So the busy guard never waits on more than one request, and none while a 429's pause lasts. Never
+   * rejects: the busy guard's precondition.
    */
   return async function rainStep(stopping: () => boolean): Promise<void> {
     beat();
@@ -238,6 +244,7 @@ export function createRainStep(deps: RainDeps) {
         await seed(at);
         seeded = true;
       }
+      await forecast.seed(at); // once it has worked; a fault is its own, never the rain's seed again
       if (!unmappedLogged) {
         // Every session that has or would have had a grid by now, whose circuit has no outline.
         const { count } = await gridless(db)
@@ -268,6 +275,7 @@ export function createRainStep(deps: RainDeps) {
         .execute();
       for (const s of live.filter((s) => inLiveWindow(s, at)))
         await insertGrid(s.session_key, s.circuit_short_name, at);
+      await forecast.open(at);
 
       if (stopping() || paused()) return;
       const due = await dueGrid(db, at);
@@ -277,6 +285,7 @@ export function createRainStep(deps: RainDeps) {
           await processGrid(due);
         return;
       }
+      if (await forecast.run(at, take)) return; // a refusal of its share leaves the run to the backfill
 
       const past = await gridless(db)
         .select(['session.session_key', 'meeting.circuit_short_name'])

@@ -32,7 +32,7 @@ const EMPTY: RainFrame[] = [];
 /** A ring label's place: on the south-east diagonal, nudged off the ring. */
 const diag = (r: number, nudge: number) => Number((r * Math.SQRT1_2 + nudge).toFixed(2));
 
-const ext = (href: string, text: string) => (
+export const ext = (href: string, text: string) => (
   <a href={href} rel="noreferrer">
     {text}
   </a>

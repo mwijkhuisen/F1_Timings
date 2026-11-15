@@ -1,7 +1,19 @@
 import { readFileSync } from 'node:fs';
 import { createServer } from 'node:net';
 import { join } from 'node:path';
-import { Laps, Pits, RaceControl, Rain, Season, Seasons, SessionDetail, Status, Stints, Weather } from '@f1/contracts';
+import {
+  Forecast,
+  Laps,
+  Pits,
+  RaceControl,
+  Rain,
+  Season,
+  Seasons,
+  SessionDetail,
+  Status,
+  Stints,
+  Weather,
+} from '@f1/contracts';
 import type { Hono } from 'hono';
 import { type Kysely, sql } from 'kysely';
 import { HttpResponse, http, passthrough } from 'msw';
@@ -33,6 +45,8 @@ const SPRINT = 11383; // final
 const SHA = 'a'.repeat(40);
 const SHA2 = 'b'.repeat(40);
 const FAILING = 11397; // Mexico City practice 1, set retrying by hand
+const VEGAS = 1300; // a forecast with hours
+const LUSAIL = 1301; // a forecast before its first success
 // The race's fastest lap (car 16, lap 60, 1:36.628) is deleted by one synthetic message.
 const SYNTHETIC = {
   session_key: RACE,
@@ -92,6 +106,7 @@ const ROUTES = [
   [`/api/v1/sessions/${QUALI}/race-control`, 'RaceControl', RaceControl],
   [`/api/v1/sessions/${QUALI}/weather`, 'Weather', Weather],
   [`/api/v1/sessions/${QUALI}/rain`, 'Rain', Rain],
+  [`/api/v1/meetings/${VEGAS}/forecast`, 'Forecast', Forecast],
   ['/api/v1/status', 'Status', Status],
 ] as const;
 
@@ -99,6 +114,9 @@ const ROUTES = [
 const mm = (base: number) =>
   Array.from({ length: 49 }, (_, i) => (i === 3 ? null : base + i / 100)) as unknown as number[];
 const FRAME_1 = '2026-10-10T10:00:00.000Z';
+const FETCHED = '2026-11-18T03:00:00.000Z';
+const HOUR_1 = { precipitation_probability: 40, precipitation: 0.5, temperature_2m: -2.5, wind_speed_10m: 3.25 };
+const HOUR_2 = { precipitation_probability: 0, precipitation: 0, temperature_2m: 18, wind_speed_10m: 0 };
 const FRAME_2 = '2026-10-10T10:15:00.000Z';
 
 const get = (path: string, method = 'GET') =>
@@ -169,6 +187,30 @@ describe('api (f1_api login, Access JWT)', { timeout: 120_000 }, () => {
         { session_key: QUALI, date: FRAME_1, mm: mm(0) },
         { session_key: RACE, date: FRAME_1, mm: mm(0) },
         { session_key: SPRINT, date: FRAME_1, mm: mm(0) },
+      ])
+      .execute();
+    // #120: Las Vegas has a forecast and three hours (inserted out of date order), Lusail one that never succeeded.
+    const forecast = { source: 'open-meteo', lat: 36.1167, lon: -115.1666, state: 'live', updated_at: FETCHED };
+    await admin
+      .insertInto('forecast')
+      .values([
+        { ...forecast, meeting_key: VEGAS, map_id: 'us-2023', fetched_at: FETCHED, fetch_count: 1 },
+        { ...forecast, meeting_key: LUSAIL, map_id: 'qa-2004', fail_count: 1, last_error: 'timeout' },
+      ])
+      .execute();
+    await admin
+      .insertInto('forecast_hour')
+      .values([
+        { meeting_key: VEGAS, date: '2026-11-20T02:00:00Z', ...HOUR_2 },
+        { meeting_key: VEGAS, date: '2026-11-20T01:00:00Z', ...HOUR_1 },
+        {
+          meeting_key: VEGAS,
+          date: '2026-11-20T03:00:00Z',
+          precipitation_probability: null,
+          precipitation: null,
+          temperature_2m: null,
+          wind_speed_10m: null,
+        },
       ])
       .execute();
     apiDb = createDb(testDb.urls.f1_api);
@@ -372,6 +414,10 @@ describe('api (f1_api login, Access JWT)', { timeout: 120_000 }, () => {
       ['/api/v1/sessions/-1/rain', 400, 'bad request'],
       ['/api/v1/sessions/1234567890/rain', 400, 'bad request'],
       ['/api/v1/sessions/999999/rain', 404, 'not found'],
+      ['/api/v1/meetings/abc/forecast', 400, 'bad request'],
+      ['/api/v1/meetings/-1/forecast', 400, 'bad request'],
+      ['/api/v1/meetings/1234567890/forecast', 400, 'bad request'],
+      ['/api/v1/meetings/999999/forecast', 404, 'not found'],
       ['/api/v1/seasons/2025', 404, 'not found'],
       ['/api/v1/nothing', 404, 'not found'],
     ] as const;
@@ -469,6 +515,39 @@ describe('api (f1_api login, Access JWT)', { timeout: 120_000 }, () => {
       expect(await cacheOf(QUALI, method)).toBe('private, max-age=86400'); // both final
       expect(await cacheOf(SPRINT, method)).toBe('no-store'); // final session, live grid
       expect(await cacheOf(RACE, method)).toBe('no-store'); // final grid, session not final
+    }
+  });
+
+  it('forecast: map_id, fetched_at and the hours by date, nulls kept, always no-store', async () => {
+    const res = await get(`/api/v1/meetings/${VEGAS}/forecast`);
+    expect(res.status).toBe(200);
+    expect(res.headers.get('cache-control')).toBe('no-store');
+    expect(Forecast.parse(await res.json())).toEqual({
+      map_id: 'us-2023',
+      fetched_at: FETCHED,
+      hours: [
+        { date: '2026-11-20T01:00:00.000Z', ...HOUR_1 },
+        { date: '2026-11-20T02:00:00.000Z', ...HOUR_2 },
+        {
+          date: '2026-11-20T03:00:00.000Z',
+          precipitation_probability: null,
+          precipitation: null,
+          temperature_2m: null,
+          wind_speed_10m: null,
+        },
+      ],
+    });
+  });
+
+  it('forecast: null for a meeting without one or before its first success, no-store', async () => {
+    const meeting = (await body('/api/v1/seasons/2026', Season)).find((m) =>
+      m.sessions.some((s) => s.session_key === QUALI),
+    );
+    for (const key of [meeting?.meeting_key, LUSAIL]) {
+      const res = await get(`/api/v1/meetings/${key}/forecast`);
+      expect(res.status).toBe(200);
+      expect(res.headers.get('cache-control')).toBe('no-store');
+      expect(await res.text()).toBe('null');
     }
   });
 

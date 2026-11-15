@@ -1,0 +1,22 @@
+{
+  "api": "forecast",
+  "kind": "forecast",
+  "query": {
+    "latitude": "36.1167",
+    "longitude": "-115.1666",
+    "hourly": "precipitation_probability,precipitation,temperature_2m,wind_speed_10m",
+    "start_hour": "2026-11-20T00:00",
+    "end_hour": "2026-11-22T06:00",
+    "timeformat": "unixtime",
+    "timezone": "GMT",
+    "wind_speed_unit": "ms",
+    "cell_selection": "land"
+  },
+  "fetchedAt": "2026-11-15T08:05:23.435Z",
+  "status": 200,
+  "location": {
+    "lat": 36.1167,
+    "lon": -115.1666
+  },
+  "attribution": "Data: Open-Meteo.com, CC BY 4.0, https://open-meteo.com/ — https://creativecommons.org/licenses/by/4.0/"
+}
