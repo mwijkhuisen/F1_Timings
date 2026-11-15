@@ -80,7 +80,7 @@ Shown as one line (wrapping allowed) under the map, in both Weather tabs (item 5
 4. Only when `grid.map_id` is `gb-1948` (Silverstone): `Includes UK Met Office model data (CC BY-SA 4.0).`
    - "CC BY-SA 4.0" → `https://creativecommons.org/licenses/by-sa/4.0/`
    - It also applies under the forecast (item 5) when the forecast's `map_id` is `gb-1948`.
-5. Under the weekend forecast (the season page's list and the forecast card, #120), always: `Forecast: Weather data by Open-Meteo.com (CC BY 4.0). Modelled, not measured; hourly values rounded and summarised.`
+5. Under the weekend forecast (the season page's list and the forecast card, #120), always: `Weather data by Open-Meteo.com (CC BY 4.0). Modelled, not measured; hourly values rounded and summarised.`
    - "Open-Meteo.com" → `https://open-meteo.com/`
    - "CC BY 4.0" → `https://creativecommons.org/licenses/by/4.0/`
 

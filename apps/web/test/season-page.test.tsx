@@ -219,7 +219,7 @@ describe('the weekend forecast on the season page', () => {
   it('says it is a model forecast, when it was updated, and credits Open-Meteo', () => {
     const foot = weekend.slice(weekend.indexOf('<p class="foot fcsrc">'));
     expect(textOf(foot)).toContain(
-      'Forecast (model), updated 15:10. Forecast: Weather data by Open-Meteo.com (CC BY 4.0). Modelled, not measured; hourly values rounded and summarised.',
+      'Forecast (model), updated 15:10. Weather data by Open-Meteo.com (CC BY 4.0). Modelled, not measured; hourly values rounded and summarised.',
     );
     expect(foot).toContain('<a href="https://open-meteo.com/" rel="noreferrer">Open-Meteo.com</a>');
     expect(foot).toContain('<a href="https://creativecommons.org/licenses/by/4.0/" rel="noreferrer">CC BY 4.0</a>');
@@ -228,7 +228,7 @@ describe('the weekend forecast on the season page', () => {
 
   it("uses the weekday form when the forecast is from another Amsterdam day, so it never reads as today's", () => {
     const old = withForecast(forecastOf('br-1940', '2026-11-06T09:00:00.000Z'));
-    expect(textOf(old)).toContain('Forecast (model), updated Fri 6 Nov 2026, 10:00. Forecast:');
+    expect(textOf(old)).toContain('Forecast (model), updated Fri 6 Nov 2026, 10:00. Weather data by');
   });
 
   it('adds the UK Met Office line for Silverstone only', () => {

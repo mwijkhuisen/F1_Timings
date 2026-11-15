@@ -2732,6 +2732,17 @@ section.rainmap .raintime input[type="range"] {
   font-size: 12.5px;
 }
 
+/* The credit under the weekend list (outside a .card, so .card .foot does not reach it) and the card's own gap. */
+.fcsrc {
+  margin-top: 8px;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.card.forecast {
+  margin-bottom: 12px;
+}
+
 /* Inline links in a sentence are exempt from the 44 px target (WCAG 2.5.8). */
 .fcsrc a {
   display: inline;

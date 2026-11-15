@@ -10,7 +10,7 @@ import { Tile } from './Tiles.tsx';
 /** The credit's sentence(s); the Met Office line only for Silverstone (item 4). */
 export const ForecastCredit = ({ map_id }: { map_id: string }) => (
   <>
-    Forecast: Weather data by {ext('https://open-meteo.com/', 'Open-Meteo.com')} (
+    Weather data by {ext('https://open-meteo.com/', 'Open-Meteo.com')} (
     {ext('https://creativecommons.org/licenses/by/4.0/', 'CC BY 4.0')}). Modelled, not measured; hourly values rounded
     and summarised.
     {map_id === 'gb-1948' && (

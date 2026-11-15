@@ -135,7 +135,7 @@ describe('the forecast card', () => {
   it("credits Open-Meteo, word for word, and Silverstone's Met Office data only there", () => {
     const html = card();
     expect(textOf(html)).toContain(
-      'Forecast: Weather data by Open-Meteo.com (CC BY 4.0). Modelled, not measured; hourly values rounded and summarised.',
+      'Weather data by Open-Meteo.com (CC BY 4.0). Modelled, not measured; hourly values rounded and summarised.',
     );
     expect(html).toContain('<a href="https://open-meteo.com/" rel="noreferrer">Open-Meteo.com</a>');
     expect(html).toContain('<a href="https://creativecommons.org/licenses/by/4.0/" rel="noreferrer">CC BY 4.0</a>');
