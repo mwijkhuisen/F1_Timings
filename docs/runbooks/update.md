@@ -324,8 +324,8 @@ sudo docker compose -p f1 -f /etc/f1/compose.yaml --env-file /srv/f1/state/curre
 - **Session failures (exit 1, the run goes on):** `timeout`, `network`, `http_<status>`, `empty`, `too_large` (a file over its cap, or a session's parsed files over 16 MiB), `too_many_topics` (a session `Index.json` with over 64 topics), `key_mismatch`, `not_archive`, `db`. Rerun after a fix; each one is in the session's `archive` line.
 - **The last line:** `archive_done` counts `downloaded` (sessions whose files are all on disk) and `imported` (sessions whose rows were written; always 0 from 2023).
 - **Expected failures (2026-11-12, again since P3e):** a 2021 run always ends with `failed: 1` (exit 1): 2021 Abu Dhabi Practice 1 (7165) is skipped as `key_mismatch` (A§6.2), and its files are downloaded all the same. A 2022 run ends with `index_http_403` and imports nothing while F1 refuses that year; run `archive 2022` again later. A loop over the years that stops on a failure therefore stops after 2021.
-- **Rate:** one request every 2 s. 2018 to now is about 22,000 requests, about 12 h in all (an estimate, A§6.2) [H14: the measured time for one year]; run a year at a time (`tmux` or `nohup` keeps it alive after the SSH session ends), between weekends.
-- **Disk:** [H14: the disk 2018 to now takes, A§14.1].
+- **Rate:** one request every 2 s. 2018 to now is about 22,000 requests, about 12 h in all (an estimate, A§6.2); measured on 2021 into an empty directory: 1 h 50 m 40 s for 112 sessions, 58 s per session at the median (WSL, 2026-11-15); run a year at a time (`tmux` or `nohup` keeps it alive after the SSH session ends), between weekends.
+- **Disk:** the 2021 season took 1.9 GB; 2018 to now is about 15–17 GB (an extrapolation, A§14.1), against 960 GB free.
 - **Years:** 2018 to the current year (exit 64 otherwise). From 2023 the job writes no rows; run `fill --all` (below) afterwards, so the 2023+ archive files fill OpenF1's laps (A§7).
 
 ## Merge the archive files and recordings into the laps (the `fill` job) [owner]

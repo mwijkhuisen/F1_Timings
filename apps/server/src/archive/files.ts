@@ -19,8 +19,9 @@ export const MAX_BYTES = 64 * 1024 * 1024;
 export const INDEX_MAX_BYTES = 1024 * 1024;
 /**
  * One raw-only topic file (P3e, A§6.2): written, never read, so only the download's double buffer counts against the
- * job's 512m. [H14: a placeholder until the 2021 measurement; S6 sets it to about 3 times the largest raw file seen,
- * kept at or under 32 MiB unless the measurement says otherwise. The largest `.z` file seen so far is 10.0 MB, #122.]
+ * job's 512m. The H14 season (2021, WSL [box], 2026-11-15): the largest raw file is 20.4 MB (a test day's
+ * `Position.z`), 10.1 MB outside the test days, so 32 MiB is 1.6 times the largest (owner, 2026-11-15: not 3 times,
+ * which would cost about 60 MB more of the 512m). The full season peaked at 376 MB RSS.
  */
 export const RAW_MAX_BYTES = 32 * 1024 * 1024;
 /**
