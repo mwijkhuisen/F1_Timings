@@ -1,12 +1,13 @@
 -- P8 [box]: the facts behind the championship standings (A§6.1, A§7, A§8) over the OpenF1 races and sprints of 2023 on,
--- once the re-queue of 20261115000002_standings.sql has drained (/status shows no extra `fetched`).
+-- once the re-queue of 20261115000002_standings.sql has drained (/status shows no extra `due`: the first tick turns
+-- the re-queued `fetched` into `due`).
 --
 -- Read-only: it runs as f1_api (SELECT only) inside a READ ONLY transaction that is rolled back. It prints counts
 -- and session keys only, never a name, a number of points or a position.
 --
--- On the VM:
---   sudo docker compose -p f1 -f /etc/f1/compose.yaml --env-file /srv/f1/state/current.env exec -T db \
---     psql -U postgres -d f1 -X -v ON_ERROR_STOP=1 -f - < standings-facts.sql
+-- On the VM, which has no checkout (<revision> is the release's commit, `revision` in `sudo f1-status`):
+--   curl -fsSL -o standings-facts.sql https://raw.githubusercontent.com/mwijkhuisen/F1_Timings/<revision>/scripts/standings-facts.sql
+--   sudo f1-psql -q -v ON_ERROR_STOP=1 -f - < standings-facts.sql
 
 SET ROLE f1_api;
 BEGIN READ ONLY;
