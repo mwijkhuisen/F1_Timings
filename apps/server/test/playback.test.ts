@@ -860,6 +860,28 @@ describe('playback with pos (P7a)', () => {
     expect(await seek(at, given(undefined))).toBeNull();
   });
 
+  it("ignores a Subscribe state's Position (an hour old here): not the snapshot's pos, and no event", async () => {
+    const dir = tmp();
+    const base = practice();
+    const regular = base.findLast((v) => v[1] === 'Position.z' && v[0] <= T0 + 40_000) as Value;
+    // 600 ms after the regular line, so its entry would be in a newer 500 ms bucket; car 33 marks it.
+    const r = regular[0] + 600;
+    const old = { 'Position.z': positionZ(r - 3_600_000, { 33: { Status: 'OnTrack', X: 120, Y: -40, Z: 3 } }) };
+    await record(dir, byR([...base, [r, '_subscribe', old]]), 60_000);
+
+    const seek = start(dir, { at: r + 100, pos: given(FRAME) });
+    expect(snapshotPos((await seek.gen.next()).value as PlaybackEvent)).toEqual({
+      t: regular[0],
+      cars: newest(regular),
+    });
+    await seek.gen.return(undefined);
+
+    const { gen, clock } = start(dir, { at: T0, pos: given(FRAME) });
+    const pos = posOf(await drain(gen, clock));
+    expect(pos.length).toBeGreaterThan(250);
+    expect(pos.some((p) => '33' in p.cars)).toBe(false);
+  });
+
   it('a frame that comes mid-stream starts the events: asked again after 30 s, without holding the stream', async () => {
     const dir = tmp();
     await record(dir, practice(), 60_000);

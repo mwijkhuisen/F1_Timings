@@ -15,6 +15,8 @@ const MAX_INFLATED = 256 * 1024;
 const BASE64 = /^[A-Za-z0-9+/]+={0,2}$/;
 // A car is 1–99: the ids 241–243 are not cars (A§6.2), and neither is 0 or a leading zero.
 const CAR = /^[1-9]\d?$/;
+/** A real message carries 1–9 entries (A§6.2): a bigger one is no position feed, and inflating it costs CPU. */
+const MAX_ENTRIES = 32;
 
 export const zCounts = (): Record<ZFail, number> => ({
   bad_base64: 0,
@@ -43,7 +45,7 @@ export function decodeZ(payload: unknown): { ok: true; value: unknown } | { ok: 
     return { ok: false, fail: large ? 'too_large' : 'bad_deflate' };
   }
   try {
-    return { ok: true, value: JSON.parse(text.replace(/^﻿/, '')) };
+    return { ok: true, value: JSON.parse(text.replace(/^\uFEFF/, '')) };
   } catch {
     return { ok: false, fail: 'bad_json' };
   }
@@ -56,10 +58,10 @@ const status = (v: unknown): Sample['status'] | undefined =>
 /**
  * A decoded Position message, `Position[].{Timestamp, Entries.<n>.{Status, X, Y, Z}}` (A§6.2). An entry with a bad
  * Timestamp is skipped; a sample whose id is no car, whose Status is none of OnTrack, OffTrack or a number (2019),
- * whose X, Y or Z is no int16, or at X = Y = 0, is dropped.
+ * whose X, Y or Z is no int16, or at X = Y = 0, is dropped. A message of over MAX_ENTRIES entries is [].
  */
 export function positions(value: unknown): PosEntry[] {
-  if (!isObj(value) || !Array.isArray(value.Position)) return [];
+  if (!isObj(value) || !Array.isArray(value.Position) || value.Position.length > MAX_ENTRIES) return [];
   const out: PosEntry[] = [];
   for (const entry of value.Position) {
     const t = isObj(entry) ? utc(entry.Timestamp) : null;

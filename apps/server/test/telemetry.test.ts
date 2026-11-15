@@ -14,7 +14,7 @@ const one = (entries: Record<string, unknown>, ...ts: unknown[]) =>
 describe('decodeZ (P7a, A§11.3)', () => {
   it('decodes raw deflate JSON, with or without a BOM', () => {
     expect(decodeZ(json(message))).toEqual({ ok: true, value: message });
-    expect(decodeZ(z(`﻿${JSON.stringify(message)}`))).toEqual({ ok: true, value: message });
+    expect(decodeZ(z(`\uFEFF${JSON.stringify(message)}`))).toEqual({ ok: true, value: message });
   });
 
   it('a zip bomb is too_large: 4 MiB of zeros in about 4 KB', () => {
@@ -121,5 +121,19 @@ describe('positions (P7a, A§6.2)', () => {
     expect(positions({ Position: [{ Timestamp: '2027-01-01T12:00:00Z' }, 7, null] })).toEqual([]);
     expect(one({})).toEqual([{ t: Date.parse('2027-01-01T12:00:00.250Z'), cars: [] }]);
     for (const value of [null, 'x', 3, [], { Position: {} }, { Entries: [] }]) expect(positions(value)).toEqual([]);
+  });
+
+  it('a message of over 32 entries is [] (real ones carry 1–9): a small payload cannot inflate into thousands', () => {
+    const cars = Object.fromEntries(Array.from({ length: 99 }, (_, i) => [String(i + 1), sample()]));
+    const entries = (n: number) =>
+      Array.from({ length: n }, (_, i) => ({
+        Timestamp: new Date(Date.UTC(2027, 0, 1, 12) + i).toISOString(),
+        Entries: cars,
+      }));
+    expect(positions({ Position: entries(32) })).toHaveLength(32);
+    const big = json({ Position: entries(33) });
+    expect(big.length).toBeLessThan(4_000); // deflate keeps 33 × 99 repeated samples small
+    const z = decodeZ(big);
+    expect(z.ok && positions(z.value)).toEqual([]);
   });
 });

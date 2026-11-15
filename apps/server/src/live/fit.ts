@@ -192,8 +192,9 @@ function* complete(laps: readonly LapRow[]): Generator<Candidate & { key: string
 
 /**
  * The recording's first complete on-track lap, fitted (D2). One createFeed and createLaps over the non-`.z` events,
- * as playback's apply runs them (UNPARSED skipped); `Position.z` is decoded only once a lap has a start, into a per-car
- * buffer of the last BUFFER_MS (at most BUFFER_MAX samples). After a TimingData count, the laps' rows (at most every ROWS_MS of F1
+ * as playback's apply runs them (UNPARSED skipped); `Position.z` is decoded only once a lap has a start (never a
+ * Subscribe state's, which can be an hour old), into a per-car buffer of the
+ * last BUFFER_MS (at most BUFFER_MAX samples). After a TimingData count, the laps' rows (at most every ROWS_MS of F1
  * time) give the candidates; one is judged once the Position data reaches its end + GAP_MS, as samples arrive
  * 1.7–2.3 s late (A§6.2). It passes when every sample in [start, end) is OnTrack, at least MIN_SAMPLES over at least
  * MIN_LAP_MS, with no gap and neither edge over GAP_MS, and the fit's rms is at most MAX_RMS_M. A lap start from a
@@ -233,7 +234,7 @@ export async function findFrame(
   for await (const line of lines) {
     if (++read > LINES_MAX) return GAVE_UP;
     for (const ev of parseFeedLine(line.text)) {
-      if (ev.topic === 'Position.z') {
+      if (ev.topic === 'Position.z' && !ev.full) {
         if (decoding && ++decoded > DECODED_MAX) return GAVE_UP;
         const z = decoding ? decodeZ(ev.payload) : undefined;
         if (z && !z.ok) counts[z.fail]++;

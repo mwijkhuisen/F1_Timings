@@ -134,8 +134,12 @@ describe('findFrame (P7a, D2)', () => {
 
   it('finds the first complete lap of a practice session; nothing is decoded before a lap starts', async () => {
     const counts = zCounts();
+    // A Subscribe state's Position (`full`) can be an hour old: never decoded either.
+    const subscribe: Value = [T0 + 12_000, '_subscribe', { 'Position.z': '!!!' }, new Date(T0 + 12_000).toISOString()];
     const { outcome, found } = await findFrame(
-      iterate(practice([{ driver: 4, laps: [80_000, 75_000, 76_000] }], [junk(T0 - 20_000), junk(T0 + 10_000)])),
+      iterate(
+        practice([{ driver: 4, laps: [80_000, 75_000, 76_000] }], [junk(T0 - 20_000), junk(T0 + 10_000), subscribe]),
+      ),
       9001,
       OUTLINE,
       counts,

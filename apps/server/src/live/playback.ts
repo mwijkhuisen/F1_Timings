@@ -255,7 +255,8 @@ export async function* playback(o: {
     let switched = false;
     applied = line.r;
     for (const ev of parseFeedLine(line.text)) {
-      if (ev.topic === 'Position.z' && o.pos) {
+      // Not a Subscribe state's (`full`): it can be an hour old (A§11.3), yet it would be kept and sent at its line's r.
+      if (ev.topic === 'Position.z' && o.pos && !ev.full) {
         lastPos = { payload: ev.payload, r: line.r };
         // Streaming only: the seek keeps the line and decodes none (A§11.3).
         if (!out || !frame) continue;
