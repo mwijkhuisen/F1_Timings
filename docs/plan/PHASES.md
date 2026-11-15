@@ -15,7 +15,7 @@ Status: approved by the owner (2026-10-25). It builds on `ARCHITECTURE.md` (cite
 | Nov 2026 → Jan 2027 | **P6a–P6c** | Team radio (owner, 2026-11-09), next to P4 and P5. P6a's live check needs a session (Las Vegas 20–22 Nov, else Lusail or Yas Marina). P6b and P6c start only after their gate checks |
 | After P2 | **P3a–P3g** | History (owner, 2026-11-10): the F1 archive from 2018 (every topic, 2023 on as files only), Jolpica 1950–2017, the FIA PDFs from 2012, the sources combined, old-season views. P3d's probes come first |
 | Nov → Dec 2026 | **P7a** | Telemetry, map first (owner, 2026-11-15, #122): the player's car map from the recordings alone, so it needs nothing from P3e. Its [weekend] check needs a session: Yas Marina 4–6 Dec (else Lusail 27–29 Nov if P7a is ready, else 2027 pre-season testing, stated in the PR) |
-| After P3e | **P7b**, **P7c** | Telemetry (owner, 2026-11-15): the stored laps, the route and the per-lap figures (P7b: the VM backfill of recordings first, 2018 on after P3e), then the traces on Compare (P7c) |
+| After P7a | **P7b**, **P7c** | Telemetry (owner, 2026-11-15): the stored laps, the route and the per-lap figures (P7b: the VM backfill of recordings first; only its 2018-on backfill waits for P3e), then the traces on Compare (P7c) |
 | After the #123 plan PR | **P8** | Championship standings (owner, 2026-11-15), 2023 on; next to P4–P6 |
 
 Remaining 2026 weekends (OpenF1 schedule): Austin (race 25 Oct) · Mexico City 30 Oct–1 Nov · São Paulo 6–8 Nov · Las Vegas 20–22 Nov · Lusail 27–29 Nov · Yas Marina 4–6 Dec.
@@ -263,8 +263,8 @@ Remaining 2026 weekends (OpenF1 schedule): Austin (race 25 Oct) · Mexico City 3
   - **H12, Jolpica:** imported from its CSV dump, not the API. The free dump is about 14 days behind, which does not matter for finished seasons.
   - **H13, old-season views:** the views hide per-lap columns a session has no data for, and add a panel with the session's bests (best sectors and top speeds).
   - **H14, measure first:** the first full archive download (all topics, telemetry included) runs on the owner's machine for one season and measures size, time and RSS. The caps and the VM run come after.
-  - **H15, telemetry:** it gets its own phase (P7). Since 2026-11-15 (T7) P7a, the player's map from the recordings, needs nothing from P3e; P7b and P7c come after it.
-  - **H16, order:** the probes first (P3d), then P3e, P3c, P3f, P3b and P3g. P7b and P7c come after P3e, and P7a needs nothing from it (T7, owner, 2026-11-15). Owner decision D1, 2026-11-12: the P3b merge core comes before P3c; P3b is two PRs.
+  - **H15, telemetry:** it gets its own phase (P7). Since 2026-11-15 (T7) P7a, the player's map from the recordings, needs nothing from P3e; P7b and P7c come after P7a, and only P7b's 2018-on backfill waits for P3e.
+  - **H16, order:** the probes first (P3d), then P3e, P3c, P3f, P3b and P3g. P7a needs nothing from P3e; P7b and P7c come after P7a, and only P7b's 2018-on backfill waits for P3e (T7, owner, 2026-11-15). Owner decision D1, 2026-11-12: the P3b merge core comes before P3c; P3b is two PRs.
 - **Related issues:**
   - #96 (pit-lane topics, its topic check) and #126 (2018 compound names) take facts from P3d;
   - #122 is P7;
