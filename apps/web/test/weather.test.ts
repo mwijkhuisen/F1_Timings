@@ -8,6 +8,7 @@ import {
   rainPeriods,
   reading,
   summarise,
+  trackAt,
   type WeatherRow,
 } from '../src/lib/weather.ts';
 import { lap } from './laps.ts';
@@ -241,5 +242,32 @@ describe('the words', () => {
     expect(periodText(at(12, 12), laps, 'Race')).toBe('14:12 · lap 1');
     expect(periodText(at(12, 25), laps, 'Qualifying')).toBe('14:12–14:25');
     expect(periodText(at(12, 25), null, 'Race')).toBe('14:12–14:25');
+  });
+});
+
+describe('trackAt', () => {
+  const rows = [w(0, { track_temperature: 40 }), w(10, { track_temperature: 42 }), w(20, { track_temperature: 0 })];
+  const at = (m: number) => T0 + m * MIN;
+
+  it('takes the latest sample at or before, never interpolating', () => {
+    expect(trackAt(rows, at(5))).toBe(40);
+    expect(trackAt(rows, at(15))).toBe(42);
+  });
+
+  it('takes a sample dated exactly at the time', () => {
+    expect(trackAt(rows, at(10))).toBe(42);
+  });
+
+  it('is null before the first sample', () => {
+    expect(trackAt(rows, at(-1))).toBeNull();
+    expect(trackAt([], at(0))).toBeNull();
+  });
+
+  it('reads a 0 dropout as null, not the earlier sample', () => {
+    expect(trackAt(rows, at(25))).toBeNull();
+  });
+
+  it('does not need sorted input', () => {
+    expect(trackAt([rows[2] as WeatherRow, rows[0] as WeatherRow, rows[1] as WeatherRow], at(15))).toBe(42);
   });
 });

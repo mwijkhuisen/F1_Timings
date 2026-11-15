@@ -28,6 +28,7 @@ async function stintsTab(type: string) {
     http.get(`*/api/v1/sessions/${KEY}/stints`, () => HttpResponse.json(stints)),
     http.get(`*/api/v1/sessions/${KEY}/pits`, () => HttpResponse.json([])),
     http.get(`*/api/v1/sessions/${KEY}/race-control`, () => HttpResponse.json(vsc)),
+    http.get(`*/api/v1/sessions/${KEY}/weather`, () => HttpResponse.json([])),
   );
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   client.setQueryData(['race-control', KEY], vsc);
@@ -64,7 +65,7 @@ describe('a cached race-control answer outside a race', () => {
     expect(race.vsclines).toBe(1);
   });
 
-  it('shows no race-control error line on Compare in practice', () => {
+  it("shows no SC or VSC band line on Compare in practice, only the track evolution's red-flag one", () => {
     const html = (type: string) => {
       const client = new QueryClient();
       client
@@ -87,7 +88,10 @@ describe('a cached race-control answer outside a race', () => {
         </QueryClientProvider>,
       );
     };
-    expect(html('Practice')).not.toContain('Race control did not load');
-    expect(html('Race')).toContain('Race control did not load');
+    // Practice fetches race control for the track evolution's red-flag bands (#114), and says so when it fails.
+    expect(html('Practice')).not.toContain('no SC, VSC or red-flag bands');
+    expect(html('Practice')).toContain('Race control did not load: no red-flag bands.');
+    expect(html('Qualifying')).not.toContain('Race control did not load');
+    expect(html('Race')).toContain('Race control did not load: no SC, VSC or red-flag bands.');
   });
 });

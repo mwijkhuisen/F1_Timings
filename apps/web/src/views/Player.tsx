@@ -1,4 +1,4 @@
-import { type Lap, type Obj, type SessionDetail, view } from '@f1/contracts';
+import { type Lap, type Obj, type SessionDetail, view, type Weather } from '@f1/contracts';
 import {
   type CSSProperties,
   memo,
@@ -27,6 +27,7 @@ import {
 } from '../lib/pitwall.ts';
 import { feedReached, qualiPhases } from '../lib/quali.ts';
 import {
+  feedClock,
   feedRaceControl,
   lapPeriods,
   lastStop,
@@ -39,6 +40,7 @@ import {
   statusSeries,
 } from '../lib/replay.ts';
 import { type PlayerTab, parseTab, replayQuery, setTitleWord } from '../lib/routes.ts';
+import { paceRuns } from '../lib/runs.ts';
 import { orderDrivers } from '../lib/session.ts';
 import {
   createStore,
@@ -52,15 +54,17 @@ import {
   streamUrl,
 } from '../lib/stream.ts';
 import { fmtClock, parseT } from '../lib/time.ts';
-import { KIND_LABEL, KIND_NAME, type Kind, type Track } from '../lib/track.ts';
+import { type ClockPeriod, KIND_LABEL, KIND_NAME, type Kind, type Period, type Track } from '../lib/track.ts';
 import { ErrorBoundary, ErrorView, OFFLINE } from '../ui/ErrorView.tsx';
-import { Comparison, PitCycles } from './Compare.tsx';
+import { Comparison, PitCycles, TrackEvolution } from './Compare.tsx';
 import { DriverPicker, picksOf } from './DriverPicker.tsx';
 import { QualiSwitch } from './LapsTab.tsx';
 import { LapTable } from './LapTable.tsx';
 import { Order } from './Order.tsx';
+import { PaceTable, RunPlan } from './Pace.tsx';
 import { Panel, Strip, useTick } from './PitWall.tsx';
 import { RainMapCard } from './RainMap.tsx';
+import { SpeedTable } from './Speeds.tsx';
 import { StintBars } from './Stints.tsx';
 import { QualiTiles, SessionTiles } from './Tiles.tsx';
 import { driverOf, gridOf, Tower, towerRows } from './Tower.tsx';
@@ -77,7 +81,9 @@ import { WeatherPanels } from './Weather.tsx';
 // boundary, the replay's in the URL (`?tab=`, #100); the Weather tab shows the feed's weather rows up to T (P5b),
 // redrawn only when a row arrives, and the rain map's frames up to T (P5c). Laps (with the session tiles), Compare and
 // Stints (#112) read the stream's rows up to T, and their SC, VSC and red bands come from the feed's status series
-// (`lapPeriods`): the player never asks `/race-control` or `/stints`, so nothing after T reaches the page.
+// (`lapPeriods`, and in practice `feedClock`): the player never asks `/race-control`, `/stints` or `/weather`, so
+// nothing after T reaches the page. With the session page's components on those rows (#114) Laps adds the speed table,
+// Compare the track evolution (qualifying and practice) and Stints the pace per run and the practice run plan.
 
 /** A SessionDetail whose drivers and results come from the stream: OpenF1 has no drivers during a live session. */
 function streamDetail(detail: SessionDetail, state: Obj): SessionDetail {
@@ -143,13 +149,69 @@ function PlayerLaps({
       ) : (
         table
       )}
+      <SpeedTable detail={detail} laps={laps} />
     </>
   );
 }
 
 /**
+ * The Stints tab (#112, #114): the stint bars, then in races and practice the pace per run and, in practice, the run
+ * plan, on the stream's rows up to T. `periods` are the race's lap periods (red included, so the pace leaves red laps
+ * out; the bars draw SC and VSC only), `clock` the practice's clock periods. The runs are rebuilt only when these
+ * change, which is when the rows change. The player has no race-control or weather query, so
+ * nothing "did not load": `weather` is the feed's rows up to T. The run plan's axis ends at T (`end`), never at the
+ * scheduled `date_end`, which in a live session is a guess.
+ */
+function PlayerStints({
+  detail,
+  laps,
+  stints,
+  periods,
+  clock,
+  weather,
+  end,
+}: {
+  detail: SessionDetail;
+  laps: Lap[];
+  stints: Stint[];
+  periods: Period[];
+  clock: ClockPeriod[];
+  weather: Weather;
+  end: number;
+}) {
+  const { type } = detail.session;
+  const race = type === 'Race';
+  const practice = type === 'Practice';
+  const runs = useMemo(
+    () => (race || practice ? paceRuns(laps, stints, type, { periods, clock }) : []),
+    [race, practice, laps, stints, type, periods, clock],
+  );
+  return (
+    <>
+      <StintBars detail={detail} laps={laps} stints={stints} periods={periods.filter((p) => p.kind !== 'red')} />
+      {practice && runs.length > 0 && (
+        <RunPlan detail={detail} laps={laps} runs={runs} clock={clock} weather={weather} end={end} />
+      )}
+      {(race || practice) && (
+        <PaceTable
+          detail={detail}
+          laps={laps}
+          runs={runs}
+          weather={weather}
+          failed={false}
+          unnumbered={race ? stints.filter((s) => s.lap_start === null || s.lap_end === null).length : 0}
+        />
+      )}
+    </>
+  );
+}
+
+/** Stable, so a weather row re-renders `SessionTabs` only on Stints, the one tab that reads it. */
+const NO_WEATHER: Weather = [];
+
+/**
  * The Laps, Compare and Stints tabs (#112), from the stream's rows up to T, shown inside the tab's error boundary. A
- * `memo` whose props change only on a snapshot, a `laps` event, a knock-out (qualifying) or a pick, so other deltas
+ * `memo` whose props change only on a snapshot, a `laps` event, a knock-out (qualifying), a pick or, on Stints, a weather row, so other deltas
  * render nothing here. What they read is rebuilt with the rows: the drivers and results from the stream, and the bands
  * up to T as the leader's laps, in races only. A SessionData change brings no `laps` event by itself, so a band shows with the next row change
  * (A§13). The state holds only applied events, so nothing is after T.
@@ -160,6 +222,7 @@ const SessionTabs = memo(function SessionTabs({
   feed,
   laps,
   stints,
+  weather,
   lo,
   reached,
   chosen,
@@ -170,6 +233,8 @@ const SessionTabs = memo(function SessionTabs({
   feed: Feed;
   laps: Lap[];
   stints: Stint[];
+  /** The feed's weather rows up to T (`snap.weather.rows`): a new array only when a row arrives. */
+  weather: Weather;
   lo: number;
   /** The feed's knock-outs as a JSON key (`feedReached`), so an equal set keeps the memo. */
   reached: string;
@@ -177,17 +242,18 @@ const SessionTabs = memo(function SessionTabs({
   chosen: number[] | null;
   onPick: (numbers: number[]) => void;
 }) {
-  const rows = useMemo(
-    () => ({
+  const rows = useMemo(() => {
+    const series = statusSeries(feed.state);
+    const { type } = detail.session;
+    return {
       detail: streamDetail(detail, feed.state),
-      track: {
-        periods: lapPeriods(statusSeries(feed.state), laps, feed.t, lo, detail.session.type),
-        unplaced: [],
-        unmatched: 0,
-      },
-    }),
-    [detail, feed, laps, lo],
-  );
+      track: { periods: lapPeriods(series, laps, feed.t, lo, type), unplaced: [], unmatched: 0 },
+      // Practice only, as the session page's `clockPeriods` (qualifying draws phases, not flags).
+      clock: type === 'Practice' ? feedClock(series, feed.t, lo) : [],
+      // The T the bands were closed at: an open band's end, so the run plan's axis ends there too.
+      t: feed.t,
+    };
+  }, [detail, feed, laps, lo]);
   if (tab === 'laps')
     return (
       <PlayerLaps
@@ -197,18 +263,22 @@ const SessionTabs = memo(function SessionTabs({
         track={rows.track}
       />
     );
-  // Stints: the stream's stint rows, the SC and VSC bands (red flags are not drawn there, as on the session page).
+  // Stints: the stream's stint rows, the SC and VSC bands (red flags are not drawn there, as on the session page), the
+  // pace per run and the practice run plan (#114).
   if (tab === 'stints')
     return stints.length === 0 ? (
       <p className="muted">No stints in the feed yet.</p>
     ) : laps.length === 0 ? (
       <p className="muted">No laps in the feed yet.</p>
     ) : (
-      <StintBars
+      <PlayerStints
         detail={rows.detail}
         laps={laps}
         stints={stints}
-        periods={rows.track.periods.filter((p) => p.kind !== 'red')}
+        periods={rows.track.periods}
+        clock={rows.clock}
+        weather={weather}
+        end={rows.t}
       />
     );
   // No laps, no picker (as #99 on the session page).
@@ -239,6 +309,7 @@ const SessionTabs = memo(function SessionTabs({
           />
         )}
       </Comparison>
+      {rows.detail.session.type !== 'Race' && <TrackEvolution detail={rows.detail} laps={laps} clock={rows.clock} />}
     </>
   );
 });
@@ -1108,6 +1179,7 @@ export function Player({
             feed={feed}
             laps={snap.laps}
             stints={snap.stints}
+            weather={shown === 'stints' ? snap.weather.rows : NO_WEATHER}
             lo={lo}
             reached={reachedKey}
             chosen={chosen}

@@ -6,10 +6,11 @@ import { trackPeriods } from '../lib/track.ts';
 import { LapTable } from './LapTable.tsx';
 import { QualiTable } from './QualiTable.tsx';
 import { RaceControlLog } from './RaceControlLog.tsx';
+import { SpeedTable } from './Speeds.tsx';
 import { QualiTiles, SessionTiles } from './Tiles.tsx';
 
 // The Laps tab (P4b): the tiles, then the lap table, or for qualifying By phase | Every lap (component
-// state, By phase first), then the race-control log (#111). Race control is fetched for every session type; only
+// state, By phase first), then the speed traps and own bests (#114), then the race-control log (#111). Race control is fetched for every session type; only
 // races and sprints draw the SC, VSC and red-flag bands from it. The table shows at once and gains its bands when
 // it arrives.
 
@@ -55,6 +56,7 @@ export function LapsTab({ session, detail, laps }: { session: number; detail: Se
       ) : (
         <LapTable detail={detail} laps={laps} track={track} marks />
       )}
+      <SpeedTable detail={detail} laps={laps} />
       {rc.data && <RaceControlLog detail={detail} laps={laps} rows={rc.data} />}
       {!race && rc.error && <p className="muted">Race control did not load.</p>}
     </>

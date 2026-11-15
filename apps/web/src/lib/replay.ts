@@ -1,6 +1,6 @@
 import { type Lap, type Obj, view } from '@f1/contracts';
 import { type Feed, utc } from './stream.ts';
-import type { Kind, Period } from './track.ts';
+import type { ClockPeriod, Kind, Period } from './track.ts';
 import { leaderLap } from './weather.ts';
 
 // The player's view of the state at T (A§13, P4e): the seek-bar marks, the "Back to" chips, the last stop and the
@@ -98,6 +98,18 @@ export function lapPeriods(
     else out.push({ kind: m.kind, from, to });
   }
   return out;
+}
+
+/**
+ * The SC, VSC and red bands at or before T on the clock (#114, practice): `markersUpTo` from `lo`, each from its start
+ * to its end, an open one ending at T. The track evolution and the run plan read these, as the session page reads
+ * `clockPeriods`.
+ */
+export function feedClock(series: readonly Status[], T: number, lo: number): ClockPeriod[] {
+  return markersUpTo(series, T, [lo, Number.POSITIVE_INFINITY]).flatMap((m) =>
+    // `markersUpTo` always sets `end` on a band (an open one ends at T).
+    m.kind === 'start' || m.kind === 'chequered' ? [] : [{ kind: m.kind, from: m.t, to: m.end as number }],
+  );
 }
 
 /** The feed's race-control messages that have a text (#112, the player's pit cycles); `date` is null without a Utc. */
