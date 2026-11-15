@@ -181,6 +181,25 @@ export const Rain = z.strictObject({
   frames: z.array(z.strictObject({ date, mm: z.array(z.number().nullable()) })),
 });
 
+// #120 (A§10): a meeting's weekend forecast, an Open-Meteo model at the circuit's centre, by hour. `date` is the end of
+// the hour a sum covers. Rain chance %, precipitation mm, air °C, wind m/s; any of them may be null. `fetched_at` is
+// the last success; the answer is null until there is one.
+export const Forecast = z
+  .strictObject({
+    map_id: z.string(),
+    fetched_at: date,
+    hours: z.array(
+      z.strictObject({
+        date,
+        precipitation_probability: int.nullable(),
+        precipitation: reading,
+        temperature_2m: reading,
+        wind_speed_10m: reading,
+      }),
+    ),
+  })
+  .nullable();
+
 // P5b (A§10, A§11.3): one feed WeatherData view as a Weather row at `t`. A field is its number when it is a non-blank
 // string whose value is finite and fits the P5a column, else null: a `real` is 0 or 1e-37 ≤ |v| ≤ 3.4e38 (as in
 // openf1/schemas.ts), rainfall and wind direction an integer within smallint. −0 becomes 0, so a row survives JSON.
@@ -316,6 +335,7 @@ export type Pits = z.infer<typeof Pits>;
 export type RaceControl = z.infer<typeof RaceControl>;
 export type Weather = z.infer<typeof Weather>;
 export type Rain = z.infer<typeof Rain>;
+export type Forecast = z.infer<typeof Forecast>;
 export type Status = z.infer<typeof Status>;
 export type Live = z.infer<typeof Live>;
 export type Recordings = z.infer<typeof Recordings>;

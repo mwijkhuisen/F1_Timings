@@ -1,7 +1,16 @@
 import { stat } from 'node:fs/promises';
 import { join } from 'node:path';
 import { setTimeout as sleep } from 'node:timers/promises';
-import { isUnmatched, PERIOD_LIKE, type Rain, REVISION, type Seasons, type Status, type Stints } from '@f1/contracts';
+import {
+  type Forecast,
+  isUnmatched,
+  PERIOD_LIKE,
+  type Rain,
+  REVISION,
+  type Seasons,
+  type Status,
+  type Stints,
+} from '@f1/contracts';
 import type { HttpBindings } from '@hono/node-server';
 import { type Context, Hono, type MiddlewareHandler } from 'hono';
 import { routePath } from 'hono/route';
@@ -386,6 +395,32 @@ export function createApp({
     };
     // Immutable only when the grid will never change: its own state, not just the session's.
     return c.json(body, 200, cache(grid?.state === 'final' ? session.state : 'live', session.v));
+  });
+
+  // #120 (D1): a meeting's weekend forecast, null until its first success. Always no-store: it changes every 3 h.
+  api.get('/meetings/:key/forecast', async (c) => {
+    const key = sessionKey(c); // the same 1-9 digits
+    if (key === undefined) return badRequest(c);
+    const forecast = await db
+      .selectFrom('meeting')
+      .leftJoin('forecast', 'forecast.meeting_key', 'meeting.meeting_key')
+      .select(['forecast.map_id', 'forecast.fetched_at'])
+      .where('meeting.meeting_key', '=', key)
+      .executeTakeFirst();
+    if (!forecast) return notFound(c);
+    if (forecast.map_id === null || forecast.fetched_at === null) return c.json(null, 200, NO_STORE);
+    const hours = await db
+      .selectFrom('forecast_hour')
+      .select(['date', 'precipitation_probability', 'precipitation', 'temperature_2m', 'wind_speed_10m'])
+      .where('meeting_key', '=', key)
+      .orderBy('date')
+      .execute();
+    const body: Forecast = {
+      map_id: forecast.map_id,
+      fetched_at: forecast.fetched_at.toISOString(),
+      hours: hours.map((h) => ({ ...h, date: h.date.toISOString() })),
+    };
+    return c.json(body, 200, NO_STORE);
   });
 
   api.get('/status', async (c) => {

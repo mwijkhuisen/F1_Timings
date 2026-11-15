@@ -74,8 +74,22 @@ let db: Kysely<DB>;
 
 const MC = 1; // Monte Carlo
 const LIVE = ['2026-11-15T13:00:00Z', '2026-11-15T15:00:00Z'] as const;
-const meeting = (meeting_key: number, circuit_short_name: string | null) =>
-  admin.insertInto('meeting').values({ meeting_key, source: 'openf1', year: 2026, circuit_short_name }).execute();
+/** A meeting with a final weekend forecast, which keeps the forecast (#120, forecast-job.int.test.ts) out of the runs. */
+async function meeting(meeting_key: number, circuit_short_name: string | null): Promise<void> {
+  await admin.insertInto('meeting').values({ meeting_key, source: 'openf1', year: 2026, circuit_short_name }).execute();
+  await admin
+    .insertInto('forecast')
+    .values({
+      meeting_key,
+      source: 'open-meteo',
+      map_id: 'mc-1929',
+      lat: 43.7367,
+      lon: 7.4258,
+      state: 'final',
+      updated_at: '2026-11-01T00:00:00Z',
+    })
+    .execute();
+}
 const session = (key: number, meeting_key: number, [date_start, date_end]: readonly [string, string], extra = {}) =>
   admin
     .insertInto('session')
@@ -490,7 +504,9 @@ describe('rain job (Open-Meteo through msw, f1_ingest login)', { timeout: 120_00
     at = new Date('2026-11-15T12:01:00Z');
     await p.run();
     expect(seen).toHaveLength(1);
-    expect(logged('rain_budget')).toEqual([expect.objectContaining({ kind: 'backfill', used: { hour: 49, day: 49 } })]);
+    expect(logged('rain_budget')).toEqual([
+      expect.objectContaining({ kind: 'backfill', used: { hour: 49, day: 49, forecast: 0 } }),
+    ]);
     at = new Date('2026-11-15T12:30:00Z');
     await p.run();
     expect(seen.map((s) => s.host)).toEqual(['historical', 'forecast']);
@@ -530,9 +546,9 @@ describe('rain job (Open-Meteo through msw, f1_ingest login)', { timeout: 120_00
     }
     const p = daemon();
     await p.run();
-    expect(p.budget.used()).toEqual({ hour: 196, day: 294 });
+    expect(p.budget.used()).toEqual({ hour: 196, day: 294, forecast: 0 });
     await p.run();
-    expect(p.budget.used()).toEqual({ hour: 196, day: 294 });
+    expect(p.budget.used()).toEqual({ hour: 196, day: 294, forecast: 0 });
     expect(seen).toEqual([]);
   });
 
@@ -547,13 +563,13 @@ describe('rain job (Open-Meteo through msw, f1_ingest login)', { timeout: 120_00
     at = new Date('2026-11-15T13:12:00Z');
     await first.run();
     expect(await grid(100)).toMatchObject({ fetch_count: 1, fail_count: 0, attempt_count: 2 });
-    expect(first.budget.used()).toEqual({ hour: 98, day: 98 });
+    expect(first.budget.used()).toEqual({ hour: 98, day: 98, forecast: 0 });
 
     at = new Date('2026-11-15T13:13:00Z'); // a restart: nothing is due (the grid's next fetch is 13:27)
     const restarted = daemon();
     await restarted.run();
     expect(seen).toHaveLength(2);
-    expect(restarted.budget.used()).toEqual({ hour: 98, day: 98 }); // (fetch_count + fail_count) × 49 would be 49
+    expect(restarted.budget.used()).toEqual({ hour: 98, day: 98, forecast: 0 }); // (fetch_count + fail_count) × 49 would be 49
   });
 
   it('runs during a live window while the OpenF1 tick waits: no OpenF1 request, one Open-Meteo fetch', async () => {

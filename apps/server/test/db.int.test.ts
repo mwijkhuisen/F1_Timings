@@ -22,6 +22,8 @@ const TABLES = [
   'weather',
   'rain_grid',
   'rain_frame',
+  'forecast',
+  'forecast_hour',
   'recording',
   'recorder_status',
   'ingest_status',

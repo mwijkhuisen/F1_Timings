@@ -35,6 +35,31 @@ export interface Driver {
   team_name: string | null;
 }
 
+export interface Forecast {
+  attempt_count: Generated<number>;
+  fail_count: Generated<number>;
+  fetch_count: Generated<number>;
+  fetched_at: Timestamp | null;
+  last_error: string | null;
+  lat: number;
+  lon: number;
+  map_id: string;
+  meeting_key: number;
+  next_fetch_at: Timestamp | null;
+  source: string;
+  state: string;
+  updated_at: Timestamp;
+}
+
+export interface ForecastHour {
+  date: Timestamp;
+  meeting_key: number;
+  precipitation: number | null;
+  precipitation_probability: number | null;
+  temperature_2m: number | null;
+  wind_speed_10m: number | null;
+}
+
 export interface IngestStatus {
   id: Generated<boolean>;
   last_sync_at: Timestamp | null;
@@ -238,6 +263,8 @@ export interface Weather {
 
 export interface DB {
   driver: Driver;
+  forecast: Forecast;
+  forecast_hour: ForecastHour;
   ingest_status: IngestStatus;
   lap: Lap;
   lap_source: LapSource;
