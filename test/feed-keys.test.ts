@@ -15,7 +15,7 @@ describe('keyPaths', () => {
       Withheld: false,
       Empty: {},
     });
-    expect([...paths].sort()).toEqual([
+    expect([...paths.keys()].sort()).toEqual([
       'Empty',
       'Lines.#.GapToLeader',
       'Lines.#.Line',
@@ -24,13 +24,15 @@ describe('keyPaths', () => {
       'NoEntries.#',
       'Withheld',
     ]);
+    expect(paths.get('Lines.#.Line')).toBe(1);
+    expect(paths.get('NoEntries.#')).toBe(3);
   });
 
   it('has no path for a payload that is no object, and stops at 32 levels', () => {
     expect(keyPaths('a .z payload').size).toBe(0);
     let deep: unknown = 'x';
     for (let i = 0; i < 40; i++) deep = { k: deep };
-    expect([...keyPaths(deep)]).toEqual([Array(32).fill('k').join('.')]);
+    expect([...keyPaths(deep).keys()]).toEqual([Array(32).fill('k').join('.')]);
   });
 });
 
@@ -206,9 +208,62 @@ describe('census', () => {
     expect(await feedKeys(['--nope'], (l) => lines.push(l))).toBe(64);
     expect(await feedKeys([join(tmpdir(), 'f1-keys-missing', 'feed.jsonl')], (l) => lines.push(l))).toBe(1);
     expect(lines[0]).toMatch(
-      /^usage: feed-keys\.ts \[--topic <name>\] \[--codes\] <feed\.jsonl \| recording dir \| archive dir>…\n/,
+      /^usage: feed-keys\.ts \[--topic <name>\] \[--codes\] <feed\.jsonl \| recording dir \| archive dir \| <Topic>\.json \| Index\.json>…\n/,
     );
     expect(lines[0]).toContain('status-like keys only (Status, Started, Message, Category, Flag, Mode, Scope)');
     expect(lines.at(-1)).toBe('feed-keys: input (unreadable, or an archive without a Heartbeat t0)');
+  });
+});
+
+describe('a final .json state', () => {
+  it('prints key paths with leaf counts, no value, --codes for status-like keys, --topic ignored', async () => {
+    const file = join(mkdtempSync(join(tmpdir(), 'f1-keys-')), 'Index.json');
+    // A BOM, numeric keys, an array, an empty object and a value that must not reach the output.
+    writeFileSync(
+      file,
+      `﻿${JSON.stringify({
+        Feeds: {
+          TimingData: { KeyFramePath: 'secret/TimingData.json' },
+          SessionInfo: { KeyFramePath: 'secret/x.json' },
+        },
+        Lines: { '1': { Sectors: [{ Value: 'secret' }, { Value: 'secret' }], Status: 'Started' }, '44': { Empty: {} } },
+        Message: 'secret text',
+      })}`,
+    );
+    const lines: string[] = [];
+    expect(await feedKeys(['--topic', 'LapCount', file], (l) => lines.push(l))).toBe(0);
+    expect(lines).toEqual([
+      `== ${file}`,
+      'state: 6 key paths',
+      '  Feeds.SessionInfo.KeyFramePath 1',
+      '  Feeds.TimingData.KeyFramePath 1',
+      '  Lines.#.Empty 1',
+      '  Lines.#.Sectors.#.Value 2',
+      '  Lines.#.Status 1',
+      '  Message 1',
+    ]);
+    expect(lines.join('\n')).not.toContain('secret');
+    const coded: string[] = [];
+    expect(await feedKeys(['--codes', file], (l) => coded.push(l))).toBe(0);
+    expect(coded.slice(2)).toEqual([
+      '  Feeds.SessionInfo.KeyFramePath 1',
+      '  Feeds.TimingData.KeyFramePath 1',
+      '  Lines.#.Empty 1',
+      '  Lines.#.Sectors.#.Value 2',
+      '  Lines.#.Status 1',
+      '    = Started 1',
+      '  Message 1',
+      '    = <text> 1',
+    ]);
+  });
+
+  it('exits 1 with feed-keys: input on a file that is no JSON or is missing', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'f1-keys-'));
+    writeFileSync(join(dir, 'Bad.json'), '{"secret": ');
+    for (const name of ['Bad.json', 'Missing.json']) {
+      const lines: string[] = [];
+      expect(await feedKeys([join(dir, name)], (l) => lines.push(l))).toBe(1);
+      expect(lines).toEqual([`== ${join(dir, name)}`, 'feed-keys: input']);
+    }
   });
 });
