@@ -199,6 +199,7 @@ const cases = [
       ingest: { last_sync_at: null, live_wait: false, last_tick_at: '2026-11-01T12:00:00.000Z', stale: false },
       rain: { states: { live: 0, final: 1, failed: 0 }, failed: [] },
       rc_unmatched: [{ session_key: 1, year: 2026, meeting_name: null, session_name: 'Race', rows: 2 }],
+      standings_mismatch: [],
     },
     'cancelled',
   ],

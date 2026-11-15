@@ -8,6 +8,7 @@ import {
   type Rain,
   REVISION,
   type Seasons,
+  type Standings,
   type Status,
   type Stints,
 } from '@f1/contracts';
@@ -21,6 +22,7 @@ import { codeOf, type DB } from '../db/db.ts';
 import { playback } from '../live/playback.ts';
 import { AFTER_MS } from '../live/recorder.ts';
 import { colours } from '../timing/colours.ts';
+import { counted, type StandingsSeason, standings, standingsMismatches } from '../timing/standings.ts';
 
 // The api role's routes (A§10). JSON uses the A§7 column names; answers match the zod contracts in
 // packages/contracts. No body or log echoes input, a header, the token or a database message.
@@ -397,6 +399,81 @@ export function createApp({
     return c.json(body, 200, cache(grid?.state === 'final' ? session.state : 'live', session.v));
   });
 
+  // P8 (A§9, A§10): the championship standings after S, computed from S's season only and, of the sessions after S,
+  // nothing but the next counted session's points_start (no later result, no points_current). Not a counted
+  // session: empty arrays. Immutable only when every counted session up to S is final and the standing is no fallback.
+  api.get('/sessions/:key/standings', async (c) => {
+    const key = sessionKey(c);
+    if (key === undefined) return badRequest(c);
+    const v = version(c);
+    if (v instanceof Response) return v;
+    const row = await db
+      .selectFrom('session as s')
+      .innerJoin('meeting as m', 'm.meeting_key', 's.meeting_key')
+      .select(['s.ingest_state', 'm.year'])
+      .where('s.session_key', '=', key)
+      .executeTakeFirst();
+    if (!row) return notFound(c);
+    const sessions = await db
+      .selectFrom('session as s')
+      .innerJoin('meeting as m', 'm.meeting_key', 's.meeting_key')
+      .select([
+        's.session_key',
+        's.source',
+        's.type',
+        's.name',
+        's.date_start',
+        's.is_cancelled',
+        's.ingest_state',
+        'm.name as meeting_name',
+      ])
+      .where('m.year', '=', row.year)
+      .execute();
+    const all = counted({ year: row.year, sessions });
+    const i = all.findIndex((s) => s.session_key === key);
+    if (i < 0) {
+      const body: Standings = standings(
+        { year: row.year, sessions, drivers: [], results: [], championship_drivers: [], championship_teams: [] },
+        key,
+      );
+      return c.json(body, 200, cache(row.ingest_state, v));
+    }
+    const upTo = all.slice(0, i + 1).map((s) => s.session_key);
+    const withNext = all.slice(0, i + 2).map((s) => s.session_key); // N's points_start is the only later row read
+    const season: StandingsSeason = {
+      year: row.year,
+      sessions,
+      // Identity only (a number's person and team), any session of the season.
+      drivers: await db
+        .selectFrom('driver')
+        .select(['session_key', 'driver_number', 'full_name', 'acronym', 'team_name', 'team_colour'])
+        .where(
+          'session_key',
+          'in',
+          sessions.map((s) => s.session_key),
+        )
+        .execute(),
+      results: await db
+        .selectFrom('result')
+        .select(['session_key', 'driver_number', 'position', 'points'])
+        .where('session_key', 'in', upTo)
+        .execute(),
+      championship_drivers: await db
+        .selectFrom('championship_driver')
+        .select(['session_key', 'driver_number', 'points_start'])
+        .where('session_key', 'in', withNext)
+        .execute(),
+      championship_teams: await db
+        .selectFrom('championship_team')
+        .select(['session_key', 'team_name', 'points_start'])
+        .where('session_key', 'in', withNext)
+        .execute(),
+    };
+    const body: Standings = standings(season, key);
+    const settled = !body.provisional && all.slice(0, i + 1).every((s) => s.ingest_state === 'final');
+    return c.json(body, 200, cache(settled ? 'final' : 'live', v));
+  });
+
   // #120 (D1): a meeting's weekend forecast, null until its first success. Always no-store: it changes every 3 h.
   api.get('/meetings/:key/forecast', async (c) => {
     const key = sessionKey(c); // the same 1-9 digits
@@ -530,6 +607,63 @@ export function createApp({
     const rc_unmatched = [...unmatched.values()]
       .sort((a, b) => b.date_start.getTime() - a.date_start.getTime() || a.session_key - b.session_key)
       .map(({ date_start, ...item }) => item);
+    // Computed on read like rc_unmatched (A§10): every season from 2023 on, one query per table, grouped by year here.
+    const seasonKeys = (raceOnly: boolean) => {
+      const q = db
+        .selectFrom('session as s')
+        .innerJoin('meeting as m', 'm.meeting_key', 's.meeting_key')
+        .where('m.year', '>=', 2023)
+        .select('s.session_key');
+      return raceOnly ? q.where('s.type', '=', 'Race') : q;
+    };
+    const seasons = await db
+      .selectFrom('session as s')
+      .innerJoin('meeting as m', 'm.meeting_key', 's.meeting_key')
+      .select([
+        's.session_key',
+        's.source',
+        's.type',
+        's.name',
+        's.date_start',
+        's.is_cancelled',
+        'm.name as meeting_name',
+        'm.year',
+      ])
+      .where('m.year', '>=', 2023)
+      .execute();
+    const drivers = await db
+      .selectFrom('driver')
+      .select(['session_key', 'driver_number', 'full_name', 'acronym', 'team_name', 'team_colour'])
+      .where('session_key', 'in', seasonKeys(false))
+      .execute();
+    const results = await db
+      .selectFrom('result')
+      .select(['session_key', 'driver_number', 'position', 'points'])
+      .where('session_key', 'in', seasonKeys(true))
+      .execute();
+    const championshipDrivers = await db
+      .selectFrom('championship_driver')
+      .select(['session_key', 'driver_number', 'points_start'])
+      .execute();
+    const championshipTeams = await db
+      .selectFrom('championship_team')
+      .select(['session_key', 'team_name', 'points_start'])
+      .execute();
+    const yearOf = new Map(seasons.map((s) => [s.session_key, s.year]));
+    const standings_mismatch = [...new Set(yearOf.values())]
+      .sort((a, b) => b - a)
+      .flatMap((year) => {
+        const of = <R extends { session_key: number }>(rows: R[]) =>
+          rows.filter((r) => yearOf.get(r.session_key) === year);
+        return standingsMismatches({
+          year,
+          sessions: seasons.filter((s) => s.year === year),
+          drivers: of(drivers),
+          results: of(results),
+          championship_drivers: of(championshipDrivers),
+          championship_teams: of(championshipTeams),
+        });
+      });
     const body = {
       revision,
       states,
@@ -539,6 +673,7 @@ export function createApp({
       ingest: ingest ?? null,
       rain: { states: rainStates, failed: rainFailed },
       rc_unmatched,
+      standings_mismatch,
     };
     return c.json(body, 200, NO_STORE);
   });

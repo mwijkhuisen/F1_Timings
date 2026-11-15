@@ -7,8 +7,8 @@ import { Scroll } from '../ui/Scroll.tsx';
 
 // The status page (D12, #105), polled every minute: session counts per state, the ingest daemon (last sync, live
 // window, last report), every session whose last fetch failed, the rain grids the same way, the races whose race
-// control has a wording the bands do not know, and the live recorder. A session name links to its laps, a rain grid to
-// its weather.
+// control has a wording the bands do not know, the standings that differ from OpenF1's next ones (P8), and the live
+// recorder. A session name links to its laps, a rain grid to its weather.
 
 const WARNINGS = {
   token_expiring: 'The F1 TV token expires within 24 h and a session is due.',
@@ -91,6 +91,39 @@ function FailedTable({ rows, view, label }: { rows: Failed; view: 'laps' | 'weat
   );
 }
 
+type Unmatched = StatusData['rc_unmatched'];
+
+/** Sessions with a row count (race control in an unknown form, standings that differ); the name links to its laps. */
+function SessionRows({ rows, label }: { rows: Unmatched; label: string }) {
+  if (rows.length === 0) return <p>None.</p>;
+  return (
+    <Scroll label={label}>
+      <table className="list" aria-label={label}>
+        <thead>
+          <tr>
+            <th scope="col">Year</th>
+            <th scope="col">Meeting</th>
+            <th scope="col">Session</th>
+            <th scope="col">Rows</th>
+          </tr>
+        </thead>
+        <tbody>
+          {rows.map((r) => (
+            <tr key={r.session_key}>
+              <td>{r.year}</td>
+              <td>{r.meeting_name}</td>
+              <td>
+                <Link to={`/${r.year}/0/${r.session_key}/laps`}>{named(r.session_name, r.session_key)}</Link>
+              </td>
+              <td>{r.rows}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </Scroll>
+  );
+}
+
 function Counts({ values }: { values: [string, string | number][] }) {
   return (
     <dl className="counts">
@@ -134,34 +167,9 @@ export function StatusPanel({ status }: { status: StatusData }) {
       <h3>Grids whose last fetch failed</h3>
       <FailedTable rows={status.rain.failed} view="weather" label="Rain grids, last fetch failed" />
       <h2>Race control in an unknown form</h2>
-      {status.rc_unmatched.length === 0 ? (
-        <p>None.</p>
-      ) : (
-        <Scroll label="Race control in an unknown form">
-          <table className="list" aria-label="Race control in an unknown form">
-            <thead>
-              <tr>
-                <th scope="col">Year</th>
-                <th scope="col">Meeting</th>
-                <th scope="col">Session</th>
-                <th scope="col">Rows</th>
-              </tr>
-            </thead>
-            <tbody>
-              {status.rc_unmatched.map((r) => (
-                <tr key={r.session_key}>
-                  <td>{r.year}</td>
-                  <td>{r.meeting_name}</td>
-                  <td>
-                    <Link to={`/${r.year}/0/${r.session_key}/laps`}>{named(r.session_name, r.session_key)}</Link>
-                  </td>
-                  <td>{r.rows}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </Scroll>
-      )}
+      <SessionRows rows={status.rc_unmatched} label="Race control in an unknown form" />
+      <h2>Standings that differ from OpenF1</h2>
+      <SessionRows rows={status.standings_mismatch} label="Standings that differ from OpenF1" />
       <h2>Recorder</h2>
       <Recorder recorder={status.recorder} />
     </>

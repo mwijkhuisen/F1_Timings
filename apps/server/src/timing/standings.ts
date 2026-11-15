@@ -49,7 +49,7 @@ const FIRST_YEAR = 2023; // P8 covers 2023 on; 1950–2022 is #189 (D3)
 const EMPTY: Standings = { drivers: [], teams: [], rounds: [], provisional: false };
 
 /** The season's non-cancelled openf1 races and sprints, by date_start then session_key (A§9). */
-function counted(season: StandingsSeason): StandingsSession[] {
+export function counted<S extends StandingsSession>(season: { year: number; sessions: readonly S[] }): S[] {
   if (season.year < FIRST_YEAR) return [];
   return season.sessions
     .filter((s) => s.source === 'openf1' && s.type === 'Race' && !s.is_cancelled)

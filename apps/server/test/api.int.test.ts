@@ -599,6 +599,7 @@ describe('api (f1_api login, Access JWT)', { timeout: 120_000 }, () => {
       rain: { states: { live: 1, final: 2, failed: 0 }, failed: [] },
       // The sprint is a Race-type session: its real FORMATION LAP(S) BEHIND SAFETY CAR and SAFETY CAR LIGHTS OFF are ignored (D4).
       rc_unmatched: [],
+      standings_mismatch: [],
     });
   });
 

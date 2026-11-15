@@ -323,6 +323,10 @@ export const Status = z.strictObject({
   rc_unmatched: z.array(
     z.strictObject({ session_key: int, year: int, meeting_name: text, session_name: text, rows: int }),
   ),
+  // P8 (A§10): counted sessions whose next session's points_start disagrees with their own points for `rows` people.
+  standings_mismatch: z.array(
+    z.strictObject({ session_key: int, year: int, meeting_name: text, session_name: text, rows: int }),
+  ),
 });
 
 export const Live = z.strictObject({
