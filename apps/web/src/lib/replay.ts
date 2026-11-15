@@ -107,7 +107,8 @@ export function lapPeriods(
  */
 export function feedClock(series: readonly Status[], T: number, lo: number): ClockPeriod[] {
   return markersUpTo(series, T, [lo, Number.POSITIVE_INFINITY]).flatMap((m) =>
-    m.kind === 'start' || m.kind === 'chequered' ? [] : [{ kind: m.kind, from: m.t, to: m.end ?? T }],
+    // `markersUpTo` always sets `end` on a band (an open one ends at T).
+    m.kind === 'start' || m.kind === 'chequered' ? [] : [{ kind: m.kind, from: m.t, to: m.end as number }],
   );
 }
 

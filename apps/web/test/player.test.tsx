@@ -2786,6 +2786,7 @@ describe('Compare, Stints and the Laps tab in the player (#112)', () => {
       .map((q) => q.queryKey[0]);
     expect(keys).not.toContain('race-control');
     expect(keys).not.toContain('stints');
+    expect(keys).not.toContain('weather');
   });
 
   it('the Laps tab: the Fastest lap tile skips a deleted lap; an open SC bands the laps up to the leader’s, growing', () => {
@@ -2942,10 +2943,10 @@ describe('Compare, Stints and the Laps tab in the player (#112)', () => {
 
   // #114: the session page's pace table, run plan, track evolution and speed table on the stream's rows up to T.
   describe('pace, run plan, evolution and speeds (#114)', () => {
-    /** Lap n starts at T − 600 s + 90 s × (n − 1) and takes 80.00n s: laps 1–7 end before T + 30 s. */
+    /** Lap n starts at T − 700 s + 90 s × (n − 1) and takes 80.00n s: laps 1–7 all end before T (lap 7 at T − 80 s). */
     const prow = (d: number, n: number, extra: Partial<Lap> = {}): Lap => ({
       ...lap(d, n),
-      date_start: iso(T - 600_000 + (n - 1) * 90_000),
+      date_start: iso(T - 700_000 + (n - 1) * 90_000),
       ...extra,
     });
     const asType = (type: string, name: string) => ({ ...detail, session: { ...detail.session, type, name } });
@@ -2971,20 +2972,20 @@ describe('Compare, Stints and the Laps tab in the player (#112)', () => {
       [...host.querySelectorAll('table.pace tbody tr')].map((tr) =>
         [...tr.children].map((c) => c.querySelector('.note')?.textContent ?? c.textContent),
       );
-    /** One driver's run 1: an out-lap, laps 2–6 and an in-lap on 7, from 19:50 on. */
+    /** One driver's run 1: an out-lap, laps 2–6 and an in-lap on 7. */
     const run = (...ns: number[]) => ns.map((n) => prow(1, n, { is_pit_out: n === 1, is_pit_in: n === 7 }));
     const reds = () => [...host.querySelectorAll('.redband')].length;
 
     it('practice Stints: the run plan and the pace table at T; a red flag from the status series is banded and its lap left out', () => {
-      // Red from T − 335 s to T − 250 s: lap 4 (T − 330 s, 80.004 s) is under it, laps 3 and 5 are not.
+      // Red from T − 435 s to T − 350 s: lap 4 (T − 430 s, 80.004 s) is under it, laps 3 and 5 are not.
       open(
         'Practice',
         'Practice 1',
         typed(
           'Practice',
           'Practice 1',
-          [T - 335_000, 'SessionStatus', 'Aborted'],
-          [T - 250_000, 'SessionStatus', 'Started'],
+          [T - 435_000, 'SessionStatus', 'Aborted'],
+          [T - 350_000, 'SessionStatus', 'Started'],
         ),
         run(1, 2, 3, 4, 5, 6, 7),
         stints([1, 1, 1, 7, 'MEDIUM']),
@@ -3003,22 +3004,39 @@ describe('Compare, Stints and the Laps tab in the player (#112)', () => {
         '1 out-lap, 1 in-lap, 1 under SC, VSC or red flag',
       );
       // The run plan's axis ends at T, never at the scheduled end two hours later: a lane's run is a fraction of it.
-      const seg = $<HTMLElement>('ol.stints .seg[style*="--w"]');
-      expect(Number.parseFloat(seg.style.getPropertyValue('--w'))).toBeGreaterThan(40);
+      const seg = host.querySelectorAll('ol.stints')[1]?.querySelector<HTMLElement>('.seg[style*="--w"]');
+      if (!seg) throw new Error('no run plan segment');
+      expect(Number.parseFloat(seg.style.getPropertyValue('--w'))).toBeGreaterThan(80);
     });
 
     it('race Stints: the pace per stint, with an SC lap left out and no run plan', () => {
-      // The SC from T − 320 s to T − 250 s, all in the leader's lap 4: lap 4 is left out, with lap 1 and the in-lap 7.
+      // The SC from T − 420 s to T − 350 s, all in the leader's lap 4: lap 4 is left out, with lap 1 and the in-lap 7.
       open(
         'Race',
         'Race',
-        typed('Race', 'Race', [T - 320_000, 'TrackStatus', 'SCDeployed'], [T - 250_000, 'TrackStatus', 'AllClear']),
+        typed('Race', 'Race', [T - 420_000, 'TrackStatus', 'SCDeployed'], [T - 350_000, 'TrackStatus', 'AllClear']),
         run(1, 2, 3, 4, 5, 6, 7),
         stints([1, 1, 1, 7, 'MEDIUM']),
       );
       button('Stints');
       expect(h2s()).not.toContain('Run plan');
       expect(h2s()).toContain('Pace per run');
+      expect(paceRows()).toEqual([['VER', '1', expect.any(String), '4', '1:20.004', '1:20.002', '3']]);
+      expect($('table.pace tbody .note[title*="under SC"]').getAttribute('title')).toBe(
+        'lap 1, 1 in-lap, 1 under SC, VSC or red flag',
+      );
+    });
+
+    it('race Stints: a closed red flag from the status series leaves its lap out of the pace (red is included)', () => {
+      // Red from T − 425 s to T − 335 s: the leader's lap 4 only (lap 4 runs T − 430 s to T − 350 s, lap 5 starts T − 340 s).
+      open(
+        'Race',
+        'Race',
+        typed('Race', 'Race', [T - 425_000, 'SessionStatus', 'Aborted'], [T - 335_000, 'SessionStatus', 'Started']),
+        run(1, 2, 3, 4, 5, 6, 7),
+        stints([1, 1, 1, 7, 'MEDIUM']),
+      );
+      button('Stints');
       expect(paceRows()).toEqual([['VER', '1', expect.any(String), '4', '1:20.004', '1:20.002', '3']]);
       expect($('table.pace tbody .note[title*="under SC"]').getAttribute('title')).toBe(
         'lap 1, 1 in-lap, 1 under SC, VSC or red flag',

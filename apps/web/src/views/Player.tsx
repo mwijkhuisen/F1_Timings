@@ -158,7 +158,7 @@ function PlayerLaps({
  * The Stints tab (#112, #114): the stint bars, then in races and practice the pace per run and, in practice, the run
  * plan, on the stream's rows up to T. `periods` are the race's lap periods (red included, so the pace leaves red laps
  * out; the bars draw SC and VSC only), `clock` the practice's clock periods. The runs are rebuilt only when these
- * change, which is when SessionTabs renders (a row change). The player has no race-control or weather query, so
+ * change, which is when the rows change. The player has no race-control or weather query, so
  * nothing "did not load": `weather` is the feed's rows up to T. The run plan's axis ends at T (`end`), never at the
  * scheduled `date_end`, which in a live session is a guess.
  */
@@ -206,9 +206,12 @@ function PlayerStints({
   );
 }
 
+/** Stable, so a weather row re-renders `SessionTabs` only on Stints, the one tab that reads it. */
+const NO_WEATHER: Weather = [];
+
 /**
  * The Laps, Compare and Stints tabs (#112), from the stream's rows up to T, shown inside the tab's error boundary. A
- * `memo` whose props change only on a snapshot, a `laps` event, a knock-out (qualifying) or a pick, so other deltas
+ * `memo` whose props change only on a snapshot, a `laps` event, a knock-out (qualifying), a pick or, on Stints, a weather row, so other deltas
  * render nothing here. What they read is rebuilt with the rows: the drivers and results from the stream, and the bands
  * up to T as the leader's laps, in races only. A SessionData change brings no `laps` event by itself, so a band shows with the next row change
  * (A§13). The state holds only applied events, so nothing is after T.
@@ -247,6 +250,8 @@ const SessionTabs = memo(function SessionTabs({
       track: { periods: lapPeriods(series, laps, feed.t, lo, type), unplaced: [], unmatched: 0 },
       // Practice only, as the session page's `clockPeriods` (qualifying draws phases, not flags).
       clock: type === 'Practice' ? feedClock(series, feed.t, lo) : [],
+      // The T the bands were closed at: an open band's end, so the run plan's axis ends there too.
+      t: feed.t,
     };
   }, [detail, feed, laps, lo]);
   if (tab === 'laps')
@@ -273,7 +278,7 @@ const SessionTabs = memo(function SessionTabs({
         periods={rows.track.periods}
         clock={rows.clock}
         weather={weather}
-        end={feed.t}
+        end={rows.t}
       />
     );
   // No laps, no picker (as #99 on the session page).
@@ -1174,7 +1179,7 @@ export function Player({
             feed={feed}
             laps={snap.laps}
             stints={snap.stints}
-            weather={snap.weather.rows}
+            weather={shown === 'stints' ? snap.weather.rows : NO_WEATHER}
             lo={lo}
             reached={reachedKey}
             chosen={chosen}

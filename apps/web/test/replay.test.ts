@@ -265,6 +265,12 @@ describe('feedClock (#114)', () => {
       { kind: 'red', from: hm('20:10:00'), to: hm('20:12:00') },
     ]);
   });
+
+  it('drops a band that started before lo, as lapPeriods and the seek bar do', () => {
+    expect(feedClock(s, hm('20:40:00'), hm('20:12:00'))).toEqual([
+      { kind: 'vsc', from: hm('20:30:00'), to: hm('20:40:00') },
+    ]);
+  });
 });
 
 describe('feedRaceControl', () => {
