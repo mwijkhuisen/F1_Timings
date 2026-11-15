@@ -433,6 +433,12 @@ describe('runPlan', () => {
     expect(hourly.ticks.map((t) => t.label)).toEqual(['14:00', '15:00', '16:00']);
   });
 
+  it('keeps at most 49 ticks when a malformed date_start stretches the span to years', () => {
+    const { ticks } = runPlan(drivers, [], Date.parse('0001-01-01T00:00:00Z'), to, [], []);
+    expect(ticks.length).toBeGreaterThan(0);
+    expect(ticks.length).toBeLessThanOrEqual(49);
+  });
+
   it('clamps a red band to the span and drops one entirely outside', () => {
     const red: ClockPeriod[] = [
       { kind: 'red', from: from - 600_000, to: from + 450_000 },

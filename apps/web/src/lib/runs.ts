@@ -201,7 +201,8 @@ export type RunPlan = { lanes: Lane[]; ticks: Tick[]; red: RedBand[] };
 
 /**
  * The practice run plan over [from, to] (epoch ms): a lane per driver that has runs, in the given order; ticks every
- * 15 min up to a 2 h span, else hourly (UTC quarter-hours are whole in Amsterdam time too); the red bands.
+ * 15 min up to a 2 h span, else hourly, and at most 49 past 48 h (UTC quarter-hours are whole in Amsterdam time too);
+ * the red bands.
  */
 export function runPlan(
   drivers: readonly Driver[],
@@ -238,7 +239,9 @@ export function runPlan(
     }
     lanes.push(lane);
   }
-  const step = to - from <= 2 * 3_600_000 ? 900_000 : 3_600_000;
+  // A span past 48 h (a malformed date_start) steps whole hours, so there are never more than 49 ticks.
+  const span = to - from;
+  const step = span <= 2 * 3_600_000 ? 900_000 : 3_600_000 * Math.max(1, Math.ceil(span / (48 * 3_600_000)));
   const ticks: Tick[] = [];
   for (let t = Math.ceil(from / step) * step; t <= to; t += step) ticks.push({ t, x: x(t), label: fmtHm(t) });
   return {
