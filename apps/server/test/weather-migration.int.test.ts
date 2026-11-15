@@ -147,8 +147,8 @@ describe('the weather migration (20261109000001)', { timeout: 120_000 }, () => {
     } finally {
       await db.destroy();
     }
-    expect(new Set(requested)).toEqual(new Set([RACE])); // seven requests, one session
-    expect(requested).toHaveLength(7);
+    expect(new Set(requested)).toEqual(new Set([RACE])); // one session: the seven and, since P8, the two standings
+    expect(requested).toHaveLength(9);
     expect(
       await admin
         .selectFrom('session')
@@ -159,7 +159,7 @@ describe('the weather migration (20261109000001)', { timeout: 120_000 }, () => {
     const counts = await sql<{ weather: number; raw: number }>`
       SELECT (SELECT count(*)::int FROM weather WHERE session_key = ${RACE}) AS weather,
              (SELECT count(*)::int FROM raw_response WHERE session_key = ${RACE}) AS raw`.execute(admin);
-    expect(counts.rows[0]).toEqual({ weather: 160, raw: 7 });
+    expect(counts.rows[0]).toEqual({ weather: 160, raw: 9 });
   });
 
   it('rolls back with weather raw rows present, and the old CHECK refuses weather again', async () => {

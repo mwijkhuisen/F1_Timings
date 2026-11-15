@@ -9,6 +9,7 @@ import {
   Season,
   Seasons,
   SessionDetail,
+  Standings,
   Status,
   Stints,
   Weather,
@@ -121,7 +122,7 @@ export function useRefetchOnFetch(key: number, fetchCount: number | undefined) {
   useEffect(() => {
     if (fetchCount === undefined) return;
     if (seen.current !== undefined && seen.current !== fetchCount)
-      for (const what of ['laps', 'stints', 'pits', 'race-control', 'weather'])
+      for (const what of ['laps', 'stints', 'pits', 'race-control', 'weather', 'standings'])
         void client.invalidateQueries({ queryKey: [what, key] });
     seen.current = fetchCount;
   }, [client, key, fetchCount]);
@@ -145,6 +146,17 @@ export const usePits = (key: number) =>
   useQuery({
     queryKey: ['pits', key],
     queryFn: ({ signal }) => getJson(`/api/v1/sessions/${key}/pits`, Pits, signal),
+    staleTime: STALE_MS,
+  });
+
+/**
+ * The championship standings after a race or sprint (P8, A§10): asked by the Result tab of a race-type session only
+ * (views/Result.tsx), never by `/`, the season page or the player (spoilers, A§13).
+ */
+export const useStandings = (key: number) =>
+  useQuery({
+    queryKey: ['standings', key],
+    queryFn: ({ signal }) => getJson(`/api/v1/sessions/${key}/standings`, Standings, signal),
     staleTime: STALE_MS,
   });
 

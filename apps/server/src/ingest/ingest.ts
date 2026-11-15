@@ -8,7 +8,16 @@ import type { MergeCounts } from '../merge/merge.ts';
 import { chunks, writeLaps } from '../merge/write.ts';
 import type { createClient, Query } from '../openf1/client.ts';
 import { type Endpoint, parse, type Result, type Rows, type ShapeError } from '../openf1/schemas.ts';
-import { meetingRow, normaliseSession, type SessionData, type SessionRows, sessionRow, withGrid } from './normalise.ts';
+import {
+  championshipDriverRows,
+  championshipTeamRows,
+  meetingRow,
+  normaliseSession,
+  type SessionData,
+  type SessionRows,
+  sessionRow,
+  withGrid,
+} from './normalise.ts';
 import {
   afterFailure,
   afterSuccess,
@@ -35,7 +44,7 @@ export const SESSION_ENDPOINTS = [
   'weather',
 ] as const;
 // Laps are not among them: writeLaps replaces OpenF1's candidates only and rebuilds `lap` (P3b). raw_response
-// goes on its own, for the grid (O1).
+// goes on its own, for the grid and the standings (O1).
 const REPLACED = ['driver', 'stint', 'pit', 'race_control', 'result', 'weather'] as const;
 /** The ingest lock (#103): the daemon holds it, so a `backfill` next to it refuses (two limiters, A§8). */
 export const INGEST_LOCK = 0x4631_494e; // 'F1IN'
@@ -70,6 +79,16 @@ type GridLog =
   | { rows: number; skipped: number }
   | { error: ErrorCode | 'no_quali'; kept: number; issues?: ShapeError['issues'] }
   | 'no_quali';
+
+/** The session line's `championship` (P8): per endpoint counts or a fixed code, never a value. */
+type StandingLog =
+  | { rows: number; skipped: number }
+  | { error: ErrorCode; kept: number; issues?: ShapeError['issues'] };
+/** P8 (A§8): the ninth and tenth endpoints, each with its table; a Race-type session asks for both. */
+export const CHAMPIONSHIP = [
+  { endpoint: 'championship_drivers', table: 'championship_driver' },
+  { endpoint: 'championship_teams', table: 'championship_team' },
+] as const;
 
 /** One OpenF1 call, parsed. The heartbeat follows each call, so slow but progressing work never goes stale. */
 export async function fetchRows<E extends Endpoint>(
@@ -210,6 +229,7 @@ export async function replaceRows(trx: Transaction<DB>, key: number, rows: Sessi
  * write. `refetch` never changes state on failure.
  * A race also fetches its qualifying's starting grid, which fails on its own (O1, A§8): the
  * stored grid and its raw row stay, and the session goes on.
+ * A race or sprint then fetches its two championship endpoints, each failing on its own the same way (P8).
  * Never throws; logs one line per session.
  */
 export async function processSession(deps: Deps, key: number, refetch = false): Promise<Outcome> {
@@ -308,6 +328,18 @@ export async function processSession(deps: Deps, key: number, refetch = false): 
   }
   // O1: after the seven, and never a failure of the session.
   const grid = typeof quali === 'number' ? await fetchRows(deps, 'starting_grid', { session_key: quali }) : undefined;
+  // P8: after the grid, on every fetch, the session's own key; like the grid, never a failure of the session.
+  const standings =
+    type === 'Race'
+      ? [
+          await fetchRows(deps, 'championship_drivers', { session_key: key }).then((f) =>
+            f.ok ? { ...f, value: { ...f.value, ...championshipDriverRows(key, f.value.rows) } } : f,
+          ),
+          await fetchRows(deps, 'championship_teams', { session_key: key }).then((f) =>
+            f.ok ? { ...f, value: { ...f.value, ...championshipTeamRows(key, f.value.rows) } } : f,
+          ),
+        ]
+      : [];
   let normalised: ReturnType<typeof normaliseSession>;
   try {
     normalised = normaliseSession(key, data as SessionData, type);
@@ -322,6 +354,7 @@ export async function processSession(deps: Deps, key: number, refetch = false): 
     endpoints?: string[];
     merge?: MergeCounts;
     grid?: GridLog | undefined;
+    championship?: Record<string, StandingLog> | undefined;
   };
   try {
     done = await db.transaction().execute(async (trx) => {
@@ -387,6 +420,7 @@ export async function processSession(deps: Deps, key: number, refetch = false): 
         .deleteFrom('raw_response')
         .where('session_key', '=', key)
         .$if(keep !== undefined || fresh !== undefined, (q) => q.where('endpoint', '<>', 'starting_grid'))
+        .$if(type === 'Race', (q) => q.where('endpoint', 'not in', ['championship_drivers', 'championship_teams']))
         .execute();
       await trx.insertInto('raw_response').values(raw).execute();
       if (fresh) {
@@ -411,9 +445,68 @@ export async function processSession(deps: Deps, key: number, refetch = false): 
         gridLog = { ...keep, kept: result.filter((r) => r.grid !== null).length };
       }
       const merge = await replaceRows(trx, key, { ...rows, result });
+      // P8 (A§8): a success replaces the raw row and the table's rows, in one savepoint, so a body or row that
+      // PostgreSQL refuses is a failure of that endpoint only; a failure keeps the stored raw row and rows.
+      const championship: Record<string, StandingLog> = {};
+      for (const [i, { endpoint, table }] of CHAMPIONSHIP.entries()) {
+        const got = standings[i];
+        if (!got) continue;
+        let outcome: StandingLog | undefined;
+        let failure: { error: ErrorCode; issues?: ShapeError['issues'] } | undefined;
+        const stored = async () =>
+          (
+            await trx
+              .selectFrom(table)
+              .select(sql<number>`count(*)::int`.as('n'))
+              .where('session_key', '=', key)
+              .executeTakeFirstOrThrow()
+          ).n;
+        // Owner, 2026-11-15 (P8 review): an answer without rows where rows are stored fails, as the grid's does.
+        if (got.ok && got.value.rows.length === 0 && (had.some((r) => r.endpoint === endpoint) || (await stored()) > 0))
+          failure = { error: 'empty' };
+        else if (got.ok) {
+          await sql`SAVEPOINT standing`.execute(trx);
+          try {
+            await trx
+              .deleteFrom('raw_response')
+              .where('session_key', '=', key)
+              .where('endpoint', '=', endpoint)
+              .execute();
+            await trx
+              .insertInto('raw_response')
+              .values({
+                session_key: key,
+                source: 'openf1',
+                endpoint,
+                fetched_at: now(),
+                http_status: got.value.status,
+                body: JSON.stringify(got.value.body),
+              })
+              .execute();
+            await trx.deleteFrom(table).where('session_key', '=', key).execute();
+            for (const chunk of chunks(got.value.rows as object[]))
+              await trx
+                .insertInto(table)
+                .values(chunk as never)
+                .execute();
+            outcome = { rows: got.value.rows.length, skipped: got.value.skipped };
+          } catch {
+            await sql`ROLLBACK TO SAVEPOINT standing`.execute(trx);
+            failure = { error: 'schema' };
+          }
+        } else failure = { error: got.error.last_error, ...(got.error.issues && { issues: got.error.issues }) };
+        if (failure) outcome = { ...failure, kept: await stored() };
+        if (outcome) championship[endpoint === 'championship_drivers' ? 'drivers' : 'teams'] = outcome;
+      }
       const next = afterSuccess(row, now());
       await setProgress(trx, key, next);
-      return { next, empty: false, merge, grid: gridLog };
+      return {
+        next,
+        empty: false,
+        merge,
+        grid: gridLog,
+        championship: standings.length > 0 ? championship : undefined,
+      };
     });
   } catch (err) {
     return fail('db', { cause: codeOf(err) });
@@ -436,6 +529,7 @@ export async function processSession(deps: Deps, key: number, refetch = false): 
       rules,
       merge: done.merge,
       grid: done.grid,
+      championship: done.championship,
       ...rc_unmatched,
     }),
     'session',

@@ -211,6 +211,123 @@ describe('[U] the starting_grid fixtures', () => {
   });
 });
 
+// P8 (A§6.1): session_result.points and the two championship endpoints; a value zod accepts fits its column.
+describe('points and the championship schemas', () => {
+  const rows = (file: string) => read(file) as Record<string, unknown>[];
+  const issues = (endpoint: 'session_result' | 'championship_drivers' | 'championship_teams', body: unknown) => {
+    const result = parse(endpoint, body);
+    return result.ok ? [] : result.error.issues.map((i) => i.path);
+  };
+
+  it('session_result.points: a real, null or missing → null, a string or a value past real rejected', () => {
+    const [r] = rows('session_result-normal.raw');
+    expect(issues('session_result', [{ ...r, points: 12.5 }])).toEqual([]);
+    expect(issues('session_result', [{ ...r, points: 0 }])).toEqual([]);
+    expect(issues('session_result', [{ ...r, points: '25' }])).toEqual(['[0].points']);
+    expect(issues('session_result', [{ ...r, points: 1e39 }])).toEqual(['[0].points']); // real overflow
+    const { points: _, ...missing } = r ?? {};
+    for (const body of [{ ...missing, points: null }, missing]) {
+      const parsed = parse('session_result', [body]);
+      expect(parsed.ok && parsed.value[0]?.points).toBeNull();
+    }
+    const [q] = rows('session_result-quali.raw');
+    const quali = parse('session_result', [q]);
+    expect(quali.ok && quali.value[0]?.points).toBeNull(); // practice and qualifying rows have none
+  });
+
+  it.each([
+    ['championship_drivers', 'driver_number'],
+    ['championship_teams', 'team_name'],
+  ] as const)('%s: bounded by its columns, unknown fields stripped, nothing but the key required', (endpoint, key) => {
+    const [row] = rows(`${endpoint}-normal.raw`);
+    const bad = (field: string, value: unknown) => issues(endpoint, [{ ...row, [field]: value }]);
+    expect(bad('session_key', null)).toEqual(['[0].session_key']);
+    expect(bad(key, null)).toEqual([`[0].${key}`]);
+    expect(bad('position_current', 1.5)).toEqual(['[0].position_current']); // smallint
+    expect(bad('position_start', 40_000)).toEqual(['[0].position_start']);
+    expect(bad('points_current', 1e39)).toEqual(['[0].points_current']); // real overflow
+    expect(bad('points_start', -1e-40)).toEqual(['[0].points_start']); // real underflow
+    expect(bad('points_start', '325')).toEqual(['[0].points_start']);
+    expect(bad('points_start', 12.5)).toEqual([]);
+    expect(issues(endpoint, 'x')).toEqual(['']);
+    const parsed = parse(endpoint, [{ [key]: row?.[key], session_key: 1, extra: 'x', points_start: null }]);
+    expect(parsed.ok && parsed.value).toEqual([
+      {
+        [key]: row?.[key],
+        session_key: 1,
+        position_start: null,
+        position_current: null,
+        points_start: null,
+        points_current: null,
+        meeting_key: null,
+      },
+    ]);
+  });
+
+  it.each(['championship_drivers', 'championship_teams'] as const)(
+    '%s: at most 100 rows, like the grid',
+    (endpoint) => {
+      const [row] = rows(`${endpoint}-normal.raw`);
+      const many = Array.from({ length: 101 }, () => row);
+      expect(issues(endpoint, many.slice(0, 100))).toEqual([]);
+      expect(parse(endpoint, many)).toEqual({
+        ok: false,
+        error: { code: 'shape', issues: [{ path: '', code: 'too_big' }] },
+      });
+    },
+  );
+
+  it('team_name: text without NUL, at most 200 characters (it is a key)', () => {
+    const [row] = rows('championship_teams-normal.raw');
+    const at = (team_name: unknown) => issues('championship_teams', [{ ...row, team_name }]);
+    expect(at('a'.repeat(200))).toEqual([]);
+    expect(at('a'.repeat(201))).toEqual(['[0].team_name']);
+    expect(at('a\u0000b')).toEqual(['[0].team_name']);
+  });
+});
+
+// [U] facts of the championship endpoints (#123 U8, A§6.1), pinned on the fixtures recorded 2026-11-15 (race 11388
+// and sprint 11383 of meeting 1296): rows carry the session's own key, a number per driver or team, `points_current`
+// is `points_start` plus the session's points, a driver of no result row can be there (a car that left the entry
+// list), and a qualifying session answers 404 "No results found.".
+describe('[U] the championship fixtures', () => {
+  type C = { session_key: number; driver_number?: number; team_name?: string } & Record<string, number>;
+  const rows = (name: string) => read(`${name}.raw`) as C[];
+  const CASES = [
+    ['normal', 11388, 'normal'],
+    ['sprint', 11383, 'sprint'],
+  ] as const;
+
+  it.each(['championship_drivers', 'championship_teams'])('%s-empty is empty (404 "No results found.")', (name) => {
+    expect(rows(`${name}-empty`)).toEqual([]);
+    expect((read(`${name}-empty.meta.json`) as { status: number }).status).toBe(404);
+  });
+
+  it.each(CASES)('%s: 23 drivers and 11 teams of session %i, positions 1…23 and 1…11', (name, key) => {
+    const drivers = rows(`championship_drivers-${name}`);
+    const teams = rows(`championship_teams-${name}`);
+    expect([drivers.length, teams.length]).toEqual([23, 11]);
+    for (const list of [drivers, teams]) expect(new Set(list.map((r) => r.session_key))).toEqual(new Set([key]));
+    expect(drivers.map((r) => r.position_current).toSorted((a, b) => (a ?? 0) - (b ?? 0))).toEqual(
+      Array.from({ length: 23 }, (_, i) => i + 1),
+    );
+    expect(teams.map((r) => r.position_current).toSorted((a, b) => (a ?? 0) - (b ?? 0))).toEqual(
+      Array.from({ length: 11 }, (_, i) => i + 1),
+    );
+  });
+
+  it.each(CASES)(
+    '%s: points_current − points_start is the result points; one driver has no result row',
+    (name, _key, result) => {
+      const points = new Map(rows(`session_result-${result}`).map((r) => [r.driver_number, r.points]));
+      const drivers = rows(`championship_drivers-${name}`);
+      for (const d of drivers)
+        expect((d.points_current ?? 0) - (d.points_start ?? 0)).toBe(points.get(d.driver_number as number) ?? 0);
+      expect(drivers.filter((d) => !points.has(d.driver_number as number)).map((d) => d.driver_number)).toEqual([22]);
+    },
+  );
+});
+
 // [U] pit.lap_number = in-lap (A§6.1, A§9). Proven per session type over the fixture rows:
 // in a race or sprint the out-lap is pit.lap_number + 1, in qualifying it is pit.lap_number itself.
 describe('[U] pit.lap_number against the out-laps', () => {

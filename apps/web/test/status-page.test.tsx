@@ -17,6 +17,7 @@ const body = {
   ingest: null,
   rain: { states: { live: 0, final: 0, failed: 0 }, failed: [] },
   rc_unmatched: [],
+  standings_mismatch: [],
 };
 
 let root: Root;

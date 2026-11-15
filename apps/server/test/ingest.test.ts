@@ -2,10 +2,16 @@ import { DummyDriver, Kysely, PostgresAdapter, PostgresIntrospector, PostgresQue
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { DB } from '../src/db/db.ts';
 import { minuteWork, SYNC_RETRY_MS, scheduleSync } from '../src/ingest/ingest.ts';
-import { ms, normaliseSession, withGrid } from '../src/ingest/normalise.ts';
+import {
+  championshipDriverRows,
+  championshipTeamRows,
+  ms,
+  normaliseSession,
+  withGrid,
+} from '../src/ingest/normalise.ts';
 import { afterFailure, afterSuccess, busyGuard, errorCode, firstFetchAt, type Progress } from '../src/ingest/state.ts';
 import type { createClient } from '../src/openf1/client.ts';
-import type { Lap, StartingGrid, Weather } from '../src/openf1/schemas.ts';
+import type { ChampionshipDrivers, ChampionshipTeams, Lap, StartingGrid, Weather } from '../src/openf1/schemas.ts';
 
 const MIN = 60_000;
 const end = new Date('2026-10-11T14:00:00Z');
@@ -201,6 +207,78 @@ describe('withGrid', () => {
       usable: 0,
     });
     expect(withGrid([result(1)], [g(1, null), g(2, 1, 11379)], 11384)).toMatchObject({ usable: 0 });
+  });
+});
+
+// P8: the session's own championship rows only; a duplicate key (the last wins) and another session's row are skipped.
+describe('championship rows', () => {
+  const standing = { position_start: 2, position_current: 1, points_start: 100, points_current: 125.5, meeting_key: 1 };
+  const d = (driver_number: number, session_key = 11388, more: Partial<ChampionshipDrivers> = {}) => ({
+    session_key,
+    driver_number,
+    ...standing,
+    ...more,
+  });
+  const t = (team_name: string, session_key = 11388, more: Partial<ChampionshipTeams> = {}) => ({
+    session_key,
+    team_name,
+    ...standing,
+    ...more,
+  });
+
+  it('drivers: source openf1, keyed by driver_number, null stays null; counts what it skips', () => {
+    const out = championshipDriverRows(11388, [
+      d(1),
+      d(1, 11388, { points_current: 130, position_start: null }),
+      d(4),
+      d(16, 11383),
+    ]);
+    expect(out.skipped).toBe(2); // the duplicate and the other session's row
+    expect(out.rows).toEqual([
+      {
+        session_key: 11388,
+        source: 'openf1',
+        driver_number: 1,
+        position_start: null,
+        position_current: 1,
+        points_start: 100,
+        points_current: 130,
+      },
+      expect.objectContaining({ driver_number: 4, points_current: 125.5 }),
+    ]);
+    expect(championshipDriverRows(11388, [])).toEqual({ rows: [], skipped: 0 }); // a 404 answer
+  });
+
+  it('teams: keyed by team_name', () => {
+    const out = championshipTeamRows(11388, [
+      t('Ferrari'),
+      t('Mercedes'),
+      t('Ferrari', 11388, { points_current: 1 }),
+      t('X', 1),
+    ]);
+    expect(out.skipped).toBe(2);
+    expect(out.rows.map((r) => [r.team_name, r.points_current])).toEqual([
+      ['Ferrari', 1],
+      ['Mercedes', 125.5],
+    ]);
+  });
+
+  it('result.points comes from session_result, null without a value', () => {
+    const none = { drivers: [], laps: [], stints: [], pit: [], race_control: [], weather: [] };
+    const sr = (driver_number: number, points: number | null) => ({
+      session_key: 11388,
+      driver_number,
+      position: driver_number,
+      number_of_laps: 1,
+      points,
+      dnf: false,
+      dns: false,
+      dsq: false,
+      duration: null,
+      gap_to_leader: null,
+    });
+    const { rows } = normaliseSession(11388, { ...none, session_result: [sr(1, 25), sr(2, 0.5), sr(3, null)] }, 'Race');
+    expect(rows.result.map((r) => r.points)).toEqual([25, 0.5, null]);
   });
 });
 

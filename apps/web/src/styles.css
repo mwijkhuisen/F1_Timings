@@ -2799,3 +2799,12 @@ section.rainmap .raintime input[type="range"] {
     display: block;
   }
 }
+
+/* The standings section of the Result tab (P8): the tables are .result's; the chart's head sits under them. */
+.standings .panel-title {
+  margin-top: 24px;
+}
+
+.standings .panel-title h3 {
+  margin: 0;
+}

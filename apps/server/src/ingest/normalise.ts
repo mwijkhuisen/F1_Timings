@@ -1,6 +1,8 @@
 import type { Insertable } from 'kysely';
 import type { DB } from '../db/db.ts';
 import type {
+  ChampionshipDrivers,
+  ChampionshipTeams,
   Driver,
   Lap,
   Meeting,
@@ -207,6 +209,7 @@ export function normaliseSession(
         driver_number: r.driver_number,
         position: place(r.position),
         laps: r.number_of_laps,
+        points: r.points,
         dnf: r.dnf,
         dns: r.dns,
         dsq: r.dsq,
@@ -254,3 +257,46 @@ export function withGrid(
   const usable = [...position.values()].filter((p) => p !== null).length;
   return { results: out, rows, skipped: grid.length - rows, usable };
 }
+
+/**
+ * P8: the session's championship rows (A§6.1), `skipped` counting a row of another session and a duplicate key (the
+ * last wins). A 404 "No results found." is an empty answer: no rows.
+ */
+function championshipRows<T extends { session_key: number }, R>(
+  key: number,
+  list: readonly T[],
+  id: (r: T) => string,
+  row: (r: T) => R,
+): { rows: R[]; skipped: number } {
+  const out = new Map<string, R>();
+  for (const r of list) if (r.session_key === key) out.set(id(r), row(r));
+  return { rows: [...out.values()], skipped: list.length - out.size };
+}
+
+const standing = (r: ChampionshipDrivers | ChampionshipTeams) => ({
+  position_start: r.position_start,
+  position_current: r.position_current,
+  points_start: r.points_start,
+  points_current: r.points_current,
+});
+
+export const championshipDriverRows = (key: number, list: readonly ChampionshipDrivers[]) =>
+  championshipRows(
+    key,
+    list,
+    (r) => String(r.driver_number),
+    (r): Insertable<DB['championship_driver']> => ({
+      session_key: key,
+      source,
+      driver_number: r.driver_number,
+      ...standing(r),
+    }),
+  );
+
+export const championshipTeamRows = (key: number, list: readonly ChampionshipTeams[]) =>
+  championshipRows(
+    key,
+    list,
+    (r) => r.team_name,
+    (r): Insertable<DB['championship_team']> => ({ session_key: key, source, team_name: r.team_name, ...standing(r) }),
+  );

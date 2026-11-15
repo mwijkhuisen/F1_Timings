@@ -36,6 +36,7 @@ const status = {
   ingest: null,
   rain: { states: { live: 0, final: 0, failed: 0 }, failed: [] },
   rc_unmatched: [],
+  standings_mismatch: [],
 };
 const BROKEN = 'Something went wrong: reload the page.';
 

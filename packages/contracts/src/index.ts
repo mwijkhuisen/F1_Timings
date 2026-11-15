@@ -235,6 +235,48 @@ export function withWeatherRow(rows: Weather, row: Weather[number]): Weather {
   return [...rows.slice(Math.max(0, rows.length + 1 - MAX_WEATHER_ROWS)), row];
 }
 
+// P8 (owner, 2026-11-15, #123; A§9, A§10): the championship standings after a race or sprint S, computed per request
+// from no session after S but the next one's points_start. A person is a full_name and a team a team_name (their
+// keys), so neither is null. `change` is the place change (positive = up), null on the season's first counted session
+// and for someone without a place before S. Points are numbers: OpenF1 gives no integer guarantee.
+const change = int.nullable();
+export const Standings = z.strictObject({
+  drivers: z.array(
+    z.strictObject({
+      position: int,
+      change,
+      full_name: z.string(),
+      acronym: text,
+      team_names: z.array(z.string()), // the session's team first
+      team_colour: text,
+      points: z.number(),
+      session_points: z.number(),
+    }),
+  ),
+  teams: z.array(
+    z.strictObject({
+      position: int,
+      change,
+      team_name: z.string(),
+      team_colour: text,
+      points: z.number(),
+      session_points: z.number(),
+    }),
+  ),
+  // The standing after each counted session up to S, for the chart.
+  rounds: z.array(
+    z.strictObject({
+      session_key: int,
+      meeting_name: text,
+      session_name: text,
+      date_start: date,
+      drivers: z.array(z.strictObject({ full_name: z.string(), points: z.number() })),
+      teams: z.array(z.strictObject({ team_name: z.string(), points: z.number() })),
+    }),
+  ),
+  provisional: z.boolean(),
+});
+
 /** F1_REVISION: the release's git commit (CI's `github.sha`), or `dev` for any other build (A§10). */
 export const REVISION = /^(?:[0-9a-f]{40}|dev)$/;
 
@@ -279,6 +321,10 @@ export const Status = z.strictObject({
   }),
   // Races with race-control rows that look like a period but match no known form (A§6.1), computed on read.
   rc_unmatched: z.array(
+    z.strictObject({ session_key: int, year: int, meeting_name: text, session_name: text, rows: int }),
+  ),
+  // P8 (A§10): counted sessions whose next session's points_start disagrees with their own points for `rows` people.
+  standings_mismatch: z.array(
     z.strictObject({ session_key: int, year: int, meeting_name: text, session_name: text, rows: int }),
   ),
 });
@@ -336,6 +382,7 @@ export type RaceControl = z.infer<typeof RaceControl>;
 export type Weather = z.infer<typeof Weather>;
 export type Rain = z.infer<typeof Rain>;
 export type Forecast = z.infer<typeof Forecast>;
+export type Standings = z.infer<typeof Standings>;
 export type Status = z.infer<typeof Status>;
 export type Live = z.infer<typeof Live>;
 export type Recordings = z.infer<typeof Recordings>;

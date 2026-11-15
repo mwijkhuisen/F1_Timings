@@ -46,6 +46,8 @@ describe('the season page', () => {
     expect(html).toContain('<span class="state live">live now · <a href="/live">Follow</a></span>');
     expect(html).toContain('<span class="state next">next</span>');
     expect(html).toContain('<span class="state scheduled">scheduled</span>');
+    // Standings show in a race's Result tab only (A§13 spoiler rule).
+    expect(html).not.toContain('Standings');
     // The open recording is followed live, never offered as a replay.
     expect(html).not.toContain('/replay/42');
   });

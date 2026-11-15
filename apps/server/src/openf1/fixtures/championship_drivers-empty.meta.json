@@ -1,0 +1,13 @@
+{
+  "url": "https://api.openf1.org/v1/championship_drivers?session_key=11392",
+  "fetchedAt": "2026-11-15T12:39:51.959Z",
+  "status": 404,
+  "trim": {
+    "drivers": null,
+    "laps": null
+  },
+  "rows": {
+    "fetched": 0,
+    "kept": 0
+  }
+}

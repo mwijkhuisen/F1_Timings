@@ -332,6 +332,7 @@ describe('the status panel', () => {
           ingest: null,
           rain: { states: { live: 0, final: 0, failed: 0 }, failed: [] },
           rc_unmatched: [],
+          standings_mismatch: [],
           ...over,
         })}
       />,
@@ -424,6 +425,19 @@ describe('the status panel', () => {
     );
   });
 
+  it('standings that differ from OpenF1: none, or each session with a link to its laps and the row count', () => {
+    expect(html).toContain('<h2>Standings that differ from OpenF1</h2><p>None.</p><h2>Recorder</h2>');
+    const r = render(null, {
+      standings_mismatch: [
+        { session_key: 9213, year: 2023, meeting_name: 'Dutch Grand Prix', session_name: 'Race', rows: 9 },
+      ],
+    });
+    expect(r).toContain('aria-label="Standings that differ from OpenF1"');
+    expect(r).toContain(
+      '<td>2023</td><td>Dutch Grand Prix</td><td><a href="/2023/0/9213/laps">Race</a></td><td>9</td>',
+    );
+  });
+
   it('a session without a name still gives its link the text "Session <key>", in every table', () => {
     const failed = {
       session_key: 9967,
@@ -438,9 +452,10 @@ describe('the status panel', () => {
       failed: [failed],
       rain: { states: { live: 0, final: 0, failed: 1 }, failed: [failed] },
       rc_unmatched: [{ session_key: 9967, year: 2026, meeting_name: null, session_name: null, rows: 2 }],
+      standings_mismatch: [{ session_key: 9967, year: 2026, meeting_name: null, session_name: null, rows: 1 }],
     });
     for (const view of ['laps', 'weather']) expect(r).toContain(`<a href="/2026/0/9967/${view}">Session 9967</a>`);
-    expect(r.match(/>Session 9967<\/a>/g)).toHaveLength(3);
+    expect(r.match(/>Session 9967<\/a>/g)).toHaveLength(4);
   });
 
   it('the recorder: nothing yet', () => {
@@ -504,6 +519,7 @@ describe('the recorder warnings on /live', () => {
       ingest: null,
       rain: { states: { live: 0, final: 0, failed: 0 }, failed: [] },
       rc_unmatched: [],
+      standings_mismatch: [],
     }).recorder;
   const base = {
     state: 'idle',

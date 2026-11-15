@@ -1,8 +1,9 @@
 import { type Kysely, sql } from 'kysely';
 import { codeOf, type DB } from '../db/db.ts';
+import { chunks } from '../merge/write.ts';
 import { parse } from '../openf1/schemas.ts';
-import { type Deps, fetchRows, live, processSession, replaceRows, SESSION_ENDPOINTS } from './ingest.ts';
-import { normaliseSession, type SessionData } from './normalise.ts';
+import { CHAMPIONSHIP, type Deps, fetchRows, live, processSession, replaceRows, SESSION_ENDPOINTS } from './ingest.ts';
+import { championshipDriverRows, championshipTeamRows, normaliseSession, type SessionData } from './normalise.ts';
 import { FIRST_FETCH_AFTER_MS } from './state.ts';
 
 // The recovery tools (#103, A§8): a batch refetch, a rederive from raw_response, accept-empty and rain-refetch. Each
@@ -55,8 +56,9 @@ type Rederived = { outcome: 'rederived' | 'skipped' | 'failed'; line: Record<str
  * A§2 principle 3: derives stored sessions again from their raw responses, with today's normaliser and rules. No
  * OpenF1 call (so no empty guard), and no state, progress or raw change. Per session one transaction: lock the
  * session row, then read the raw rows under the lock, so a concurrent fetch is never overwritten by older raw. The
- * grid carries over by driver from the stored results (D2). `all` takes every OpenF1 session, newest first. True when
- * nothing failed (a skip is no failure).
+ * grid carries over by driver from the stored results (D2). The two championship endpoints (P8) are derived when
+ * their raw row is there; a missing one is not `incomplete` and leaves the table as it is. `all` takes every OpenF1
+ * session, newest first. True when nothing failed (a skip is no failure).
  */
 export async function rederive(deps: Pick<Deps, 'db' | 'log' | 'beat'>, keys: number[] | 'all'): Promise<boolean> {
   const { db, log, beat } = deps;
@@ -90,9 +92,10 @@ export async function rederive(deps: Pick<Deps, 'db' | 'log' | 'beat'>, keys: nu
           .selectFrom('raw_response')
           .select(['endpoint', 'body'])
           .where('session_key', '=', key)
-          .where('endpoint', 'in', SESSION_ENDPOINTS)
+          .where('endpoint', 'in', [...SESSION_ENDPOINTS, ...CHAMPIONSHIP.map((c) => c.endpoint)])
           .execute();
-        if (raw.length === 0) return { outcome: 'skipped', line: { skipped: 'no_raw' } };
+        if (!raw.some((r) => (SESSION_ENDPOINTS as readonly string[]).includes(r.endpoint)))
+          return { outcome: 'skipped', line: { skipped: 'no_raw' } };
         const bodies = new Map(raw.map((r) => [r.endpoint, r.body]));
         if (SESSION_ENDPOINTS.some((e) => !bodies.has(e)))
           return { outcome: 'skipped', line: { skipped: 'incomplete' } };
@@ -104,6 +107,20 @@ export async function rederive(deps: Pick<Deps, 'db' | 'log' | 'beat'>, keys: nu
           data[endpoint] = parsed.value;
         }
         const { rows, skipped, rules } = normaliseSession(key, data as SessionData, s.type);
+        // P8: parsed before the first write, so a schema failure writes nothing; a missing raw row leaves its table.
+        const standings: { table: (typeof CHAMPIONSHIP)[number]['table']; rows: object[] }[] = [];
+        for (const { endpoint, table } of CHAMPIONSHIP) {
+          const body = bodies.get(endpoint);
+          if (body === undefined) continue;
+          const parsed = parse(endpoint, body);
+          if (!parsed.ok)
+            return { outcome: 'failed', line: { error: 'schema', endpoint, issues: parsed.error.issues } };
+          const list = parsed.value as never[];
+          standings.push({
+            table,
+            rows: (endpoint === 'championship_drivers' ? championshipDriverRows : championshipTeamRows)(key, list).rows,
+          });
+        }
         const stored = await trx
           .selectFrom('result')
           .select(['driver_number', 'grid'])
@@ -112,7 +129,18 @@ export async function rederive(deps: Pick<Deps, 'db' | 'log' | 'beat'>, keys: nu
         const grids = new Map(stored.map((r) => [r.driver_number, r.grid]));
         const result = rows.result.map((r) => ({ ...r, grid: grids.get(r.driver_number) ?? null }));
         const merge = await replaceRows(trx, key, { ...rows, result });
-        const counted = Object.fromEntries(Object.entries(rows).map(([table, list]) => [table, list.length]));
+        for (const { table, rows: list } of standings) {
+          await trx.deleteFrom(table).where('session_key', '=', key).execute();
+          for (const chunk of chunks(list))
+            await trx
+              .insertInto(table)
+              .values(chunk as never)
+              .execute();
+        }
+        const counted = Object.fromEntries([
+          ...Object.entries(rows).map(([table, list]) => [table, list.length]),
+          ...standings.map((c) => [c.table, c.rows.length]),
+        ]);
         const ms = Math.round(performance.now() - t);
         return { outcome: 'rederived', line: { rows: counted, skipped, rules, merge, ms } };
       });
