@@ -151,6 +151,18 @@ describe('the stints bars', () => {
       expect(ticks(53)).toEqual([10, 20, 30, 40, 53]);
       expect(ticks(54)).toEqual([10, 20, 30, 40, 50, 54]);
     });
+
+    it('keeps at most 50 ticks when a malformed lap number stretches the total', () => {
+      const { total, ticks } = stintLayout(
+        [nor],
+        Laps.parse(lapsOf(4, 3)),
+        Stints.parse([stint(4, 1, 1, 2_000_000_000, 'SOFT')]),
+        2026,
+      );
+      expect(total).toBe(2_000_000_000);
+      expect(ticks.length).toBeLessThanOrEqual(50);
+      expect(ticks.at(-1)).toBe(total);
+    });
   });
 
   const html = renderToStaticMarkup(
