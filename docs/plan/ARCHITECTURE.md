@@ -264,7 +264,7 @@ Checked against the live APIs on 2026-10-25 (Austin quali `11392`, Marina Bay ra
     - 2020 `2020-02-21_Pre-Season_Test_1/2020-02-19_Practice_1/` answers 200: SessionInfo Key 5738, Type `Practice`, meeting 1043.
     - 2021 `2021-03-14_Pre-Season_Test/2021-03-12_Practice_1/` answers 200: Key 6394, Type `Practice`, meeting 1087.
     - Neither key is in its year's Index, and no listed key collides with them.
-    - 2018 (`2018-03-01_…/2018-02-26_Practice_1/`) and 2019 (`2019-02-21_…/2019-02-18_Practice_1/`) answer 403 with both names. Since the names are a guess, that leaves 2018–2019 testing **[U]**.
+    - 2018 (`2018-03-01_…/2018-02-26_Practice_1/`) and 2019 (`2019-02-21_…/2019-02-18_Practice_1/`) answer 403 with both names. A second round of 8 (owner's go, same day) answers 403 too: the 2021 name `Pre-Season_Test`, a `Day_1` session for test 1, day 1 of the second test (`2018-03-09_Pre-Season_Test_2/2018-03-06_Practice_1/`, `2019-03-01_Pre-Season_Test{_2,ing}/2019-02-26_Practice_1/`), and day 4 of 2019's first test (`2019-02-21_Practice_4/`). Since the names are a guess, that leaves 2018–2019 testing **[U]**; 16 misses make it likely that the archive has none.
     - So P3e's 2018–2022 testing rows need paths built outside the Index, as Australia FP2 2018 does (below).
   - 2023: one test of 3 sessions, `<year>/<date>_Pre-Season_Testing/<date>_Practice_1/` to `_3/`.
   - 2024: none.
