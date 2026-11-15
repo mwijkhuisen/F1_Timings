@@ -1,6 +1,6 @@
-import type { Live, Recordings, Season as SeasonData } from '@f1/contracts';
+import { CIRCUITS, type Circuit, type Live, type Recordings, type Season as SeasonData } from '@f1/contracts';
 import { useEffect, useState } from 'react';
-import { useLive, useRecordings, useSaved, useSeason, useSeasons } from '../lib/api.ts';
+import { type Outline, useLive, useOutlines, useRecordings, useSaved, useSeason, useSeasons } from '../lib/api.ts';
 import { Link, replace, sessionPath } from '../lib/routes.ts';
 import type { Saved } from '../lib/saved.ts';
 import {
@@ -23,6 +23,27 @@ import { Pending } from '../ui/ErrorView.tsx';
 // `/` goes to /live while a recording is open, else to the newest season with a session (owner D1).
 
 const dot = (...parts: (string | number | null | undefined | false)[]) => parts.filter(Boolean).join(' · ');
+
+/** The circuit of a meeting, when the circuit table maps it (2023–2026); else no layout and no circuit line. */
+const circuitOf = (m: Meeting): Circuit | undefined =>
+  m.circuit_short_name !== null && Object.hasOwn(CIRCUITS, m.circuit_short_name)
+    ? CIRCUITS[m.circuit_short_name]
+    : undefined;
+
+/** "Albert Park Circuit · 5.278 km · First GP 1996" (#91, D4). */
+const circuitLine = (c: Circuit) => `${c.name} · ${(c.length_m / 1000).toFixed(3)} km · First GP ${c.first_gp}`;
+
+/**
+ * The circuit outline, north up, with the start/finish bar when the script's table has one: decoration, so
+ * aria-hidden (the heading names the meeting, the circuit line carries the facts). The box has a fixed size in CSS and
+ * renders empty until its chunk is in, so nothing moves.
+ */
+const Layout = ({ className, outline }: { className: string; outline: Outline | undefined }) => (
+  <svg className={className} viewBox={outline?.viewBox} aria-hidden="true">
+    {outline && <path className="track" d={outline.outline} />}
+    {outline?.start && <path className="sf" d={outline.start} />}
+  </svg>
+);
 
 /**
  * The session's name: a link to its replay with "Laps" beside it once a recording has ended, else a link to its lap
@@ -92,12 +113,15 @@ export function SeasonView({
   live,
   recordings,
   now,
+  outlines,
 }: {
   year: number;
   season: SeasonData;
   live: Live | null;
   recordings: Recordings;
   now: number;
+  /** The outline files loaded so far, by map id. */
+  outlines: ReadonlyMap<string, Outline>;
 }) {
   if (season.length === 0)
     return (
@@ -112,6 +136,7 @@ export function SeasonView({
   const nextKey = next?.session.session_key ?? null;
   const upNext = weekend && next?.meeting.meeting_key === weekend.meeting_key ? next.session : null;
   const tracked = weekend?.sessions.some((s) => fmtTrack(s.date_start, weekend.gmt_offset) !== null);
+  const here = weekend && circuitOf(weekend);
   return (
     <>
       <h1 tabIndex={-1}>{year}</h1>
@@ -146,16 +171,26 @@ export function SeasonView({
               })}
             </ul>
           </div>
-          {upNext && (
+          {(upNext || here) && (
             <div className="upnext">
-              <p className="eyebrow">Up next</p>
-              <p className="count">{fmtCountdown(Date.parse(upNext.date_start) - now)}</p>
-              <p>
-                {upNext.name} · <time dateTime={upNext.date_start}>{fmtInstant(upNext.date_start)}</time>
-              </p>
-              <Link className="btnlink" to="/live">
-                Open Live
-              </Link>
+              {upNext && (
+                <>
+                  <p className="eyebrow">Up next</p>
+                  <p className="count">{fmtCountdown(Date.parse(upNext.date_start) - now)}</p>
+                  <p>
+                    {upNext.name} · <time dateTime={upNext.date_start}>{fmtInstant(upNext.date_start)}</time>
+                  </p>
+                  <Link className="btnlink" to="/live">
+                    Open Live
+                  </Link>
+                </>
+              )}
+              {here && (
+                <figure className="layout">
+                  <Layout className="big" outline={outlines.get(here.id)} />
+                  <figcaption>{circuitLine(here)}</figcaption>
+                </figure>
+              )}
             </div>
           )}
         </section>
@@ -164,30 +199,48 @@ export function SeasonView({
       <div className="meetings">
         {season
           .filter((m) => m !== weekend)
-          .map((m) => (
-            <article className="meeting" key={m.meeting_key}>
-              <p className="eyebrow">
-                {dot(rounds.has(m.meeting_key) && `Round ${rounds.get(m.meeting_key)}`, m.country_code)}
-              </p>
-              <h3>{m.is_cancelled ? <Cancelled>{m.name}</Cancelled> : m.name}</h3>
-              {m.circuit_short_name && <p className="muted">{m.circuit_short_name}</p>}
-              <ul className="sess">
-                {m.sessions.map((s) => {
-                  const state = stateOf(m, s, recordings, live, now, nextKey);
-                  return (
-                    <li key={s.session_key}>
-                      <Name year={year} meeting={m} session={s} state={state} />
-                      <time className="when" dateTime={s.date_start}>
-                        {fmtInstant(s.date_start)}
-                      </time>
-                      <State state={state} />
-                    </li>
-                  );
-                })}
-              </ul>
-            </article>
-          ))}
+          .map((m) => {
+            const c = circuitOf(m);
+            return (
+              <article className="meeting" key={m.meeting_key}>
+                {c && <Layout className={m.is_cancelled ? 'thumb off' : 'thumb'} outline={outlines.get(c.id)} />}
+                <p className="eyebrow">
+                  {dot(rounds.has(m.meeting_key) && `Round ${rounds.get(m.meeting_key)}`, m.country_code)}
+                </p>
+                <h3>{m.is_cancelled ? <Cancelled>{m.name}</Cancelled> : m.name}</h3>
+                {m.circuit_short_name && <p className="muted">{m.circuit_short_name}</p>}
+                {c && <p className="muted">{circuitLine(c)}</p>}
+                <ul className="sess">
+                  {m.sessions.map((s) => {
+                    const state = stateOf(m, s, recordings, live, now, nextKey);
+                    return (
+                      <li key={s.session_key}>
+                        <Name year={year} meeting={m} session={s} state={state} />
+                        <time className="when" dateTime={s.date_start}>
+                          {fmtInstant(s.date_start)}
+                        </time>
+                        <State state={state} />
+                      </li>
+                    );
+                  })}
+                </ul>
+              </article>
+            );
+          })}
       </div>
+      {season.some((m) => circuitOf(m)) && (
+        <p className="muted credit">
+          Circuit outlines:{' '}
+          <a href="https://github.com/bacinger/f1-circuits" rel="noreferrer">
+            bacinger/f1-circuits
+          </a>{' '}
+          (
+          <a href="/third-party-licences.txt" rel="noreferrer">
+            MIT
+          </a>
+          ), simplified.
+        </p>
+      )}
     </>
   );
 }
@@ -210,6 +263,9 @@ export function Season({ year }: { year: number }) {
   const season = useSeason(year, (data) => (polling(data, Date.now()) ? WEEKEND_POLL_MS : false));
   const live = useLive();
   const recordings = useRecordings(polling(season.data, now) && WEEKEND_POLL_MS);
+  // Outline chunks only, never an OSM layer (#91); a circuit on several meetings loads once.
+  const ids = [...new Set(season.data?.flatMap((m) => circuitOf(m)?.id ?? []))];
+  const outlines = useOutlines(ids);
   if (!season.data) return <Pending error={season.error} />;
   return (
     <SeasonView
@@ -218,6 +274,7 @@ export function Season({ year }: { year: number }) {
       live={live.data ?? null}
       recordings={recordings.data ?? []}
       now={now}
+      outlines={outlines}
     />
   );
 }

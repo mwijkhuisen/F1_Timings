@@ -1,5 +1,7 @@
 // @vitest-environment happy-dom
-import { type Live, Recordings } from '@f1/contracts';
+import { readdirSync, readFileSync } from 'node:fs';
+import { join } from 'node:path';
+import { CIRCUITS, type Live, Recordings, type Season as SeasonData } from '@f1/contracts';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { HttpResponse, http } from 'msw';
 import type { ReactNode } from 'react';
@@ -7,6 +9,7 @@ import { createRoot, type Root } from 'react-dom/client';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, onTestFinished, vi } from 'vitest';
 import { server } from '../../../test/msw.setup.ts';
+import { loadCircuitMap, loadOutline, type Outline } from '../src/lib/api.ts';
 import { Season, SeasonView, Start } from '../src/views/Season.tsx';
 import { FakeCaches } from './caches.ts';
 import { sessionDetail } from './laps.ts';
@@ -15,8 +18,22 @@ import { live, NOW, recordings, season, seasons } from './season-data.ts';
 // The season page (A§13, P4c): this weekend first with every state in words, Up next, the other meetings as cards,
 // and never a result. The static renders run in happy-dom too, which renderToStaticMarkup does not mind.
 
-const render = (now: number, l: Live | null = live) =>
-  renderToStaticMarkup(<SeasonView year={2026} season={season} live={l} recordings={recordings} now={now} />);
+/** The outline files of the test season's circuits (#91), read through the real loader. */
+const outlines = new Map(
+  await Promise.all(
+    season
+      .flatMap((m) => CIRCUITS[m.circuit_short_name ?? '']?.id ?? [])
+      .map(async (id) => [id, (await loadOutline(id)) as Outline] as const),
+  ),
+);
+
+const render = (
+  now: number,
+  l: Live | null = live,
+  s: SeasonData = season,
+  o: ReadonlyMap<string, Outline> = outlines,
+) =>
+  renderToStaticMarkup(<SeasonView year={2026} season={s} live={l} recordings={recordings} now={now} outlines={o} />);
 
 describe('the season page', () => {
   // The view takes `now` as a prop; the clock is faked only so nothing else can leak in.
@@ -81,7 +98,11 @@ describe('the season page', () => {
 
   it('lists the other meetings as cards in season order, with their round and country', () => {
     expect(html).toContain('<h2 class="eyebrow sect">The rest of 2026</h2>');
-    const cards = [...html.matchAll(/<article class="meeting"><p class="eyebrow">([^<]*)<\/p><h3>(.*?)<\/h3>/g)];
+    const cards = [
+      ...html.matchAll(
+        /<article class="meeting">(?:<svg [^>]*>.*?<\/svg>)?<p class="eyebrow">([^<]*)<\/p><h3>(.*?)<\/h3>/g,
+      ),
+    ];
     expect(cards.map(([, eyebrow, name]) => `${eyebrow} | ${name}`)).toEqual([
       'BRN | Pre-Season Testing',
       'Round 1 · MEX | Mexico City Grand Prix',
@@ -108,7 +129,7 @@ describe('the season page', () => {
       ...recordings,
     ]);
     const card = renderToStaticMarkup(
-      <SeasonView year={2026} season={season} live={live} recordings={ended} now={NOW} />,
+      <SeasonView year={2026} season={season} live={live} recordings={ended} now={NOW} outlines={outlines} />,
     );
     expect(card).toContain(
       '<span class="name"><a href="/replay/43">Race</a><span class="laps"> · <a href="/2026/1310-mexico-city/9002-race/laps">Laps</a></span></span><time class="when" dateTime="2026-10-25T20:00:00.000Z">',
@@ -129,9 +150,10 @@ describe('the season page', () => {
   });
 
   it('says "track time beside it" only with a parsable gmt_offset', () => {
-    const bad = season.map((m) => ({ ...m, gmt_offset: 'abc' }));
-    const html = renderToStaticMarkup(
-      <SeasonView year={2026} season={bad} live={live} recordings={recordings} now={NOW} />,
+    const html = render(
+      NOW,
+      live,
+      season.map((m) => ({ ...m, gmt_offset: 'abc' })),
     );
     expect(html).toContain('Interlagos · Amsterdam time</p>');
     expect(html).not.toContain('at the track');
@@ -143,6 +165,99 @@ describe('the season page', () => {
     expect(after).not.toContain('This weekend');
     expect(after).not.toContain('Up next');
     expect(after).toContain('<h2 class="eyebrow sect">Meetings</h2>');
+  });
+});
+
+// #91: the circuit outline on every mapped card and in This weekend, the circuit line, the start/finish bar, the credit.
+describe('the season page draws the circuit layouts', () => {
+  beforeAll(() => {
+    vi.useFakeTimers({ now: NOW, toFake: ['Date'] });
+  });
+  afterAll(() => {
+    vi.useRealTimers();
+  });
+  const html = () => render(NOW);
+  /** The outline svg, its start/finish bar only where the circuit has one. */
+  const svg = (cls: string, id: string) => {
+    const o = outlines.get(id) as Outline;
+    const sf = o.start ? `<path class="sf" d="${o.start}"></path>` : '';
+    return `<svg class="${cls}" viewBox="${o.viewBox}" aria-hidden="true"><path class="track" d="${o.outline}"></path>${sf}</svg>`;
+  };
+
+  it('puts the outline at the top of every mapped card, before the eyebrow, muted for a cancelled meeting', () => {
+    const page = html();
+    expect(page.match(/<article class="meeting">/g)).toHaveLength(4);
+    expect(page).toContain(`<article class="meeting">${svg('thumb', 'bh-2002')}<p class="eyebrow">BRN</p>`);
+    expect(page).toContain(`<article class="meeting">${svg('thumb', 'mx-1962')}<p class="eyebrow">Round 1 · MEX</p>`);
+    expect(page).toContain(`<article class="meeting">${svg('thumb off', 'it-1953')}<p class="eyebrow">ITA</p>`);
+    expect(page).toContain(`<article class="meeting">${svg('thumb', 'us-2023')}<p class="eyebrow">Round 3 · USA</p>`);
+  });
+
+  it('writes the circuit line under the city: name · length in km with three decimals · first GP', () => {
+    const page = html();
+    expect(page).toContain(
+      '<p class="muted">Mexico City</p><p class="muted">Autódromo Hermanos Rodríguez · 4.304 km · First GP 1963</p>',
+    );
+    expect(page).toContain('<p class="muted">Las Vegas Strip Circuit · 6.201 km · First GP 2023</p>');
+    expect(page).toContain(
+      '<p class="muted">Autodromo Internazionale Enzo e Dino Ferrari · 4.909 km · First GP 1980</p>',
+    );
+  });
+
+  it("draws This weekend's larger layout in the Up next column, under Open Live, with the line as its caption", () => {
+    expect(html()).toContain(
+      `<a class="btnlink" href="/live">Open Live</a><figure class="layout">${svg('big', 'br-1940')}<figcaption>Autódromo José Carlos Pace · 4.309 km · First GP 1973</figcaption></figure></div>`,
+    );
+  });
+
+  it('keeps the column for the layout alone when there is no Up next (the grace day after the Race)', () => {
+    const grace = render(Date.parse('2026-11-09T06:00:00.000Z'), null);
+    expect(grace).toContain('<h2>São Paulo Grand Prix</h2>');
+    expect(grace).not.toContain('Up next');
+    expect(grace).toContain(`<div class="upnext"><figure class="layout">${svg('big', 'br-1940')}<figcaption>`);
+  });
+
+  it('renders the fixed box before the outline chunk is in, and the circuit line at once', () => {
+    const page = render(NOW, live, season, new Map());
+    expect(page).toContain('<article class="meeting"><svg class="thumb" aria-hidden="true"></svg><p class="eyebrow">');
+    expect(page).toContain('<figure class="layout"><svg class="big" aria-hidden="true"></svg><figcaption>');
+    expect(page).toContain('Autódromo Hermanos Rodríguez · 4.304 km · First GP 1963');
+  });
+
+  it('draws no layout, no circuit line, no box and no credit for a circuit the table does not map', () => {
+    const unmapped = render(
+      NOW,
+      live,
+      season.map((m) => ({ ...m, circuit_short_name: 'Hockenheim' })),
+    );
+    expect(unmapped).not.toContain('<svg');
+    expect(unmapped).not.toContain(' km · First GP');
+    expect(unmapped).not.toContain('<figure');
+    expect(unmapped).not.toContain('Circuit outlines');
+    expect(unmapped).toContain('<article class="meeting"><p class="eyebrow">Round 1 · MEX</p>');
+    // Up next keeps its column.
+    expect(unmapped).toContain('<a class="btnlink" href="/live">Open Live</a></div>');
+  });
+
+  it('has no style attribute, hides every svg from assistive tech and credits bacinger with rel="noreferrer" links', () => {
+    for (const page of [html(), render(Date.parse('2026-11-09T06:00:00.000Z'), null)]) {
+      expect(page).not.toContain('style=');
+      const svgs = page.match(/<svg [^>]*>/g) ?? [];
+      expect(svgs).toHaveLength(5);
+      for (const s of svgs) expect(s).toContain('aria-hidden="true"');
+      expect(page).toMatch(
+        /<\/div><p class="muted credit">Circuit outlines: <a href="https:\/\/github.com\/bacinger\/f1-circuits" rel="noreferrer">bacinger\/f1-circuits<\/a> \(<a href="\/third-party-licences.txt" rel="noreferrer">MIT<\/a>\), simplified.<\/p>$/,
+      );
+    }
+  });
+
+  // vector-effect is not inherited (P5c): it sits on the paths themselves, not on the <svg>.
+  it('gives both outline paths a non-scaling stroke in the CSS', () => {
+    const css = readFileSync(join(import.meta.dirname, '../src/styles.css'), 'utf8').replace(/\/\*[\s\S]*?\*\//g, '');
+    const rules = [...css.matchAll(/([^{}]*)\{[^}]*vector-effect:\s*non-scaling-stroke;[^}]*\}/g)].map(([, s = '']) =>
+      s.split(',').map((x) => x.trim()),
+    );
+    expect(rules).toContainEqual(['.thumb path', '.big path']);
   });
 });
 
@@ -210,6 +325,33 @@ describe('the season page requests', () => {
     await vi.waitFor(() => expect(host.querySelector('h1')?.textContent).toBe('2026'));
     await vi.waitFor(() => expect(paths).toHaveLength(3));
     expect([...paths].sort()).toEqual(['/api/v1/live', '/api/v1/recordings', '/api/v1/seasons/2026']);
+  });
+
+  // #91: the season page reads the outline chunks only; the OSM layers (485 KB for all 26) are the rain map's.
+  it('/2026 loads the outline files of its circuits and never an OSM layer', async () => {
+    const osm: string[] = [];
+    const files = readdirSync(join(import.meta.dirname, '../src/map/osm')).filter((f) => f.endsWith('.json'));
+    expect(files.length).toBeGreaterThan(20);
+    for (const f of files)
+      vi.doMock(`../src/map/osm/${f}`, () => {
+        osm.push(f);
+        return { default: { water: '', coast: '', roads: '' } };
+      });
+    onTestFinished(() => {
+      for (const f of files) vi.doUnmock(`../src/map/osm/${f}`);
+    });
+    server.use(
+      http.get('*/api/v1/seasons/2026', () => HttpResponse.json(season)),
+      http.get('*/api/v1/live', () => HttpResponse.json(live)),
+      http.get('*/api/v1/recordings', () => HttpResponse.json(recordings)),
+    );
+    mount(<Season year={2026} />);
+    await vi.waitFor(() => expect(host.querySelectorAll('.meeting .thumb path.track')).toHaveLength(4));
+    expect(host.querySelector('.weekend .big path.track')).not.toBeNull();
+    expect(osm).toEqual([]);
+    // The spy sees a load: the rain map's loader still reads a layer.
+    await loadCircuitMap('it-1922');
+    expect(osm).toEqual(['it-1922.json']);
   });
 
   const start = async (recording: Live['recording']) => {

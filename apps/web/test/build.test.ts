@@ -190,7 +190,8 @@ describe('web build', () => {
     expect(entries.some((c) => c.dynamicImports.includes(lazy[0]?.fileName ?? ''))).toBe(true);
   });
 
-  // P5c: the map files (lib/api.ts globs them) load only with the rain map, one circuit at a time.
+  // P5c: the map files (lib/api.ts globs them) load one circuit at a time: an outline with the rain map or on the season
+  // page (#91), an OSM layer with the rain map only.
   it('keeps every map file out of the initial bundle, each in a lazy chunk of its own', () => {
     const MAP = /[\\/]src[\\/]map[\\/](?:osm[\\/])?[\w-]+\.json$/;
     const byName = new Map(chunks.map((c) => [c.fileName, c]));

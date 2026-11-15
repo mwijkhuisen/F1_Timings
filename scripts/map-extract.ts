@@ -17,6 +17,11 @@ const CLIP_KM = 6;
 const TOLERANCE_KM = 0.015;
 const ROUND_KM = 0.01;
 export const MAX_BYTES = 40_960;
+/** The start/finish bar's length and the viewBox padding, as shares of the outline's larger side (#91). */
+const BAR = 0.12;
+const PAD = 0.04;
+/** A START point farther than this from the drawn outline is refused, km: a typo, not a position. */
+const SNAP_KM = 0.04;
 
 /**
  * OpenF1 circuit_short_name → [bacinger id, native15]. native15 is true where Open-Meteo has a native 15-minute model
@@ -52,6 +57,44 @@ export const TABLE: Readonly<Record<string, readonly [id: string, native15: bool
   'Yas Marina Circuit': ['ae-2009', false],
 };
 
+/** A circuit's name, length and first Grand Prix: bacinger's properties, then FIXES over them. */
+export type Meta = { name: string; length_m: number; first_gp: number };
+
+/**
+ * Corrections to bacinger's properties by id, from formula1.com's race pages (read 2026-11-14; the name is the page's
+ * "When was the … built?" heading, the length and first GP its facts block): F1's current names, lengths and first
+ * World Championship Grand Prix. The other 14 circuits match bacinger. Never edit the vendored GeoJSON; edit here,
+ * then re-run.
+ */
+export const FIXES: Readonly<Record<string, Partial<Meta>>> = {
+  'sa-2021': { length_m: 6174 }, // formula1.com/en/racing/2025/saudi-arabia (its heading's "Cornich" is a typo: name kept)
+  'jp-1962': { name: 'Suzuka Circuit' }, // formula1.com/en/racing/2026/japan
+  'it-1953': { name: 'Autodromo Internazionale Enzo e Dino Ferrari' }, // formula1.com/en/racing/2025/emiliaromagna
+  'mc-1929': { first_gp: 1950 }, // formula1.com/en/racing/2026/monaco: 1929 was a race before the championship
+  'es-1991': { length_m: 4657 }, // formula1.com/en/racing/2026/barcelona-catalunya
+  'at-1969': { length_m: 4326 }, // formula1.com/en/racing/2026/austria
+  'es-2026': { name: 'Madring', length_m: 5414 }, // formula1.com/en/racing/2026/spain
+  'sg-2008': { length_m: 4927 }, // formula1.com/en/racing/2026/singapore (and 2025: 4.927 km, not 4.940)
+  'us-2012': { name: 'Circuit of The Americas', length_m: 5513 }, // formula1.com/en/racing/2026/united-states
+  'br-1940': { name: 'Autódromo José Carlos Pace' }, // formula1.com/en/racing/2026/brazil
+  'us-2023': { name: 'Las Vegas Strip Circuit' }, // formula1.com/en/racing/2026/las-vegas
+  'qa-2004': { name: 'Lusail International Circuit', length_m: 5419 }, // formula1.com/en/racing/2026/qatar
+};
+
+/**
+ * The start/finish (control) line by id: [lat, lon], each with its source. The script snaps it to the drawn outline
+ * and writes a bar across the track there. A circuit without a sourced entry gets no mark: never guess one (#91).
+ */
+export const START: Readonly<Record<string, readonly [lat: number, lon: number]>> = {
+  // madring.com/en/circuit: "From the starting line to Turn 1, there's just over 200 meters." Turn 1's apex is 203 m
+  // along the outline from this point (its first point).
+  'es-2026': [40.46518, -3.61689],
+  // formula1.com/en/latest/article/explained-how-every-silverstone-corner-got-its-name.idMlxFC2gfN2ApcPmifxN: "The
+  // drivers line up on the grid along the Hamilton Straight before embarking on the 239m run down to Abbey": the point
+  // of the outline 239 m before Abbey's apex.
+  'gb-1948': [52.0788, -1.01523],
+};
+
 type Pt = [number, number];
 
 /** The outlines by id: [lon, lat] pairs as the GeoJSON has them. */
@@ -65,6 +108,16 @@ export function readOutlines(file = GEOJSON): Map<string, Pt[]> {
     out.set(f.properties.id, f.geometry.coordinates);
   }
   return out;
+}
+
+/** bacinger's name, length (m) and first GP by id, before FIXES. */
+export function readMeta(file = GEOJSON): Map<string, Meta> {
+  const geo = JSON.parse(readFileSync(file, 'utf8')) as {
+    features: { properties: { id: string; Name: string; length: number; firstgp: number } }[];
+  };
+  return new Map(
+    geo.features.map(({ properties: p }) => [p.id, { name: p.Name, length_m: p.length, first_gp: p.firstgp }]),
+  );
 }
 
 /** The bounding-box centre of [lon, lat] pairs, rounded to 4 decimals: [lat0, lon0]. */
@@ -104,18 +157,78 @@ function distance([px, py]: Pt, [ax, ay]: Pt, [bx, by]: Pt): number {
   return Math.hypot(px - (ax + t * dx), py - (ay + t * dy));
 }
 
+/** Rounded to ROUND_KM, never −0. */
+const round = (v: number) => Math.round(v / ROUND_KM) / (1 / ROUND_KM) + 0;
 /** Minimal number text: 1.2, -0.05, 0. */
-const num = (v: number) => String(Math.round(v / ROUND_KM) / (1 / ROUND_KM) + 0);
+const num = (v: number) => String(round(v));
 
-/** The SVG path data of one outline in the km frame around its centre, north up. */
-export function outlinePath(lonLat: readonly Pt[]): string {
+/**
+ * One outline as drawn, in the km frame around its centre with SVG axes (y = −north): simplified, clipped, rounded,
+ * without the repeated closing point (the path's Z closes it).
+ */
+export function outlinePoints(lonLat: readonly Pt[]): Pt[] {
   const [lat0, lon0] = centre(lonLat);
   const km = lonLat.map(([lon, lat]) => project(lat, lon, lat0, lon0));
-  const pts = simplify(km, TOLERANCE_KM).filter(([x, y]) => Math.abs(x) <= CLIP_KM && Math.abs(y) <= CLIP_KM);
-  const svg = pts.map(([x, y]) => `${num(x)} ${num(-y)}`);
-  // A closed ring repeats its first point: Z closes it.
-  if (svg.length > 1 && svg[0] === svg[svg.length - 1]) svg.pop();
-  return `M ${svg.join(' L ')} Z`;
+  const pts = simplify(km, TOLERANCE_KM)
+    .filter(([x, y]) => Math.abs(x) <= CLIP_KM && Math.abs(y) <= CLIP_KM)
+    .map(([x, y]): Pt => [round(x), round(-y)]);
+  if (pts.length > 1 && same(pts[0] as Pt, pts[pts.length - 1] as Pt)) pts.pop();
+  return pts;
+}
+
+/** The larger side of the points' bounding box. */
+const side = (pts: readonly Pt[]) =>
+  Math.max(
+    ...[0, 1].map((i) => Math.max(...pts.map((p) => p[i] as number)) - Math.min(...pts.map((p) => p[i] as number))),
+  );
+
+/**
+ * The start/finish bar: `at` (SVG km) snapped to the nearest point of the closed outline `pts`, and a bar `len` km long
+ * across the segment there, its ends rounded. `off` is the snap distance; undefined past SNAP_KM (a typo in START).
+ */
+export function startBar(pts: readonly Pt[], at: Pt, len: number): { bar: [Pt, Pt]; off: number } | undefined {
+  const n = pts.length;
+  /** The unit direction of segment i (from point i to the next). */
+  const dir = (i: number): Pt => {
+    const [a, b] = [pts[(i + n) % n] as Pt, pts[(i + n + 1) % n] as Pt];
+    const d = Math.hypot(b[0] - a[0], b[1] - a[1]);
+    return d === 0 ? [0, 0] : [(b[0] - a[0]) / d, (b[1] - a[1]) / d];
+  };
+  let best: { off: number; p: Pt; i: number; t: number } | undefined;
+  pts.forEach((a, i) => {
+    const b = pts[(i + 1) % n] as Pt;
+    const [dx, dy] = [b[0] - a[0], b[1] - a[1]];
+    const len2 = dx * dx + dy * dy;
+    if (len2 === 0) return;
+    const t = Math.max(0, Math.min(1, ((at[0] - a[0]) * dx + (at[1] - a[1]) * dy) / len2));
+    const p: Pt = [a[0] + t * dx, a[1] + t * dy];
+    const off = Math.hypot(at[0] - p[0], at[1] - p[1]);
+    if (!best || off < best.off) best = { off, p, i, t };
+  });
+  if (!best || best.off > SNAP_KM) return undefined;
+  const { p, i, t, off } = best;
+  // On a vertex the track's direction there is the bisector of its two segments, not either one alone.
+  const v = t < 1e-9 ? i : t > 1 - 1e-9 ? i + 1 : undefined;
+  const [ux, uy] = v === undefined ? dir(i) : [dir(v - 1)[0] + dir(v)[0], dir(v - 1)[1] + dir(v)[1]];
+  const [dx, dy] = Math.hypot(ux, uy) === 0 ? dir(i) : [ux, uy];
+  const k = len / 2 / Math.hypot(dx, dy);
+  return {
+    bar: [
+      [round(p[0] - dy * k), round(p[1] + dx * k)],
+      [round(p[0] + dy * k), round(p[1] - dx * k)],
+    ],
+    off,
+  };
+}
+
+/** The points' bounding box padded by PAD of its larger side, rounded outward to 0.01 km: the viewBox "x y w h". */
+export function viewBox(pts: readonly Pt[]): string {
+  const pad = PAD * side(pts);
+  const lo = [0, 1].map((i) => Math.floor((Math.min(...pts.map((p) => p[i] as number)) - pad) * 100) / 100);
+  const hi = [0, 1].map((i) => Math.ceil((Math.max(...pts.map((p) => p[i] as number)) + pad) * 100) / 100);
+  return [lo[0], lo[1], (hi[0] as number) - (lo[0] as number), (hi[1] as number) - (lo[1] as number)]
+    .map((v) => num(v as number))
+    .join(' ');
 }
 
 /** Object keys that Biome leaves unquoted. */
@@ -126,6 +239,7 @@ export function extract(
   env: Readonly<Record<string, string | undefined>>,
   log: (line: string) => void = (line) => console.error(line),
   dirs = { map: MAP_DIR, circuits: CIRCUITS_TS, geojson: GEOJSON },
+  start: Readonly<Record<string, readonly [number, number]>> = START,
 ): number {
   if (env.CI) {
     log('map-extract refuses to run under CI (A§12.1 invariant 4)');
@@ -136,34 +250,87 @@ export function extract(
     return 64;
   }
   const outlines = readOutlines(dirs.geojson);
+  const meta = readMeta(dirs.geojson);
   mkdirSync(dirs.map, { recursive: true });
   const rows: string[] = [];
   for (const [name, [id, native15]] of Object.entries(TABLE).sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))) {
     const lonLat = outlines.get(id);
+    const m = { ...meta.get(id), ...FIXES[id] } as Meta;
     if (!lonLat) {
       log(`map-extract: ${name}: no outline ${id}`);
       return 1;
     }
+    // The values are written into TypeScript source: a string without a quote or backslash, and integers only.
+    if (typeof m.name !== 'string' || /['\\\n]/.test(m.name))
+      throw new Error(`${id}: a quote, backslash or newline in the name`);
+    if (!Number.isInteger(m.length_m) || !Number.isInteger(m.first_gp))
+      throw new Error(`${id}: a length or first GP that is not an integer`);
     const [lat, lon] = centre(lonLat);
-    const path = outlinePath(lonLat);
-    if (!/^[MLZ0-9 .-]+$/.test(path)) throw new Error(`${id}: unexpected path text`);
+    const pts = outlinePoints(lonLat);
+    const out: { outline: string; viewBox?: string; start?: string } = {
+      outline: `M ${pts.map((p) => p.join(' ')).join(' L ')} Z`,
+    };
+    let drawn = pts;
+    let snapped = '';
+    const at = start[id];
+    if (at) {
+      const [x, y] = project(at[0], at[1], lat, lon);
+      const s = startBar(pts, [x, -y], BAR * side(pts));
+      if (!s) {
+        log(`map-extract: ${id}: the start/finish point is more than ${SNAP_KM * 1000} m off the outline`);
+        return 1;
+      }
+      out.start = `M ${s.bar[0].join(' ')} L ${s.bar[1].join(' ')}`;
+      drawn = [...pts, ...s.bar];
+      snapped = `, start/finish snapped ${Math.round(s.off * 1000)} m`;
+    }
+    out.viewBox = viewBox(drawn);
+    for (const v of [out.outline, out.start ?? '']) {
+      if (!/^[MLZ0-9 .-]*$/.test(v)) throw new Error(`${id}: unexpected path text`);
+    }
     const file = join(dirs.map, `${id}.json`);
-    writeFileSync(file, `${JSON.stringify({ outline: path }, null, 2)}\n`);
+    writeFileSync(
+      file,
+      `${JSON.stringify({ outline: out.outline, viewBox: out.viewBox, start: out.start }, null, 2)}\n`,
+    );
     const size = statSync(file).size;
     if (size > MAX_BYTES) {
       log(`map-extract: ${id}.json is ${size} bytes, over ${MAX_BYTES}`);
       return 1;
     }
-    log(`${id}.json ${size} bytes`);
-    rows.push(`  ${key(name)}: { id: '${id}', lat: ${lat}, lon: ${lon}, native15: ${native15} },`);
+    log(`${id}.json ${size} bytes${snapped}`);
+    rows.push(
+      [
+        `  ${key(name)}: {`,
+        `    id: '${id}',`,
+        `    lat: ${lat},`,
+        `    lon: ${lon},`,
+        `    native15: ${native15},`,
+        `    name: '${m.name}',`,
+        `    length_m: ${m.length_m},`,
+        `    first_gp: ${m.first_gp},`,
+        '  },',
+      ].join('\n'),
+    );
   }
   writeFileSync(
     dirs.circuits,
     `// Generated by scripts/map-extract.ts from bacinger/f1-circuits (MIT, see data/third-party/f1-circuits).
-// Do not edit by hand: change the table in the script and run it again.
+// Do not edit by hand: change the tables in the script and run it again.
 
-/** A circuit's centre (the outline's bounding-box centre) and whether Open-Meteo has a native 15-minute model there. */
-export type Circuit = { id: string; lat: number; lon: number; native15: boolean };
+/**
+ * A circuit: its map id, its centre (the outline's bounding-box centre), whether Open-Meteo has a native 15-minute model
+ * there, and F1's name, length (m) and first World Championship Grand Prix for it (A§6.3).
+ */
+export type Circuit = {
+  id: string;
+  lat: number;
+  lon: number;
+  native15: boolean;
+  name: string;
+  length_m: number;
+  first_gp: number;
+};
 
 /** By OpenF1 circuit_short_name. */
 export const CIRCUITS: Readonly<Record<string, Circuit>> = {
