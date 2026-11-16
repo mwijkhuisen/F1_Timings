@@ -25,6 +25,8 @@ export type Planned = {
   key: number;
   path: string;
   type: string | null;
+  /** The session's end, epoch ms. */
+  end: number;
   meeting: Insertable<DB['meeting']>;
   session: Insertable<DB['session']>;
 };
@@ -82,27 +84,34 @@ export function planSessions(
       d.start <= d.end &&
       d.end < now,
   );
-  // Keyed on the meeting Key: an off-Index session joins its Index meeting (2018 Bahrain and China).
+  // Keyed on the meeting Key: an off-Index session joins its Index meeting (2018 Bahrain and China). The meeting
+  // object and GmtOffset are the first session's (the Index's come before the extras), so every run writes one row.
   const span = new Map<number, [number, number]>();
-  for (const { start, end, meetingKey } of ok) {
+  const head = new Map<number, (typeof ok)[number]>();
+  for (const d of ok) {
+    const { start, end, meetingKey } = d;
     if (meetingKey === null) continue;
     const [a, b] = span.get(meetingKey) ?? [start, end];
     span.set(meetingKey, [Math.min(a, start), Math.max(b, end)]);
+    if (!head.has(meetingKey)) head.set(meetingKey, d);
   }
   const badPath: number[] = [];
   const sessions: Planned[] = [];
-  for (const { s, offset, start, end, key, meetingKey } of ok) {
+  for (const d of ok) {
+    const { s, offset, start, end, key, meetingKey } = d;
     if (key === null || meetingKey === null || !offset) continue;
     if (!isArchivePath(s.Path) || !s.Path.startsWith(`${year}/`)) {
       badPath.push(key);
       continue;
     }
-    const m = s.meeting;
+    const h = head.get(meetingKey) ?? d;
+    const m = h.s.meeting;
     const [first, last] = span.get(meetingKey) ?? [start, end];
     sessions.push({
       key,
       path: s.Path,
       type: str(s.Type),
+      end,
       meeting: {
         meeting_key: meetingKey,
         source,
@@ -112,7 +121,7 @@ export function planSessions(
         location: str(m.Location),
         country_code: str(nested(m.Country, 'Code')),
         circuit_short_name: str(nested(m.Circuit, 'ShortName')),
-        gmt_offset: offset.text,
+        gmt_offset: (h.offset ?? offset).text,
         date_start: iso(first),
         date_end: iso(last),
         is_cancelled: false,

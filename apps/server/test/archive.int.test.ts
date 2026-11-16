@@ -21,6 +21,7 @@ import {
   type ArchiveArgs,
   type ArchiveDeps,
   archive,
+  FINAL_AFTER_MS,
   GAP_MS,
   LOCK_KEY,
   OLD_TOPICS,
@@ -87,6 +88,7 @@ const GONE = '2019/2019-06-02_Gone_Grand_Prix/2019-06-01_Practice_1/';
 const INFOS: Record<string, string> = {
   [`${SPRINT}SessionInfo.jsonStream`]: info({
     Key: 9103,
+    Meeting: { Key: 9100, Name: 'Synthetic Grand Prix' }, // fewer fields than the Index's meeting
     Name: 'Sprint',
     StartDate: '2019-03-15T12:00:00',
     EndDate: '2019-03-15T13:00:00',
@@ -459,7 +461,7 @@ describe('archive (fixtures through msw, f1_ingest login)', { timeout: 120_000 }
     const race = index.Meetings[0].Sessions[1];
     index.Meetings[0].Sessions.push(
       { ...race, Key: 9131, Path: '2019/../uat/2019-03-17_Race/' },
-      { ...race, Key: 9132 }, // the race's Path, so its SessionInfo Key is 9102
+      { ...race, Key: 9132, Type: 'Race\u001b[2J' }, // the race's Path, so its SessionInfo Key is 9102
     );
     f1((path) => (path === '2019/Index.json' ? HttpResponse.json(index) : undefined));
     const fresh = { ...args, keys: [9131, 9132, 9999], dir: mkdtempSync(join(tmpdir(), 'f1-archive-')) };
@@ -473,6 +475,7 @@ describe('archive (fixtures through msw, f1_ingest login)', { timeout: 120_000 }
       [9999, 'not_in_index'],
       [9132, 'key_mismatch'],
     ]);
+    expect(logged('archive').at(-1)).toMatchObject({ session_key: 9132, type: 'other' }); // remote text: never logged
     expect(logged('archive_done').at(-1)).toMatchObject({ imported: 0, failed: 2, incomplete: 0, bad_path: 1 });
     expect(await count('session', 'session_key IN (9131, 9132, 9999)')).toBe(0);
   });
@@ -654,6 +657,63 @@ describe('archive (fixtures through msw, f1_ingest login)', { timeout: 120_000 }
       expect(since(again)).toEqual(['2019/Index.json']);
     });
 
+    it('a raw topic failure still writes the rows and fails the session; the rerun asks for the raw topics again', async () => {
+      f1((path) =>
+        path === `${RACE}Index.json`
+          ? feeds(['CarData.z', 'TrackStatus'])
+          : path === `${RACE}CarData.z.jsonStream`
+            ? 500
+            : undefined,
+      );
+      const dir = fresh([9102]);
+      expect(await archive(deps, dir)).toBe(false);
+      expect(logged('archive').at(-1)).toMatchObject({ session_key: 9102, level: 50, laps: 6, error: 'http_500' });
+      expect(logged('archive').at(-1)).toHaveProperty('merge'); // written
+      expect(logged('archive_done').at(-1)).toMatchObject({ downloaded: 0, imported: 1, failed: 1 });
+      f1();
+      const asked = requests.length;
+      expect(await archive(deps, dir)).toBe(true);
+      expect(since(asked)).toEqual(['2019/Index.json', `${RACE}CarData.z.jsonStream`, `${RACE}TrackStatus.jsonStream`]);
+    });
+
+    it('a session Index 200 that is no {Feeds} is not kept: this run takes OLD_TOPICS, the rerun asks again', async () => {
+      f1((path) => (path === `${RACE}Index.json` ? new HttpResponse('<html>error</html>') : undefined));
+      const dir = fresh([9102]);
+      expect(await archive(deps, dir)).toBe(true);
+      expect(logged('archive').at(-1)).toMatchObject({ session_key: 9102, topics: 30, topics_from: 'fallback' });
+      expect(existsSync(join(dir.dir, '9102', 'Index.json'))).toBe(false);
+      f1();
+      const asked = requests.length;
+      expect(await archive(deps, dir)).toBe(true);
+      expect(since(asked)).toEqual(['2019/Index.json', `${RACE}Index.json`]);
+      expect(logged('archive').at(-1)).toMatchObject({ session_key: 9102, topics_from: 'index' });
+    });
+
+    it('a directory in the P3a layout asks for the session Index and the new topics only; the rows stay identical', async () => {
+      f1();
+      const p3e = fresh([9102]);
+      expect(await archive(deps, p3e)).toBe(true);
+      const before = await hashes();
+      // P3a: the 10 TOPICS files and markers, no session Index.
+      const p3a = fresh([9102]);
+      mkdirSync(join(p3a.dir, '9102'));
+      for (const f of readdirSync(join(p3e.dir, '9102')).filter((f) => f !== 'Index.json'))
+        writeFileSync(join(p3a.dir, '9102', f), readFileSync(join(p3e.dir, '9102', f)));
+      expect(readdirSync(join(p3a.dir, '9102'))).toHaveLength(TOPICS.length);
+      const raw = [`${RACE}CarData.z.jsonStream`, `${RACE}TeamRadio.jsonStream`];
+      f1((path) =>
+        path === `${RACE}Index.json`
+          ? feeds([...TOPICS, 'CarData.z', 'TeamRadio'])
+          : raw.includes(path)
+            ? garbage()
+            : undefined,
+      );
+      const asked = requests.length;
+      expect(await archive(deps, p3a)).toBe(true);
+      expect(since(asked)).toEqual(['2019/Index.json', `${RACE}Index.json`, ...raw]);
+      expect(await hashes()).toEqual(before);
+    });
+
     it('a raw file over RAW_MAX_BYTES fails the session as too_large; a parsed topic keeps MAX_BYTES', async () => {
       const chunk = new Uint8Array(1024 * 1024);
       const big = () => {
@@ -811,6 +871,53 @@ describe('archive (fixtures through msw, f1_ingest login)', { timeout: 120_000 }
     expect(logged('archive').at(-2)).toMatchObject({ session_key: 9151, error: 'http_500' });
     expect(logged('archive_done').at(-1)).toMatchObject({ imported: 1, failed: 1 });
     expect(logged('archive').some((l) => l.error === 'not_in_index' && l.session_key === 9151)).toBe(false);
+  });
+
+  it('one meeting row per meeting_key, the Index meeting first: a full and a keyed run write the same row', async () => {
+    f1();
+    const off = { ...deps, offIndex: EXTRAS };
+    const dir = { ...args, keys: [9102, 9103], dir: mkdtempSync(join(tmpdir(), 'f1-archive-')) };
+    const row = async () =>
+      admin.selectFrom('meeting').selectAll().where('meeting_key', '=', 9100).executeTakeFirstOrThrow();
+    expect(await archive(off, dir)).toBe(true); // the sprint (its SessionInfo meeting) is written last
+    const full = await row();
+    expect(full).toMatchObject({ official_name: 'FORMULA 1 SYNTHETIC GRAND PRIX 2019', location: 'Nowhere' });
+    expect(await archive(off, { ...dir, keys: [9102] })).toBe(true);
+    expect(await row()).toEqual(full);
+  });
+
+  it("an unwanted off-Index entry's failure counts nothing in a keyed run", async () => {
+    f1((path) => (path === `${GONE}SessionInfo.jsonStream` ? 500 : undefined));
+    const off = { ...deps, offIndex: EXTRAS };
+    const from = logged('archive').length;
+    expect(await archive(off, { ...args, keys: [9102], dir: mkdtempSync(join(tmpdir(), 'f1-archive-')) })).toBe(true);
+    expect(
+      logged('archive')
+        .slice(from)
+        .map((l) => l.session_key),
+    ).toEqual([9102]);
+    expect(logged('archive_done').at(-1)).toMatchObject({ imported: 1, failed: 0, incomplete: 0 });
+  });
+
+  it('an off-Index entry planSessions drops (no StartDate) is bad_index for its key, and failed', async () => {
+    f1((path) =>
+      path === `${GONE}SessionInfo.jsonStream` ? new HttpResponse(info({ StartDate: undefined })) : undefined,
+    );
+    const off = { ...deps, offIndex: EXTRAS };
+    expect(await archive(off, { ...args, keys: [9151], dir: mkdtempSync(join(tmpdir(), 'f1-archive-')) })).toBe(false);
+    expect(logged('archive').at(-1)).toMatchObject({ level: 50, session_key: 9151, error: 'bad_index' });
+    expect(logged('archive_done').at(-1)).toMatchObject({ imported: 0, failed: 1 });
+  });
+
+  it('skips a session that ended under FINAL_AFTER_MS ago (recent): no request, no failure', async () => {
+    f1();
+    const raceEnd = Date.parse('2019-03-17T07:10:00Z');
+    const soon = { ...deps, now: () => new Date(raceEnd + FINAL_AFTER_MS - 60_000) };
+    const asked = requests.length;
+    expect(await archive(soon, { ...args, keys: [9102], dir: mkdtempSync(join(tmpdir(), 'f1-archive-')) })).toBe(true);
+    expect(since(asked)).toEqual(['2019/Index.json']);
+    expect(logged('archive').at(-1)).toMatchObject({ level: 30, session_key: 9102, type: 'Race', state: 'recent' });
+    expect(logged('archive_done').at(-1)).toMatchObject({ recent: 1, downloaded: 0, imported: 0, failed: 0 });
   });
 
   it('the role exits 1 on an expired token, logged in as f1_ingest, without a request', async () => {

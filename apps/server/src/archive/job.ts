@@ -122,6 +122,10 @@ export const GAP_MS = 2_000;
 export const LOCK_KEY = 0x4631_4152; // 'F1AR'
 /** No request this close to the token's exp: the run stops with `token_expired` instead. */
 const EXP_MARGIN_MS = 60_000;
+/** A session that ended less than this before the job's now is skipped (`recent`), as the rain job's final fetch. */
+export const FINAL_AFTER_MS = 24 * 3_600_000;
+/** The session types a log line names; any other Type text is `other` (remote text never reaches a log). */
+const TYPES = new Set<string | null>(['Race', 'Qualifying', 'Practice']);
 /** A 403 or 404 on these leaves no marker: the session is incomplete for this run and a rerun asks again. */
 const REQUIRED = new Set<string>(['SessionInfo', 'TimingData']);
 // Laps are not among them: writeLaps replaces the archive's candidates only and rebuilds `lap` (P3b).
@@ -213,7 +217,8 @@ async function job(deps: ArchiveDeps, args: ArchiveArgs): Promise<boolean> {
   const filesOnly = year >= FILES_ONLY_FROM;
   // downloaded: sessions whose topics are all on disk or marked, SessionInfo and TimingData among them (both modes);
   // imported: sessions whose rows were written (through 2022 only).
-  const counts = { downloaded: 0, imported: 0, failed: 0, incomplete: 0, bad_path: 0, t0_heartbeat: 0 };
+  // recent: sessions that ended under FINAL_AFTER_MS ago, skipped.
+  const counts = { downloaded: 0, imported: 0, failed: 0, incomplete: 0, bad_path: 0, t0_heartbeat: 0, recent: 0 };
   const done = (ok: boolean, error?: string) => {
     const passed = ok && counts.failed === 0;
     log[passed ? 'info' : 'error']({ year, ...counts, error }, 'archive_done');
@@ -256,10 +261,13 @@ async function job(deps: ArchiveDeps, args: ArchiveArgs): Promise<boolean> {
   const listed = indexSessions(index.value.bytes.toString('utf8'));
   if (listed === undefined) return done(false, 'index_format');
 
-  // The off-Index sessions of the year (D1), whatever the keys, so a keyed run gives a meeting the same span. An Index
-  // session with a Path wins a duplicate key. A 403 or 404 leaves no marker (incomplete): a rerun asks again.
+  const wanted = (key: number) => args.keys.length === 0 || args.keys.includes(key);
+  // The off-Index sessions of the year (D1), whatever the keys, so a keyed run gives a meeting the same span; only a
+  // wanted entry's failure counts. An Index session with a Path wins a duplicate key. A 403 or 404 leaves no marker
+  // (incomplete): a rerun asks again.
   const table = offIndex[year] ?? [];
   const extras: IndexSession[] = [];
+  const extraKeys: number[] = [];
   for (const { key, path } of table) {
     if (listed.some((s) => s.Key === key)) continue;
     const into = join(dir, String(key));
@@ -271,6 +279,7 @@ async function job(deps: ArchiveDeps, args: ArchiveArgs): Promise<boolean> {
         return done(false, got);
       }
       if (!got.ok) {
+        if (!wanted(key)) continue;
         if (absent(got.error)) counts.incomplete++;
         else counts.failed++;
         log.error({ session_key: key, year, error: absent(got.error) ? 'incomplete' : code(got.error) }, 'archive');
@@ -280,15 +289,23 @@ async function job(deps: ArchiveDeps, args: ArchiveArgs): Promise<boolean> {
       put(info, got.value.bytes);
     }
     extras.push(offIndexSession(readFileSync(info, 'utf8'), key, path));
+    extraKeys.push(key);
   }
   const plan = planSessions([...listed, ...extras], year, now().getTime());
 
-  const wanted = (key: number) => args.keys.length === 0 || args.keys.includes(key);
   for (const key of plan.badPath.filter(wanted)) {
     counts.bad_path++;
     log.error({ session_key: key, year, error: 'bad_path' }, 'archive');
   }
-  if (plan.badIndex > 0) log.error({ year, sessions: plan.badIndex, error: 'bad_index' }, 'archive');
+  // An off-Index entry planSessions dropped is a failure of its own (its SessionInfo lacks a field the plan needs).
+  const planned = new Set([...plan.sessions.map((s) => s.key), ...plan.badPath]);
+  const dropped = extraKeys.filter((key) => !planned.has(key));
+  for (const key of dropped.filter(wanted)) {
+    counts.failed++;
+    log.error({ session_key: key, year, error: 'bad_index' }, 'archive');
+  }
+  const badIndex = plan.badIndex - dropped.length;
+  if (badIndex > 0) log.error({ year, sessions: badIndex, error: 'bad_index' }, 'archive');
   for (const key of args.keys) {
     if (plan.sessions.some((s) => s.key === key) || plan.badPath.includes(key) || table.some((e) => e.key === key))
       continue;
@@ -297,13 +314,20 @@ async function job(deps: ArchiveDeps, args: ArchiveArgs): Promise<boolean> {
   }
 
   for (const session of plan.sessions.filter((s) => wanted(s.key))) {
+    const type = TYPES.has(session.type) ? session.type : 'other';
+    // The current year: the archive may not be final yet (an overrun, a file still being written).
+    if (session.end > now().getTime() - FINAL_AFTER_MS) {
+      counts.recent++;
+      log.info({ session_key: session.key, year, type, state: 'recent' }, 'archive');
+      continue;
+    }
     const reason = await stopped();
     if (reason) return done(false, reason);
     const started = performance.now();
     const line = (fields: Record<string, unknown>) => ({
       session_key: session.key,
       year,
-      type: session.type,
+      type,
       ...fields,
       ms: Math.round(performance.now() - started),
     });
@@ -311,25 +335,27 @@ async function job(deps: ArchiveDeps, args: ArchiveArgs): Promise<boolean> {
     mkdirSync(into, { recursive: true });
 
     // The session's own topic list: its Index.json, kept; a 403 or 404 leaves the `Index.missing` marker (before the
-    // 2018 US GP), and that, or an Index that is no {Feeds: {…}}, means OLD_TOPICS. The URL is always
-    // <Path><Topic>.jsonStream, never the Index's StreamPath.
+    // 2018 US GP), and that, or an Index that is no {Feeds: {…}} (not kept, so a rerun asks again), means OLD_TOPICS.
+    // The URL is always <Path><Topic>.jsonStream, never the Index's StreamPath.
     const indexFile = join(into, 'Index.json');
     const indexMarker = join(into, 'Index.missing');
+    let own = existsSync(indexFile) ? indexTopics(readFileSync(indexFile, 'utf8')) : undefined;
     if (!existsSync(indexFile) && !existsSync(indexMarker)) {
       const got = await get(`${session.path}Index.json`, INDEX_MAX_BYTES);
       if (typeof got === 'string') {
         log.error(line({ error: got }), 'archive');
         return done(false, got);
       }
-      if (got.ok) put(indexFile, got.value.bytes);
-      else if (absent(got.error)) put(indexMarker, '');
+      if (got.ok) {
+        own = indexTopics(got.value.bytes.toString('utf8'));
+        if (own !== undefined) put(indexFile, got.value.bytes);
+      } else if (absent(got.error)) put(indexMarker, '');
       else {
         counts.failed++;
         log.error(line({ error: code(got.error) }), 'archive');
         continue;
       }
     }
-    const own = existsSync(indexFile) ? indexTopics(readFileSync(indexFile, 'utf8')) : undefined;
     if (own !== undefined && own.length > MAX_TOPICS) {
       counts.failed++;
       log.error(line({ topics: own.length, error: 'too_many_topics' }), 'archive');
@@ -339,9 +365,10 @@ async function job(deps: ArchiveDeps, args: ArchiveArgs): Promise<boolean> {
     const list = [...new Set<string>([...TOPICS, ...(own ?? OLD_TOPICS)])];
 
     const paths = new Map<string, string>(); // the TOPICS files: the only ones ever read
-    const raw = new Map<string, string>(); // every other topic: written, never read or parsed
+    let raw = 0; // every other topic: written, never read or parsed
     let missing = 0;
-    let error: string | undefined;
+    let error: string | undefined; // a parsed topic's failure: no rows
+    let rawError: string | undefined; // a raw topic's failure: the rows are still written, the session fails
     for (const topic of list) {
       const parsed = PARSED.has(topic);
       const path = join(into, `${topic}.jsonStream`);
@@ -361,16 +388,18 @@ async function job(deps: ArchiveDeps, args: ArchiveArgs): Promise<boolean> {
           }
           put(marker, '');
         } else {
-          error = code(got.error);
+          if (parsed) error = code(got.error);
+          else rawError = code(got.error);
           break;
         }
       }
-      if (existsSync(path)) (parsed ? paths : raw).set(topic, path);
-      else missing++;
+      if (!existsSync(path)) missing++;
+      else if (parsed) paths.set(topic, path);
+      else raw++;
     }
     const files = {
       files: paths.size,
-      raw_files: raw.size,
+      raw_files: raw,
       skipped_files: missing,
       topics: list.length,
       topics_from: own === undefined ? 'fallback' : 'index',
@@ -381,11 +410,13 @@ async function job(deps: ArchiveDeps, args: ArchiveArgs): Promise<boolean> {
       continue;
     }
     const whole = [...REQUIRED].every((t) => paths.has(t));
-    if (whole) counts.downloaded++;
+    if (whole && rawError === undefined) counts.downloaded++;
     if (filesOnly) {
       // H3: no row is written and no file is read; a session without SessionInfo or TimingData is still incomplete.
-      if (!whole) counts.incomplete++;
-      log[whole ? 'info' : 'error'](line(whole ? files : { ...files, error: 'incomplete' }), 'archive');
+      if (rawError !== undefined) counts.failed++;
+      else if (!whole) counts.incomplete++;
+      const fail = rawError ?? (whole ? undefined : 'incomplete');
+      log[fail === undefined ? 'info' : 'error'](line({ ...files, error: fail }), 'archive');
       continue;
     }
     // Sized before anything is read: the parse holds the whole session in memory (MAX_SESSION_BYTES). Raw files never
@@ -433,8 +464,11 @@ async function job(deps: ArchiveDeps, args: ArchiveArgs): Promise<boolean> {
     }
     counts.imported++;
     if (stats.t0 === 'heartbeat') counts.t0_heartbeat++;
+    // A raw topic failed: imported, and failed too, so the rerun asks for it again.
+    if (rawError !== undefined) counts.failed++;
     // The Heartbeat t0 can be minutes off (A§6.2): imported, but an error line to look at.
-    log[stats.t0 === 'heartbeat' ? 'error' : 'info'](line({ ...fields, merge: written }), 'archive');
+    const bad = stats.t0 === 'heartbeat' || rawError !== undefined;
+    log[bad ? 'error' : 'info'](line({ ...fields, merge: written, error: rawError }), 'archive');
   }
   return done(true);
 }
