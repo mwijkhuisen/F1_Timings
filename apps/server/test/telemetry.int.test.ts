@@ -113,6 +113,16 @@ async function record() {
   rec.feed(T0, 'CarData.z', z({ Entries: [bad] }), iso(T0));
   const status = { Timestamp: iso(odd), Entries: { '1': { ...place(0), Status: 254 } } }; // bad_status
   rec.feed(T0, 'Position.z', z({ Position: [status] }), iso(T0));
+  // Per topic, a message of 33 entries (too_many_entries) and an entry at no time (bad_entry).
+  rec.feed(T0, 'CarData.z', z({ Entries: Array(33).fill({ Utc: iso(odd), Cars: {} }) }), iso(T0));
+  rec.feed(T0, 'Position.z', z({ Position: Array(33).fill({ Timestamp: iso(odd), Entries: {} }) }), iso(T0));
+  rec.feed(
+    T0,
+    'CarData.z',
+    z({ Entries: [{ Utc: 'yesterday', Cars: { '1': { Channels: channels(0, 0) } } }] }),
+    iso(T0),
+  );
+  rec.feed(T0, 'Position.z', z({ Position: [{ Timestamp: 'yesterday', Entries: { '1': place(0) } }] }), iso(T0));
   const msgs = messages(LIVE, SPEED.live);
   for (const m of [...msgs, ...msgs.slice(0, 3)]) {
     // the first three again, as after a reconnect: equal t keep the first
@@ -231,7 +241,7 @@ describe('the telemetry job (f1_ingest login, synthetic files)', { timeout: 120_
       from: { 'f1-live': 3, 'f1-archive': 2 },
       whole: 5,
       too_long: 0,
-      dropped: { bad_sample: 1, bad_status: 1, drs_partial: 0 },
+      dropped: { bad_sample: 1, bad_status: 1, drs_partial: 0, too_many_entries: 2, bad_entry: 2 },
       z: { 'f1-live': { ...zero, bad_base64: 1 }, 'f1-archive': zero },
       car_bytes: 5 * (1 + 9 * 40), // the flags byte and 40 samples without DRS per lap
       pos_bytes: 5 * 9 * 40,
@@ -363,6 +373,7 @@ describe('the telemetry job (f1_ingest login, synthetic files)', { timeout: 120_
       ok: ['car_bytes', 'dropped', 'from', 'ms', 'pos_bytes', 'rows', 'session_key', 'too_long', 'whole', 'z'],
     };
     const codes = /^(unknown_session|not_file|too_large|too_many_samples|recording_missing|no_files|no_laps)$/;
+    const dropped = ['bad_entry', 'bad_sample', 'bad_status', 'drs_partial', 'too_many_entries'];
     const leaves = (v: unknown): unknown[] =>
       typeof v === 'object' && v !== null ? Object.values(v).flatMap(leaves) : [v];
     expect(seen.length).toBeGreaterThan(10);
@@ -370,6 +381,7 @@ describe('the telemetry job (f1_ingest login, synthetic files)', { timeout: 120_
       const kind = msg === 'telemetry_done' ? 'done' : 'error' in rest ? 'error' : 'skip' in rest ? 'skip' : 'ok';
       expect(msg).toMatch(/^telemetry(_done)?$/);
       expect(Object.keys(rest).sort()).toEqual(keys[kind]);
+      if (kind === 'ok') expect(Object.keys(rest.dropped as object).sort()).toEqual(dropped);
       const { error, skip, ...counts } = rest;
       for (const code of [error, skip].filter((c) => c !== undefined)) expect(code).toMatch(codes);
       for (const leaf of leaves(counts)) expect(typeof leaf).toBe('number');

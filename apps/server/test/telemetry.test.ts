@@ -136,6 +136,20 @@ describe('positions (P7a, A§6.2)', () => {
     const z = decodeZ(big);
     expect(z.ok && positions(z.value)).toEqual([]);
   });
+
+  it('counts a message of over 32 entries and each skipped entry in `skipped`, if given', () => {
+    const skipped = { too_many_entries: 0, bad_entry: 0 };
+    const entry = { Timestamp: '2027-01-01T12:00:00Z', Entries: {} };
+    expect(positions({ Position: Array(33).fill(entry) }, skipped)).toEqual([]);
+    expect(
+      positions(
+        { Position: [entry, { Timestamp: 'yesterday', Entries: {} }, { Timestamp: entry.Timestamp }, 7] },
+        skipped,
+      ),
+    ).toHaveLength(1);
+    expect(positions({ Position: {} }, skipped)).toEqual([]); // no message: not counted
+    expect(skipped).toEqual({ too_many_entries: 1, bad_entry: 3 });
+  });
 });
 
 describe('carData (P7b, A§6.2)', () => {
@@ -215,5 +229,13 @@ describe('carData (P7b, A§6.2)', () => {
       Array.from({ length: n }, (_, i) => at(cars, new Date(Date.UTC(2027, 0, 1, 12) + i).toISOString()));
     expect(decoded(entries(32)).entries).toHaveLength(32);
     expect(decoded(entries(33))).toEqual({ entries: [], dropped: 0 });
+  });
+
+  it('counts a message of over 32 entries and each skipped entry in `skipped`, if given', () => {
+    const skipped = { too_many_entries: 0, bad_entry: 0 };
+    const good = at({ '1': { Channels: channels() } });
+    expect(carData({ Entries: Array(33).fill(good) }, skipped).entries).toEqual([]);
+    expect(carData({ Entries: [good, at({}, 'yesterday'), { Utc: good.Utc }, null] }, skipped).entries).toHaveLength(1);
+    expect(skipped).toEqual({ too_many_entries: 1, bad_entry: 3 });
   });
 });

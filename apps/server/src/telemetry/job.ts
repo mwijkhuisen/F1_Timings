@@ -150,7 +150,7 @@ async function telemetrySession(deps: TelemetryDeps, args: Omit<FillArgs, 'keys'
   if (!rec && archive.length === 0) return { skip: 'no_files' };
 
   const z = { 'f1-live': zCounts(), 'f1-archive': zCounts() };
-  const dropped = { bad_sample: 0, bad_status: 0, drs_partial: 0 };
+  const dropped = { bad_sample: 0, bad_status: 0, drs_partial: 0, too_many_entries: 0, bad_entry: 0 };
   let tooLong = 0;
   const maxSamples = deps.maxSamples ?? MAX_SOURCE_SAMPLES;
   // Samples outside every window are dropped at once (garage and pre-session time).
@@ -169,14 +169,14 @@ async function telemetrySession(deps: TelemetryDeps, args: Omit<FillArgs, 'keys'
         return;
       }
       if (topic === 'CarData.z') {
-        const { entries, dropped: bad } = carData(d.value);
+        const { entries, dropped: bad } = carData(d.value, dropped);
         dropped.bad_sample += bad;
         for (const { t, cars } of entries) {
           for (const [id, s] of cars) into(find(byDriver.get(id), t))?.car.push({ ...s, t });
         }
         return;
       }
-      for (const { t, cars } of positions(d.value)) {
+      for (const { t, cars } of positions(d.value, dropped)) {
         for (const [id, s] of cars) {
           if (statusCode(s.status) === null) dropped.bad_status++;
           else into(find(byDriver.get(id), t))?.pos.push({ ...s, t });
