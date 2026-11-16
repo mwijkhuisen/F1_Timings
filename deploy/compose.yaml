@@ -219,7 +219,8 @@ services:
         read_only: true
         bind:
           create_host_path: false
-    mem_limit: 512m
+    # As fill: the 2021 season peaked at 433 MB in a 512M cgroup (A§14.2), too close; Node sizes its heap from this.
+    mem_limit: 768m
     cpus: 1.0
     pids_limit: 64
     healthcheck:

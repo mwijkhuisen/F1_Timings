@@ -23,6 +23,7 @@ type Source = 'f1-live' | 'f1-archive';
 export const MAX_Z_BYTES = 64 * 1024 * 1024;
 const TOPICS = ['CarData.z', 'Position.z'];
 const CHUNK = 500;
+const CHUNK_BYTES = 8 * 1024 * 1024;
 
 /** One source's packed lap: its T1 coverage (`any`: it has a sample), both columns and the T6 figures. */
 type Built = Coverage & { car: Buffer; pos: Buffer; drsPartial: boolean } & ReturnType<typeof t6>;
@@ -229,15 +230,24 @@ async function telemetrySession(deps: TelemetryDeps, args: Omit<FillArgs, 'keys'
       });
     }
   }
+  // At most CHUNK rows and CHUNK_BYTES of bytea per statement: 500 laps at the bound would be about 190 MB.
+  const chunks: (typeof rows)[] = [];
+  let bytes = CHUNK_BYTES;
+  for (const row of rows) {
+    const n = row.car.length + row.pos.length;
+    const last = chunks.at(-1);
+    if (!last || last.length === CHUNK || bytes + n > CHUNK_BYTES) {
+      chunks.push([row]);
+      bytes = n;
+    } else {
+      last.push(row);
+      bytes += n;
+    }
+  }
   await db.transaction().execute(async (trx) => {
     await trx.selectFrom('session').select('session_key').where('session_key', '=', key).forUpdate().execute();
     await trx.deleteFrom('telemetry_lap').where('session_key', '=', key).execute();
-    for (let i = 0; i < rows.length; i += CHUNK) {
-      await trx
-        .insertInto('telemetry_lap')
-        .values(rows.slice(i, i + CHUNK))
-        .execute();
-    }
+    for (const chunk of chunks) await trx.insertInto('telemetry_lap').values(chunk).execute();
   });
   return {
     rows: rows.length,
