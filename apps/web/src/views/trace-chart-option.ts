@@ -23,7 +23,7 @@ export const lateStart = (t: Telemetry): boolean => (t.pos.t[0] ?? 0) > GAP_MS;
  * linear in time between the two Position samples around it when they are at most GAP_MS apart; null outside the
  * Position span or inside a longer step (nothing is extrapolated). Fewer than 2 Position samples place nothing, and
  * neither does a first Position sample more than GAP_MS after the lap start: a gap at the start leaves the zero
- * unknown, so the lap would not line up with the other ([box] 2026-11-16: one 5498 lap at 9.2 s, p90 274 ms).
+ * unknown, so the lap would not line up with the other ([box] 2026-11-16: 20 of 5498's 990 laps, at most 9.2 s; p90 274 ms).
  */
 export function distances(t: Telemetry): (number | null)[] {
   const { t: pt, x, y } = t.pos;
@@ -70,6 +70,7 @@ export const traceLabel = (laps: readonly TraceLap[]): string =>
   `Telemetry: ${laps.map((l) => l.name).join(', ')}: speed, throttle, brake and gear by distance`;
 
 const metres = new Intl.NumberFormat('en-GB', { maximumFractionDigits: 0 });
+const km = new Intl.NumberFormat('en-GB', { maximumFractionDigits: 1 });
 
 /** E3: the strip only for a lap with the DRS channel, in a session up to 2025 (never 2026). */
 const hasDrs = (l: TraceLap, year: number) => l.telemetry.car.drs !== null && year <= 2025;
@@ -118,7 +119,8 @@ export function traceChartOption(laps: readonly TraceLap[], tokens: ChartTokens,
     axisLabel: {
       show: g === bottom,
       color: tokens.muted,
-      formatter: (v: number) => `${metres.format(v)} m`,
+      // In km: "1,000 m" labels touched on a 5.8 km lap at 390 px. ECharts' ticks are 1, 2 or 5 × 10ⁿ m.
+      formatter: (v: number) => `${km.format(v / 1000)} km`,
       alignMinLabel: 'left' as const,
       alignMaxLabel: 'right' as const,
     },
@@ -143,18 +145,21 @@ export function traceChartOption(laps: readonly TraceLap[], tokens: ChartTokens,
   ];
   if (drs.length > 0)
     yAxis.push({
-      type: 'category' as const,
+      // A value axis, not a category one: on a category axis a null is no gap, so a lap that never opened DRS drew a
+      // full bar (P7c build, seen in a 390 px shot). One row per lap at 0, 1, …, Lap 1 on top.
+      type: 'value' as const,
       gridIndex: 4,
       name: 'DRS',
       nameLocation: 'middle' as const,
       nameGap: 36,
       nameTextStyle: { color: tokens.muted },
-      // One row per lap, Lap 1 on top; the colour and the line type name the lap, as on the other grids.
-      data: drs.map((k) => names[k]),
+      min: -0.5,
+      max: drs.length - 0.5,
       inverse: true,
       axisLabel: { show: false },
       axisTick: { show: false },
       axisLine: { show: false },
+      splitLine: { show: false },
     });
 
   const line = (k: number, g: number, data: (number | null)[][], extra: object = {}) => ({

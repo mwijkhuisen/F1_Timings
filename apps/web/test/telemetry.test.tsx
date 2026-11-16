@@ -165,7 +165,12 @@ describe('traceChartOption', () => {
       expect(x).toMatchObject({ type: 'value', gridIndex: g, min: 0, max: 300 });
       expect(x.axisLabel.show).toBe(g === 4);
     }
-    expect(option.xAxis[4]?.axisLabel.formatter(1240)).toBe('1,240 m');
+    expect([0, 200, 1000, 1500].map((v) => option.xAxis[4]?.axisLabel.formatter(v))).toEqual([
+      '0 km',
+      '0.2 km',
+      '1 km',
+      '1.5 km',
+    ]);
     expect(option.axisPointer).toEqual({ link: [{ xAxisIndex: 'all' }] });
     expect(option.yAxis.map((y) => (y as { name: string }).name)).toEqual([
       'km/h',
@@ -253,10 +258,10 @@ describe('traceChartOption', () => {
       [300, null],
     ]);
     expect(on('VER L41', 4)?.lineStyle).toEqual({ width: 6 });
-    expect(option.yAxis[4]).toMatchObject({ type: 'category', gridIndex: 4, data: ['VER L41'] });
+    expect(option.yAxis[4]).toMatchObject({ type: 'value', gridIndex: 4, min: -0.5, max: 0.5, inverse: true });
     // Both laps with the channel: a row each, Lap 1 on top.
     const both = traceChartOption(lapsOf(short(), short()), tokens, 2021);
-    expect(both.yAxis[4]).toMatchObject({ data: ['VER L41', 'NOR L38'], inverse: true });
+    expect(both.yAxis[4]).toMatchObject({ min: -0.5, max: 1.5, inverse: true });
     expect((both.series as unknown as S[]).filter((s) => s.xAxisIndex === 4).map((s) => s.name)).toEqual([
       'VER L41',
       'NOR L38',
@@ -419,7 +424,7 @@ describe('the trace chart at 390 px', () => {
       expect(lines).toHaveLength(drs && year === 2019 ? 10 : 8);
       const texts = list.flatMap(({ el }) => (el.style.text ? [el.style.text] : []));
       expect(texts).toEqual(
-        expect.arrayContaining(['km/h', 'Throttle %', 'Brake', 'Gear', 'VER L41', 'NOR L38', '0 m']),
+        expect.arrayContaining(['km/h', 'Throttle %', 'Brake', 'Gear', 'VER L41', 'NOR L38', '0 km']),
       );
       expect(texts.includes('DRS')).toBe(drs && year === 2019);
       for (const { el, box } of list) {
@@ -433,6 +438,22 @@ describe('the trace chart at 390 px', () => {
       const spans = new Set(lines.filter(({ box }) => box.width > 100).map(({ box }) => `${box.x} ${box.width}`));
       expect(spans.size).toBe(1);
     }
+  });
+
+  it('draws no strip for a lap whose DRS never opens, also when it is drawn alone: closed is a gap, not a bar', () => {
+    const open = circleLap(0, true);
+    const shut = { ...open, car: { ...open.car, drs: open.car.t.map(() => 8) } };
+    const strips = (ls: TraceLap[]) =>
+      [
+        ...render(traceChartOption(ls, tokens, 2019))
+          .renderToSVGString()
+          .matchAll(/<path d="([^"]*)"[^>]*stroke-width="6"/g),
+      ]
+        .map(([, d = '']) => d)
+        .filter((d) => d.includes('L'));
+    expect(strips([{ name: 'VER L41', driver: VER, telemetry: shut, slot: 1 }])).toHaveLength(0);
+    expect(strips([{ name: 'VER L41', driver: VER, telemetry: open, slot: 1 }])).toHaveLength(1);
+    expect(strips(lapsOf(shut, open))).toHaveLength(1);
   });
 
   it('breaks the speed line of a lap with a 3 s dropout into two pieces, one piece without it', () => {
