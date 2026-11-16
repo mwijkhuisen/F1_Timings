@@ -1,8 +1,9 @@
-import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
+import { copyFileSync, mkdtempSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { gzipSync } from 'node:zlib';
 import { describe, expect, it } from 'vitest';
+import { TOPICS } from '../apps/server/src/archive/job.ts';
 import {
   BAR,
   compare,
@@ -112,14 +113,42 @@ describe('readInput and compare', () => {
     const dir = mkdtempSync(join(tmpdir(), 'f1-compare-'));
     writeFileSync(join(dir, 'Heartbeat.jsonStream'), '﻿00:00:01.000{"Utc":"2026-10-30T10:00:01.000Z"}\r\n');
     writeFileSync(join(dir, 'TimingData.jsonStream'), '﻿00:00:05.000{"Lines":{}}\r\n00:00:00.500{"Lines":{}}\r\n');
-    const input = await readInput(dir);
+    const input = await readInput(dir, new Set(TOPICS));
     const t0 = Date.parse('2026-10-30T10:00:00.000Z');
     expect(input?.events.map((e) => [e.topic, e.t - t0])).toEqual([
       ['TimingData', 500],
       ['Heartbeat', 1000],
       ['TimingData', 5000],
     ]);
-    expect(await readInput(join(dir, 'missing'))).toBeUndefined();
+    expect(await readInput(join(dir, 'missing'), new Set(TOPICS))).toBeUndefined();
+  });
+
+  it("reads only the archive job's topics (P3e): a .z or other raw-only file is never parsed", async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'f1-compare-'));
+    writeFileSync(join(dir, 'Heartbeat.jsonStream'), '\uFEFF00:00:01.000{"Utc":"2026-10-30T10:00:01.000Z"}\r\n');
+    writeFileSync(join(dir, 'TimingData.jsonStream'), '\uFEFF00:00:05.000{"Lines":{}}\r\n');
+    writeFileSync(join(dir, 'CarData.z.jsonStream'), '00:00:02.000"bm90IGRlZmxhdGU="\r\nnot a line\r\n');
+    writeFileSync(join(dir, 'TeamRadio.jsonStream'), '00:00:03.000{"Captures":[]}\r\nnot a line\r\n');
+    const input = await readInput(dir, new Set(TOPICS));
+    expect(input?.events.map((e) => e.topic)).toEqual(['Heartbeat', 'TimingData']);
+    expect(input?.skipped).toBe(0);
+  });
+
+  it("leaves the session's Index.json out of an archive directory's merge check", async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'f1-compare-'));
+    const race = join(import.meta.dirname, '../apps/server/test/fixtures/archive/race'); // synthetic
+    for (const f of readdirSync(race)) copyFileSync(join(race, f), join(dir, f));
+    writeFileSync(join(dir, 'Index.json'), '{"Feeds":{"DriverList":{}}}');
+    writeFileSync(join(dir, 'DriverList.json'), '{}');
+    const lines: string[] = [];
+    await compare(
+      [dir],
+      {},
+      (l) => lines.push(l),
+      async () => ({ laps: [], stints: [] }),
+    );
+    expect(lines).toContain('session 9102 type Race');
+    expect(lines.filter((l) => l.startsWith('merge '))).toEqual(['merge DriverList: differs at .3']);
   });
 
   it('reads a recorder directory: its segments in numeric order, gzipped or plain, then feed.jsonl', async () => {
@@ -131,7 +160,7 @@ describe('readInput and compare', () => {
     );
     writeFileSync(join(dir, 'feed-999.jsonl.gz'), gzipSync(`${line(999, 'Heartbeat')}\n`)); // after 1000 by name
     writeFileSync(join(dir, 'feed.jsonl'), `${line(2000, 'TrackStatus')}\n`);
-    const input = await readInput(dir);
+    const input = await readInput(dir, new Set(TOPICS));
     expect(input?.events.map((e) => [e.t, e.topic])).toEqual([
       [999, 'Heartbeat'],
       [1000, 'TimingData'],
@@ -157,7 +186,7 @@ describe('compare: the [box] verdict on the synthetic practice feed', () => {
     return { exit: await compare([feed], {}, (l) => lines.push(l), oracle), lines };
   };
   const ours = async () => {
-    const { rows } = reconstruct(((await readInput(PRACTICE)) as Input).events, 'f1-live');
+    const { rows } = reconstruct(((await readInput(PRACTICE, new Set(TOPICS))) as Input).events, 'f1-live');
     return rows as NonNullable<typeof rows>;
   };
 

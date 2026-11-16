@@ -120,7 +120,7 @@ services:
       disable: true
 
   # A job (A§4, A§6.2): f1-update never runs it; the owner runs `compose --profile jobs run --rm archive
-  # archive <year>` to fetch the F1 archive of 2018-2022. tcp/443 out through f1-egress. The token dir
+  # archive <year>` to fetch the F1 archive of 2018 to now. tcp/443 out through f1-egress. The token dir
   # is read-only: it only reads the token that live caches (A§12.3), so no F1 TV password secret, and
   # /srv/f1/state itself is never mounted (O1). Like live's, both host directories come from f1-install.
   archive:

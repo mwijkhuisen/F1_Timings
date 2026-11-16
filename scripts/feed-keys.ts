@@ -1,6 +1,7 @@
 import { readFileSync } from 'node:fs';
 import { parseArgs } from 'node:util';
 import { safe } from '../apps/server/src/archive/files.ts';
+import { TOPICS } from '../apps/server/src/archive/job.ts';
 import { createFeed } from '../apps/server/src/live/merge.ts';
 import type { FeedEvent } from '../apps/server/src/live/read.ts';
 import { EXIT_USAGE } from '../apps/server/src/main.ts';
@@ -133,7 +134,8 @@ export async function feedKeys(argv: readonly string[], log: (line: string) => v
       }
       continue;
     }
-    const input = await readInput(name);
+    // Of an archive directory: the t0 topics (among TOPICS) and the one counted, also a raw-only one (P3e).
+    const input = await readInput(name, new Set([...TOPICS, topic]));
     if (input === undefined) {
       log('feed-keys: input (unreadable, or an archive without a Heartbeat t0)');
       return 1;
