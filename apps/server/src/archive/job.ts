@@ -361,15 +361,24 @@ async function job(deps: ArchiveDeps, args: ArchiveArgs): Promise<boolean> {
       log.error(line({ topics: own.length, error: 'too_many_topics' }), 'archive');
       continue;
     }
-    // The parsed TOPICS first, so the REQUIRED break ends a session before any raw download.
-    const list = [...new Set<string>([...TOPICS, ...(own ?? OLD_TOPICS)])];
+    // The parsed TOPICS first, so the REQUIRED break ends a session before any raw download. With a usable Index only
+    // the TOPICS it lists are asked for (#146): an unlisted one gets no request and no marker. Without one (the
+    // fallback) every TOPIC is asked for, so its markers keep a rerun from asking again.
+    const list = [
+      ...new Set<string>([
+        ...(own === undefined ? TOPICS : TOPICS.filter((t) => own.includes(t))),
+        ...(own ?? OLD_TOPICS),
+      ]),
+    ];
+    // An Index that omits SessionInfo or TimingData: incomplete, with no request at all (no raw download either).
+    const lacking = [...REQUIRED].filter((t) => !list.includes(t)).length;
 
     const paths = new Map<string, string>(); // the TOPICS files: the only ones ever read
     let raw = 0; // every other topic: written, never read or parsed
-    let missing = 0;
+    let missing = lacking;
     let error: string | undefined; // a parsed topic's failure: no rows
     let rawError: string | undefined; // a raw topic's failure: the rows are still written, the session fails
-    for (const topic of list) {
+    for (const topic of lacking > 0 ? [] : list) {
       const parsed = PARSED.has(topic);
       const path = join(into, `${topic}.jsonStream`);
       // An empty marker: the archive answered 403 or 404, so a rerun does not ask again (never for REQUIRED).

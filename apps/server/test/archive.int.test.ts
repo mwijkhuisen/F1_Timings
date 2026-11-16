@@ -243,29 +243,28 @@ describe('archive (fixtures through msw, f1_ingest login)', { timeout: 120_000 }
     expect(await count('lap', 'quali_phase = 2')).toBe(6);
     expect(await count('lap', 'session_key = 9121 AND quali_phase IS NULL')).toBe(0);
 
-    // The year Index; 3 sessions × (their Index + 10 topics); the all-403 session's Index and SessionInfo. One at a
-    // time, 2 s apart, with the token.
-    expect(requests.length).toBe(36);
+    // The year Index; 3 sessions × their Index + the topics it lists (8 + 7 + 8: an unlisted TOPIC is not asked for,
+    // #146); the all-403 session's Index and SessionInfo. One at a time, 2 s apart, with the token.
+    expect(requests.length).toBe(29);
     for (const [i, r] of requests.entries()) {
       expect(r.auth).toBe(`Bearer ${TOKEN}`);
       if (i > 0) expect(r.at - (requests[i - 1]?.at ?? 0)).toBeGreaterThanOrEqual(GAP_MS);
     }
     expect(readdirSync(join(args.dir, '9102')).sort()).toEqual([
       'DriverList.jsonStream',
-      'ExtrapolatedClock.missing',
       'Heartbeat.jsonStream',
       'Index.json',
       'RaceControlMessages.jsonStream',
       'SessionData.jsonStream',
       'SessionInfo.jsonStream',
-      'SessionStatus.missing',
       'TimingAppData.jsonStream',
       'TimingData.jsonStream',
       'WeatherData.jsonStream',
     ]);
-    expect(existsSync(join(args.dir, '9101', 'Heartbeat.missing'))).toBe(true);
-    expect(existsSync(join(args.dir, '9121', 'SessionData.missing'))).toBe(true);
-    // No marker for SessionInfo or TimingData: a rerun asks again. Its session Index was a 403: the marker.
+    // No marker for a topic its Index omits (Heartbeat of 9101, SessionData of 9121), and none for SessionInfo or
+    // TimingData either way. The all-403 session's Index was a 403: the marker.
+    expect(existsSync(join(args.dir, '9101', 'Heartbeat.missing'))).toBe(false);
+    expect(existsSync(join(args.dir, '9121', 'SessionData.missing'))).toBe(false);
     expect(readdirSync(join(args.dir, '9111'))).toEqual(['Index.missing']);
     expect(readFileSync(join(args.dir, 'index-2019.json'))).toEqual(readFileSync(join(FIXTURES, 'index-2019.json')));
 
@@ -276,8 +275,8 @@ describe('archive (fixtures through msw, f1_ingest login)', { timeout: 120_000 }
       type: 'Race',
       files: 8,
       raw_files: 0,
-      skipped_files: 2,
-      topics: 10,
+      skipped_files: 0,
+      topics: 8,
       topics_from: 'index',
       t0: 'sessiondata',
       t0_heartbeat_delta_ms: -2000,
@@ -288,8 +287,14 @@ describe('archive (fixtures through msw, f1_ingest login)', { timeout: 120_000 }
       weather: 3,
       phases: 0,
     });
-    expect(bySession[9101]).toMatchObject({ files: 7, skipped_files: 3, t0_heartbeat_delta_ms: null, phases: 2 });
-    expect(bySession[9121]).toMatchObject({ files: 8, skipped_files: 2, t0: 'clock', laps: 10, phases: 2 });
+    expect(bySession[9101]).toMatchObject({
+      files: 7,
+      skipped_files: 0,
+      topics: 7,
+      t0_heartbeat_delta_ms: null,
+      phases: 2,
+    });
+    expect(bySession[9121]).toMatchObject({ files: 8, skipped_files: 0, topics: 8, t0: 'clock', laps: 10, phases: 2 });
     expect(bySession[9111]).toMatchObject({ files: 0, skipped_files: 1, topics: 30, topics_from: 'fallback' });
     expect(bySession[9111]).toMatchObject({ error: 'incomplete' });
     expect(logged('archive_done').at(-1)).toMatchObject({
@@ -368,12 +373,11 @@ describe('archive (fixtures through msw, f1_ingest login)', { timeout: 120_000 }
     const asked = requests.length;
     const fresh = { ...args, dir: mkdtempSync(join(tmpdir(), 'f1-archive-')) };
     expect(await archive(deps, fresh)).toBe(false);
-    // The year Index, the first session's Index, SessionInfo and Heartbeat, then its SessionData: 401.
+    // The year Index, the first session's Index, SessionInfo (its Index omits Heartbeat), then its SessionData: 401.
     expect(requests.slice(asked).map((r) => r.path.split('/').at(-1))).toEqual([
       'Index.json',
       'Index.json',
       'SessionInfo.jsonStream',
-      'Heartbeat.jsonStream',
       'SessionData.jsonStream',
     ]);
     expect(logged('archive').at(-1)).toMatchObject({ session_key: 9101, error: 'http_401' });
@@ -573,7 +577,7 @@ describe('archive (fixtures through msw, f1_ingest login)', { timeout: 120_000 }
       expect(await archive(deps, plain)).toBe(true);
       const before = await hashes();
 
-      const listed = ['CarData.z', 'ContentStreams', 'TimingData', '../x', 'A/B', 'Index', 'Position.z'];
+      const listed = [...TOPICS, 'CarData.z', 'ContentStreams', '../x', 'A/B', 'Index', 'Position.z'];
       const raw = [`${RACE}CarData.z.jsonStream`, `${RACE}ContentStreams.jsonStream`];
       f1((path) => (path === `${RACE}Index.json` ? feeds(listed) : raw.includes(path) ? garbage() : undefined));
       const all = fresh([9102]);
@@ -612,6 +616,56 @@ describe('archive (fixtures through msw, f1_ingest login)', { timeout: 120_000 }
       expect(since(again)).toEqual(['2019/Index.json']);
       expect(await hashes()).toEqual(before);
     });
+
+    it('a session Index that omits SessionData and Heartbeat: no request and no marker for either, the same rows as when they answered 403 (#146)', async () => {
+      const OLD = '2019/2019-04-14_Old_Grand_Prix/2019-04-13_Qualifying/';
+      // Listed and answered 403: the markers, and the rows the omission must reproduce.
+      f1((path) => (path === `${OLD}Index.json` ? feeds(TOPICS) : undefined));
+      const asked = fresh([9121]);
+      expect(await archive(deps, asked)).toBe(true);
+      expect(existsSync(join(asked.dir, '9121', 'SessionData.missing'))).toBe(true);
+      expect(existsSync(join(asked.dir, '9121', 'Heartbeat.missing'))).toBe(true);
+      expect(logged('archive').at(-1)).toMatchObject({ files: 8, skipped_files: 2, topics: 10, t0: 'clock' });
+      const before = await hashes();
+
+      f1();
+      const omitted = fresh([9121]);
+      const start = requests.length;
+      expect(await archive(deps, omitted)).toBe(true);
+      const fixture = TOPICS.filter((t) => existsSync(join(FIXTURES, 'old-quali', `${t}.jsonStream`)));
+      expect(fixture).not.toContain('SessionData');
+      expect(fixture).not.toContain('Heartbeat');
+      expect(since(start)).toEqual([
+        '2019/Index.json',
+        `${OLD}Index.json`,
+        ...fixture.map((t) => `${OLD}${t}.jsonStream`),
+      ]);
+      expect(readdirSync(join(omitted.dir, '9121')).filter((f) => f.endsWith('.missing'))).toEqual([]);
+      expect(logged('archive').at(-1)).toMatchObject({ files: 8, skipped_files: 0, topics: 8, t0: 'clock', laps: 10 });
+      expect(logged('archive').at(-1)).not.toHaveProperty('error');
+      expect(await hashes()).toEqual(before);
+    });
+
+    it.each(['SessionInfo', 'TimingData'])(
+      'a session Index that omits %s: incomplete with no request and no marker, and no other topic downloaded (#146)',
+      async (omitted) => {
+        f1((path) => (path === `${RACE}Index.json` ? feeds(TOPICS.filter((t) => t !== omitted)) : undefined));
+        const dir = fresh([9102]);
+        const asked = requests.length;
+        expect(await archive(deps, dir)).toBe(true);
+        expect(since(asked)).toEqual(['2019/Index.json', `${RACE}Index.json`]);
+        expect(readdirSync(join(dir.dir, '9102'))).toEqual(['Index.json']);
+        expect(logged('archive').at(-1)).toMatchObject({
+          session_key: 9102,
+          files: 0,
+          skipped_files: 1,
+          topics: 9,
+          topics_from: 'index',
+          error: 'incomplete',
+        });
+        expect(logged('archive_done').at(-1)).toMatchObject({ downloaded: 0, imported: 0, failed: 0, incomplete: 1 });
+      },
+    );
 
     it('a session Index of 65 topics fails the session (too_many_topics), another Index failure fails it too', async () => {
       const many = Array.from({ length: 65 }, (_, i) => `Topic${i}`);
@@ -660,7 +714,7 @@ describe('archive (fixtures through msw, f1_ingest login)', { timeout: 120_000 }
     it('a raw topic failure still writes the rows and fails the session; the rerun asks for the raw topics again', async () => {
       f1((path) =>
         path === `${RACE}Index.json`
-          ? feeds(['CarData.z', 'TrackStatus'])
+          ? feeds([...TOPICS, 'CarData.z', 'TrackStatus'])
           : path === `${RACE}CarData.z.jsonStream`
             ? 500
             : undefined,
@@ -699,6 +753,7 @@ describe('archive (fixtures through msw, f1_ingest login)', { timeout: 120_000 }
       mkdirSync(join(p3a.dir, '9102'));
       for (const f of readdirSync(join(p3e.dir, '9102')).filter((f) => f !== 'Index.json'))
         writeFileSync(join(p3a.dir, '9102', f), readFileSync(join(p3e.dir, '9102', f)));
+      for (const t of ['ExtrapolatedClock', 'SessionStatus']) writeFileSync(join(p3a.dir, '9102', `${t}.missing`), '');
       expect(readdirSync(join(p3a.dir, '9102'))).toHaveLength(TOPICS.length);
       const raw = [`${RACE}CarData.z.jsonStream`, `${RACE}TeamRadio.jsonStream`];
       f1((path) =>
@@ -730,7 +785,7 @@ describe('archive (fixtures through msw, f1_ingest login)', { timeout: 120_000 }
       expect(RAW_MAX_BYTES + chunk.length).toBeLessThan(MAX_BYTES);
       f1((path) =>
         path === `${RACE}Index.json`
-          ? feeds(['CarData.z'])
+          ? feeds([...TOPICS, 'CarData.z'])
           : path === `${RACE}CarData.z.jsonStream`
             ? big()
             : undefined,
@@ -748,7 +803,7 @@ describe('archive (fixtures through msw, f1_ingest login)', { timeout: 120_000 }
     });
 
     it('a raw file over MAX_SESSION_BYTES on disk is never counted: the session imports', async () => {
-      f1((path) => (path === `${RACE}Index.json` ? feeds(['CarData.z']) : undefined));
+      f1((path) => (path === `${RACE}Index.json` ? feeds([...TOPICS, 'CarData.z']) : undefined));
       const dir = fresh([9102]);
       mkdirSync(join(dir.dir, '9102'));
       const big = join(dir.dir, '9102', 'CarData.z.jsonStream');
@@ -765,7 +820,7 @@ describe('archive (fixtures through msw, f1_ingest login)', { timeout: 120_000 }
     const quali = `${FILES_GP}/2023-03-04_Qualifying/`;
     f1((path) =>
       path === `${race}Index.json`
-        ? feeds(['TimingData', 'CarData.z'])
+        ? feeds([...TOPICS, 'CarData.z'])
         : path === `${race}CarData.z.jsonStream` || path === `${quali}TimingData.jsonStream`
           ? new HttpResponse('not a stream line\r\n')
           : undefined,
@@ -784,7 +839,7 @@ describe('archive (fixtures through msw, f1_ingest login)', { timeout: 120_000 }
         .filter((l) => l.year === 2023)
         .map((l) => [l.session_key, l]),
     );
-    expect(bySession[9201]).toMatchObject({ level: 30, files: 7, raw_files: 0, topics: 10 });
+    expect(bySession[9201]).toMatchObject({ level: 30, files: 7, raw_files: 0, topics: 7 });
     expect(bySession[9202]).toMatchObject({ level: 30, files: 8, raw_files: 1, topics: 11, topics_from: 'index' });
     for (const key of [9201, 9202]) {
       expect(bySession[key]).not.toHaveProperty('error');
@@ -814,14 +869,17 @@ describe('archive (fixtures through msw, f1_ingest login)', { timeout: 120_000 }
       `${EXTRA_TEST}SessionInfo.jsonStream`,
       `${GONE}SessionInfo.jsonStream`,
     ]);
-    // Then the race, the sprint (its SessionInfo already on disk) and the test day, every request by the table path.
+    // Then the race, the sprint (its SessionInfo already on disk) and the test day, every request by the table path, for
+    // the TOPICS their Index lists (the race fixture's 8, the quali fixture's 7).
+    const inRace = TOPICS.filter((t) => t !== 'ExtrapolatedClock' && t !== 'SessionStatus');
+    const inQuali = inRace.filter((t) => t !== 'Heartbeat');
     expect(paths.slice(4)).toEqual([
       `${RACE}Index.json`,
-      ...TOPICS.map((t) => `${RACE}${t}.jsonStream`),
+      ...inRace.map((t) => `${RACE}${t}.jsonStream`),
       `${SPRINT}Index.json`,
-      ...TOPICS.filter((t) => t !== 'SessionInfo').map((t) => `${SPRINT}${t}.jsonStream`),
+      ...inRace.filter((t) => t !== 'SessionInfo').map((t) => `${SPRINT}${t}.jsonStream`),
       `${EXTRA_TEST}Index.json`,
-      ...TOPICS.filter((t) => t !== 'SessionInfo').map((t) => `${EXTRA_TEST}${t}.jsonStream`),
+      ...inQuali.filter((t) => t !== 'SessionInfo').map((t) => `${EXTRA_TEST}${t}.jsonStream`),
     ]);
     expect(paths.some((p) => p.startsWith('2019/elsewhere/') || p.includes('2019-03-16_Other'))).toBe(false);
 
