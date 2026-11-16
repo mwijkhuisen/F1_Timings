@@ -175,11 +175,16 @@ export function parseD(param: string | null, drivers: readonly { number: number 
 /** The value of `?d=`: the numbers in pick order, joined with ','. */
 export const formatD = (numbers: readonly number[]): string => numbers.join(',');
 
-export type PlayerTab = 'tower' | 'laps' | 'order' | 'compare' | 'stints' | 'weather';
+export type PlayerTab = 'tower' | 'laps' | 'order' | 'compare' | 'stints' | 'weather' | 'map';
 
-/** `?tab=` (#100, #112): laps, order, compare, stints or weather; anything else, or none, is the tower. */
+/** `?tab=` (#100, #112, P7a): laps, order, compare, stints, weather or map; anything else, or none, is the tower. */
 export const parseTab = (param: string | null): PlayerTab =>
-  param === 'laps' || param === 'order' || param === 'compare' || param === 'stints' || param === 'weather'
+  param === 'laps' ||
+  param === 'order' ||
+  param === 'compare' ||
+  param === 'stints' ||
+  param === 'weather' ||
+  param === 'map'
     ? param
     : 'tower';
 

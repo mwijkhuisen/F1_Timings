@@ -68,6 +68,7 @@ import { SpeedTable } from './Speeds.tsx';
 import { StintBars } from './Stints.tsx';
 import { QualiTiles, SessionTiles } from './Tiles.tsx';
 import { driverOf, gridOf, Tower, towerRows } from './Tower.tsx';
+import { TrackMap } from './TrackMap.tsx';
 import { WeatherPanels } from './Weather.tsx';
 
 // The player (A§13): one playback stream at a time; the bar holds the clock line, the seek bar with the marks at or
@@ -322,6 +323,7 @@ const TABS: [PlayerTab, string][] = [
   ['compare', 'Compare'],
   ['stints', 'Stints'],
   ['weather', 'Weather'],
+  ['map', 'Map'],
 ];
 
 export const MAX_DELAY = 120;
@@ -783,10 +785,16 @@ export function Player({
     const { at: from, still } = open;
     if (from === null) return;
     let retry: ReturnType<typeof setTimeout> | undefined;
-    const params = { recording: recording.id, at: from, delay: open.delay ?? 0, still: still === true };
+    // P7a, D1: positions on every tab, so a tab switch never reopens the stream.
+    const params = { recording: recording.id, at: from, delay: open.delay ?? 0, still: still === true, pos: true };
     held.current = from === 'live' ? Math.max(0, delayNow.current - params.delay) * 1000 : 0;
     const opened = openStream(params, {
       onData(feed, kind) {
+        // A position's t is behind the newest receive time: it moves neither the clock nor what the state stands at.
+        if (kind === 'pos') {
+          store.update(feed, kind);
+          return;
+        }
         clock.current = { t: feed.t, wall: Date.now() };
         stood.current = feed.t;
         store.update(feed, kind);
@@ -1040,6 +1048,11 @@ export function Player({
   }, [snap, sessionKey]);
   // The tab shown: Order falls back to the Tower when the session is not (or no longer) a race.
   const shown = tab === 'order' && !wall?.race ? 'tower' : tab;
+  // The map's drivers: the DriverList, read only while the map is shown and once per flush.
+  const drivers = useMemo(
+    () => (shown === 'map' && snap.feed ? (view(snap.feed.state, 'DriverList') ?? {}) : {}),
+    [shown, snap],
+  );
   // The running order (races only) from the stream's lap rows up to T, built only on its tab and, as the lap table, only
   // when the lap rows change (the DriverList and the grid it reads are set before the first lap). Its drivers are the
   // whole DriverList: the Grid row names a car that never set a lap.
@@ -1172,6 +1185,15 @@ export function Player({
       <ErrorBoundary key={shown}>
         {!state ? (
           <p className="muted">Connecting…</p>
+        ) : shown === 'map' ? (
+          <TrackMap
+            circuit={detail?.meeting.circuit_short_name}
+            positions={store.pos}
+            ended={recording.ended_at !== null}
+            drivers={drivers}
+            now={now}
+            playing={playing}
+          />
         ) : detail && feed && (shown === 'laps' || shown === 'compare' || shown === 'stints') ? (
           <SessionTabs
             tab={shown}

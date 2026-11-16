@@ -182,6 +182,8 @@ describe('the rain map', () => {
       '.rainfield .map-rings circle',
       '.rainfield .map-halo',
       '.rainfield .map-outline',
+      '.trackmap .map-halo',
+      '.trackmap .map-outline',
       '.rainfield .map-scale path',
     ]);
     // Each of those is an element of the markup (a <circle> in the rings group, a <path> in the scale group).

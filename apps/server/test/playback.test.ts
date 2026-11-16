@@ -1,12 +1,13 @@
 import { linkSync, mkdtempSync, readdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { gunzipSync, gzipSync } from 'node:zlib';
+import { deflateRawSync, deflateSync, gunzipSync, gzipSync, inflateRawSync } from 'node:zlib';
 import {
   type Lap,
   merge,
   type Obj,
   PlaybackPing,
+  PlaybackPos,
   type Stints,
   view,
   type Weather,
@@ -15,11 +16,15 @@ import {
 } from '@f1/contracts';
 import fc from 'fast-check';
 import { afterEach, describe, expect, it } from 'vitest';
+import { type Frame, toOutline } from '../src/live/fit.ts';
 import { createLaps } from '../src/live/laps.ts';
 import { createFeed } from '../src/live/merge.ts';
+import { OUTLINES } from '../src/live/outlines.ts';
 import { lapRows, type PlaybackEvent, playback } from '../src/live/playback.ts';
 import { parseFeedLine } from '../src/live/read.ts';
 import { openRecording, type Recording } from '../src/live/recording.ts';
+import { type ZFail, zCounts } from '../src/live/telemetry.ts';
+import { along, type Car, session } from './track.ts';
 
 // playback.ts over real recordings: openRecording writes the files on an injected clock, and the playback runs on a
 // fake clock that only its sleep advances, so no test waits on a timer. Every stream is finite: it reaches `end` or
@@ -154,6 +159,7 @@ function start(
     ended?: () => Promise<boolean>;
     tick?: () => Promise<void>;
     onOpen?: (seek: { ms: number; lines: number }) => void;
+    pos?: { frame: () => Promise<Frame | undefined>; counts: Record<ZFail, number> };
   },
 ) {
   const clock = o.clock ?? { now: 0 };
@@ -173,6 +179,7 @@ function start(
     ended: o.ended ?? (async () => true),
     signal: abort.signal,
     ...(o.onOpen && { onOpen: o.onOpen }),
+    ...(o.pos && { pos: o.pos }),
   });
   return { gen, clock, abort };
 }
@@ -194,6 +201,9 @@ const text = (values: Value[]) => values.map((v) => `${JSON.stringify(v)}\n`).jo
 /** A WeatherData line at `r`, with its F1 timestamp at `r` too. */
 const weatherAt = (r: number, payload: Obj): Value => [r, 'WeatherData', payload, iso(r)];
 const byR = (values: Value[]) => values.sort((a, b) => a[0] - b[0]); // stable: a tie keeps its order
+/** A synthetic Position.z payload (A§6.2): one entry at `ms` with these cars, base64 of raw deflate. */
+const positionZ = (ms: number, Entries: Obj) =>
+  deflateRawSync(JSON.stringify({ Position: [{ Timestamp: iso(ms), Entries }] })).toString('base64');
 
 // A§9 on the stream rows (#95): synthetic sessions, every value invented.
 const s = (sec: number) => T0 + sec * 1000;
@@ -286,11 +296,12 @@ describe('playback', () => {
         // Reconnect duplicates: a line re-sent later (up to 4 min) with its topic, payload and F1 timestamp.
         fc.array(fc.tuple(fc.nat(), fc.integer({ min: 1, max: 240_000 })), { maxLength: 8 }),
         fc.array(fc.nat(), { maxLength: 3 }), // CarData.z lines, just after these lines
+        fc.array(fc.nat(), { maxLength: 3 }), // Position.z lines (P7a), just after these lines: none without pos=1
         fc.array(fc.nat(), { maxLength: 4 }), // lines received in the same ms as the line before
         fc.array(fc.constantFrom('gz', 'plain', 'both'), { minLength: 1, maxLength: 4 }), // the segments' files
         fc.nat(), // T
         fc.constantFrom(1, 2, 4, 8, 16),
-        async ([source, sessionKey], rotateMs, weathers, subs, dups, zs, same, forms, pick, speed) => {
+        async ([source, sessionKey], rotateMs, weathers, subs, dups, zs, ps, same, forms, pick, speed) => {
           // Before the duplicates are drawn, so a duplicate can repeat a weather line too (never a `_subscribe` one).
           const weatherLines = weathers.map(([i, w]) => weatherAt(nth(source, i)[0] + 1, w));
           const subscribes = subs.flatMap(([i, w]): Value[] => {
@@ -308,6 +319,10 @@ describe('playback', () => {
           for (const i of zs) {
             const r = nth(base, i)[0] + 1;
             values.push([r, 'CarData.z', 'eJyLjgUAARUAuQ==', iso(r)]);
+          }
+          for (const i of ps) {
+            const r = nth(base, i)[0] + 1;
+            values.push([r, 'Position.z', positionZ(r, { 7: { Status: 'OnTrack', X: 120, Y: -40, Z: 3 } }), iso(r)]);
           }
           values.sort((a, b) => a[0] - b[0]);
           for (const i of same) {
@@ -737,5 +752,203 @@ describe('playback', () => {
     ]);
     // A practice (or race) series is not read: stale entries after a switch would give every lap a phase.
     expect((await phases('Practice')).every(([, phase]) => phase === null)).toBe(true);
+  });
+});
+
+// pos=1 (P7a, A§11.3, T4) over a synthetic practice on the P5c Interlagos outline (test/track.ts, every value invented):
+// the frame is given here, fit.test.ts covers the fit.
+describe('playback with pos (P7a)', () => {
+  const OUTLINE = OUTLINES['br-1940'] as string;
+  const FRAME: Frame = { s: 1.03, theta: (-57 * Math.PI) / 180, m: -1, tx: 210, ty: -140 };
+  // Car 16 is OffTrack for 2 s of its out-lap: drawn all the same (D3).
+  const CARS: Car[] = [
+    { driver: 4, laps: [80_000, 75_000] },
+    { driver: 16, laps: [82_000, 74_000], offTrack: [[20_000, 22_000]] },
+  ];
+  const practice = (extra: Value[] = []) =>
+    byR([...session({ outline: OUTLINE, frame: FRAME, sessionKey: 9001, t0: T0, cars: CARS }), ...extra]);
+  const given = (frame: Frame | undefined) => ({ frame: async () => frame, counts: zCounts() });
+  const junk = (r: number, payload: string): Value => [r, 'Position.z', payload, iso(r)];
+  const posOf = (events: Seen[]) =>
+    events.flatMap(({ at, ev }) => (ev.event === 'pos' ? [{ at, ...PlaybackPos.parse(ev.data) }] : []));
+  const bucket = (t: number) => Math.floor(t / 500);
+  /** A Position.z line's newest entry, decoded here: cars 1–99 not at (0, 0), in outline metres. */
+  const newest = (v: Value) => {
+    const { Position } = JSON.parse(inflateRawSync(Buffer.from(v[2] as string, 'base64')).toString()) as {
+      Position: { Entries: Record<string, { X: number; Y: number }> }[];
+    };
+    const { Entries } = Position.at(-1) as (typeof Position)[number];
+    return Object.fromEntries(
+      Object.entries(Entries)
+        .filter(([id, c]) => /^[1-9]\d?$/.test(id) && (c.X !== 0 || c.Y !== 0))
+        .map(([id, c]) => [id, toOutline(FRAME, c.X, c.Y)]),
+    );
+  };
+  const snapshotPos = (ev: PlaybackEvent | undefined) => (ev?.event === 'snapshot' ? ev.data.pos : 'no snapshot');
+
+  it('no pos t above T, one per 500 ms bucket of t, every car of its entry on the outline; the rest as without pos', async () => {
+    const dir = tmp();
+    await record(dir, practice(), 60_000);
+    const from = T0 + 10_000;
+    const run = async (pos?: ReturnType<typeof given>) => {
+      const { gen, clock } = start(dir, { at: from, ...(pos && { pos }) });
+      return drain(gen, clock);
+    };
+    const [withPos, without] = [await run(given(FRAME)), await run()];
+    const pos = posOf(withPos);
+
+    expect(pos.length).toBeGreaterThan(300); // 2 Hz over the 157 s after T
+    for (const p of pos) expect(p.t).toBeLessThanOrEqual(from + p.at); // T at speed 1
+    // At most 2 per aligned second; every bucket has an entry here, so it is exactly the next bucket each time.
+    for (const [i, p] of pos.entries()) if (i > 0) expect(bucket(p.t)).toBe(bucket((pos[i - 1] as typeof p).t) + 1);
+    const perSecond = Map.groupBy(pos, (p) => Math.floor(p.t / 1000));
+    expect(Math.max(...[...perSecond.values()].map((g) => g.length))).toBe(2);
+    // Both cars in every event, car 16 while OffTrack too (its F1 time + 1.7 s on the receive axis), id 241 never.
+    expect(pos.every((p) => Object.keys(p.cars).sort().join() === '16,4')).toBe(true);
+    expect(pos.filter((p) => p.t >= T0 + 21_700 && p.t < T0 + 23_700)).toHaveLength(4);
+    const track = along(OUTLINE);
+    const dense = Array.from({ length: Math.ceil(track.length) }, (_, i) => track.at(i)); // every metre
+    const off = (x: number, y: number) => Math.min(...dense.map(([a, b]) => Math.hypot(a - x, b - y)));
+    for (const p of pos) for (const [x, y] of Object.values(p.cars)) expect(off(x, y)).toBeLessThan(1.5);
+
+    // Without pos: no `pos` event and no `pos` key; with it, the same events besides those (and the heartbeats, which
+    // the `pos` events make needless).
+    const rest = (events: Seen[]) =>
+      events.flatMap(({ ev }): unknown[] => {
+        if (ev.event === 'pos' || ev.event === 'ping') return [];
+        if (ev.event !== 'snapshot') return [ev];
+        const { pos: _, ...data } = ev.data;
+        return [{ ...ev, data }];
+      });
+    expect(kinds(without)).not.toContain('pos');
+    expect(without[0]?.ev.event === 'snapshot' && Object.keys(without[0].ev.data)).toEqual([
+      't',
+      'state',
+      'laps',
+      'stints',
+      'weather',
+    ]);
+    expect(rest(withPos)).toEqual(rest(without));
+    expect(deltas(without).length).toBeGreaterThan(3);
+  });
+
+  it("the snapshot's pos is the last Position line before T, decoded alone: an earlier junk line is never decoded", async () => {
+    const dir = tmp();
+    const values = practice([junk(T0 + 5_000, '!!!')]);
+    await record(dir, values, 60_000);
+    const at = T0 + 60_300;
+    const pos = given(FRAME);
+    const { gen, clock } = start(dir, { at, pos });
+    const first = (await gen.next()).value as PlaybackEvent;
+    expect(pos.counts).toEqual(zCounts());
+    const line = values.findLast((v) => v[1] === 'Position.z' && v[0] <= at) as Value;
+    expect(snapshotPos(first)).toEqual({ t: line[0], cars: newest(line) });
+    expect(Object.keys(newest(line)).sort()).toEqual(['16', '4']);
+    // The events go on from the next bucket, and the junk line stays undecoded.
+    const next = posOf(await drain(gen, clock))[0];
+    expect(bucket(next?.t ?? 0)).toBe(bucket(line[0]) + 1);
+    expect(pos.counts).toEqual(zCounts());
+
+    // Before the first Position line: no cars. Without a frame: null (T5).
+    const seek = async (t: number, p: ReturnType<typeof given>) => {
+      const s = start(dir, { at: t, pos: p });
+      const ev = (await s.gen.next()).value as PlaybackEvent;
+      await s.gen.return(undefined);
+      return snapshotPos(ev);
+    };
+    expect(await seek(T0 - 10_000, given(FRAME))).toEqual({ t: T0 - 10_000, cars: {} });
+    expect(await seek(at, given(undefined))).toBeNull();
+  });
+
+  it("ignores a Subscribe state's Position (an hour old here): not the snapshot's pos, and no event", async () => {
+    const dir = tmp();
+    const base = practice();
+    const regular = base.findLast((v) => v[1] === 'Position.z' && v[0] <= T0 + 40_000) as Value;
+    // 600 ms after the regular line, so its entry would be in a newer 500 ms bucket; car 33 marks it.
+    const r = regular[0] + 600;
+    const old = { 'Position.z': positionZ(r - 3_600_000, { 33: { Status: 'OnTrack', X: 120, Y: -40, Z: 3 } }) };
+    await record(dir, byR([...base, [r, '_subscribe', old]]), 60_000);
+
+    const seek = start(dir, { at: r + 100, pos: given(FRAME) });
+    expect(snapshotPos((await seek.gen.next()).value as PlaybackEvent)).toEqual({
+      t: regular[0],
+      cars: newest(regular),
+    });
+    await seek.gen.return(undefined);
+
+    const { gen, clock } = start(dir, { at: T0, pos: given(FRAME) });
+    const pos = posOf(await drain(gen, clock));
+    expect(pos.length).toBeGreaterThan(250);
+    expect(pos.some((p) => '33' in p.cars)).toBe(false);
+  });
+
+  it('a frame that comes mid-stream starts the events: asked again after 30 s, without holding the stream', async () => {
+    const dir = tmp();
+    await record(dir, practice(), 60_000);
+    let calls = 0;
+    const pos = { frame: async () => (++calls >= 2 ? FRAME : undefined), counts: zCounts() };
+    const { gen, clock } = start(dir, { at: T0, pos });
+    const events = await drain(gen, clock);
+
+    expect(snapshotPos(events[0]?.ev)).toBeNull();
+    expect(calls).toBe(2); // and no more once it has one
+    const got = posOf(events);
+    expect(got[0]?.at).toBeGreaterThanOrEqual(30_000);
+    expect(got[0]?.at).toBeLessThan(31_500);
+    expect(got.length).toBeGreaterThan(250);
+    expect(deltas(events).filter((d) => d.at < 30_000).length).toBeGreaterThan(0); // the stream went on meanwhile
+  });
+
+  it('an abort while the frame is pending ends the stream, with no file opened', async () => {
+    const dir = tmp();
+    await record(dir, practice(), 60_000);
+    const fds = () => readdirSync('/proc/self/fd').length;
+    const before = fds();
+    const { gen, abort } = start(dir, {
+      at: T0,
+      pos: { frame: () => new Promise<undefined>(() => {}), counts: zCounts() }, // a fit that never ends
+    });
+    const next = gen.next();
+    abort.abort();
+    expect(await next).toEqual({ done: true, value: undefined });
+    expect(fds()).toBe(before);
+  });
+
+  it('a slow frame on a replay brings no second snapshot: its clock starts after the frame, onOpen counts the wait', async () => {
+    const dir = tmp();
+    await record(dir, practice(), 60_000);
+    const clock = { now: 0 };
+    const opened: { ms: number; lines: number }[] = [];
+    const pos = {
+      frame: async () => {
+        clock.now += 20_000; // 4 × BEHIND_MS at speed 1
+        return FRAME;
+      },
+      counts: zCounts(),
+    };
+    const { gen } = start(dir, { at: T0 + 10_000, clock, pos, onOpen: (s) => opened.push(s) });
+    const events = await drain(gen, clock);
+
+    expect(kinds(events).filter((k) => k === 'snapshot')).toHaveLength(1);
+    expect(events[0]?.ev.event === 'snapshot' && events[0].ev.data.t).toBe(T0 + 10_000);
+    expect(opened).toEqual([{ ms: 20_000, lines: expect.any(Number) }]);
+    expect(posOf(events).length).toBeGreaterThan(300);
+  });
+
+  it('a line that fails to decode while streaming is counted and skipped, never thrown', async () => {
+    const dir = tmp();
+    const bad = [
+      junk(T0 + 30_100, '!!!'),
+      junk(T0 + 30_200, deflateSync('{}').toString('base64')),
+      junk(T0 + 30_300, deflateRawSync('{').toString('base64')),
+    ];
+    await record(dir, practice(bad), 60_000);
+    const pos = given(FRAME);
+    const { gen, clock } = start(dir, { at: T0, pos });
+    const events = await drain(gen, clock);
+
+    expect(pos.counts).toEqual({ ...zCounts(), bad_base64: 1, zlib: 1, bad_json: 1 });
+    expect(events.at(-1)?.ev.event).toBe('end');
+    expect(posOf(events).filter((p) => p.t > T0 + 31_000).length).toBeGreaterThan(250);
   });
 });

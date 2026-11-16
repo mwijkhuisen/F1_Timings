@@ -2,6 +2,7 @@ import { stat } from 'node:fs/promises';
 import { join } from 'node:path';
 import { setTimeout as sleep } from 'node:timers/promises';
 import {
+  CIRCUITS,
   type Forecast,
   isUnmatched,
   PERIOD_LIKE,
@@ -19,8 +20,11 @@ import { streamSSE } from 'hono/streaming';
 import { type Kysely, sql } from 'kysely';
 import type { Logger } from 'pino';
 import { codeOf, type DB } from '../db/db.ts';
+import { createFrames } from '../live/fit.ts';
+import { OUTLINES } from '../live/outlines.ts';
 import { playback } from '../live/playback.ts';
 import { AFTER_MS } from '../live/recorder.ts';
+import { zCounts } from '../live/telemetry.ts';
 import { colours } from '../timing/colours.ts';
 import { counted, type StandingsSeason, standings, standingsMismatches } from '../timing/standings.ts';
 
@@ -63,6 +67,7 @@ export function createApp({
   writeTimeoutMs?: number;
 }) {
   let streams = 0;
+  const frames = createFrames(log); // the map frames by recording (P7a, D2)
   /** A§10: the web's `?v=<revision>` is a cache key. null when absent; else exactly one REVISION value, or the 400. */
   const version = (c: Context): string | null | Response => {
     const v = c.req.queries('v');
@@ -750,7 +755,7 @@ export function createApp({
       const all = c.req.queries(name);
       return all && all.length > 1 ? null : all?.[0]; // a repeated parameter is ambiguous
     };
-    const [at, delay, speed, still] = [param('at'), param('delay'), param('speed'), param('still')];
+    const [at, delay, speed, still, pos] = [param('at'), param('delay'), param('speed'), param('still'), param('pos')];
     const live = at === 'live';
     const num = (v: string | null | undefined, re: RegExp, dflt: number) =>
       v === undefined ? dflt : v !== null && re.test(v) ? Number(v) : Number.NaN;
@@ -764,14 +769,18 @@ export function createApp({
       !SPEEDS.includes(speedX) ||
       (live && speedX !== 1) ||
       // A paused seek's still frame (A§13): for the open log only, so a replay at T, never live.
-      (still !== undefined && (still !== '1' || live))
+      (still !== undefined && (still !== '1' || live)) ||
+      // The car positions (P7a, A§11.3): `pos` events and the snapshot's `pos`.
+      (pos !== undefined && pos !== '1')
     )
       return badRequest(c);
     const mode = live ? 'live' : still ? 'still' : 'replay'; // `still` is '1' or absent by now
     const row = await db
-      .selectFrom('recording')
-      .select(['path', 'session_key', 'started_at', 'ended_at'])
-      .where('id', '=', id)
+      .selectFrom('recording as r')
+      .leftJoin('session as s', 's.session_key', 'r.session_key')
+      .leftJoin('meeting as m', 'm.meeting_key', 's.meeting_key')
+      .select(['r.path', 'r.session_key', 'r.started_at', 'r.ended_at', 'm.circuit_short_name'])
+      .where('r.id', '=', id)
       .executeTakeFirst();
     if (!row) return notFound(c);
     const from = live ? 'live' : Number(at);
@@ -829,6 +838,13 @@ export function createApp({
         }
       };
       let seek: { ms: number; lines: number } | undefined; // set by the seek, logged with the first snapshot
+      // pos=1: the session's P5c outline by its meeting's circuit (own keys only: the name is database text), and what
+      // the `pos` events cost (P7a, A§11.3).
+      const name = row.circuit_short_name;
+      const circuit = name !== null && Object.hasOwn(CIRCUITS, name) ? CIRCUITS[name] : undefined;
+      const outline = circuit && OUTLINES[circuit.id];
+      const counts = zCounts();
+      const sent = { events: 0, bytes: 0, first: 0, last: 0 };
       try {
         const events = playback({
           dir,
@@ -843,6 +859,21 @@ export function createApp({
           onOpen: (s) => {
             seek = s;
           },
+          ...(pos === '1' && {
+            pos: {
+              frame: () =>
+                outline
+                  ? frames.get({
+                      id: String(Number(id)), // one cache key per recording, leading zeros or not
+                      dir,
+                      sessionKey: row.session_key,
+                      outline,
+                      ended: row.ended_at !== null,
+                    })
+                  : Promise.resolve(undefined),
+              counts,
+            },
+          }),
         });
         for await (const ev of events) {
           // The snapshot's state is the stream's own: serialized before the generator moves on.
@@ -854,6 +885,10 @@ export function createApp({
             log.info({ mode, scan_ms: ms, lines, snapshot_bytes: Buffer.byteLength(data) }, 'playback open');
           }
           await within(stream.writeSSE({ event: ev.event, data }));
+          if (ev.event === 'pos') {
+            if (sent.events++ === 0) sent.first = ev.data.t;
+            [sent.bytes, sent.last] = [sent.bytes + Buffer.byteLength(data), ev.data.t];
+          }
         }
       } catch (err) {
         if (!abort.signal.aborted) log.error({ cause: codeOf(err) }, 'playback'); // never the message to the client
@@ -865,6 +900,13 @@ export function createApp({
       } finally {
         abort.abort();
         streams--;
+        // What the positions cost (P7a, A§11.3): counts and ms only, as the open line.
+        if (pos === '1') {
+          log.info(
+            { events: sent.events, bytes: sent.bytes, span_ms: sent.last - sent.first, ...counts },
+            'playback pos',
+          );
+        }
       }
     });
     res.headers.set('Cache-Control', 'no-store, no-transform'); // streamSSE says no-cache

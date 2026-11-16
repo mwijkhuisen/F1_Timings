@@ -181,6 +181,13 @@ describe('streamUrl', () => {
     expect(streamUrl({ recording: 7, at: 1234, delay: 12, still: true })).toBe(
       '/api/v1/playback/7/stream?at=1234&still=1',
     );
+    // P7a: `pos` asks for the car positions, live and replay.
+    expect(streamUrl({ recording: 7, at: 'live', delay: 12, pos: true })).toBe(
+      '/api/v1/playback/7/stream?at=live&delay=12&pos=1',
+    );
+    expect(streamUrl({ recording: 7, at: 1234, delay: 12, still: true, pos: true })).toBe(
+      '/api/v1/playback/7/stream?at=1234&still=1&pos=1',
+    );
     // A still frame is a replay at T: live never carries it.
     expect(streamUrl({ recording: 7, at: 'live', delay: 12, still: true })).toBe(
       '/api/v1/playback/7/stream?at=live&delay=12',
@@ -348,7 +355,7 @@ describe('Player', () => {
     render({});
     expect(FakeES.all).toHaveLength(1);
     const first = last();
-    expect(first.url).toBe('/api/v1/playback/7/stream?at=live&delay=0');
+    expect(first.url).toBe('/api/v1/playback/7/stream?at=live&delay=0&pos=1');
     // P4e: was "Delay +1 s" and "Delay +5 s".
     click('1 second earlier');
     advance(100);
@@ -440,7 +447,7 @@ describe('Player', () => {
       advance(100);
       button('Pause');
       button('Live');
-      expect(last().url).toBe('/api/v1/playback/7/stream?at=live&delay=20');
+      expect(last().url).toBe('/api/v1/playback/7/stream?at=live&delay=20&pos=1');
       const live = last();
       advance(1_000);
       expect(FakeES.all).toHaveLength(2);
@@ -451,7 +458,7 @@ describe('Player', () => {
       advance(800);
       slide('Delay', 10);
       advance(200);
-      expect(last().url).toBe('/api/v1/playback/7/stream?at=live&delay=10');
+      expect(last().url).toBe('/api/v1/playback/7/stream?at=live&delay=10&pos=1');
       const retried = last();
       advance(1_000);
       expect(last()).toBe(retried);
@@ -484,7 +491,7 @@ describe('Player', () => {
       advance(1);
       expect(FakeES.all).toHaveLength(2);
       expect(first.closed).toBe(true);
-      expect(last().url).toBe('/api/v1/playback/7/stream?at=live&delay=25');
+      expect(last().url).toBe('/api/v1/playback/7/stream?at=live&delay=25&pos=1');
       expect(openCount()).toBe(1);
       // The closed stream shows nothing more.
       first.emit('delta', { t: NOW - 25_000, topic: 'TrackStatus', data: { Status: '5' } });
@@ -521,7 +528,7 @@ describe('Player', () => {
       first.emit('error');
       advance(1_000);
       expect(FakeES.all).toHaveLength(2);
-      expect(last().url).toBe('/api/v1/playback/7/stream?at=live&delay=5');
+      expect(last().url).toBe('/api/v1/playback/7/stream?at=live&delay=5&pos=1');
       advance(10_000);
       expect(light()).toBe('Track clear'); // dropped with the stream: the new snapshot covers it
       last().emit('snapshot', { t: Date.now() - 5_000, state: raceState(), laps: [], stints: [] });
@@ -582,7 +589,7 @@ describe('Player', () => {
     button('Play');
     expect(atOf(last())).toBe(String(NOW - 2_000));
     button('Live');
-    expect(last().url).toBe('/api/v1/playback/7/stream?at=live&delay=0');
+    expect(last().url).toBe('/api/v1/playback/7/stream?at=live&delay=0&pos=1');
     expect(openCount()).toBe(1);
   });
 
@@ -815,7 +822,7 @@ describe('Player', () => {
     last().emit('error');
     advance(1_000);
     expect(FakeES.all).toHaveLength(2);
-    expect(last().url).toBe('/api/v1/playback/7/stream?at=live&delay=0');
+    expect(last().url).toBe('/api/v1/playback/7/stream?at=live&delay=0&pos=1');
   });
 
   it('end closes the stream and never reopens', () => {
@@ -1189,16 +1196,24 @@ describe('the Weather tab in the player', () => {
   it('the view switch reads Tower · Laps · Order · Compare · Stints · Weather in a race (#112); aria-pressed follows the click', () => {
     start(rows);
     const views = () => [...host.querySelectorAll('fieldset[aria-label="View"] button')];
-    expect(views().map((b) => b.textContent)).toEqual(['Tower', 'Laps', 'Order', 'Compare', 'Stints', 'Weather']);
+    expect(views().map((b) => b.textContent)).toEqual([
+      'Tower',
+      'Laps',
+      'Order',
+      'Compare',
+      'Stints',
+      'Weather',
+      'Map',
+    ]);
     const pressed = () => views().map((b) => b.getAttribute('aria-pressed'));
-    expect(pressed()).toEqual(['true', 'false', 'false', 'false', 'false', 'false']);
+    expect(pressed()).toEqual(['true', 'false', 'false', 'false', 'false', 'false', 'false']);
     button('Weather');
-    expect(pressed()).toEqual(['false', 'false', 'false', 'false', 'false', 'true']);
+    expect(pressed()).toEqual(['false', 'false', 'false', 'false', 'false', 'true', 'false']);
     expect(host.querySelector('table[aria-label="Timing tower"]')).toBeNull();
     expect(air()).toBe('20.0–22.4 °C');
     expect(host.querySelector('.strip')).not.toBeNull(); // the strip stays on every tab
     button('Laps');
-    expect(pressed()).toEqual(['false', 'true', 'false', 'false', 'false', 'false']);
+    expect(pressed()).toEqual(['false', 'true', 'false', 'false', 'false', 'false', 'false']);
     expect(host.querySelector('table.laps')).not.toBeNull();
     expect(host.querySelector('dl.tiles.wx')).toBeNull();
     button('Tower');
@@ -1215,6 +1230,7 @@ describe('the Weather tab in the player', () => {
       'Compare',
       'Stints',
       'Weather',
+      'Map',
     ]);
     expect(host.textContent).not.toContain('Interval change');
   });
@@ -1233,6 +1249,7 @@ describe('the Weather tab in the player', () => {
       ['Compare', 'false'],
       ['Stints', 'false'],
       ['Weather', 'false'],
+      ['Map', 'false'],
     ]);
     expect(host.querySelector('table[aria-label="Timing tower"]')).not.toBeNull();
   });
@@ -2398,7 +2415,7 @@ describe('the failure probe (#100, D3)', () => {
     const url = last().url;
     last().emit('error');
     expect(fetchStub).toHaveBeenCalledTimes(1);
-    expect(url).toBe(streamUrl({ recording: 7, at: start + 3_000, delay: 0 }));
+    expect(url).toBe(streamUrl({ recording: 7, at: start + 3_000, delay: 0, pos: true }));
     expect(fetchStub.mock.calls[0]?.[0]).toBe(url);
     expect(fetchStub.mock.calls[0]?.[1]).toMatchObject({ method: 'HEAD', redirect: 'error' });
     advance(4_000);
@@ -3201,5 +3218,161 @@ describe('Compare, Stints and the Laps tab in the player (#112)', () => {
       // Both inside that block: its own closing brace is the first unindented one.
       expect(css.indexOf('\n  .views button {', phone)).toBeLessThan(css.indexOf('\n}', phone));
     });
+  });
+});
+
+// The Map tab (P7a, A§13, D1): positions are asked for on every tab, a `pos` event moves neither the clock nor what
+// the state stands at, and the tab is in the URL. The outline is in the query cache beforehand: nothing is fetched.
+describe('the Map tab in the player (P7a)', () => {
+  const T = S + 3_600_000;
+  const mapDetail = { ...detail, meeting: { ...detail.meeting, circuit_short_name: 'Interlagos' } };
+  const snapshot = (pos?: object) => ({
+    t: T,
+    state: raceState(),
+    laps: [lap(1, 1)],
+    stints: [],
+    ...(pos ? { pos } : {}),
+  });
+  const pressed = () =>
+    [...host.querySelectorAll('fieldset[aria-label="View"] button[aria-pressed="true"]')].map((b) => b.textContent);
+  const clock = () => $('.clockline time').textContent;
+  beforeEach(() => client.setQueryData(['map', 'br-1940'], { outline: 'M 0 0 L 100 50 Z', osm: null }));
+  afterEach(() => history.replaceState(null, '', '/'));
+
+  it('asks for positions on every tab: the open URL carries pos=1, live and replay, and a tab switch opens nothing', () => {
+    render({ recording: ended, start: T, detail: mapDetail });
+    expect(new URL(last().url, 'http://x').searchParams.get('pos')).toBe('1');
+    last().emit('snapshot', snapshot());
+    advance(250);
+    button('Map');
+    button('Laps');
+    expect(FakeES.all).toHaveLength(1);
+    act(() => root.unmount());
+    root = createRoot(host);
+    render({ recording: open, start: 'live', detail: mapDetail });
+    expect(new URL(last().url, 'http://x').searchParams.get('pos')).toBe('1');
+  });
+
+  it('draws the cars of the snapshot and of each pos event, on the tab', () => {
+    render({ recording: ended, start: T, detail: mapDetail });
+    last().emit('snapshot', snapshot({ t: T - 500, cars: { 1: [100, 50] } }));
+    advance(250);
+    button('Map');
+    expect(host.querySelector('svg.trackmap')).not.toBeNull();
+    expect([...host.querySelectorAll('g.car text')].map((t) => t.textContent)).toEqual(['AAA']);
+    last().emit('pos', { t: T - 100, cars: { 1: [110, 55], 2: [0, 10] } });
+    advance(250);
+    expect([...host.querySelectorAll('g.car text')].map((t) => t.textContent)).toEqual(['AAA', 'BBB']);
+    expect((host.querySelector('g.car') as SVGGElement).style.getPropertyValue('--x')).toBe('0.11');
+  });
+
+  it('a snapshot with pos null: an open recording waits for a lap, an ended one says no lap places the cars', () => {
+    for (const [recording, text] of [
+      [open, 'No car positions yet: the map places the cars once the feed has one full lap on track.'],
+      [ended, 'No car positions: no lap of this recording places the cars on the outline.'],
+    ] as const) {
+      act(() => root.unmount());
+      root = createRoot(host);
+      render({ recording, start: T, detail: mapDetail });
+      last().emit('snapshot', { ...snapshot(), pos: null });
+      advance(250);
+      button('Map');
+      expect(host.textContent).toContain(text);
+      expect(host.querySelector('g.car')).toBeNull();
+    }
+  });
+
+  it('?tab=map while the session is still loading shows Loading…, not "no outline"', () => {
+    history.replaceState(null, '', '/replay/7?tab=map');
+    render({ recording: ended, start: T, detail: undefined, keepT: true });
+    last().emit('snapshot', snapshot({ t: T, cars: { 1: [0, 0] } }));
+    advance(250);
+    expect(host.textContent).toContain('Loading…');
+    expect(host.textContent).not.toContain('No circuit outline');
+    expect(host.querySelector('svg.trackmap')).toBeNull();
+  });
+
+  it('glides a car between two samples of one run, and jumps after a gap of over 1.5 s', () => {
+    render({ recording: ended, start: T, detail: mapDetail });
+    last().emit('snapshot', snapshot({ t: T - 500, cars: { 1: [100, 50] } }));
+    advance(250);
+    button('Map');
+    const cls = () => $('g.car').getAttribute('class');
+    expect(cls()).toBe('car'); // the first sample
+    last().emit('pos', { t: T, cars: { 1: [110, 55] } });
+    advance(250);
+    expect(cls()).toBe('car move'); // 500 ms on: the same run
+    last().emit('pos', { t: T + 2_500, cars: { 1: [150, 60] } });
+    advance(250);
+    expect(cls()).toBe('car'); // 2.5 s on: a new run
+  });
+
+  it("withPos: a car's run goes on across samples 500 ms apart and starts again after a 2 s gap", () => {
+    const seen: Feed['pos'][] = [];
+    const h = { onData: (f: Feed) => seen.push(f.pos), onError() {}, onStale() {}, onEnd() {} };
+    const s = openStream({ recording: 7, at: T, delay: 0, pos: true }, h, FakeES as unknown as typeof EventSource);
+    last().emit('snapshot', { ...snapshot(), pos: { t: T, cars: { 1: [0, 0] } } });
+    last().emit('pos', { t: T + 500, cars: { 1: [10, 0] } });
+    last().emit('pos', { t: T + 2_500, cars: { 1: [20, 0] } });
+    expect(seen.map((p) => p?.cars['1'])).toEqual([
+      { x: 0, y: 0, t: T, run: T },
+      { x: 10, y: 0, t: T + 500, run: T },
+      { x: 20, y: 0, t: T + 2_500, run: T + 2_500 },
+    ]);
+    expect(seen.map((p) => p?.at)).toEqual([T, T + 500, T + 2_500]);
+    s.close();
+  });
+
+  it('a pos event flushes the positions channel alone: the Snap stays the same object', () => {
+    const store = createStore();
+    const feed: Feed = { t: T, state: {}, laps: new Map(), stints: new Map(), weather: [], pos: { at: T, cars: {} } };
+    store.update(feed, 'snapshot');
+    vi.advanceTimersByTime(250);
+    const first = store.get();
+    expect(store.pos.get()).toBe(feed.pos);
+    const calls = { snap: 0, pos: 0 };
+    const off = [store.subscribe(() => calls.snap++), store.pos.subscribe(() => calls.pos++)];
+    feed.pos = { at: T + 500, cars: { 1: { x: 0, y: 0, t: T + 500, run: T + 500 } } };
+    store.update(feed, 'pos');
+    vi.advanceTimersByTime(250);
+    expect(store.get()).toBe(first);
+    expect(store.pos.get()).toBe(feed.pos);
+    expect(calls).toEqual({ snap: 0, pos: 1 });
+    // A snapshot (a new feed) updates both.
+    store.update({ ...feed, pos: null }, 'snapshot');
+    vi.advanceTimersByTime(250);
+    expect(store.get()).not.toBe(first);
+    expect(store.pos.get()).toBeNull();
+    expect(calls).toEqual({ snap: 1, pos: 2 });
+    for (const f of off) f();
+  });
+
+  it('a pos event leaves the clock, T and the state where they were', () => {
+    render({ recording: ended, start: T, detail: mapDetail });
+    last().emit('snapshot', snapshot({ t: T - 500, cars: { 1: [0, 0] } }));
+    advance(2_000);
+    const before = clock();
+    expect(before).toBe(fmtClock(T + 2_000));
+    const stood = host.querySelector('.strip')?.textContent;
+    // A position's t is up to a second behind the newest receive time: were it applied as a delta, T would step back.
+    last().emit('pos', { t: T, cars: { 1: [5, 5] } });
+    advance(300);
+    expect(clock()).toBe(before);
+    expect(host.querySelector('.strip')?.textContent).toBe(stood);
+    advance(1_000);
+    expect(clock()).toBe(fmtClock(T + 3_300));
+  });
+
+  it('?tab=map opens the replay there, and a click on it writes &tab=map', () => {
+    history.replaceState(null, '', '/replay/7?tab=map');
+    render({ recording: ended, start: T, detail: mapDetail, keepT: true });
+    last().emit('snapshot', snapshot());
+    advance(250);
+    expect(pressed()).toEqual(['Map']);
+    button('Pause');
+    button('Tower');
+    expect(location.search).toBe('?t=21:00:00');
+    button('Map');
+    expect(location.search).toBe('?t=21:00:00&tab=map');
   });
 });

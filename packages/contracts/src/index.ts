@@ -358,12 +358,21 @@ export const Recordings = z.array(
 // replace the rows of the same (driver_number, lap_number) or (driver_number, stint_number). `weather` holds every
 // WeatherData sample since the stream's last session switch, one row per applied WeatherData delta, at most the last
 // MAX_WEATHER_ROWS; the client adds weatherRow of the merged view at the delta's t with withWeatherRow.
+// With `pos=1` (P7a, A§11.3): `pos` events, at most one per 500 ms of t, each one Position timestamp on the receive
+// axis with every car of it as [x, y] in integer metres of the circuit outline's frame (x east, y south, from its
+// centre). The snapshot's `pos` is the last one before T, null while the session has no fitted frame; without `pos=1`
+// the key is absent.
+export const PlaybackPos = z.strictObject({
+  t: int,
+  cars: z.record(z.string().regex(/^[1-9]\d?$/), z.tuple([int, int])),
+});
 export const PlaybackSnapshot = z.strictObject({
   t: int,
   state: z.record(z.string(), z.unknown()),
   laps: Laps,
   stints: Stints,
   weather: Weather,
+  pos: PlaybackPos.nullable().optional(),
 });
 export const PlaybackLaps = z.strictObject({ t: int, laps: Laps, stints: Stints });
 export const PlaybackDelta = z.strictObject({ t: int, topic: z.string(), data: z.unknown() });
@@ -391,6 +400,7 @@ export type PlaybackLaps = z.infer<typeof PlaybackLaps>;
 export type PlaybackDelta = z.infer<typeof PlaybackDelta>;
 export type PlaybackEnd = z.infer<typeof PlaybackEnd>;
 export type PlaybackPing = z.infer<typeof PlaybackPing>;
+export type PlaybackPos = z.infer<typeof PlaybackPos>;
 
 export type SectorDelta = {
   lap_number: number;

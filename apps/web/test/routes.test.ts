@@ -215,8 +215,8 @@ describe('parseD and formatD: the picks in ?d= (C4)', () => {
 });
 
 describe('the player tab in the URL (#100)', () => {
-  // #112 adds compare and stints; the player has no Mini-sectors tab.
-  it.each(['laps', 'order', 'compare', 'stints', 'weather'] as const)('parseTab reads %s', (tab) => {
+  // #112 adds compare and stints, P7a the map; the player has no Mini-sectors tab.
+  it.each(['laps', 'order', 'compare', 'stints', 'weather', 'map'] as const)('parseTab reads %s', (tab) => {
     expect(parseTab(tab)).toBe(tab);
   });
 
@@ -233,6 +233,7 @@ describe('the player tab in the URL (#100)', () => {
     expect(replayQuery('?tab=weather&t=21:00:15', { tab: 'order' })).toBe('?t=21:00:15&tab=order');
     expect(replayQuery('', { t: '21:00:15' })).toBe('?t=21:00:15');
     expect(replayQuery('', { tab: 'laps' })).toBe('?tab=laps');
+    expect(replayQuery('?t=21:00:15', { tab: 'map' })).toBe('?t=21:00:15&tab=map');
     expect(replayQuery('?t=21:00:15&tab=compare', { tab: 'stints' })).toBe('?t=21:00:15&tab=stints');
     expect(replayQuery('?tab=compare', { t: '21:00:15' })).toBe('?t=21:00:15&tab=compare');
   });

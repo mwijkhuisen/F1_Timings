@@ -1,12 +1,23 @@
 import { open, stat } from 'node:fs/promises';
 import { join } from 'node:path';
-import { type Lap, type Obj, type Stints, view, type Weather, weatherRow, withWeatherRow } from '@f1/contracts';
+import {
+  type Lap,
+  type Obj,
+  type PlaybackPos,
+  type Stints,
+  view,
+  type Weather,
+  weatherRow,
+  withWeatherRow,
+} from '@f1/contracts';
 import { progressiveColours } from '../timing/colours.ts';
 import { markLaps } from '../timing/rules.ts';
+import { type Frame, toOutline } from './fit.ts';
 import { createLaps, type LapRow, qualifyingParts, type StintRow } from './laps.ts';
 import { createFeed } from './merge.ts';
-import { isObj, parseFeedLine, utc } from './read.ts';
+import { isObj, parseFeedLine, UNPARSED, utc } from './read.ts';
 import { type Line, missing, NOFOLLOW, notFile, segment, segments, splitter } from './recording.ts';
+import { decodeZ, positions, type ZFail } from './telemetry.ts';
 
 // State at T over one recording's files (A§11.3, ADR-0007): a replay from the first line up to T, then a delta per
 // change, paced by the live clock (T = now − delay) or the replay clock (T = at + elapsed × speed). The time axis is
@@ -16,12 +27,16 @@ import { type Line, missing, NOFOLLOW, notFile, segment, segments, splitter } fr
 // The lap and stint rows come from createLaps over the same events: a snapshot carries all of them, a `laps` event the
 // rows that changed since the last send. The weather rows are one per applied WeatherData delta since the last session
 // switch, at most the last MAX_WEATHER_ROWS (withWeatherRow).
+//
+// With `pos` (P7a, pos=1, A§11.3): `Position.z` streams as `pos` events, still never applied or kept in the state.
 
+type Snapshot = { t: number; state: Obj; laps: Lap[]; stints: Stints; weather: Weather; pos?: PlaybackPos | null };
 /** `state` is the stream's own, which changes on the next `next()`: serialize it before. `weather` is never mutated. */
 export type PlaybackEvent =
-  | { event: 'snapshot'; data: { t: number; state: Obj; laps: Lap[]; stints: Stints; weather: Weather } }
+  | { event: 'snapshot'; data: Snapshot }
   | { event: 'delta'; data: { t: number; topic: string; data: unknown } }
   | { event: 'laps'; data: { t: number; laps: Lap[]; stints: Stints } }
+  | { event: 'pos'; data: PlaybackPos }
   | { event: 'end'; data: { t: number } }
   | { event: 'ping'; data: { t: number } };
 
@@ -32,11 +47,11 @@ const TAIL_MS = 1_000;
 const ENDED_MS = 30_000;
 const CHUNK = 64 * 1024;
 const AGAIN_MS = 50;
+const POS_MS = 500; // T4: the first Position entry per 500 ms of t, at most 2 Hz
+const FRAME_MS = 30_000; // without a frame, asked again at most this often (a live session's first lap, T5)
 const keyOf = (info: unknown) => (isObj(info) && typeof info.Key === 'number' ? info.Key : undefined);
 // The topics the lap rows read: the engine's two, and A§9's race control and qualifying parts (lapRows).
 const LAP_TOPICS = new Set(['TimingData', 'TimingAppData', 'RaceControlMessages', 'SessionData']);
-/** Recorded, not parsed yet (#96): kept out of the state and the stream, as the `.z` topics. */
-const UNPARSED = new Set(['PitLaneTimeCollection', 'PitStopSeries', 'PitStop']);
 
 /**
  * The engine's rows in the shapes of the Lap and Stints contracts, with A§9's deleted laps and qualifying phases from
@@ -161,6 +176,16 @@ async function* lines(dir: string, from: number): AsyncGenerator<Line | null | u
   }
 }
 
+const ignore = () => {};
+/** `p`'s value, or undefined as soon as `signal` aborts. */
+const untilAbort = <T>(p: Promise<T>, signal: AbortSignal) =>
+  new Promise<T | undefined>((resolve, reject) => {
+    const stop = () => resolve(undefined);
+    if (signal.aborted) return stop();
+    signal.addEventListener('abort', stop, { once: true });
+    p.then(resolve, reject).finally(() => signal.removeEventListener('abort', stop));
+  });
+
 export async function* playback(o: {
   dir: string;
   /** The recording's session: the lap rows are its own (createLaps ignores another session's lines). */
@@ -179,9 +204,27 @@ export async function* playback(o: {
    * parsing and the lap rows) and the lines it applied. Never for a later snapshot (a switch or a backlog).
    */
   onOpen?: (seek: { ms: number; lines: number }) => void;
+  /**
+   * pos=1 (P7a, A§11.3): the session's map frame (T5), awaited before the seek and asked again at most every FRAME_MS
+   * while there is none; a failed decode is counted in `counts`, never thrown. Without it the stream is as before.
+   */
+  pos?: { frame: () => Promise<Frame | undefined>; counts: Record<ZFail, number> };
 }): AsyncGenerator<PlaybackEvent> {
   const start = o.now();
-  const T = () => (o.at === 'live' ? o.now() - o.delay * 1000 : o.at + (o.now() - start) * o.speed);
+  let frame: Frame | undefined;
+  if (o.pos) {
+    // An abort during a fit ends the stream and frees its slot.
+    frame = await untilAbort(o.pos.frame(), o.signal);
+    if (o.signal.aborted) return;
+  }
+  // The replay clock starts after the fit, so a slow one is no backlog (BEHIND_MS); onOpen's ms still counts it.
+  const begun = o.pos ? o.now() : start;
+  const T = () => (o.at === 'live' ? o.now() - o.delay * 1000 : o.at + (o.now() - begun) * o.speed);
+  let asked = begun;
+  let asking = false;
+  /** The last Position.z line applied, raw: decoded only for a snapshot or while streaming. */
+  let lastPos: { payload: unknown; r: number } | undefined;
+  let bucket = Number.NEGATIVE_INFINITY; // POS_MS bucket of the last position sent
   const feed = createFeed();
   let weather: Weather = [];
   const engine = createLaps(o.sessionKey, 'f1-live');
@@ -190,11 +233,41 @@ export async function* playback(o: {
   let lapsAt = Number.NEGATIVE_INFINITY; // wall time of the last `laps` check
   let applied = Number.NEGATIVE_INFINITY; // receivedAt of the last line applied
 
+  /**
+   * The kept line's Position entries on the receive axis (A§10): t = r − (newest − Timestamp), so t ≤ r ≤ T. Each car
+   * (OffTrack too, D3) in outline metres.
+   */
+  const entries = (kept: { payload: unknown; r: number }, f: Frame, counts: Record<ZFail, number>): PlaybackPos[] => {
+    const z = decodeZ(kept.payload);
+    if (!z.ok) {
+      counts[z.fail]++;
+      return [];
+    }
+    const list = positions(z.value);
+    const newest = Math.max(...list.map((e) => e.t));
+    return list.map(({ t, cars }) => ({
+      t: kept.r - (newest - t),
+      cars: Object.fromEntries(cars.map(([n, s]) => [String(n), toOutline(f, s.x, s.y)])),
+    }));
+  };
   /** Applies one line, its deltas into `out`. True when it switched the session: the state was cleared first. */
   const apply = (line: Line, out?: PlaybackEvent[]) => {
     let switched = false;
     applied = line.r;
     for (const ev of parseFeedLine(line.text)) {
+      // Not a Subscribe state's (`full`): it can be an hour old (A§11.3), yet it would be kept and sent at its line's r.
+      if (ev.topic === 'Position.z' && o.pos && !ev.full) {
+        lastPos = { payload: ev.payload, r: line.r };
+        // Streaming only: the seek keeps the line and decodes none (A§11.3).
+        if (!out || !frame) continue;
+        for (const p of entries(lastPos, frame, o.pos.counts)) {
+          const b = Math.floor(p.t / POS_MS);
+          if (b <= bucket || Object.keys(p.cars).length === 0) continue;
+          bucket = b;
+          out.push({ event: 'pos', data: p });
+        }
+        continue;
+      }
       if (ev.topic.endsWith('.z') || UNPARSED.has(ev.topic)) continue;
       // A new session's SessionInfo: no topic of the previous session stays (no ghost driver, line or message). The
       // laps engine keeps going: it holds the recording's session only.
@@ -203,6 +276,7 @@ export async function* playback(o: {
         if (key !== undefined && current !== undefined && key !== current) {
           for (const topic of Object.keys(feed.state)) delete feed.state[topic];
           weather = [];
+          lastPos = undefined;
           switched = true;
         }
       }
@@ -236,11 +310,24 @@ export async function* playback(o: {
       stints: unsent(all.stints, (s) => `stint ${s.driver_number} ${s.stint_number}`),
     };
   };
+  /**
+   * The snapshot's position: the last line's newest entry, decoded once (A§11.3), or no cars without one; null without
+   * a frame (T5). The events go on from its bucket.
+   */
+  const posAt = (t: number, counts: Record<ZFail, number>): PlaybackPos | null => {
+    const kept = lastPos;
+    const newest = kept && frame ? entries(kept, frame, counts).findLast((e) => e.t === kept.r) : undefined;
+    const pos = frame ? (newest ?? { t, cars: {} }) : null;
+    bucket = Math.floor((pos?.t ?? t) / POS_MS);
+    return pos;
+  };
   // ponytail: every open sends all lap rows uncompressed, about 0.65 MB for a full race (Caddy leaves the SSE route
   // uncompressed); a compact or compressed form if that hurts.
   const snapshot = (t: number): PlaybackEvent => {
     sent.clear();
-    return { event: 'snapshot', data: { t, state: feed.state, ...rows(), weather } };
+    const data: Snapshot = { t, state: feed.state, ...rows(), weather };
+    if (o.pos) data.pos = posAt(t, o.pos.counts);
+    return { event: 'snapshot', data };
   };
   const changes = (): PlaybackEvent | undefined => {
     lapsAt = o.now();
@@ -275,6 +362,18 @@ export async function* playback(o: {
     let polled = Number.NEGATIVE_INFINITY;
     let ending = false;
     while (!o.signal.aborted) {
+      if (o.pos && !frame && !asking && o.now() - asked >= FRAME_MS) {
+        // In the background: the stream goes on, and the events start with the frame. createFrames never rejects.
+        [asking, asked] = [true, o.now()];
+        o.pos
+          .frame()
+          .then((f) => {
+            frame = f;
+          }, ignore)
+          .finally(() => {
+            asking = false;
+          });
+      }
       const now = T();
       // Changed rows at most once a second, after the last line of a receivedAt (so `t` covers every line up to it).
       if (dirty && o.now() - lapsAt >= LAPS_MS && line?.r !== applied) {

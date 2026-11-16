@@ -6,6 +6,7 @@ import {
   PlaybackEnd,
   PlaybackLaps,
   PlaybackPing,
+  PlaybackPos,
   PlaybackSnapshot,
   type Stints,
   view,
@@ -23,19 +24,38 @@ import {
 
 export type Stint = Stints[number];
 /** `still`: a still frame (a paused seek, or a load that resumes at `?t`, A§13), which the server only logs (#101). */
-export type StreamParams = { recording: number; at: number | 'live'; delay: number; still?: boolean };
-/** Mutated in place by every event; a snapshot starts a new one. `weather` is a new array per row. */
-export type Feed = { t: number; state: Obj; laps: Map<string, Lap>; stints: Map<string, Stint>; weather: Weather };
+export type StreamParams = { recording: number; at: number | 'live'; delay: number; still?: boolean; pos?: boolean };
+/**
+ * The car positions (P7a, A§11.3), one sample per car: x and y in integer metres of the circuit outline's frame, `t` on
+ * the receive axis and `run` the first t of the car's gap-free run (a gap over RUN_GAP_MS between its samples starts a
+ * new one). `at` is the newest t. A new object per `pos` event or snapshot.
+ */
+export type Positions = { at: number; cars: Record<string, { x: number; y: number; t: number; run: number }> };
+/** A car's samples further apart than this are not one run (T3, A§11.3): the dot jumps instead of gliding. */
+export const RUN_GAP_MS = 1500;
+/**
+ * Mutated in place by every event; a snapshot starts a new one. `weather` is a new array per row. `pos`: undefined when
+ * the stream did not ask for positions, null while the session has no fitted frame. A `pos` event replaces it and never
+ * touches `t`: its t sits behind the newest receive time.
+ */
+export type Feed = {
+  t: number;
+  state: Obj;
+  laps: Map<string, Lap>;
+  stints: Map<string, Stint>;
+  weather: Weather;
+  pos?: Positions | null;
+};
 export type Handlers = {
-  onData(feed: Feed, kind: 'snapshot' | 'delta' | 'laps'): void;
+  onData(feed: Feed, kind: 'snapshot' | 'delta' | 'laps' | 'pos'): void;
   onError(): void;
   /** An event failed its contract: the build and the server differ, and a reconnect cannot fix that (A§13). */
   onStale(): void;
   onEnd(t: number): void;
 };
 
-export const streamUrl = ({ recording, at, delay, still }: StreamParams): string =>
-  `/api/v1/playback/${recording}/stream?${at === 'live' ? `at=live&delay=${delay}` : `at=${at}${still ? '&still=1' : ''}`}`;
+export const streamUrl = ({ recording, at, delay, still, pos }: StreamParams): string =>
+  `/api/v1/playback/${recording}/stream?${at === 'live' ? `at=live&delay=${delay}` : `at=${at}${still ? '&still=1' : ''}`}${pos ? '&pos=1' : ''}`;
 
 export type Probe = 'expired' | 'offline' | 'missing' | 'up' | 'error';
 
@@ -154,6 +174,7 @@ export function openStream(params: StreamParams, h: Handlers, ES: typeof EventSo
   on('snapshot', PlaybackSnapshot, (d) => {
     // merge copies into prototype-free objects and drops unsafe keys, as on the server.
     feed = { t: d.t, state: Object.create(null), laps: new Map(), stints: new Map(), weather: [...d.weather] };
+    if (d.pos !== undefined) feed.pos = d.pos && withPos(null, d.pos);
     merge(feed.state, d.state);
     putRows(feed, d);
     h.onData(feed, 'snapshot');
@@ -173,6 +194,11 @@ export function openStream(params: StreamParams, h: Handlers, ES: typeof EventSo
     feed.t = d.t;
     putRows(feed, d);
     h.onData(feed, 'laps');
+  });
+  on('pos', PlaybackPos, (d) => {
+    if (!feed) return;
+    feed.pos = withPos(feed.pos ?? null, d); // not feed.t: the position's t is behind the newest receive time
+    h.onData(feed, 'pos');
   });
   on('ping', PlaybackPing, () => {}, false); // liveness only
   on(
@@ -200,6 +226,16 @@ export function openStream(params: StreamParams, h: Handlers, ES: typeof EventSo
   };
 }
 
+/** `prev` with the event's cars put in, as a new object; a car's run goes on while its samples are within RUN_GAP_MS. */
+function withPos(prev: Positions | null, d: PlaybackPos): Positions {
+  const cars = { ...prev?.cars };
+  for (const [n, [x, y]] of Object.entries(d.cars)) {
+    const was = cars[n];
+    cars[n] = { x, y, t: d.t, run: was && d.t - was.t <= RUN_GAP_MS ? was.run : d.t };
+  }
+  return { at: d.t, cars };
+}
+
 /** A feed Utc in epoch ms, read as UTC with or without its Z; NaN when absent or unparsable. */
 export const utc = (v: string | undefined) =>
   v === undefined ? Number.NaN : Date.parse(v.endsWith('Z') ? v : `${v}Z`);
@@ -207,7 +243,7 @@ export const utc = (v: string | undefined) =>
 /**
  * What React renders: a new object per flush, so it is the key for everything derived from the state. `laps` and
  * `stints` are new arrays only when the rows changed (a snapshot or a `laps` event); `weather` a new pair only when the
- * weather rows changed.
+ * weather rows changed. The positions are not in it (P7a review): a `pos` event leaves it as it was.
  */
 export type Snap = {
   rev: number;
@@ -217,15 +253,35 @@ export type Snap = {
   weather: { rows: Weather; laps: Lap[] };
 };
 
-/** Holds the latest feed and notifies at most every `everyMs`, so a burst of deltas is one render. */
+/** The store's positions channel (P7a): the feed's positions as of the last flush, for `useSyncExternalStore`. */
+export type PosChannel = { get(): Positions | null | undefined; subscribe(f: () => void): () => void };
+
+const subscriber = (subs: Set<() => void>) => (f: () => void) => {
+  subs.add(f);
+  return () => {
+    subs.delete(f);
+  };
+};
+
+/**
+ * Holds the latest feed and notifies at most every `everyMs`, so a burst of deltas is one render. The positions have
+ * their own channel on the same flush: a `pos` event (2–4 a second) renders the map only, never what `Snap` keys.
+ */
 export function createStore(everyMs = 250) {
   let snap: Snap = { rev: 0, feed: undefined, laps: [], stints: [], weather: { rows: [], laps: [] } };
+  let pos: Positions | null | undefined;
   let pending: Feed | undefined;
-  let lapsDirty = false;
+  let [snapDirty, lapsDirty] = [false, false];
   let timer: ReturnType<typeof setTimeout> | undefined;
-  const subs = new Set<() => void>();
+  const [subs, posSubs] = [new Set<() => void>(), new Set<() => void>()];
   const flush = () => {
     timer = undefined;
+    if (pending?.pos !== pos) {
+      pos = pending?.pos; // a new object per `pos` event or snapshot
+      for (const f of posSubs) f();
+    }
+    if (!snapDirty) return;
+    snapDirty = false;
     const laps = lapsDirty && pending ? [...pending.laps.values()] : snap.laps;
     const stints = lapsDirty && pending ? [...pending.stints.values()] : snap.stints;
     // The Weather tab's chart option is rebuilt only when the rows change (about once a minute), not on every `laps`
@@ -238,15 +294,12 @@ export function createStore(everyMs = 250) {
   };
   return {
     get: () => snap,
-    subscribe(f: () => void) {
-      subs.add(f);
-      return () => {
-        subs.delete(f);
-      };
-    },
-    update(feed: Feed, kind: 'snapshot' | 'delta' | 'laps') {
+    subscribe: subscriber(subs),
+    pos: { get: () => pos, subscribe: subscriber(posSubs) } satisfies PosChannel,
+    update(feed: Feed, kind: 'snapshot' | 'delta' | 'laps' | 'pos') {
       pending = feed;
-      lapsDirty ||= kind !== 'delta';
+      snapDirty ||= kind !== 'pos';
+      lapsDirty ||= kind === 'snapshot' || kind === 'laps';
       if (timer === undefined) timer = setTimeout(flush, everyMs);
     },
   };
