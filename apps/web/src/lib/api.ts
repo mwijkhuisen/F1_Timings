@@ -54,8 +54,9 @@ const subscribe = (l: () => void) => {
 export const useStale = () => useSyncExternalStore(subscribe, isStale, isStale);
 
 export async function getJson<T>(path: string, contract: { parse(data: unknown): T }, signal: AbortSignal): Promise<T> {
-  // A per-session answer may sit in the browser cache for 24 h: `v` makes the cache key per build (A§10).
-  const url = path.includes('/api/v1/sessions/') ? `${path}?v=${REVISION}` : path;
+  // A per-session answer may sit in the browser cache for 24 h: `v` makes the cache key per build (A§10), joined with
+  // `&` to a path that has a query (the telemetry's `?driver=&lap=`).
+  const url = path.includes('/api/v1/sessions/') ? `${path}${path.includes('?') ? '&' : '?'}v=${REVISION}` : path;
   // redirect: 'error' turns Access's login redirect into a TypeError instead of an HTML page.
   const res = await fetch(url, { signal, redirect: 'error', headers: { accept: 'application/json' } });
   if (!res.ok) throw new HttpError(res.status);
