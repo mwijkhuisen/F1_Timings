@@ -34,7 +34,7 @@ program='
 | ($c.services | to_entries) as $s
 | ($c.networks // {}) as $n
 | {
-  services: (($c.services | keys) == ["api", "archive", "caddy", "cloudflared", "db", "fill", "ingest", "jolpica", "live", "migrate"]),
+  services: (($c.services | keys) == ["api", "archive", "caddy", "cloudflared", "db", "fill", "ingest", "jolpica", "live", "migrate", "telemetry"]),
   read_only: all($s[]; .value.read_only == true),
   cap_drop_all: all($s[]; .value.cap_drop == ["ALL"]),
   # Exactly this list: a second entry such as seccomp=unconfined would weaken the container.
@@ -45,7 +45,7 @@ program='
   restart: (([$s[] | {(.key): .value.restart}] | add) == {
     api: "unless-stopped", caddy: "unless-stopped", cloudflared: "unless-stopped", db: "unless-stopped",
     ingest: "unless-stopped", live: "unless-stopped",
-    archive: "no", fill: "no", jolpica: "no", migrate: "no"}),
+    archive: "no", fill: "no", jolpica: "no", migrate: "no", telemetry: "no"}),
   # Only db and live need time to stop cleanly. Compose v5.5.1 renders 1m0s; another version may say 60s.
   stop_grace_period: (([$s[] | select(.value.stop_grace_period != null) | {(.key): .value.stop_grace_period}] | add // {}) as $g
     | (($g | keys) == ["db", "live"] and all($g[]; . == "1m0s" or . == "60s"))),
@@ -66,7 +66,9 @@ program='
         {svc: "fill", source: "/srv/f1/live", target: "/srv/f1/live", read_only: true},
         {svc: "jolpica", source: "/srv/f1/jolpica", target: "/srv/f1/jolpica", read_only: true},
         {svc: "live", source: "/srv/f1/live", target: "/srv/f1/live", read_only: false},
-        {svc: "live", source: "/srv/f1/state/live", target: "/srv/f1/state", read_only: false}]),
+        {svc: "live", source: "/srv/f1/state/live", target: "/srv/f1/state", read_only: false},
+        {svc: "telemetry", source: "/srv/f1/archive", target: "/srv/f1/archive", read_only: true},
+        {svc: "telemetry", source: "/srv/f1/live", target: "/srv/f1/live", read_only: true}]),
   only_port_127_0_0_1_8180: ([$s[] | .key as $k | .value.ports[]? | {svc: $k, host_ip, published, target, protocol}]
     == [{svc: "caddy", host_ip: "127.0.0.1", published: "8180", target: 80, protocol: "tcp"}]),
   no_database_url: all($s[]; (.value.environment // {}) | has("DATABASE_URL") | not),
@@ -78,7 +80,7 @@ program='
   tunnel_token_file: any($c.services.cloudflared.command[]?; . == "--token-file"),
   # http2 over tcp/7844 only (P2f): QUIC fails on the VM and the firewall has no udp/7844 (nft-check.sh).
   tunnel_http2: (($c.services.cloudflared.command // []) | index(["--protocol", "http2"]) != null),
-  healthchecks: all($s[] | select(.key != "migrate" and .key != "archive" and .key != "fill" and .key != "jolpica"); .value.healthcheck.test != null and .value.healthcheck.disable != true),
+  healthchecks: all($s[] | select(.key != "migrate" and .key != "archive" and .key != "fill" and .key != "jolpica" and .key != "telemetry"); .value.healthcheck.test != null and .value.healthcheck.disable != true),
   images_pinned: all($s[]; .value.image | test("@sha256:[0-9a-f]{64}$") or . == "f1-server:ci" or . == "f1-web:ci"),
   networks_named_f1: ($n != {} and all($n | to_entries[]; (.key | test("^f1-[a-z-]+$")) and .value.name == .key
     and .value.driver_opts["com.docker.network.bridge.name"] == .key)),
@@ -87,7 +89,7 @@ program='
   ipv4_only: all($n[]; .enable_ipv6 != true),
   icc_off_unless_internal: all($n[]; .internal == true or .driver_opts["com.docker.network.bridge.enable_icc"] == "false"),
   network_members: (([$n | keys[] as $k | {($k): ([$s[] | select((.value.networks // {}) | has($k)) | .key] | sort)}] | add) == {
-    "f1-db": ["api", "archive", "db", "fill", "ingest", "jolpica", "live", "migrate"], "f1-edge": ["api", "caddy"],
+    "f1-db": ["api", "archive", "db", "fill", "ingest", "jolpica", "live", "migrate", "telemetry"], "f1-edge": ["api", "caddy"],
     "f1-egress": ["archive", "ingest", "live"],
     "f1-api-egress": ["api"], "f1-tunnel": ["cloudflared"], "f1-tunnel-edge": ["caddy", "cloudflared"],
     "f1-publish": ["caddy"]}),
@@ -98,7 +100,7 @@ program='
     api: ["db_f1_api"], archive: ["db_f1_ingest"], caddy: [], cloudflared: ["cf_tunnel_token"],
     db: ["db_f1_api", "db_f1_ingest", "db_f1_migrator", "db_postgres"], fill: ["db_f1_ingest"],
     ingest: ["db_f1_ingest", "hc_ping_key"], jolpica: ["db_f1_ingest"], live: ["db_f1_ingest", "f1tv_password", "f1tv_username", "hc_ping_key"],
-    migrate: ["db_f1_migrator"]}),
+    migrate: ["db_f1_migrator"], telemetry: ["db_f1_ingest"]}),
   gids_only_for_own_secrets: all($s[]; ([.value.group_add[]? | tostring] | sort) == ([.value.secrets[]?.source | $gid[.]] | unique)),
   gids_62001_62099: all($s[]; all(.value.group_add[]?; tonumber | . >= 62001 and . <= 62099)),
   no_rws: ($c | tojson | test("rws|172\\.30\\.") | not)
@@ -141,6 +143,8 @@ negative "api with /srv/f1/live read-write" only_bind_allowlist \
   '(.services.api.volumes[] | select(.target == "/srv/f1/live") | .read_only) = false'
 negative "fill with /srv/f1/live read-write" only_bind_allowlist \
   '(.services.fill.volumes[] | select(.target == "/srv/f1/live") | .read_only) = false'
+negative "telemetry with /srv/f1/live read-write" only_bind_allowlist \
+  '(.services.telemetry.volumes[] | select(.target == "/srv/f1/live") | .read_only) = false'
 negative "jolpica with /srv/f1/jolpica read-write" only_bind_allowlist \
   '(.services.jolpica.volumes[] | select(.target == "/srv/f1/jolpica") | .read_only) = false'
 negative "api with an extra bind" only_bind_allowlist \

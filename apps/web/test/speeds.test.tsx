@@ -64,8 +64,8 @@ const laps = [
   lap(81, 7, { quali_phase: 2, lap_ms: 82_000 }),
 ];
 
-const show = (type: string, name: string, rows = laps) =>
-  act(() => root.render(<SpeedTable detail={sessionDetail(type, name, drivers)} laps={rows} />));
+const show = (type: string, name: string, rows = laps, telemetry = false) =>
+  act(() => root.render(<SpeedTable detail={sessionDetail(type, name, drivers)} laps={rows} telemetry={telemetry} />));
 const button = (text: string) => [...host.querySelectorAll('button')].find((b) => b.textContent === text);
 const text = (el: Element) => {
   const clone = el.cloneNode(true) as Element;
@@ -161,5 +161,72 @@ describe('SpeedTable', () => {
     expect(rows()[2]?.[5]).toBe('— (Needs a valid time in S1, S2 and S3)');
     show('Practice', 'Practice 1', [lap(12, 2, { lap_ms: null })]);
     expect(rows()[0]?.[4]).toBe('— (No valid lap with a time)');
+  });
+
+  // P7b, D1: the telemetry columns. ANT's Q2 best lap (L5) has 71 % full throttle and the top 352 on L5; RUS has the
+  // session's top 358 on L3 (Q1) but no Q2 lap; PIA's Q2 best lap has no telemetry; ANT's in-lap 380 never counts.
+  const tel = [
+    lap(12, 2, { ...laps[0], top_kph: 350 }),
+    lap(12, 5, { ...laps[1], top_kph: 352, full_throttle: 0.714 }),
+    lap(12, 6, { ...laps[2], top_kph: 380 }),
+    lap(63, 3, { ...laps[3], top_kph: 358, full_throttle: 0.6 }),
+    laps[4] as (typeof laps)[number],
+    laps[5] as (typeof laps)[number],
+  ];
+
+  it('adds Top after ST and Full throttle after Best lap with telemetry, in the phase of the own bests', () => {
+    show('Qualifying', 'Qualifying', tel, true);
+    expect(heads()).toEqual([
+      'Driver',
+      'I1',
+      'I2',
+      'ST',
+      'Top',
+      'Q2 Best lap',
+      'Q2 Full throttle',
+      'Q2 Sum of best sectors',
+    ]);
+    expect(host.querySelectorAll('.legend li')).toHaveLength(3);
+    expect(host.querySelector('.legend')?.textContent).toContain('Top: telemetry, anywhere on the lap');
+    act(() => button('Q1')?.click());
+    expect(heads()[6]).toBe('Q1 Full throttle');
+  });
+
+  it('boxes the session top of Top with its lap under it, an in-lap never counting', () => {
+    show('Qualifying', 'Qualifying', tel, true);
+    expect(rows()[0]?.[4]).toBe('358, fastestL3');
+    expect(rows()[1]?.[4]).toBe('352L5');
+    expect(boxed().filter(([, column]) => column === 'Top')).toEqual([['RUS', 'Top']]);
+  });
+
+  it('shows the share of throttle on the own best lap as a rounded percent with the lap under it', () => {
+    show('Qualifying', 'Qualifying', tel, true);
+    expect(rows()[1]?.[6]).toBe('71 %L5');
+    act(() => button('Q1')?.click());
+    // Q1: RUS's best lap is L4 (no telemetry); the share on L3 is not its best lap's.
+    expect(rows()[0]?.[6]).toBe('— (No telemetry for this lap)');
+  });
+
+  it('says why a — stands: no telemetry on a valid lap, on this lap, or no lap in the phase', () => {
+    show('Qualifying', 'Qualifying', tel, true);
+    const [rus, , pia] = rows();
+    expect(pia?.[4]).toBe('— (No telemetry on a valid lap)');
+    expect(pia?.[6]).toBe('— (No telemetry for this lap)');
+    expect(rus?.[6]).toBe('— (No valid lap in Q2)');
+    show('Practice', 'Practice 1', [lap(12, 2, { lap_ms: null })], true);
+    expect(rows()[0]?.[5]).toBe('— (No valid lap with a time)');
+    expect(rows()[0]?.[6]).toBe('— (No valid lap with a time)');
+  });
+
+  it('says too few samples when the best lap has telemetry but no share (one sample, or only gaps)', () => {
+    show('Qualifying', 'Qualifying', [lap(12, 5, { ...laps[1], top_kph: 352, full_throttle: null })], true);
+    expect(rows()[0]?.[4]).toBe('352, fastestL5');
+    expect(rows()[0]?.[6]).toBe('— (Too few telemetry samples on this lap)');
+  });
+
+  it('leaves both columns out without the telemetry prop', () => {
+    show('Qualifying', 'Qualifying', tel);
+    expect(heads()).toEqual(['Driver', 'I1', 'I2', 'ST', 'Q2 Best lap', 'Q2 Sum of best sectors']);
+    expect(host.querySelectorAll('.legend li')).toHaveLength(2);
   });
 });

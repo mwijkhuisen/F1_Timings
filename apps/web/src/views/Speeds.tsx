@@ -16,9 +16,20 @@ const COLUMNS = [
   ['i1_kph', 'i1', 'I1'],
   ['i2_kph', 'i2', 'I2'],
   ['st_kph', 'st', 'ST'],
-] as const satisfies readonly (readonly [Speed, 'i1' | 'i2' | 'st', string])[];
+] as const satisfies readonly (readonly [Speed, 'i1' | 'i2' | 'st' | 'top', string])[];
+const TOP = ['top_kph', 'top', 'Top'] as const satisfies readonly [Speed, 'top', string];
 
-export function SpeedTable({ detail, laps }: { detail: SessionDetail; laps: Laps }) {
+// With `telemetry` (P7b, D1: only inside an opened session) a Top column follows ST and a Full throttle column follows
+// the own best lap; the player's table leaves them out.
+export function SpeedTable({
+  detail,
+  laps,
+  telemetry = false,
+}: {
+  detail: SessionDetail;
+  laps: Laps;
+  telemetry?: boolean;
+}) {
   const qualifying = detail.session.type === 'Qualifying';
   const phases = qualifying
     ? [...new Set(laps.flatMap((l) => (l.quali_phase === null ? [] : [l.quali_phase])))].sort((a, b) => a - b)
@@ -32,6 +43,7 @@ export function SpeedTable({ detail, laps }: { detail: SessionDetail; laps: Laps
   const own = phase === null ? '' : `${phaseName(detail.session.name, phase)} `;
   const where = phase === null ? '' : ` in ${phaseName(detail.session.name, phase)}`;
   const lapText = (l: Lap) => `L${l.lap_number}`;
+  const columns = telemetry ? [...COLUMNS, TOP] : COLUMNS;
   return (
     <>
       <h2>Speed traps and own bests</h2>
@@ -52,18 +64,20 @@ export function SpeedTable({ detail, laps }: { detail: SessionDetail; laps: Laps
       <ul className="legend" aria-label="Speed traps legend">
         <li>boxed: the fastest in the session</li>
         <li>under a speed: the lap of that reading</li>
+        {telemetry && <li>Top: telemetry, anywhere on the lap</li>}
       </ul>
       <Scroll label="Speed traps and own bests">
         <table className="speeds" aria-label="Speed traps and own bests">
           <thead>
             <tr>
               <th scope="col">Driver</th>
-              {COLUMNS.map(([, , label]) => (
+              {columns.map(([, , label]) => (
                 <th key={label} scope="col">
                   {label}
                 </th>
               ))}
               <th scope="col">{own}Best lap</th>
+              {telemetry && <th scope="col">{own}Full throttle</th>}
               <th scope="col">{own}Sum of best sectors</th>
             </tr>
           </thead>
@@ -75,13 +89,20 @@ export function SpeedTable({ detail, laps }: { detail: SessionDetail; laps: Laps
                   <th scope="row" className="drv" style={d && teamStyle(d)}>
                     {d?.acronym ?? r.driver}
                   </th>
-                  {COLUMNS.map(([field, key, label]) => {
+                  {columns.map(([field, key, label]) => {
                     const l = r[key];
                     const kph = l?.[field] ?? null;
                     return (
                       <td key={field}>
                         {l === null || kph === null ? (
-                          <Note id={`speed-${r.driver}-${label}`} text="No speed-trap reading on a valid lap">
+                          <Note
+                            id={`speed-${r.driver}-${label}`}
+                            text={
+                              field === 'top_kph'
+                                ? 'No telemetry on a valid lap'
+                                : 'No speed-trap reading on a valid lap'
+                            }
+                          >
                             —
                           </Note>
                         ) : (
@@ -115,6 +136,33 @@ export function SpeedTable({ detail, laps }: { detail: SessionDetail; laps: Laps
                       </>
                     )}
                   </td>
+                  {telemetry && (
+                    <td>
+                      {r.lap?.lap_ms == null ? (
+                        <Note
+                          id={`speed-${r.driver}-ft`}
+                          text={phase === null ? 'No valid lap with a time' : `No valid lap${where}`}
+                        >
+                          —
+                        </Note>
+                      ) : r.lap.full_throttle === null ? (
+                        <Note
+                          id={`speed-${r.driver}-ft`}
+                          text={
+                            r.lap.top_kph === null
+                              ? 'No telemetry for this lap'
+                              : 'Too few telemetry samples on this lap'
+                          }
+                        >
+                          —
+                        </Note>
+                      ) : (
+                        <>
+                          {Math.round(r.lap.full_throttle * 100)} %<small className="under">{lapText(r.lap)}</small>
+                        </>
+                      )}
+                    </td>
+                  )}
                   <td>
                     {r.sum === null ? (
                       <Note id={`speed-${r.driver}-sum`} text={`Needs a valid time in S1, S2 and S3${where}`}>

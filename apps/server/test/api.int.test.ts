@@ -12,6 +12,8 @@ import {
   SessionDetail,
   Status,
   Stints,
+  TELEMETRY_MAX_SAMPLES,
+  Telemetry,
   Weather,
 } from '@f1/contracts';
 import type { Hono } from 'hono';
@@ -19,7 +21,7 @@ import { type Kysely, sql } from 'kysely';
 import { HttpResponse, http, passthrough } from 'msw';
 import pino from 'pino';
 import { Agent, setGlobalDispatcher } from 'undici';
-import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import type { z } from 'zod';
 import { server } from '../../../test/msw.setup.ts';
 import { access } from '../src/api/access.ts';
@@ -28,6 +30,7 @@ import { createDb, type DB } from '../src/db/db.ts';
 import { processSession, syncSchedule } from '../src/ingest/ingest.ts';
 import { run } from '../src/main.ts';
 import { type Clock, createClient, OPENF1 } from '../src/openf1/client.ts';
+import { type PosRow, packCar, packPos } from '../src/telemetry/pack.ts';
 import { createTestDb, type TestDb } from './db.ts';
 import { AUD, jwt, rsaKey, serveCerts, TEAM } from './jwt.ts';
 
@@ -468,6 +471,194 @@ describe('api (f1_api login, Access JWT)', { timeout: 120_000 }, () => {
       [87, 14, 'TRACK LIMITS AT TURN 11'],
     ]);
     expect(new Set(laps.map((l) => l.quali_phase))).toEqual(new Set([1, 2, 3, null]));
+  });
+
+  it('laps: top_kph and full_throttle come from the lap telemetry row, null for a lap without one (P7b)', async () => {
+    const row = {
+      session_key: RACE,
+      driver_number: 1,
+      lap_number: 38,
+      source: 'f1-live',
+      date_start: new Date('2026-10-11T13:00:00Z'),
+      car: Buffer.from([1]),
+      pos: Buffer.alloc(0),
+      top_kph: 331,
+      full_throttle: 0.71,
+    };
+    await admin.insertInto('telemetry_lap').values(row).execute();
+    try {
+      const laps = await body(`/api/v1/sessions/${RACE}/laps`, Laps);
+      expect(laps).toHaveLength(62);
+      expect(laps.filter((l) => l.top_kph !== null || l.full_throttle !== null)).toEqual([
+        expect.objectContaining({ driver_number: 1, lap_number: 38, top_kph: 331, full_throttle: 0.71 }),
+      ]);
+      expect(laps.find((l) => l.driver_number === 1 && l.lap_number === 37)).toMatchObject({
+        top_kph: null,
+        full_throttle: null,
+      });
+    } finally {
+      await admin.deleteFrom('telemetry_lap').where('session_key', '=', RACE).execute();
+    }
+  });
+
+  describe('telemetry (P7b, A§10)', () => {
+    const START = new Date('2026-10-11T13:00:00Z');
+    const car = (n: number, step: number, first = 0) =>
+      Array.from({ length: n }, (_, i) => ({
+        t: START.getTime() + first + i * step,
+        rpm: 10_000 + (i % 3000),
+        speed: i % 340,
+        gear: 1 + (i % 8),
+        throttle: i % 101,
+        brake: i % 2 ? 100 : 0,
+        drs: i % 15,
+      }));
+    const pos = (n: number, step: number) =>
+      Array.from({ length: n }, (_, i) => ({
+        t: START.getTime() + i * step,
+        x: (i * 37) % 20_000,
+        y: 5 - ((i * 11) % 9000),
+        z: i % 50,
+        status: (i % 7 === 0 ? 'OffTrack' : i % 7 === 1 ? 42 : 'OnTrack') as PosRow['status'],
+      }));
+    const row = (session: number, carBuf: Buffer, posBuf: Buffer, lap = 5) => ({
+      session_key: session,
+      driver_number: 44,
+      lap_number: lap,
+      source: 'f1-live',
+      date_start: START,
+      car: carBuf,
+      pos: posBuf,
+      top_kph: 331,
+      full_throttle: 0.5,
+    });
+    const url = (session: number, query: string) => `/api/v1/sessions/${session}/telemetry${query}`;
+    const clean = () =>
+      admin
+        .deleteFrom('telemetry_lap')
+        .where('session_key', 'in', [RACE, QUALI])
+        .execute()
+        .then(() => undefined);
+    afterEach(clean);
+
+    it('without a JWT: 401, whatever the query', async () => {
+      for (const query of ['?driver=44&lap=5', '', '?driver=x']) {
+        const res = await app.request(url(QUALI, query));
+        expect(res.status, query).toBe(401);
+        expect(await res.text()).toBe('{"error":"unauthorized"}');
+      }
+    });
+
+    it('driver and lap each once, 1 to 4 digits: else the fixed 400, never echoed', async () => {
+      for (const query of [
+        '',
+        '?driver=44',
+        '?lap=5',
+        '?driver=&lap=5',
+        '?driver=44&lap=',
+        '?driver=44&driver=1&lap=5',
+        '?driver=44&lap=5&lap=6',
+        '?driver=4a&lap=5',
+        '?driver=-1&lap=5',
+        '?driver=44&lap=5.0',
+        '?driver=12345&lap=5',
+        '?driver=44&lap=12345',
+        '?driver=44&lap=5&v=bad',
+      ]) {
+        const res = await get(url(QUALI, query));
+        expect(res.status, query).toBe(400);
+        expect(res.headers.get('cache-control')).toBe('no-store');
+        expect(await res.text()).toBe('{"error":"bad request"}');
+      }
+    });
+
+    it('an unknown session and a lap without telemetry: the fixed 404', async () => {
+      await admin
+        .insertInto('telemetry_lap')
+        .values(row(QUALI, packCar(car(3, 100), START.getTime())?.buf as Buffer, Buffer.alloc(0)))
+        .execute();
+      for (const path of [
+        url(999999, '?driver=44&lap=5'),
+        url(QUALI, '?driver=44&lap=6'),
+        url(QUALI, '?driver=45&lap=5'),
+      ]) {
+        const res = await get(path);
+        expect(res.status, path).toBe(404);
+        expect(res.headers.get('cache-control')).toBe('no-store');
+        expect(await res.text()).toBe('{"error":"not found"}');
+      }
+    });
+
+    it('answers the packed samples exactly (a 70 s hole stays empty), cached 24 h only when the session is final', async () => {
+      // A gap of 70 s after sample 40: a skip record in each buffer, no sample made up.
+      const cars = [...car(40, 100), ...car(30, 100, 40 * 100 + 70_000)];
+      const poss = [...pos(40, 100), ...pos(30, 100).map((p) => ({ ...p, t: p.t + 40 * 100 + 70_000 }))];
+      const [carBuf, posBuf] = [packCar(cars, START.getTime())?.buf, packPos(poss, START.getTime())];
+      for (const session of [QUALI, RACE])
+        await admin
+          .insertInto('telemetry_lap')
+          .values(row(session, carBuf as Buffer, posBuf as Buffer))
+          .execute();
+      const path = url(QUALI, '?driver=44&lap=5');
+      const res = await get(path);
+      expect(res.status).toBe(200);
+      expect(res.headers.get('cache-control')).toBe('private, max-age=86400');
+      const t = Telemetry.parse(await res.json());
+      expect(t).toMatchObject({ source: 'f1-live', date_start: START.toISOString(), top_kph: 331, full_throttle: 0.5 });
+      expect(t.car).toEqual({
+        t: cars.map((r) => r.t - START.getTime()),
+        rpm: cars.map((r) => r.rpm),
+        speed: cars.map((r) => r.speed),
+        gear: cars.map((r) => r.gear),
+        throttle: cars.map((r) => r.throttle),
+        brake: cars.map((r) => r.brake),
+        drs: cars.map((r) => r.drs),
+      });
+      expect(t.pos).toEqual({
+        t: poss.map((r) => r.t - START.getTime()),
+        x: poss.map((r) => r.x),
+        y: poss.map((r) => r.y),
+        z: poss.map((r) => r.z),
+        status: poss.map((r) => r.status),
+      });
+      expect((await get(`${path}&v=${SHA}`)).headers.get('cache-control')).toBe('private, max-age=86400');
+      expect((await get(`${path}&v=${SHA2}`)).headers.get('cache-control')).toBe('no-store');
+      expect((await get(url(RACE, '?driver=44&lap=5'))).headers.get('cache-control')).toBe('no-store');
+    });
+
+    it('a row at TELEMETRY_MAX_SAMPLES records answers and parses', async () => {
+      const [carBuf, posBuf] = [
+        packCar(car(TELEMETRY_MAX_SAMPLES, 50), START.getTime())?.buf,
+        packPos(pos(TELEMETRY_MAX_SAMPLES, 50), START.getTime()),
+      ];
+      await admin
+        .insertInto('telemetry_lap')
+        .values(row(QUALI, carBuf as Buffer, posBuf as Buffer))
+        .execute();
+      const res = await get(url(QUALI, '?driver=44&lap=5'));
+      expect(res.status).toBe(200);
+      const t = Telemetry.parse(await res.json());
+      expect([t.car.t.length, t.pos.t.length]).toEqual([TELEMETRY_MAX_SAMPLES, TELEMETRY_MAX_SAMPLES]);
+    });
+
+    it('a malformed row: the fixed 500 internal, logged as a code, nothing echoed', async () => {
+      const good = packPos(pos(3, 100), START.getTime()) as Buffer;
+      // An unknown flags bit, and a length that fits no record count.
+      for (const bad of [Buffer.from([2, 0, 0, 0]), Buffer.from([0, 1, 2, 3])]) {
+        await clean();
+        await admin
+          .insertInto('telemetry_lap')
+          .values(row(QUALI, bad, good))
+          .execute();
+        lines.length = 0;
+        const res = await get(url(QUALI, '?driver=44&lap=5'));
+        expect(res.status).toBe(500);
+        expect(res.headers.get('cache-control')).toBe('no-store');
+        expect(await res.text()).toBe('{"error":"internal"}');
+        expect(lines.filter((l) => l.includes('"msg":"api"'))).toHaveLength(1);
+        expect(lines.join('')).not.toMatch(/bad telemetry row|driver=|"44"/);
+      }
+    });
   });
 
   it('weather: every sample in date order with the A§7 column names; the sprint was wet for 20 of them', async () => {

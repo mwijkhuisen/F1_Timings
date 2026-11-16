@@ -1,14 +1,24 @@
 import { inflateRawSync } from 'node:zlib';
 import { isObj, utc } from './read.ts';
 
-// The `.z` topics (A§6.2, A§11.3): `decodeZ` turns one payload into JSON within a bound, and `positions` reads a
-// decoded Position message. Pure, and they never throw: a failure is a fixed code for the caller to count, never a
-// payload. Decoded telemetry is F1 data (A§12.1 invariant 3): no fixture holds any, and nothing here logs.
+// The `.z` topics (A§6.2, A§11.3): `decodeZ` turns one payload into JSON within a bound, and `positions` and
+// `carData` read a decoded Position or CarData message. Pure, and they never throw: a failure is a fixed code or a
+// count for the caller, never a payload. Decoded telemetry is F1 data (A§12.1 invariant 3): no fixture holds any,
+// and nothing here logs.
 
 export type ZFail = 'bad_base64' | 'bad_deflate' | 'too_large' | 'zlib' | 'bad_json';
 export type Sample = { status: 'OnTrack' | 'OffTrack' | number; x: number; y: number; z: number };
 /** One Position timestamp (epoch ms) with its cars, ids 1–99, in 0.1 m units. */
 export type PosEntry = { t: number; cars: [number, Sample][] };
+/** One CarData sample: channels 0, 2, 3, 4, 5 and, when the session has it, 45 (A§6.2), raw values. */
+export type CarSample = { rpm: number; speed: number; gear: number; throttle: number; brake: number; drs?: number };
+/** One CarData `Utc` (epoch ms) with its cars, ids 1–99. */
+export type CarEntry = { t: number; cars: [number, CarSample][] };
+/**
+ * What `positions` and `carData` skip whole, for a caller that counts it (the telemetry job's `dropped`, P7b review): a
+ * message of over MAX_ENTRIES entries, and an entry without a good time or a cars object. P7a's callers pass none.
+ */
+export type Skipped = { too_many_entries: number; bad_entry: number };
 
 /** About 20 times the largest message seen (11.7 KB, A§6.2): anything bigger is a zip bomb. */
 const MAX_INFLATED = 256 * 1024;
@@ -58,14 +68,22 @@ const status = (v: unknown): Sample['status'] | undefined =>
 /**
  * A decoded Position message, `Position[].{Timestamp, Entries.<n>.{Status, X, Y, Z}}` (A§6.2). An entry with a bad
  * Timestamp is skipped; a sample whose id is no car, whose Status is none of OnTrack, OffTrack or a number (2019),
- * whose X, Y or Z is no int16, or at X = Y = 0, is dropped. A message of over MAX_ENTRIES entries is [].
+ * whose X, Y or Z is no int16, or at X = Y = 0, is dropped. A message of over MAX_ENTRIES entries is []. `skipped`
+ * counts such a message (`too_many_entries`) and a skipped entry (`bad_entry`).
  */
-export function positions(value: unknown): PosEntry[] {
-  if (!isObj(value) || !Array.isArray(value.Position) || value.Position.length > MAX_ENTRIES) return [];
+export function positions(value: unknown, skipped: Skipped = { too_many_entries: 0, bad_entry: 0 }): PosEntry[] {
+  if (!isObj(value) || !Array.isArray(value.Position)) return [];
+  if (value.Position.length > MAX_ENTRIES) {
+    skipped.too_many_entries++;
+    return [];
+  }
   const out: PosEntry[] = [];
   for (const entry of value.Position) {
     const t = isObj(entry) ? utc(entry.Timestamp) : null;
-    if (t === null || !isObj(entry) || !isObj(entry.Entries)) continue;
+    if (t === null || !isObj(entry) || !isObj(entry.Entries)) {
+      skipped.bad_entry++;
+      continue;
+    }
     const cars: [number, Sample][] = [];
     for (const [id, c] of Object.entries(entry.Entries)) {
       if (!CAR.test(id) || !isObj(c)) continue;
@@ -77,4 +95,49 @@ export function positions(value: unknown): PosEntry[] {
     out.push({ t, cars });
   }
   return out;
+}
+
+const uint = (v: unknown, max: number): v is number =>
+  typeof v === 'number' && Number.isInteger(v) && v >= 0 && v <= max;
+
+/**
+ * A decoded CarData message, `Entries[].{Utc, Cars.<n>.Channels.{0,2,3,4,5,45}}` (A§6.2, P7b), on `positions`' rules:
+ * an entry with a bad Utc is skipped, an id that is no car is skipped, and a message of over MAX_ENTRIES entries is
+ * []. A car's sample is dropped, and counted in `dropped` (`bad_sample`), unless channel 0 is an integer 0–65,535,
+ * channel 2 an integer 0–32,767 (the `top_kph` smallint; real speeds stop at 365) and 3, 4 and 5 integers 0–255.
+ * Channel 45 is kept when it is an integer 0–255, else the sample has none. `skipped` as `positions`.
+ */
+export function carData(
+  value: unknown,
+  skipped: Skipped = { too_many_entries: 0, bad_entry: 0 },
+): { entries: CarEntry[]; dropped: number } {
+  if (!isObj(value) || !Array.isArray(value.Entries)) return { entries: [], dropped: 0 };
+  if (value.Entries.length > MAX_ENTRIES) {
+    skipped.too_many_entries++;
+    return { entries: [], dropped: 0 };
+  }
+  const entries: CarEntry[] = [];
+  let dropped = 0;
+  for (const entry of value.Entries) {
+    const t = isObj(entry) ? utc(entry.Utc) : null;
+    if (t === null || !isObj(entry) || !isObj(entry.Cars)) {
+      skipped.bad_entry++;
+      continue;
+    }
+    const cars: [number, CarSample][] = [];
+    for (const [id, c] of Object.entries(entry.Cars)) {
+      if (!CAR.test(id)) continue;
+      const ch = isObj(c) && isObj(c.Channels) ? c.Channels : {};
+      const [rpm, speed, gear, throttle, brake, drs] = [ch['0'], ch['2'], ch['3'], ch['4'], ch['5'], ch['45']];
+      if (!uint(rpm, 65_535) || !uint(speed, 32_767) || !uint(gear, 255) || !uint(throttle, 255) || !uint(brake, 255)) {
+        dropped++;
+        continue;
+      }
+      const s: CarSample = { rpm, speed, gear, throttle, brake };
+      if (uint(drs, 255)) s.drs = drs;
+      cars.push([Number(id), s]);
+    }
+    entries.push({ t, cars });
+  }
+  return { entries, dropped };
 }

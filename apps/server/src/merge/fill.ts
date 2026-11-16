@@ -1,4 +1,4 @@
-import { lstatSync, readdirSync, readFileSync } from 'node:fs';
+import { readdirSync } from 'node:fs';
 import { join } from 'node:path';
 import type { Kysely } from 'kysely';
 import type { Logger } from 'pino';
@@ -7,7 +7,7 @@ import { TOPICS } from '../archive/job.ts';
 import { archiveRows } from '../archive/rows.ts';
 import { codeOf, type DB } from '../db/db.ts';
 import { type FeedEvent, parseFeedLine } from '../live/read.ts';
-import { segment, segments } from '../live/recording.ts';
+import { readCapped, segment, segments } from '../live/recording.ts';
 import type { Source } from './merge.ts';
 import { mergeSession, staleLap, storeCandidates } from './write.ts';
 
@@ -27,10 +27,40 @@ const absent = (err: unknown) => codeOf(err) === 'ENOENT';
 /** The topics the archive job downloads and archiveRows reads; any other `*.jsonStream` (P3e's telemetry) is ignored. */
 const FILES = new Set<string>(TOPICS.map((t) => `${t}.jsonStream`));
 const PARSED = new Set<string>(TOPICS);
-const RECORDING = /^[0-9]+-[0-9]+$/;
+/** A recording's path, as its CHECK pins it: checked again before it is joined to a directory (fill, telemetry). */
+export const RECORDING = /^[0-9]+-[0-9]+$/;
 
-/** `<archiveDir>/<key>/`: rows of its topic files, each a regular file (a symlink fails), the size capped before any read. */
-function fromArchive(dir: string, key: number, type: string | null, maxBytes: number): Read {
+/** The earliest complete recording of a session, found through the table and never by listing the directory. */
+export const firstComplete = (db: Kysely<DB>, key: number) =>
+  db
+    .selectFrom('recording')
+    .select(['id', 'path'])
+    .where('session_key', '=', key)
+    .where('complete', '=', true)
+    .orderBy('started_at')
+    .orderBy('id')
+    .limit(1)
+    .executeTakeFirst();
+
+/**
+ * The keys, or for `'all'` every session but the jolpica ones (1950–2017: no files, and their laps have one source,
+ * so neither job could change them), newest `date_end` first (fill, telemetry).
+ */
+export const sessionKeys = async (db: Kysely<DB>, keys: FillArgs['keys']): Promise<readonly number[]> =>
+  keys !== 'all'
+    ? keys
+    : (
+        await db
+          .selectFrom('session')
+          .select('session_key')
+          .where('source', '<>', 'jolpica')
+          .orderBy('date_end', (o) => o.desc().nullsLast())
+          .orderBy('session_key', 'desc')
+          .execute()
+      ).map((s) => s.session_key);
+
+/** `<archiveDir>/<key>/`: rows of its topic files, each read through `readCapped` within what is left of `maxBytes`. */
+async function fromArchive(dir: string, key: number, type: string | null, maxBytes: number): Promise<Read> {
   let names: string[];
   try {
     names = readdirSync(dir).filter((f) => FILES.has(f));
@@ -39,10 +69,13 @@ function fromArchive(dir: string, key: number, type: string | null, maxBytes: nu
     throw err;
   }
   if (!['SessionInfo', 'TimingData'].every((t) => names.includes(`${t}.jsonStream`))) return undefined;
-  const stats = names.map((f) => lstatSync(join(dir, f)));
-  if (!stats.every((st) => st.isFile())) throw fail('not_file');
-  if (stats.reduce((n, st) => n + st.size, 0) > maxBytes) throw fail('too_large');
-  const files = new Map(names.map((f) => [f.slice(0, -'.jsonStream'.length), readFileSync(join(dir, f), 'utf8')]));
+  const files = new Map<string, string>();
+  let left = maxBytes;
+  for (const f of names) {
+    const buf = await readCapped(join(dir, f), left);
+    left -= buf.length;
+    files.set(f.slice(0, -'.jsonStream'.length), buf.toString('utf8'));
+  }
   const built = archiveRows(files, key, type);
   if (!built.ok && built.error === 'incomplete') return undefined; // no t0: as the archive job, not a failure
   if (!built.ok) throw fail(built.error);
@@ -112,16 +145,7 @@ async function fillSession(deps: FillDeps, args: Omit<FillArgs, 'keys'>, key: nu
   let recording: number | undefined;
   if (session.source === 'openf1') {
     await attempt('f1-archive', () => fromArchive(join(args.archiveDir, String(key)), key, session.type, maxBytes));
-    // The earliest complete recording, found through the table and never by listing the directory.
-    const rec = await db
-      .selectFrom('recording')
-      .select(['id', 'path'])
-      .where('session_key', '=', key)
-      .where('complete', '=', true)
-      .orderBy('started_at')
-      .orderBy('id')
-      .limit(1)
-      .executeTakeFirst();
+    const rec = await firstComplete(db, key);
     if (rec) {
       recording = Number(rec.id);
       // The CHECK pins the path already; checked again before it is joined to a directory.
@@ -146,18 +170,7 @@ async function fillSession(deps: FillDeps, args: Omit<FillArgs, 'keys'>, key: nu
  */
 export async function fill(deps: FillDeps, args: FillArgs): Promise<boolean> {
   const { db, log } = deps;
-  const keys =
-    args.keys === 'all'
-      ? (
-          await db
-            .selectFrom('session')
-            .select('session_key')
-            .where('source', '<>', 'jolpica') // nothing in a jolpica session can change (its laps have one source)
-            .orderBy('date_end', (o) => o.desc().nullsLast())
-            .orderBy('session_key', 'desc')
-            .execute()
-        ).map((s) => s.session_key)
-      : args.keys;
+  const keys = await sessionKeys(db, args.keys);
   let failed = 0;
   for (const key of keys) {
     const started = performance.now();

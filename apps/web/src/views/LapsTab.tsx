@@ -56,7 +56,7 @@ export function LapsTab({ session, detail, laps }: { session: number; detail: Se
       ) : (
         <LapTable detail={detail} laps={laps} track={track} marks />
       )}
-      <SpeedTable detail={detail} laps={laps} />
+      <SpeedTable detail={detail} laps={laps} telemetry />
       {rc.data && <RaceControlLog detail={detail} laps={laps} rows={rc.data} />}
       {!race && rc.error && <p className="muted">Race control did not load.</p>}
     </>

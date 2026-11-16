@@ -348,6 +348,34 @@ sudo docker compose -p f1 -f /etc/f1/compose.yaml --env-file /srv/f1/state/curre
 - **After an image rollback:** an image before P3b writes `lap` only, so `lap_source` goes stale for the sessions it wrote. Once rolled forward, refetch (`refetch <session_key>`) or re-archive those sessions before running `fill` on them. `fill` leaves a session unchanged and fails it as `stale_lap` when any `lap` row has no candidate of its own source (the old image wrote it), files or not; it cannot tell a candidate that is present but stale (a session the old image refetched), hence the refetch first.
 - **Browser cache:** a final session's laps stay cached in the browser for up to 24 h (A§10, `max-age=86400`), so check a filled session with a hard reload.
 
+## Pack the telemetry into the laps (the `telemetry` job) [owner]
+
+`telemetry` (A§4, A§7) reads, for each session, the `CarData.z` and `Position.z` of its earliest complete recording in `/srv/f1/live` and of its archive files in `/srv/f1/archive/<session_key>/`, and writes one packed `telemetry_lap` row per driver-lap of the `lap` table. It never reaches the network. `f1-update` never runs it and no timer does: you start it, for every session (`--all`, newest first) or for the keys you give. Run `fill --all` first where laps come from files: the job takes its lap windows from the `lap` table, and a session without laps is `no_laps`.
+
+```bash
+sudo docker compose -p f1 -f /etc/f1/compose.yaml --env-file /srv/f1/state/current.env \
+  --profile jobs run --rm telemetry telemetry --all
+sudo docker compose -p f1 -f /etc/f1/compose.yaml --env-file /srv/f1/state/current.env \
+  --profile jobs run --rm telemetry telemetry 11404 11408
+```
+
+- **Exit codes:** 0 when no session failed; 1 when one did (an unknown key, a failing source or a database error: the session's `telemetry` line is at error level with the code, and `telemetry_done` counts the failures); 64 for a usage error (keys and `--all` together or neither, a key that is not digits, an unknown flag, a directory outside the rule below); 78 without the database secret.
+- **Directories:** `--archive-dir` and `--live-dir` default to the container's paths and are not needed on the VM. They take only `/srv/f1/archive` and `/srv/f1/live` or a path with a `fixtures-private` segment (exit 64 otherwise), as `fill`.
+- **Sources:** a complete recording wins for each lap that it holds whole, and the archive fills the laps it lacks (A§7, T1). Only a complete recording counts, the earliest one of the session.
+- **A failing source** (`too_large`, `not_file`, `too_many_samples`: over 2,000,000 samples in the lap windows, and for a recording `recording_missing` or `incomplete`: no sealed segment) fails the session and changes nothing in it, so the archive never stands in for a recording that failed to read. Absent files are no failure: the line says `skip` with `no_files`, or `no_laps` when the session has no lap with a start.
+- **A rerun** gives the same rows: each session's rows are replaced in one transaction.
+- **After a refetch or `fill` that changes a session's laps,** run `telemetry` for the session: the rows are matched to the laps by driver and lap number only, so a renumbered lap shows the old lap's figures until then (A§7).
+- **Browser cache:** as after a refetch, a final session's laps stay cached in the browser for up to 24 h (A§10, `max-age=86400`), so a `telemetry` run shows in the laps only after that or a hard reload.
+- **Check it [box]:** the `telemetry_done` line has `sessions`, `failed` and `max_rss_kb`; the sizes and the source split:
+
+  ```bash
+  sudo f1-psql -c "SELECT source, count(*) AS rows, pg_size_pretty(sum(pg_column_size(car) + pg_column_size(pos))) AS stored FROM telemetry_lap GROUP BY source"
+  sudo f1-psql -c "SELECT pg_size_pretty(pg_total_relation_size('telemetry_lap'))"
+  ```
+
+  The WSL [box] (A§7) took about 3.2 MB a session. Each session's line has its counts only (A§7, "The job").
+- **After an image rollback:** the previous image never reads `telemetry_lap`, so nothing needs undoing; the rows wait for the next release.
+
 ## Import Jolpica (the `jolpica` job) [owner]
 
 `jolpica` (A§4, A§6.3, A§7) reads the Jolpica-F1 CSV dump in `/srv/f1/jolpica` and writes the races and qualifyings of 1950–2017 as `jolpica` rows; from 2018 on it adds lap candidates to the sessions that already exist. It never reaches the network, so the download is your step. `f1-update` never runs it and no timer does. `f1-install` creates `/srv/f1/jolpica` (`root:62532 0750`: root unpacks the dump, the job only reads it).

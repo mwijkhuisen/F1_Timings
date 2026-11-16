@@ -63,7 +63,7 @@ export function colouredBests<L extends Pick<Lap, 'driver_number' | 'lap_ms' | '
   return out;
 }
 
-export type Speed = 'i1_kph' | 'i2_kph' | 'st_kph';
+export type Speed = 'i1_kph' | 'i2_kph' | 'st_kph' | 'top_kph';
 
 /** The fastest speed-trap reading on valid laps (A§9 tie order), or null: a driver's own top, or the session's. */
 export const ownTop = (laps: readonly Lap[], field: Speed): Lap | null =>
@@ -104,14 +104,16 @@ export const speedTops = (laps: readonly Lap[]): Record<Speed, Lap | null> => ({
   i1_kph: ownTop(laps, 'i1_kph'),
   i2_kph: ownTop(laps, 'i2_kph'),
   st_kph: ownTop(laps, 'st_kph'),
+  top_kph: ownTop(laps, 'top_kph'),
 });
 
-/** `i1`, `i2`, `st`: the driver's top lap per speed; `lap`: own best lap; `sum`: own best S1 + S2 + S3, null unless all three exist. */
+/** `i1`, `i2`, `st`, `top`: the driver's top lap per speed (`top`: telemetry, P7b); `lap`: own best lap; `sum`: own best S1 + S2 + S3, null unless all three exist. */
 export type SpeedRow = {
   driver: number;
   i1: Lap | null;
   i2: Lap | null;
   st: Lap | null;
+  top: Lap | null;
   lap: Lap | null;
   sum: number | null;
 };
@@ -141,6 +143,7 @@ export function speedTable(laps: readonly Lap[], phase: number | null): SpeedRow
       i1: ownTop(own, 'i1_kph'),
       i2: ownTop(own, 'i2_kph'),
       st: ownTop(own, 'st_kph'),
+      top: ownTop(own, 'top_kph'),
       lap: lap.get(driver) ?? null,
       sum: a == null || b == null || c == null ? null : a + b + c,
     };

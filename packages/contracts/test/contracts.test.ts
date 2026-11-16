@@ -31,6 +31,8 @@ const lap = (over: Partial<Lap> = {}): Lap => ({
   i1_kph: 300,
   i2_kph: null,
   st_kph: 320,
+  top_kph: null,
+  full_throttle: null,
   is_pit_out: null,
   is_pit_in: false,
   seg1: [2048, null],

@@ -269,6 +269,18 @@ export interface Stint {
   tyre_age_at_start: number | null;
 }
 
+export interface TelemetryLap {
+  car: Buffer;
+  date_start: Timestamp;
+  driver_number: number;
+  full_throttle: number | null;
+  lap_number: number;
+  pos: Buffer;
+  session_key: number;
+  source: string;
+  top_kph: number | null;
+}
+
 export interface Weather {
   air_temperature: number | null;
   date: Timestamp;
@@ -302,5 +314,6 @@ export interface DB {
   result: Result;
   session: Session;
   stint: Stint;
+  telemetry_lap: TelemetryLap;
   weather: Weather;
 }

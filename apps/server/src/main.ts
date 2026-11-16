@@ -21,6 +21,7 @@ import { fill } from './merge/fill.ts';
 import { createClient, systemClock } from './openf1/client.ts';
 import { createBudget, createRainClient } from './rain/client.ts';
 import { createRainStep } from './rain/job.ts';
+import { telemetry } from './telemetry/job.ts';
 
 /** Roles of the single server image (A§4); the first argument picks one. */
 export const ROLES = [
@@ -38,6 +39,7 @@ export const ROLES = [
   'fill',
   'jolpica',
   'reindex-recordings',
+  'telemetry',
 ] as const;
 export type Role = (typeof ROLES)[number];
 
@@ -53,7 +55,8 @@ const USAGE =
   `accept-empty <session_key> <${SESSION_ENDPOINTS.join('|')}>; ` +
   'archive <year 2018-> [<session_key>...] [--token-file <path>] [--dir <path>]; ' +
   'fill <session_key>...|--all [--archive-dir <path>] [--live-dir <path>]; ' +
-  'jolpica [<year 1950->...] [--dir <path>]; reindex-recordings [--live-dir <path>])';
+  'jolpica [<year 1950->...] [--dir <path>]; reindex-recordings [--live-dir <path>]; ' +
+  'telemetry <session_key>...|--all [--archive-dir <path>] [--live-dir <path>])';
 
 /**
  * Resolves with the exit code. `apiPort` is a test seam only (not configurable in production: Caddy proxies to api:8080).
@@ -71,7 +74,7 @@ export async function run(
   };
   if (!isRole(role)) return usage();
   if (role === 'archive') return runArchive(rest, env, log);
-  if (role === 'fill') return runFill(rest, env, log);
+  if (role === 'fill' || role === 'telemetry') return runFiles(role, rest, env, log);
   if (role === 'jolpica') return runJolpica(rest, env, log);
   if (role === 'reindex-recordings') return runReindex(rest, env, log);
   if (
@@ -247,8 +250,16 @@ const privateDir = (dir: string, standard: string) => {
   return path === standard || path.split(sep).includes('fixtures-private');
 };
 
-/** The fill job (P3b): the files of the archive and of the recorder into the lap merge, as f1_ingest. No network. */
-async function runFill(argv: readonly string[], env: Env, log: (line: string) => void): Promise<number> {
+/**
+ * The jobs over the files of the archive and of the recorder, as f1_ingest, no network: fill (P3b) into the lap merge,
+ * telemetry (P7b) into the `telemetry_lap` rows.
+ */
+async function runFiles(
+  role: 'fill' | 'telemetry',
+  argv: readonly string[],
+  env: Env,
+  log: (line: string) => void,
+): Promise<number> {
   let parsed: ReturnType<typeof parseFill>;
   try {
     parsed = parseFill(argv);
@@ -261,15 +272,15 @@ async function runFill(argv: readonly string[], env: Env, log: (line: string) =>
   }
   const url = dbUrl('f1_ingest', env);
   if (typeof url === 'string') {
-    log(`fill: ${url}`);
+    log(`${role}: ${url}`);
     return EXIT_CONFIG;
   }
-  const logger = pino({ base: { role: 'fill' } });
+  const logger = pino({ base: { role } });
   const db = createDb(url, (err) => logger.error({ cause: codeOf(err) }, 'database pool error'));
   try {
-    return (await fill({ db, log: logger }, parsed)) ? 0 : 1;
+    return (await (role === 'fill' ? fill : telemetry)({ db, log: logger }, parsed)) ? 0 : 1;
   } catch (err) {
-    logger.error({ cause: codeOf(err) }, 'fill failed');
+    logger.error({ cause: codeOf(err) }, `${role} failed`);
     return 1;
   } finally {
     await db.destroy();

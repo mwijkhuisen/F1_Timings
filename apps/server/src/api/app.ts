@@ -12,6 +12,7 @@ import {
   type Standings,
   type Status,
   type Stints,
+  type Telemetry,
 } from '@f1/contracts';
 import type { HttpBindings } from '@hono/node-server';
 import { type Context, Hono, type MiddlewareHandler } from 'hono';
@@ -25,6 +26,7 @@ import { OUTLINES } from '../live/outlines.ts';
 import { playback } from '../live/playback.ts';
 import { AFTER_MS } from '../live/recorder.ts';
 import { zCounts } from '../live/telemetry.ts';
+import { unpackCar, unpackPos } from '../telemetry/pack.ts';
 import { colours } from '../timing/colours.ts';
 import { counted, type StandingsSeason, standings, standingsMismatches } from '../timing/standings.ts';
 
@@ -269,6 +271,13 @@ export function createApp({
     if (session instanceof Response) return session;
     const laps = await db
       .selectFrom('lap as l')
+      // P7b: only the two figures of telemetry_lap, never its bytea columns (nothing is detoasted).
+      .leftJoin('telemetry_lap as tl', (join) =>
+        join
+          .onRef('tl.session_key', '=', 'l.session_key')
+          .onRef('tl.driver_number', '=', 'l.driver_number')
+          .onRef('tl.lap_number', '=', 'l.lap_number'),
+      )
       .select((eb) => [
         'l.driver_number',
         'l.lap_number',
@@ -280,6 +289,8 @@ export function createApp({
         'l.i1_kph',
         'l.i2_kph',
         'l.st_kph',
+        'tl.top_kph',
+        'tl.full_throttle',
         'l.is_pit_out',
         'l.is_pit_in',
         'l.seg1',
@@ -402,6 +413,35 @@ export function createApp({
     };
     // Immutable only when the grid will never change: its own state, not just the session's.
     return c.json(body, 200, cache(grid?.state === 'final' ? session.state : 'live', session.v));
+  });
+
+  // P7b (A§10): one driver-lap, at most TELEMETRY_MAX_SAMPLES samples a topic (the DDL CHECK, and unpack again here).
+  // driver and lap are each given once; a malformed row throws into the 500 `internal`, nothing echoed.
+  api.get('/sessions/:key/telemetry', async (c) => {
+    const session = await lookup(c);
+    if (session instanceof Response) return session;
+    const [driver, lap] = ['driver', 'lap'].map((name) => {
+      const all = c.req.queries(name);
+      return all?.length === 1 && /^\d{1,4}$/.test(all[0] as string) ? Number(all[0]) : null;
+    });
+    if (driver === null || lap === null) return badRequest(c);
+    const row = await db
+      .selectFrom('telemetry_lap')
+      .select(['source', 'date_start', 'car', 'pos', 'top_kph', 'full_throttle'])
+      .where('session_key', '=', session.key)
+      .where('driver_number', '=', driver as number)
+      .where('lap_number', '=', lap as number)
+      .executeTakeFirst();
+    if (!row) return notFound(c);
+    const body: Telemetry = {
+      source: row.source as Telemetry['source'],
+      date_start: row.date_start.toISOString(),
+      top_kph: row.top_kph,
+      full_throttle: row.full_throttle,
+      car: unpackCar(row.car),
+      pos: unpackPos(row.pos),
+    };
+    return c.json(body, 200, cache(session.state, session.v));
   });
 
   // P8 (A§9, A§10): the championship standings after S, computed from S's season only and, of the sessions after S,

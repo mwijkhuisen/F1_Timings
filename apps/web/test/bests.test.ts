@@ -196,6 +196,7 @@ describe('speedTable', () => {
       i1: speed,
       i2: speed,
       st: speed,
+      top: speed,
       deleted: fc.boolean(),
       in: fc.boolean(),
       out: fc.boolean(),
@@ -208,6 +209,7 @@ describe('speedTable', () => {
             i1_kph: s.i1,
             i2_kph: s.i2,
             st_kph: s.st,
+            top_kph: s.top,
             deleted: s.deleted,
             is_pit_in: s.in,
             is_pit_out: s.out,
@@ -220,7 +222,8 @@ describe('speedTable', () => {
           ['i1_kph', 'i1'],
           ['i2_kph', 'i2'],
           ['st_kph', 'st'],
-        ] as const satisfies readonly (readonly [Speed, 'i1' | 'i2' | 'st'])[]) {
+          ['top_kph', 'top'],
+        ] as const satisfies readonly (readonly [Speed, 'i1' | 'i2' | 'st' | 'top'])[]) {
           const any = laps.some((l) => isValid(l) && l[field] !== null);
           const boxed = rows.filter((r) => r[key] !== null && r[key] === tops[field]);
           expect(boxed).toHaveLength(any ? 1 : 0);

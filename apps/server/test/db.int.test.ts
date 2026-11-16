@@ -26,6 +26,7 @@ const TABLES = [
   'rain_frame',
   'forecast',
   'forecast_hour',
+  'telemetry_lap',
   'recording',
   'recorder_status',
   'ingest_status',

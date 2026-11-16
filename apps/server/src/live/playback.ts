@@ -92,6 +92,8 @@ export function lapRows(
       i1_kph: l.i1_kph,
       i2_kph: l.i2_kph,
       st_kph: l.st_kph,
+      top_kph: null, // telemetry is stored per lap after the session, never in the stream (P7b)
+      full_throttle: null,
       is_pit_out: l.is_pit_out,
       is_pit_in: l.is_pit_in,
       seg1: null,

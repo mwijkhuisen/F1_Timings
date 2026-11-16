@@ -781,7 +781,7 @@ Remaining 2026 weekends (OpenF1 schedule): Austin (race 25 Oct) · Mexico City 3
 - **Depends on:** P7a (the decoder, the Position parser and the fit) and, for 2018 on, P3e (#130, the raw `.z` files in `/srv/f1/archive`). The VM backfill of the recordings comes first. **Owner actions:** the `telemetry` runs on the VM.
 - **Scope in:**
   - the CarData parser: channel ids 0 RPM, 2 speed, 3 gear, 4 throttle, 5 brake, 45 DRS where present. The names of 4, 5 and 45 follow FastF1 (MIT), as a reference only, and their meaning beyond that is **[U]** (A§6.2).
-  - the `telemetry_lap` table and the per-session frame (A§7): a migration, grants (`f1_ingest` replaces, `f1_api` reads), `db:types`.
+  - the `telemetry_lap` table and the per-session frame (A§7): a migration, grants (`f1_ingest` replaces, `f1_api` reads), `db:types`. The frame table (`telemetry_session`) is deferred to a follow-up issue (owner, 2026-11-16, P7b plan, D3): nothing reads it yet.
   - `telemetry <session_key>… | --all [--archive-dir <path>] [--live-dir <path>]`, the `fill` pattern (A§4): it logs in as `f1_ingest`, reads `/srv/f1/archive` and `/srv/f1/live` read-only, makes no network call, and its directory flags follow the `fill` rule. The laps come from the `lap` table, and the T1 precedence decides the source of each lap. A `jobs`-profile compose service (A§14.2).
   - `GET /api/v1/sessions/:key/telemetry?driver=&lap=` (A§10): one driver-lap, bounded, a zod contract in `packages/contracts`.
   - T6 in the laps API and the lap views (A§13): the top speed and the full-throttle share, `—` without telemetry.

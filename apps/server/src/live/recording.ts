@@ -51,6 +51,34 @@ export async function openFile(path: string): Promise<FileHandle> {
   throw notFile();
 }
 
+/**
+ * A regular file's bytes through one `openFile` handle (a symlink, FIFO or directory is `not_file`), at most `max`: the
+ * handle's size is checked and the read stops at `max` + 1 bytes, so nothing swapped in or grown after a check is read
+ * whole (`too_large`). The archive's files (fill, telemetry).
+ */
+export async function readCapped(path: string, max: number): Promise<Buffer> {
+  const big = () => Object.assign(new Error('too_large'), { code: 'too_large' });
+  const fh = await openFile(path).catch((err: unknown) => {
+    throw codeOf(err) === 'ELOOP' ? notFile() : err;
+  });
+  try {
+    const size = (await fh.stat()).size;
+    if (size > max) throw big();
+    // One byte past the size seen: a file that grew since is refused, never read in part.
+    const buf = Buffer.alloc(size + 1);
+    let n = 0;
+    while (n < buf.length) {
+      const { bytesRead } = await fh.read(buf, n, buf.length - n, n);
+      if (bytesRead === 0) break;
+      n += bytesRead;
+    }
+    if (n > size) throw big();
+    return buf.subarray(0, n);
+  } finally {
+    await fh.close();
+  }
+}
+
 export type RecordingOptions = {
   dir: string;
   now?: () => number;
