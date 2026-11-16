@@ -12,6 +12,9 @@ export * from './race-control.ts';
 // strict, so drift between the server and a contract fails the tests. No z.config
 // here: the web entry sets `jitless` (D12).
 
+/** The most samples one topic of a telemetry answer holds (A§10): the route's bound; the DDL CHECK holds the same. */
+export const TELEMETRY_MAX_SAMPLES = 20_000;
+
 const int = z.number().int();
 /** pg timestamptz → Date → toJSON. */
 const date = z.iso.datetime();
@@ -99,6 +102,8 @@ export const Lap = z.strictObject({
   i1_kph: int.nullable(),
   i2_kph: int.nullable(),
   st_kph: int.nullable(),
+  top_kph: int.nullable(), // P7b: the lap's top speed from its telemetry row; null without one (A§13)
+  full_throttle: z.number().min(0).max(1).nullable(), // P7b: the share of the lap at full throttle; null without telemetry
   is_pit_out: z.boolean().nullable(),
   is_pit_in: z.boolean(),
   seg1: segments,
@@ -111,6 +116,40 @@ export const Lap = z.strictObject({
   colour: z.strictObject({ lap: Colour, s1: Colour, s2: Colour, s3: Colour }),
 });
 export const Laps = z.array(Lap);
+
+// One lap's telemetry (P7b, A§10): every array holds at most TELEMETRY_MAX_SAMPLES integers, `t` is in ms from
+// date_start, and each topic's arrays are as long as its `t`. Samples are never filled (A§2).
+const samples = z.array(int).max(TELEMETRY_MAX_SAMPLES);
+const equalLengths = (o: Record<string, unknown[] | null>) => {
+  const lengths = Object.values(o).flatMap((a) => (a ? [a.length] : []));
+  return lengths.every((n) => n === lengths[0]);
+};
+export const Telemetry = z.strictObject({
+  source: z.enum(['f1-live', 'f1-archive']),
+  date_start: date,
+  top_kph: int.nullable(),
+  full_throttle: z.number().min(0).max(1).nullable(),
+  car: z
+    .strictObject({
+      t: samples,
+      rpm: samples,
+      speed: samples,
+      gear: samples,
+      throttle: samples,
+      brake: samples,
+      drs: samples.nullable(),
+    })
+    .refine(equalLengths, 'car arrays differ in length'),
+  pos: z
+    .strictObject({
+      t: samples,
+      x: samples,
+      y: samples,
+      z: samples,
+      status: z.array(z.union([z.enum(['OnTrack', 'OffTrack']), int.min(0).max(253)])).max(TELEMETRY_MAX_SAMPLES),
+    })
+    .refine(equalLengths, 'pos arrays differ in length'),
+});
 
 export const Stints = z.array(
   z.strictObject({
@@ -385,6 +424,7 @@ export type Season = z.infer<typeof Season>;
 export type SessionDetail = z.infer<typeof SessionDetail>;
 export type Lap = z.infer<typeof Lap>;
 export type Laps = z.infer<typeof Laps>;
+export type Telemetry = z.infer<typeof Telemetry>;
 export type Stints = z.infer<typeof Stints>;
 export type Pits = z.infer<typeof Pits>;
 export type RaceControl = z.infer<typeof RaceControl>;

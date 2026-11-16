@@ -14,6 +14,8 @@ export const lap = (driver_number: number, lap_number: number, extra: Partial<La
   i1_kph: null,
   i2_kph: null,
   st_kph: null,
+  top_kph: null,
+  full_throttle: null,
   is_pit_out: false,
   is_pit_in: false,
   seg1: null,

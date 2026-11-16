@@ -17,6 +17,8 @@ const lap = (driver_number: number, lap_number: number, extra: Partial<Lap>): La
   i1_kph: 290,
   i2_kph: 250,
   st_kph: 310,
+  top_kph: null,
+  full_throttle: null,
   is_pit_out: false,
   is_pit_in: false,
   seg1: null,

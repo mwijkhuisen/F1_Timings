@@ -42,6 +42,8 @@ describe('the stints bars', () => {
       i1_kph: null,
       i2_kph: null,
       st_kph: null,
+      top_kph: null,
+      full_throttle: null,
       is_pit_out: null,
       is_pit_in: false,
       seg1: null,
