@@ -32,7 +32,8 @@
 #      /manifest.webmanifest application/manifest+json and /icon-512.png image/png.
 #  3b. The archive job (profile jobs) without a token file: exit 1 with token_file, after its f1_ingest
 #      login and before any request (it never reaches the Index: invariant 4).
-#  3c. The fill job (profile jobs) on the migrated, empty database: exit 0 with fill_done.
+#  3c. The fill job (profile jobs) on the migrated, empty database: exit 0 with fill_done; then the telemetry job
+#      the same way (P7b): exit 0 with telemetry_done.
 #  3d. The jolpica job (profile jobs) on the empty /srv/f1/jolpica: exit 1 with jolpica_done error bad_dump.
 #  3e. F1_REVISION (#98): the f1-server:ci image's ENV equals its revision label, and the f1-web:ci build
 #      embeds it under /srv/www/assets.
@@ -347,12 +348,17 @@ grep -q '"msg":"archive_start"' "$tmp/archive" && fail "the archive job got past
 proof "compose --profile jobs run --rm archive archive 2019 without /srv/f1/state/live/f1tv-token: exit 1, archive_done error token_file (after the f1_ingest advisory lock, before the Index request)"
 
 # ------------------------------------------------------------------ 3c
-step "3c. The fill job (profile jobs) on the migrated, empty database exits 0"
+step "3c. The fill and telemetry jobs (profile jobs) on the migrated, empty database exit 0"
 run "$tmp/fill" docker compose -p f1 -f /etc/f1/compose.yaml -f "$F1_COMPOSE_OVERRIDE" --env-file "$STATE/current.env" \
   --profile jobs run --rm -T fill fill --all
 ((rc == 0)) || fail "the fill job exited $rc, not 0"
 grep -q '"msg":"fill_done"' "$tmp/fill" || fail "the fill job did not finish: no fill_done line"
 proof "compose --profile jobs run --rm fill fill --all: exit 0, fill_done (as f1_ingest on f1-db only, /srv/f1/archive and /srv/f1/live read-only; no session yet)"
+run "$tmp/telemetry" docker compose -p f1 -f /etc/f1/compose.yaml -f "$F1_COMPOSE_OVERRIDE" --env-file "$STATE/current.env" \
+  --profile jobs run --rm -T telemetry telemetry --all
+((rc == 0)) || fail "the telemetry job exited $rc, not 0"
+grep -q '"msg":"telemetry_done"' "$tmp/telemetry" || fail "the telemetry job did not finish: no telemetry_done line"
+proof "compose --profile jobs run --rm telemetry telemetry --all: exit 0, telemetry_done (as f1_ingest on f1-db only, /srv/f1/archive and /srv/f1/live read-only; no session yet)"
 
 # ------------------------------------------------------------------ 3d
 step "3d. The jolpica job (profile jobs) on the empty /srv/f1/jolpica exits 1 with bad_dump"

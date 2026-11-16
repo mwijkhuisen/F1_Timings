@@ -189,6 +189,42 @@ services:
     healthcheck:
       disable: true
 
+  # A job (A§4, A§7, P7b): f1-update never runs it; the owner runs `compose --profile jobs run --rm telemetry
+  # telemetry --all` to pack the CarData.z and Position.z of the complete recordings and the archive files into
+  # telemetry_lap rows. f1-db only: no network out and no token. It reads /srv/f1/archive and /srv/f1/live, both
+  # read-only, and writes the database as f1_ingest.
+  telemetry:
+    <<: *hardening
+    image: ${F1_SERVER_IMAGE:?}
+    command: [telemetry]
+    profiles: [jobs]
+    restart: "no"
+    user: "62532:62532"
+    group_add: ["62003"]
+    secrets: [db_f1_ingest]
+    networks: [f1-db]
+    depends_on:
+      db:
+        condition: service_healthy
+    volumes:
+      - type: bind
+        source: /srv/f1/archive
+        target: /srv/f1/archive
+        read_only: true
+        bind:
+          create_host_path: false
+      - type: bind
+        source: /srv/f1/live
+        target: /srv/f1/live
+        read_only: true
+        bind:
+          create_host_path: false
+    mem_limit: 512m
+    cpus: 1.0
+    pids_limit: 64
+    healthcheck:
+      disable: true
+
   # A job (A§4, A§7, P3c): f1-update never runs it and it has no timer; the owner runs
   # `compose --profile jobs run --rm jolpica jolpica [<year>...]` to load the Jolpica dump (1950-2017) into the
   # database. f1-db only: no network out and no token. It reads the dump from /srv/f1/jolpica, read-only, and
