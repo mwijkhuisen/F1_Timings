@@ -6,7 +6,7 @@ import { createFeed } from '../live/merge.ts';
 import { type FeedEvent, isObj, type T0From, utc } from '../live/read.ts';
 import type { Result } from '../openf1/schemas.ts';
 import { markLaps, type RuleCounts, type RuleMessage } from '../timing/rules.ts';
-import { archiveEvents, byTime, type IndexSession, indexSessions, isArchivePath, reconstruct } from './files.ts';
+import { archiveEvents, byTime, type IndexSession, isArchivePath, reconstruct } from './files.ts';
 
 // The F1 archive (A§6.2) → A§7 rows with source 'f1-archive'. Pure: the Index gives the meeting and session rows,
 // one session's streams the child rows. No pit rows: no view reads them yet.
@@ -25,6 +25,8 @@ export type Planned = {
   key: number;
   path: string;
   type: string | null;
+  /** The session's end, epoch ms. */
+  end: number;
   meeting: Insertable<DB['meeting']>;
   session: Insertable<DB['session']>;
 };
@@ -53,24 +55,22 @@ const local = (v: unknown, offset: number) =>
     : Number.NaN;
 
 /**
- * An Index.json of `year` → one plan per session with an archive Path, with its meeting and session rows; the
- * session dates in UTC from its GmtOffset, the meeting's as the min and max of its sessions. A Path that is no
- * archive path of the year counts as `badPath`, a session without a numeric Key or valid dates as `badIndex`, and so
- * does one whose UTC dates leave `year`, end before they start or end after `now` (epoch ms): an archive row must never
- * look like a coming session to the recorder or ingest's live window. Undefined when the text is no Index.
+ * The sessions of `year` (the Index's with a Path, plus the off-Index ones, P3e) → one plan per session with an
+ * archive Path, with its meeting and session rows; the session dates in UTC from its GmtOffset, the meeting's as the
+ * min and max of the sessions with its meeting Key. A Path that is no archive path of the year counts as `badPath`, a
+ * session without a numeric Key or valid dates as `badIndex`, and so does one whose UTC dates leave `year`, end before
+ * they start or end after `now` (epoch ms): an archive row must never look like a coming session to the recorder or
+ * ingest's live window.
  */
-export function indexPlan(
-  text: string,
+export function planSessions(
+  all: readonly IndexSession[],
   year: number,
   now: number,
-): { sessions: Planned[]; badPath: number[]; badIndex: number } | undefined {
-  const all = indexSessions(text);
-  if (all === undefined) return undefined;
+): { sessions: Planned[]; badPath: number[]; badIndex: number } {
   const dated = all.map((s) => {
-    const offset = gmtOffset((s as { GmtOffset?: unknown }).GmtOffset);
-    const { StartDate, EndDate } = s as { StartDate?: unknown; EndDate?: unknown };
-    const start = offset ? local(StartDate, offset.ms) : Number.NaN;
-    const end = offset ? local(EndDate, offset.ms) : Number.NaN;
+    const offset = gmtOffset(s.GmtOffset);
+    const start = offset ? local(s.StartDate, offset.ms) : Number.NaN;
+    const end = offset ? local(s.EndDate, offset.ms) : Number.NaN;
     return { s, offset, start, end, key: int(s.Key, 999_999_999), meetingKey: int(s.meeting.Key, 2_147_483_647) };
   });
   const inYear = (ms: number) => new Date(ms).getUTCFullYear() === year;
@@ -84,25 +84,34 @@ export function indexPlan(
       d.start <= d.end &&
       d.end < now,
   );
-  const span = new Map<IndexSession['meeting'], [number, number]>(); // keyed on the meeting object
-  for (const { s, start, end } of ok) {
-    const [a, b] = span.get(s.meeting) ?? [start, end];
-    span.set(s.meeting, [Math.min(a, start), Math.max(b, end)]);
+  // Keyed on the meeting Key: an off-Index session joins its Index meeting (2018 Bahrain and China). The meeting
+  // object and GmtOffset are the first session's (the Index's come before the extras), so every run writes one row.
+  const span = new Map<number, [number, number]>();
+  const head = new Map<number, (typeof ok)[number]>();
+  for (const d of ok) {
+    const { start, end, meetingKey } = d;
+    if (meetingKey === null) continue;
+    const [a, b] = span.get(meetingKey) ?? [start, end];
+    span.set(meetingKey, [Math.min(a, start), Math.max(b, end)]);
+    if (!head.has(meetingKey)) head.set(meetingKey, d);
   }
   const badPath: number[] = [];
   const sessions: Planned[] = [];
-  for (const { s, offset, start, end, key, meetingKey } of ok) {
+  for (const d of ok) {
+    const { s, offset, start, end, key, meetingKey } = d;
     if (key === null || meetingKey === null || !offset) continue;
     if (!isArchivePath(s.Path) || !s.Path.startsWith(`${year}/`)) {
       badPath.push(key);
       continue;
     }
-    const m = s.meeting;
-    const [first, last] = span.get(m) ?? [start, end];
+    const h = head.get(meetingKey) ?? d;
+    const m = h.s.meeting;
+    const [first, last] = span.get(meetingKey) ?? [start, end];
     sessions.push({
       key,
       path: s.Path,
       type: str(s.Type),
+      end,
       meeting: {
         meeting_key: meetingKey,
         source,
@@ -112,7 +121,7 @@ export function indexPlan(
         location: str(m.Location),
         country_code: str(nested(m.Country, 'Code')),
         circuit_short_name: str(nested(m.Circuit, 'ShortName')),
-        gmt_offset: offset.text,
+        gmt_offset: (h.offset ?? offset).text,
         date_start: iso(first),
         date_end: iso(last),
         is_cancelled: false,

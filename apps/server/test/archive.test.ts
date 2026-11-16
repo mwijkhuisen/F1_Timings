@@ -1,10 +1,24 @@
-import { readFileSync } from 'node:fs';
+import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { HttpResponse, http } from 'msw';
 import { describe, expect, it } from 'vitest';
 import { server } from '../../../test/msw.setup.ts';
-import { archiveEvents, download, isArchivePath, MAX_BYTES, ORIGIN, readStreams } from '../src/archive/files.ts';
-import { archiveRows, gmtOffset, indexPlan, rebuildSessionData } from '../src/archive/rows.ts';
+import {
+  archiveEvents,
+  download,
+  INDEX_MAX_BYTES,
+  indexSessions,
+  indexTopics,
+  isArchivePath,
+  isTopic,
+  MAX_BYTES,
+  ORIGIN,
+  offIndexSession,
+  readStreams,
+} from '../src/archive/files.ts';
+import { OFF_INDEX, OLD_TOPICS, TOPICS } from '../src/archive/job.ts';
+import { archiveRows, gmtOffset, planSessions, rebuildSessionData } from '../src/archive/rows.ts';
 import { createLaps } from '../src/live/laps.ts';
 import { archiveT0, type FeedEvent } from '../src/live/read.ts';
 
@@ -107,6 +121,108 @@ describe('download', () => {
       });
     server.use(http.get(`${ORIGIN}/static/big`, () => new HttpResponse(body())));
     expect(await download(`${ORIGIN}/static/big`, 'token')).toEqual({ ok: false, error: { code: 'too_large' } });
+  });
+
+  it('takes a smaller cap: a session Index of 1 MiB passes, one byte more is too_large', async () => {
+    server.use(
+      http.get(`${ORIGIN}/static/fit`, () => new HttpResponse(new Uint8Array(INDEX_MAX_BYTES))),
+      http.get(`${ORIGIN}/static/over`, () => new HttpResponse(new Uint8Array(INDEX_MAX_BYTES + 1))),
+    );
+    const fit = await download(`${ORIGIN}/static/fit`, 'token', INDEX_MAX_BYTES);
+    expect(fit.ok && fit.value.bytes.length).toBe(INDEX_MAX_BYTES);
+    expect(await download(`${ORIGIN}/static/over`, 'token', INDEX_MAX_BYTES)).toEqual({
+      ok: false,
+      error: { code: 'too_large' },
+    });
+  });
+});
+
+describe('topic names (P3e)', () => {
+  it('isTopic takes a letter, then letters and digits, an optional final .z, 64 characters at most before it', () => {
+    for (const ok of ['TimingData', 'CarData.z', 'SPFeed', `A${'b'.repeat(63)}`, `A${'b'.repeat(63)}.z`])
+      expect(isTopic(ok), ok).toBe(true);
+    for (const bad of [
+      '../x',
+      'A/B',
+      'A.json',
+      'A?x',
+      'A%2F',
+      '',
+      'CarData.zz',
+      '1A',
+      '__proto__',
+      `A${'b'.repeat(64)}`,
+    ])
+      expect(isTopic(bad), bad).toBe(false);
+  });
+
+  it("indexTopics gives a session Index's Feeds keys that pass isTopic, never Index, else undefined", () => {
+    const feeds = (names: string[]) =>
+      JSON.stringify({ Feeds: Object.fromEntries(names.map((n) => [n, { StreamPath: '../../x.jsonStream' }])) });
+    const text = `﻿${feeds(['CarData.z', 'ContentStreams', 'TimingData', '../x', 'A/B', 'Index', 'Index.z'])}`;
+    expect(indexTopics(text)).toEqual(['CarData.z', 'ContentStreams', 'TimingData', 'Index.z']);
+    expect(indexTopics(feeds([]))).toEqual([]);
+    for (const bad of ['nope', '[]', '{}', '{"Feeds":[]}', '{"Feeds":"x"}', 'null'])
+      expect(indexTopics(bad), bad).toBeUndefined();
+  });
+
+  it('OLD_TOPICS is the 29 topics of the 2018 races before the US GP, with every parsed topic but SessionData', () => {
+    expect(OLD_TOPICS).toHaveLength(29);
+    expect(new Set(OLD_TOPICS).size).toBe(29);
+    expect(OLD_TOPICS.every(isTopic)).toBe(true);
+    expect(TOPICS.filter((t) => !(OLD_TOPICS as readonly string[]).includes(t))).toEqual(['SessionData']);
+  });
+});
+
+describe('OFF_INDEX and offIndexSession (P3e, D1)', () => {
+  it('holds the 19 probed sessions: unique keys, each path an archive path of its year', () => {
+    const all = Object.entries(OFF_INDEX).flatMap(([year, list]) => list.map((e) => ({ year, ...e })));
+    expect(Object.fromEntries(Object.entries(OFF_INDEX).map(([y, l]) => [y, l.length]))).toEqual({
+      2018: 10,
+      2020: 6,
+      2021: 3,
+    });
+    expect(new Set(all.map((e) => e.key)).size).toBe(19);
+    for (const { year, path } of all) expect(isArchivePath(path) && path.startsWith(`${year}/`), path).toBe(true);
+  });
+
+  it('builds the session from the merged SessionInfo stream, with the Key and the Path of the table', () => {
+    const line = (t: string, o: unknown) => `${t}${JSON.stringify(o)}\r\n`;
+    const text = `﻿${line('00:00:00.000', {
+      Meeting: { Key: 9100, Name: 'Synthetic Grand Prix' },
+      Key: 9999, // the payload's: never used
+      Type: 'Practice',
+      Name: 'Practice 1',
+      StartDate: '2019-03-15T12:00:00',
+      EndDate: '2019-03-15T13:00:00',
+      GmtOffset: '11:00:00',
+      Path: '2019/elsewhere/x/',
+    })}${line('00:00:05.000', { Name: 'Practice 2' })}`;
+    expect(offIndexSession(text, 9103, '2019/a/b/')).toEqual({
+      Key: 9103,
+      Type: 'Practice',
+      Name: 'Practice 2',
+      StartDate: '2019-03-15T12:00:00',
+      EndDate: '2019-03-15T13:00:00',
+      GmtOffset: '11:00:00',
+      Path: '2019/a/b/',
+      meeting: { Key: 9100, Name: 'Synthetic Grand Prix' },
+    });
+    // Nothing to read: no meeting, no dates, so planSessions counts it as bad_index.
+    const empty = offIndexSession('garbage', 9104, '2019/a/c/');
+    expect(empty).toMatchObject({ Key: 9104, Path: '2019/a/c/', meeting: {} });
+    expect(planSessions([empty], 2019, NOW)).toEqual({ sessions: [], badPath: [], badIndex: 1 });
+  });
+});
+
+describe('readStreams', () => {
+  it('reads every stream, or only the topics kept (a raw-only file is never read)', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'f1-streams-'));
+    writeFileSync(join(dir, 'TimingData.jsonStream'), 'a');
+    writeFileSync(join(dir, 'CarData.z.jsonStream'), 'b');
+    writeFileSync(join(dir, 'TimingData.missing'), '');
+    expect([...readStreams(dir).keys()].sort()).toEqual(['CarData.z', 'TimingData']);
+    expect([...readStreams(dir, new Set(TOPICS)).entries()]).toEqual([['TimingData', 'a']]);
   });
 });
 
@@ -380,7 +496,13 @@ describe('archiveRows: 2019-style archives without SessionData', () => {
   });
 });
 
-describe('indexPlan', () => {
+/** The job's planning of a year Index alone (no off-Index session). */
+const indexPlan = (text: string, year: number, now: number) => {
+  const listed = indexSessions(text);
+  return listed && planSessions(listed, year, now);
+};
+
+describe('planSessions', () => {
   it('gives the meeting and session rows, in UTC from GmtOffset, the meeting spanning its sessions', () => {
     const plan = indexPlan(INDEX, 2019, NOW);
     expect(plan?.badPath).toEqual([]);
@@ -476,5 +598,30 @@ describe('indexPlan', () => {
     expect(gmtOffset('-4:30')).toEqual({ text: '-04:30:00', ms: -16_200_000 });
     expect(gmtOffset('00:00:00')).toEqual({ text: '00:00:00', ms: 0 });
     expect(gmtOffset('1 hour')).toBeUndefined();
+  });
+
+  it('spans a meeting over every session with its meeting Key, an off-Index one with its own meeting object too', () => {
+    const listed = indexSessions(INDEX) ?? [];
+    const extra = offIndexSession(
+      `00:00:00.000${JSON.stringify({
+        Meeting: { Key: 9100, Name: 'Synthetic Grand Prix' },
+        Type: 'Race',
+        Name: 'Sprint',
+        StartDate: '2019-03-15T12:00:00',
+        EndDate: '2019-03-15T13:00:00',
+        GmtOffset: '11:00:00',
+      })}`,
+      9103,
+      '2019/2019-03-17_Synthetic_Grand_Prix/2019-03-15_Sprint/',
+    );
+    const plan = planSessions([...listed, extra], 2019, NOW);
+    const span = (key: number) => {
+      const m = plan.sessions.find((s) => s.key === key)?.meeting;
+      return [m?.meeting_key, m?.date_start, m?.date_end];
+    };
+    for (const key of [9101, 9102, 9103])
+      expect(span(key)).toEqual([9100, '2019-03-15T01:00:00.000Z', '2019-03-17T07:10:00.000Z']);
+    expect(span(9111)).toEqual([9110, '2019-03-29T15:00:00.000Z', '2019-03-29T16:00:00.000Z']);
+    expect(plan.sessions.find((s) => s.key === 9103)?.session).toMatchObject({ meeting_key: 9100, name: 'Sprint' });
   });
 });

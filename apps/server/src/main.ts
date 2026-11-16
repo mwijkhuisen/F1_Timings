@@ -51,7 +51,7 @@ const USAGE =
   `usage: main.js <${ROLES.join('|')}> (refetch <session_key>|--failed|--meeting <meeting_key>; ` +
   'rederive <session_key>...|--all; rain-refetch <session_key>; ' +
   `accept-empty <session_key> <${SESSION_ENDPOINTS.join('|')}>; ` +
-  'archive <year 2018-2022> [<session_key>...] [--token-file <path>] [--dir <path>]; ' +
+  'archive <year 2018-> [<session_key>...] [--token-file <path>] [--dir <path>]; ' +
   'fill <session_key>...|--all [--archive-dir <path>] [--live-dir <path>]; ' +
   'jolpica [<year 1950->...] [--dir <path>]; reindex-recordings [--live-dir <path>])';
 
@@ -191,7 +191,7 @@ async function runIngest(job: IngestJob, env: Env, log: (line: string) => void) 
   }
 }
 
-/** The archive job (A§6.2, P3a) as f1_ingest: years 2018–2022 only, 2023 on is OpenF1's. */
+/** The archive job (A§6.2, P3a, P3e) as f1_ingest: 2018 to this year, from 2023 the files only (H3: OpenF1's rows). */
 async function runArchive(argv: readonly string[], env: Env, log: (line: string) => void): Promise<number> {
   let parsed: ReturnType<typeof parseArchive>;
   try {
@@ -220,7 +220,10 @@ async function runArchive(argv: readonly string[], env: Env, log: (line: string)
   }
 }
 
-/** `<year> [<session_key>…] [--token-file <path>] [--dir <path>]`, or undefined; parseArgs throws on an unknown flag. */
+/**
+ * `<year> [<session_key>…] [--token-file <path>] [--dir <path>]`: a year 2018 to this year, or undefined; parseArgs
+ * throws on an unknown flag.
+ */
 function parseArchive(argv: readonly string[]) {
   const { values, positionals } = parseArgs({
     args: [...argv],
@@ -228,7 +231,9 @@ function parseArchive(argv: readonly string[]) {
     options: { 'token-file': { type: 'string', default: TOKEN_FILE }, dir: { type: 'string', default: ARCHIVE_DIR } },
   });
   const [year = '', ...keys] = positionals;
-  if (!/^20(1[89]|2[0-2])$/.test(year) || !keys.every((k) => /^\d{1,9}$/.test(k))) return undefined;
+  const now = new Date().getUTCFullYear();
+  const ok = /^\d{4}$/.test(year) && Number(year) >= 2018 && Number(year) <= now;
+  if (!ok || !keys.every((k) => /^\d{1,9}$/.test(k))) return undefined;
   if (!privateDir(values.dir, ARCHIVE_DIR)) return undefined;
   return { year: Number(year), keys: keys.map(Number), tokenFile: values['token-file'], dir: values.dir };
 }
