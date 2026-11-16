@@ -324,10 +324,11 @@ function TelemetryCard({
   const [one, two] = slots as [(typeof slots)[0], (typeof slots)[0]];
   const q1 = useTelemetry(session, one.row ? { driver: one.row.driver_number, lap: one.row.lap_number } : null);
   const q2 = useTelemetry(session, two.row ? { driver: two.row.driver_number, lap: two.row.lap_number } : null);
+  const qs = [q1, q2] as const;
   const shown = slots.map((s) => {
-    const data = (s.k === 0 ? q1 : q2).data;
-    if (s.name === null) return { ...s, data, state: `No best lap for ${s.own?.acronym ?? '—'}: pick a lap.` };
-    return { ...s, data, state: traceState(s.name, s.k === 0 ? q1 : q2) };
+    const q = qs[s.k];
+    if (s.name === null) return { ...s, data: q.data, state: `No best lap for ${s.own?.acronym ?? '—'}: pick a lap.` };
+    return { ...s, data: q.data, state: traceState(s.name, q) };
   });
   const drawn = shown.flatMap((s): TraceLap[] =>
     s.state === null && s.data && s.driver && s.name

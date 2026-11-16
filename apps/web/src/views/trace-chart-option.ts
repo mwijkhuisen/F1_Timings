@@ -67,7 +67,7 @@ export type TraceLap = { name: string; driver: Driver; telemetry: Telemetry; slo
 
 /** The chart's accessible name. */
 export const traceLabel = (laps: readonly TraceLap[]): string =>
-  `Telemetry: ${laps.map((l) => l.name).join(', ')}: speed, throttle, brake and gear by distance`;
+  `Telemetry: ${laps.map((l) => plain(l.name)).join(', ')}: speed, throttle, brake and gear by distance`;
 
 const metres = new Intl.NumberFormat('en-GB', { maximumFractionDigits: 0 });
 const km = new Intl.NumberFormat('en-GB', { maximumFractionDigits: 1 });
@@ -81,19 +81,46 @@ const hasDrs = (l: TraceLap, year: number) => l.telemetry.car.drs !== null && ye
  */
 export function traceChartOption(laps: readonly TraceLap[], tokens: ChartTokens, year: number) {
   const points = laps.map((l) => tracePoints(l.telemetry));
-  // Per lap, the car index behind each data item; a break item stands at the previous point, so it shows that sample.
-  const index = points.map((ps) => {
-    let i = 0;
-    return ps.map((p) => {
-      if (p !== null) i = p.i;
-      return i;
-    });
+  // Per lap, its placed points in x order, each marked when a break follows it (x never decreases along a lap).
+  const placed = points.map((ps) => {
+    const out: { x: number; i: number; gap: boolean }[] = [];
+    for (const p of ps) {
+      const last = out.at(-1);
+      if (p === null) {
+        if (last) last.gap = true;
+      } else out.push({ x: p.x, i: p.i, gap: false });
+    }
+    return out;
   });
+  /**
+   * The tooltip's sample of lap k at distance x: the nearer placed point, none off the lap's range or inside a break.
+   * By distance, not by ECharts' params: an axis tooltip on a value axis passes only the series whose point is
+   * nearest the pointer, and two laps' points never share an x (P7c review).
+   */
+  const sampleAt = (k: number, x: number): number | null => {
+    const ps = placed[k] ?? [];
+    const first = ps[0];
+    const last = ps.at(-1);
+    if (!first || !last || x < first.x || x > last.x) return null;
+    let lo = 0;
+    let hi = ps.length - 1;
+    while (lo < hi) {
+      const m = (lo + hi + 1) >> 1;
+      if ((ps[m] as (typeof ps)[number]).x <= x) lo = m;
+      else hi = m - 1;
+    }
+    const a = ps[lo] as (typeof ps)[number];
+    const b = ps[lo + 1];
+    if (a.x === x || !b) return a.i;
+    if (a.gap) return null;
+    return x - a.x <= b.x - x ? a.i : b.i;
+  };
   const colours = lineStyles(
     laps.map((l) => l.driver),
     tokens,
   ).map((s) => s.color);
-  const names = laps.map((l) => plain(l.name));
+  // The same lap in both slots would share one legend entry, which then toggles both: the second says so.
+  const names = laps.map((l, k) => plain(l.name) + (k > 0 && l.name === laps[0]?.name ? ' again' : ''));
   const drs = laps.flatMap((l, k) => (hasDrs(l, year) ? [k] : []));
   const end = points.reduce((m, ps) => Math.max(m, ps.findLast((p) => p !== null)?.x ?? 0), 0);
   const max = Math.max(100, Math.ceil(end / 100) * 100);
@@ -120,7 +147,7 @@ export function traceChartOption(laps: readonly TraceLap[], tokens: ChartTokens,
       show: g === bottom,
       color: tokens.muted,
       // In km: "1,000 m" labels touched on a 5.8 km lap at 390 px. ECharts' ticks are 1, 2 or 5 × 10ⁿ m.
-      formatter: (v: number) => `${km.format(v / 1000)} km`,
+      formatter: (v: number) => (v === 0 ? '0' : `${km.format(v / 1000)} km`),
       alignMinLabel: 'left' as const,
       alignMaxLabel: 'right' as const,
     },
@@ -133,7 +160,8 @@ export function traceChartOption(laps: readonly TraceLap[], tokens: ChartTokens,
     nameLocation: 'middle' as const,
     nameGap: 36,
     nameTextStyle: { color: tokens.muted },
-    axisLabel: { color: tokens.muted },
+    // The lowest label of the upper grids would touch the top one of the grid below (a 2 % gap): only gear keeps it.
+    axisLabel: { color: tokens.muted, showMinLabel: g === 3 },
     splitLine: { lineStyle: { color: tokens.line } },
     ...extra,
   });
@@ -175,7 +203,6 @@ export function traceChartOption(laps: readonly TraceLap[], tokens: ChartTokens,
     data,
     ...extra,
   });
-  const lapOf: number[] = [];
   const series = laps.flatMap((l, k) => {
     const ps = points[k] ?? [];
     const car = l.telemetry.car;
@@ -214,7 +241,6 @@ export function traceChartOption(laps: readonly TraceLap[], tokens: ChartTokens,
         ),
       );
     }
-    lapOf.push(...out.map(() => k));
     return out;
   });
 
@@ -233,7 +259,7 @@ export function traceChartOption(laps: readonly TraceLap[], tokens: ChartTokens,
     ];
   };
 
-  type Param = { seriesIndex: number; dataIndex: number; axisValue?: number };
+  type Param = { axisValue?: number };
   return {
     backgroundColor: 'transparent',
     textStyle: { color: tokens.fg },
@@ -249,11 +275,11 @@ export function traceChartOption(laps: readonly TraceLap[], tokens: ChartTokens,
         const list = Array.isArray(params) ? params : [params];
         const [first] = list;
         if (!first) return '';
-        const lines = [`${metres.format(first.axisValue ?? 0)} m`];
+        const x = first.axisValue ?? 0;
+        const lines = [`${metres.format(x)} m`];
         laps.forEach((_, k) => {
-          const p = list.find((q) => lapOf[q.seriesIndex] === k);
-          const i = p && index[k]?.[p.dataIndex];
-          lines.push(...(i === undefined ? [`${names[k]} —`] : sample(k, i)));
+          const i = sampleAt(k, x);
+          lines.push(...(i === null ? [`${names[k]} —`] : sample(k, i)));
         });
         return lines.join('\n');
       },

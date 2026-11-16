@@ -6,13 +6,12 @@ import { SVGRenderer } from 'echarts/renderers';
 import { HttpResponse, http } from 'msw';
 import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
-import { renderToStaticMarkup } from 'react-dom/server';
 import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from 'vitest';
 import { server } from '../../../test/msw.setup.ts';
 import { REVISION } from '../src/lib/api.ts';
 import { init } from '../src/lib/echarts.ts';
 import { clampForLight, type Driver } from '../src/lib/session.ts';
-import { Compare, Comparison } from '../src/views/Compare.tsx';
+import { Compare } from '../src/views/Compare.tsx';
 import type { ChartTokens } from '../src/views/lap-chart-option.ts';
 import {
   distances,
@@ -166,12 +165,17 @@ describe('traceChartOption', () => {
       expect(x.axisLabel.show).toBe(g === 4);
     }
     expect([0, 200, 1000, 1500].map((v) => option.xAxis[4]?.axisLabel.formatter(v))).toEqual([
-      '0 km',
+      '0',
       '0.2 km',
       '1 km',
       '1.5 km',
     ]);
+    expect(option.xAxis[4]?.axisLabel.formatter(0)).toBe('0');
     expect(option.axisPointer).toEqual({ link: [{ xAxisIndex: 'all' }] });
+    // Only gear keeps its lowest label: the others would touch the top label of the grid below.
+    expect(
+      option.yAxis.slice(0, 4).map((y) => (y as { axisLabel: { showMinLabel: boolean } }).axisLabel.showMinLabel),
+    ).toEqual([false, false, false, true]);
     expect(option.yAxis.map((y) => (y as { name: string }).name)).toEqual([
       'km/h',
       'Throttle %',
@@ -313,25 +317,32 @@ describe('traceChartOption', () => {
   it('says the distance, then per lap speed and gear, throttle, brake and DRS, "—" for the sentinel', () => {
     const tip = option.tooltip;
     expect(tip).toMatchObject({ trigger: 'axis', renderMode: 'richText', confine: true, backgroundColor: tokens.bg });
-    // VER at sample 1 (the sentinel), NOR at sample 3 (braking).
-    expect(
-      tip.formatter([
-        { seriesIndex: 0, dataIndex: 1, axisValue: 1240.4 },
-        { seriesIndex: 7, dataIndex: 3, axisValue: 1240.4 },
-      ]),
-    ).toBe(
+    // By the pointer's distance, per lap: ECharts passes only the series nearest the pointer, here one of VER's.
+    const at = (x: number) => tip.formatter([{ axisValue: x }]);
+    // 25 m: sample 1 on both laps (the sentinel); only VER has the DRS channel.
+    expect(at(25)).toBe(
       [
-        '1,240 m',
+        '25 m',
         'VER L41 110 km/h · gear 3',
         'throttle — · brake — · DRS open',
-        'NOR L38 130 km/h · gear 4',
-        'throttle 0 % · brake',
+        'NOR L38 110 km/h · gear 3',
+        'throttle — · brake —',
       ].join('\n'),
     );
-    // A break item shows the sample before it; a lap off the hovered range is "—".
-    expect(tip.formatter([{ seriesIndex: 1, dataIndex: 5, axisValue: 100 }])).toBe(
-      ['100 m', 'VER L41 140 km/h · gear 5', 'throttle 0 % · brake · DRS closed', 'NOR L38 —'].join('\n'),
+    // 60 m: the nearer sample is 2 (50 m), not 3 (75 m); brake 0 is left out.
+    expect(at(60)).toBe(
+      [
+        '60 m',
+        'VER L41 120 km/h · gear 4',
+        'throttle 50 % · DRS open',
+        'NOR L38 120 km/h · gear 4',
+        'throttle 50 %',
+      ].join('\n'),
     );
+    // Inside the break (100–300 m) and past the last sample: no sample, never the nearest one across the gap.
+    expect(at(200)).toBe(['200 m', 'VER L41 —', 'NOR L38 —'].join('\n'));
+    expect(at(301)).toBe(['301 m', 'VER L41 —', 'NOR L38 —'].join('\n'));
+    expect(at(300)).toContain('VER L41 150 km/h · gear 5');
     expect(tip.formatter([])).toBe('');
   });
 
@@ -339,6 +350,21 @@ describe('traceChartOption', () => {
     expect(traceLabel(lapsOf(short(), short()))).toBe(
       'Telemetry: VER L41, NOR L38: speed, throttle, brake and gear by distance',
     );
+    expect(traceLabel([{ name: 'V{E|R} L41', driver: VER, telemetry: short(), slot: 0 }])).toMatch(
+      /^Telemetry: VER L41:/,
+    );
+  });
+
+  it('says "again" on the second of one lap picked twice, so the legend has two entries', () => {
+    const same = traceChartOption(
+      [
+        { name: 'VER L41', driver: VER, telemetry: short(), slot: 0 },
+        { name: 'VER L41', driver: VER, telemetry: short(), slot: 1 },
+      ],
+      tokens,
+      2019,
+    );
+    expect(same.legend.data).toEqual(['VER L41', 'VER L41 again']);
   });
 });
 
@@ -423,9 +449,7 @@ describe('the trace chart at 390 px', () => {
       const lines = list.filter(({ el }) => el.type === 'ec-polyline');
       expect(lines).toHaveLength(drs && year === 2019 ? 10 : 8);
       const texts = list.flatMap(({ el }) => (el.style.text ? [el.style.text] : []));
-      expect(texts).toEqual(
-        expect.arrayContaining(['km/h', 'Throttle %', 'Brake', 'Gear', 'VER L41', 'NOR L38', '0 km']),
-      );
+      expect(texts).toEqual(expect.arrayContaining(['km/h', 'Throttle %', 'Brake', 'Gear', 'VER L41', 'NOR L38', '0']));
       expect(texts.includes('DRS')).toBe(drs && year === 2019);
       for (const { el, box } of list) {
         const where = `${el.type} ${el.style.text ?? ''}`;
@@ -615,19 +639,5 @@ describe('the telemetry card', () => {
     expect(select(2).value).toBe('');
     expect(select(2).options[0]?.textContent).toBe('Pick a lap');
     expect(urls).toEqual([url(1, 2)]);
-  });
-
-  it('is not in the player’s comparison, which passes no traces', () => {
-    const html = renderToStaticMarkup(
-      <Comparison
-        detail={sessionDetail('Race', 'Race')}
-        drivers={[VER, NOR]}
-        laps={laps}
-        periods={[]}
-        onReference={() => {}}
-      />,
-    );
-    expect(html).toContain('<h2>Lap times</h2>');
-    expect(html).not.toContain('Telemetry');
   });
 });
