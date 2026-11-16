@@ -470,6 +470,34 @@ describe('api (f1_api login, Access JWT)', { timeout: 120_000 }, () => {
     expect(new Set(laps.map((l) => l.quali_phase))).toEqual(new Set([1, 2, 3, null]));
   });
 
+  it('laps: top_kph and full_throttle come from the lap telemetry row, null for a lap without one (P7b)', async () => {
+    const row = {
+      session_key: RACE,
+      driver_number: 1,
+      lap_number: 38,
+      source: 'f1-live',
+      date_start: new Date('2026-10-11T13:00:00Z'),
+      car: Buffer.from([1]),
+      pos: Buffer.alloc(0),
+      top_kph: 331,
+      full_throttle: 0.71,
+    };
+    await admin.insertInto('telemetry_lap').values(row).execute();
+    try {
+      const laps = await body(`/api/v1/sessions/${RACE}/laps`, Laps);
+      expect(laps).toHaveLength(62);
+      expect(laps.filter((l) => l.top_kph !== null || l.full_throttle !== null)).toEqual([
+        expect.objectContaining({ driver_number: 1, lap_number: 38, top_kph: 331, full_throttle: 0.71 }),
+      ]);
+      expect(laps.find((l) => l.driver_number === 1 && l.lap_number === 37)).toMatchObject({
+        top_kph: null,
+        full_throttle: null,
+      });
+    } finally {
+      await admin.deleteFrom('telemetry_lap').where('session_key', '=', RACE).execute();
+    }
+  });
+
   it('weather: every sample in date order with the A§7 column names; the sprint was wet for 20 of them', async () => {
     const rows = await body(`/api/v1/sessions/${SPRINT}/weather`, Weather);
     expect(rows).toHaveLength(127);

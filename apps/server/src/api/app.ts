@@ -269,6 +269,13 @@ export function createApp({
     if (session instanceof Response) return session;
     const laps = await db
       .selectFrom('lap as l')
+      // P7b: only the two figures of telemetry_lap, never its bytea columns (nothing is detoasted).
+      .leftJoin('telemetry_lap as tl', (join) =>
+        join
+          .onRef('tl.session_key', '=', 'l.session_key')
+          .onRef('tl.driver_number', '=', 'l.driver_number')
+          .onRef('tl.lap_number', '=', 'l.lap_number'),
+      )
       .select((eb) => [
         'l.driver_number',
         'l.lap_number',
@@ -280,6 +287,8 @@ export function createApp({
         'l.i1_kph',
         'l.i2_kph',
         'l.st_kph',
+        'tl.top_kph',
+        'tl.full_throttle',
         'l.is_pit_out',
         'l.is_pit_in',
         'l.seg1',
