@@ -15,7 +15,7 @@ import { DeltaTable, Duel } from './DeltaTable.tsx';
 import { evolutionChartOption, evolutionWindow } from './evolution-chart-option.ts';
 import { gapChartLabel, gapChartOption } from './gap-chart-option.ts';
 import { type ChartTokens, lapChartOption } from './lap-chart-option.ts';
-import { type TraceLap, traceChartOption, traceLabel, tracePoints } from './trace-chart-option.ts';
+import { lateStart, type TraceLap, traceChartOption, traceLabel, tracePoints } from './trace-chart-option.ts';
 
 /**
  * The pit cycles of every pair of the picked drivers (A§13, #115): one sentence each, from the stints, the line
@@ -280,6 +280,8 @@ function traceState(name: string, q: ReturnType<typeof useTelemetry>): string | 
   }
   if (!q.data) return `Loading telemetry for ${name}…`;
   if (q.data.car.t.length === 0) return `No car data for ${name}.`;
+  if (lateStart(q.data))
+    return `No position data in the first ${((q.data.pos.t[0] ?? 0) / 1000).toFixed(1)} s of ${name}, so its distance cannot start at the line.`;
   if (tracePoints(q.data).filter((p) => p !== null).length < 2)
     return `No position data for ${name}, so no distance to draw it on.`;
   return null;

@@ -15,15 +15,20 @@ const DRS_OPEN = new Set([10, 12, 14]);
 
 const at = (a: readonly number[], i: number) => a[i] as number;
 
+/** The lap's first Position sample comes more than GAP_MS after its start (E2): its distance has no known zero. */
+export const lateStart = (t: Telemetry): boolean => (t.pos.t[0] ?? 0) > GAP_MS;
+
 /**
  * E2: each car sample's metres along the lap's own Position path (2D, X/Y in 0.1 m) from its first Position sample,
  * linear in time between the two Position samples around it when they are at most GAP_MS apart; null outside the
- * Position span or inside a longer step (nothing is extrapolated). Fewer than 2 Position samples place nothing.
+ * Position span or inside a longer step (nothing is extrapolated). Fewer than 2 Position samples place nothing, and
+ * neither does a first Position sample more than GAP_MS after the lap start: a gap at the start leaves the zero
+ * unknown, so the lap would not line up with the other ([box] 2026-11-16: one 5498 lap at 9.2 s, p90 274 ms).
  */
 export function distances(t: Telemetry): (number | null)[] {
   const { t: pt, x, y } = t.pos;
   const last = pt.length - 1;
-  if (last < 1) return t.car.t.map(() => null);
+  if (last < 1 || lateStart(t)) return t.car.t.map(() => null);
   const cum = [0];
   for (let j = 1; j <= last; j++)
     cum.push(at(cum, j - 1) + Math.hypot(at(x, j) - at(x, j - 1), at(y, j) - at(y, j - 1)) * 0.1);

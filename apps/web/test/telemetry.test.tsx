@@ -85,6 +85,12 @@ describe('distances (E2)', () => {
     expect(distances(telemetry({ t: [500, 1000, 2000, 4000, 4500] }, gap))).toEqual([50, 100, null, 200, 250]);
   });
 
+  it('places nothing when the first Position sample comes over 1.5 s after the lap start: the zero is unknown', () => {
+    const at = (t0: number) => ({ ...square, t: square.t.map((t) => t + t0) });
+    expect(distances(telemetry({ t: [1500, 2000] }, at(1500)))).toEqual([0, 50]);
+    expect(distances(telemetry({ t: [1600, 2100] }, at(1600)))).toEqual([null, null]);
+  });
+
   it('places nothing with fewer than 2 Position samples', () => {
     expect(distances(telemetry({ t: [0, 500] }, { t: [0], x: [0], y: [0] }))).toEqual([null, null]);
     expect(tracePoints(telemetry({ t: [0, 500] }, { t: [], x: [], y: [] }))).toEqual([]);
@@ -565,6 +571,18 @@ describe('the telemetry card', () => {
       ]),
     );
     expect(chart()).toBeNull();
+  });
+
+  it('says a lap whose position data starts over 1.5 s after the line is not drawn, and draws the other', async () => {
+    const s = short();
+    const late = { ...s, pos: { ...s.pos, t: s.pos.t.map((t) => t + 9_200 - (s.pos.t[0] ?? 0)) } };
+    mount({ '1-2': ok(), '4-3': ok(late) });
+    await vi.waitFor(() =>
+      expect(words()).toEqual([
+        'No position data in the first 9.2 s of NOR L3, so its distance cannot start at the line.',
+      ]),
+    );
+    expect(chart()).toMatch(/^Telemetry: VER L2:/);
   });
 
   it('asks the driver without a best lap to pick one, and asks nothing for it', async () => {
