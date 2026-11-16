@@ -1,11 +1,11 @@
-import { lstatSync, readFileSync } from 'node:fs';
+import { lstatSync } from 'node:fs';
 import { join } from 'node:path';
 import type { Insertable, Kysely } from 'kysely';
 import type { Logger } from 'pino';
 import { RAW_MAX_BYTES } from '../archive/files.ts';
 import { codeOf, type DB } from '../db/db.ts';
 import { parseFeedLine, parseJsonStream } from '../live/read.ts';
-import { segment, segments } from '../live/recording.ts';
+import { readCapped, segment, segments } from '../live/recording.ts';
 import { carData, decodeZ, positions, zCounts } from '../live/telemetry.ts';
 import { type FillArgs, firstComplete, RECORDING, sessionKeys } from '../merge/fill.ts';
 import { type CarRow, type Coverage, type PosRow, packCar, packPos, pick, statusCode, t6, whole } from './pack.ts';
@@ -85,23 +85,9 @@ function find(ws: Window[] | undefined, t: number): Window | undefined {
   return w && t < w.end ? w : undefined;
 }
 
-/** `<dir>/<Topic>.jsonStream` of the two topics, those that exist: each a regular file (lstat) of at most `max`. */
-function archiveFiles(dir: string, max: number): string[] {
-  const found: string[] = [];
-  for (const topic of TOPICS) {
-    let st: ReturnType<typeof lstatSync>;
-    try {
-      st = lstatSync(join(dir, `${topic}.jsonStream`));
-    } catch (err) {
-      if (absent(err)) continue;
-      throw err;
-    }
-    if (!st.isFile()) throw fail('not_file');
-    if (st.size > max) throw fail('too_large');
-    found.push(topic);
-  }
-  return found;
-}
+/** The two topics whose `<dir>/<Topic>.jsonStream` exists, as anything: `readCapped` reads only a regular file. */
+const archiveFiles = (dir: string) =>
+  TOPICS.filter((topic) => lstatSync(join(dir, `${topic}.jsonStream`), { throwIfNoEntry: false }) !== undefined);
 
 /**
  * Every sealed segment's `.z` lines, Subscribe states skipped (they can be an hour old, as in P7a). The directory must
@@ -146,7 +132,7 @@ async function telemetrySession(deps: TelemetryDeps, args: Omit<FillArgs, 'keys'
   const byDriver = await windows(db, key);
   if (byDriver.size === 0) return { skip: 'no_laps' };
   const dir = join(args.archiveDir, String(key));
-  const archive = archiveFiles(dir, deps.maxBytes ?? RAW_MAX_BYTES);
+  const archive = archiveFiles(dir);
   const rec = await firstComplete(db, key);
   if (!rec && archive.length === 0) return { skip: 'no_files' };
 
@@ -198,8 +184,9 @@ async function telemetrySession(deps: TelemetryDeps, args: Omit<FillArgs, 'keys'
   }
   const fromArchive = take('f1-archive');
   for (const topic of archive) {
+    const text = (await readCapped(join(dir, `${topic}.jsonStream`), deps.maxBytes ?? RAW_MAX_BYTES)).toString('utf8');
     // The payloads' own Utc and Timestamp give the times, so the stream needs no t0.
-    const { events } = parseJsonStream(readFileSync(join(dir, `${topic}.jsonStream`), 'utf8'), topic, 0);
+    const { events } = parseJsonStream(text, topic, 0);
     for (const ev of events) fromArchive(topic, ev.payload);
   }
   if (archive.length > 0) pack('f1-archive');

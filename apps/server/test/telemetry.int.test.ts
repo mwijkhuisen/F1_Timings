@@ -1,3 +1,4 @@
+import { execFileSync } from 'node:child_process';
 import { mkdirSync, mkdtempSync, renameSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -269,16 +270,20 @@ describe('the telemetry job (f1_ingest login, synthetic files)', { timeout: 120_
     expect(await md5(S)).toBe(before);
   });
 
-  it('a symlinked archive file is not_file: the session fails and its rows stay', async () => {
+  it('a symlinked or FIFO archive file is not_file: the session fails and its rows stay', async () => {
     const before = await md5(S);
     const file = join(archiveDir, String(S), 'CarData.z.jsonStream');
     renameSync(file, join(root, 'CarData.z.jsonStream'));
-    symlinkSync(join(root, 'CarData.z.jsonStream'), file);
     try {
+      symlinkSync(join(root, 'CarData.z.jsonStream'), file);
+      expect(await telemetry({ db, log }, args())).toBe(false);
+      expect(one()).toMatchObject({ session_key: S, level: 50, error: 'not_file' });
+      rmSync(file);
+      execFileSync('mkfifo', [file]); // opened O_NONBLOCK: no writer, and no wait for one
       expect(await telemetry({ db, log }, args())).toBe(false);
       expect(one()).toMatchObject({ session_key: S, level: 50, error: 'not_file' });
     } finally {
-      rmSync(file);
+      rmSync(file, { force: true });
       renameSync(join(root, 'CarData.z.jsonStream'), file);
     }
     expect(await md5(S)).toBe(before);

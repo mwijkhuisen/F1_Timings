@@ -1,4 +1,4 @@
-import { lstatSync, readdirSync, readFileSync } from 'node:fs';
+import { readdirSync } from 'node:fs';
 import { join } from 'node:path';
 import type { Kysely } from 'kysely';
 import type { Logger } from 'pino';
@@ -7,7 +7,7 @@ import { TOPICS } from '../archive/job.ts';
 import { archiveRows } from '../archive/rows.ts';
 import { codeOf, type DB } from '../db/db.ts';
 import { type FeedEvent, parseFeedLine } from '../live/read.ts';
-import { segment, segments } from '../live/recording.ts';
+import { readCapped, segment, segments } from '../live/recording.ts';
 import type { Source } from './merge.ts';
 import { mergeSession, staleLap, storeCandidates } from './write.ts';
 
@@ -59,8 +59,8 @@ export const sessionKeys = async (db: Kysely<DB>, keys: FillArgs['keys']): Promi
           .execute()
       ).map((s) => s.session_key);
 
-/** `<archiveDir>/<key>/`: rows of its topic files, each a regular file (a symlink fails), the size capped before any read. */
-function fromArchive(dir: string, key: number, type: string | null, maxBytes: number): Read {
+/** `<archiveDir>/<key>/`: rows of its topic files, each read through `readCapped` within what is left of `maxBytes`. */
+async function fromArchive(dir: string, key: number, type: string | null, maxBytes: number): Promise<Read> {
   let names: string[];
   try {
     names = readdirSync(dir).filter((f) => FILES.has(f));
@@ -69,10 +69,13 @@ function fromArchive(dir: string, key: number, type: string | null, maxBytes: nu
     throw err;
   }
   if (!['SessionInfo', 'TimingData'].every((t) => names.includes(`${t}.jsonStream`))) return undefined;
-  const stats = names.map((f) => lstatSync(join(dir, f)));
-  if (!stats.every((st) => st.isFile())) throw fail('not_file');
-  if (stats.reduce((n, st) => n + st.size, 0) > maxBytes) throw fail('too_large');
-  const files = new Map(names.map((f) => [f.slice(0, -'.jsonStream'.length), readFileSync(join(dir, f), 'utf8')]));
+  const files = new Map<string, string>();
+  let left = maxBytes;
+  for (const f of names) {
+    const buf = await readCapped(join(dir, f), left);
+    left -= buf.length;
+    files.set(f.slice(0, -'.jsonStream'.length), buf.toString('utf8'));
+  }
   const built = archiveRows(files, key, type);
   if (!built.ok && built.error === 'incomplete') return undefined; // no t0: as the archive job, not a failure
   if (!built.ok) throw fail(built.error);

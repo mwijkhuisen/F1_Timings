@@ -22,6 +22,7 @@ import {
   gzipLeftovers,
   openRecording,
   type Recording,
+  readCapped,
   recordingLines,
   writeRecordingJson,
 } from '../src/live/recording.ts';
@@ -666,5 +667,23 @@ describe('recordingLines', () => {
     mkdirSync(at);
     execFileSync('mkfifo', [join(at, 'feed-1.jsonl')]);
     await expect(read(at)).rejects.toMatchObject({ code: 'not_file' });
+  });
+});
+
+describe('readCapped', () => {
+  it('reads a regular file of at most max bytes; one byte more is too_large', async () => {
+    const file = join(root, 'f.jsonStream');
+    writeFileSync(file, 'abcd');
+    expect((await readCapped(file, 4)).toString()).toBe('abcd');
+    await expect(readCapped(file, 3)).rejects.toMatchObject({ code: 'too_large' });
+  });
+
+  it('a symlink, a FIFO (without blocking) and a directory are not_file', async () => {
+    writeFileSync(join(root, 'real'), 'abcd');
+    symlinkSync(join(root, 'real'), join(root, 'link'));
+    execFileSync('mkfifo', [join(root, 'fifo')]);
+    for (const name of ['link', 'fifo', '.']) {
+      await expect(readCapped(join(root, name), 100)).rejects.toMatchObject({ code: 'not_file' });
+    }
   });
 });
