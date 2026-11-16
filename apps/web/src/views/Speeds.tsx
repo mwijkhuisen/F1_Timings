@@ -146,7 +146,14 @@ export function SpeedTable({
                           —
                         </Note>
                       ) : r.lap.full_throttle === null ? (
-                        <Note id={`speed-${r.driver}-ft`} text="No telemetry for this lap">
+                        <Note
+                          id={`speed-${r.driver}-ft`}
+                          text={
+                            r.lap.top_kph === null
+                              ? 'No telemetry for this lap'
+                              : 'Too few telemetry samples on this lap'
+                          }
+                        >
                           —
                         </Note>
                       ) : (

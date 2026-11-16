@@ -218,6 +218,12 @@ describe('SpeedTable', () => {
     expect(rows()[0]?.[6]).toBe('— (No valid lap with a time)');
   });
 
+  it('says too few samples when the best lap has telemetry but no share (one sample, or only gaps)', () => {
+    show('Qualifying', 'Qualifying', [lap(12, 5, { ...laps[1], top_kph: 352, full_throttle: null })], true);
+    expect(rows()[0]?.[4]).toBe('352, fastestL5');
+    expect(rows()[0]?.[6]).toBe('— (Too few telemetry samples on this lap)');
+  });
+
   it('leaves both columns out without the telemetry prop', () => {
     show('Qualifying', 'Qualifying', tel);
     expect(heads()).toEqual(['Driver', 'I1', 'I2', 'ST', 'Q2 Best lap', 'Q2 Sum of best sectors']);
