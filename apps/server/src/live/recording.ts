@@ -62,15 +62,17 @@ export async function readCapped(path: string, max: number): Promise<Buffer> {
     throw codeOf(err) === 'ELOOP' ? notFile() : err;
   });
   try {
-    if ((await fh.stat()).size > max) throw big();
-    const buf = Buffer.alloc(max + 1);
+    const size = (await fh.stat()).size;
+    if (size > max) throw big();
+    // One byte past the size seen: a file that grew since is refused, never read in part.
+    const buf = Buffer.alloc(size + 1);
     let n = 0;
     while (n < buf.length) {
       const { bytesRead } = await fh.read(buf, n, buf.length - n, n);
       if (bytesRead === 0) break;
       n += bytesRead;
     }
-    if (n > max) throw big();
+    if (n > size) throw big();
     return buf.subarray(0, n);
   } finally {
     await fh.close();

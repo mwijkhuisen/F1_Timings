@@ -32,8 +32,10 @@ export const MAX_Z_BYTES = 64 * 1024 * 1024;
 /**
  * A source's samples placed in a lap window, both topics (`too_many_samples`): the bound on the objects it holds until
  * it is packed. The largest real session, the 2021 test day 6396, places about 664 k CarData and 728 k Position samples.
+ * About 150 B of heap each (11404: 1.15 M samples, a live set of 128–192 MB), so 2 M is about 300 MB, inside the 408 MB
+ * heap Node takes under the job's 768m: the job fails here cleanly before it runs out of memory.
  */
-export const MAX_SOURCE_SAMPLES = 3_000_000;
+export const MAX_SOURCE_SAMPLES = 2_000_000;
 const TOPICS = ['CarData.z', 'Position.z'];
 const CHUNK = 500;
 const CHUNK_BYTES = 8 * 1024 * 1024;
@@ -154,8 +156,8 @@ async function telemetrySession(deps: TelemetryDeps, args: Omit<FillArgs, 'keys'
   let tooLong = 0;
   const maxSamples = deps.maxSamples ?? MAX_SOURCE_SAMPLES;
   // Samples outside every window are dropped at once (garage and pre-session time).
-  // ponytail: a source's in-window samples are held as objects until it is packed, bounded by MAX_SOURCE_SAMPLES (about
-  // twice the largest real session); pack per driver while reading if a session ever nears the 768m.
+  // ponytail: a source's in-window samples are held as objects until it is packed, bounded by MAX_SOURCE_SAMPLES (1.4
+  // times the largest real session); pack per lap while reading if a recorded test day ever hits it.
   const take = (source: Source) => {
     let placed = 0;
     const into = (w: Window | undefined) => {
