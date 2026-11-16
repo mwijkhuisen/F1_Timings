@@ -1,10 +1,18 @@
 // @vitest-environment happy-dom
 import type { Telemetry } from '@f1/contracts';
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { use } from 'echarts/core';
 import { SVGRenderer } from 'echarts/renderers';
-import { describe, expect, it } from 'vitest';
+import { HttpResponse, http } from 'msw';
+import { act } from 'react';
+import { createRoot, type Root } from 'react-dom/client';
+import { renderToStaticMarkup } from 'react-dom/server';
+import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from 'vitest';
+import { server } from '../../../test/msw.setup.ts';
+import { REVISION } from '../src/lib/api.ts';
 import { init } from '../src/lib/echarts.ts';
 import { clampForLight, type Driver } from '../src/lib/session.ts';
+import { Compare, Comparison } from '../src/views/Compare.tsx';
 import type { ChartTokens } from '../src/views/lap-chart-option.ts';
 import {
   distances,
@@ -13,8 +21,13 @@ import {
   traceLabel,
   tracePoints,
 } from '../src/views/trace-chart-option.ts';
+import { lap, sessionDetail } from './laps.ts';
 
 // P7c (A§13): the telemetry card's traces, on synthetic laps built here (never real or decoded telemetry, A§12.1).
+// The chart's own canvas is stubbed in the mounted card tests: they are about what is asked and said, not drawn.
+vi.mock('../src/views/Chart.tsx', () => ({
+  Chart: ({ label }: { label: string }) => <div role="img" aria-label={label} />,
+}));
 
 const tokens: ChartTokens = {
   fg: '#f0f0f5',
@@ -129,8 +142,8 @@ const short = (drs: number[] | null = DRS) =>
     },
   );
 const lapsOf = (a: Telemetry, b: Telemetry, second: Driver = NOR): TraceLap[] => [
-  { name: 'VER L41', driver: VER, telemetry: a },
-  { name: `${second.acronym} L38`, driver: second, telemetry: b },
+  { name: 'VER L41', driver: VER, telemetry: a, slot: 0 },
+  { name: `${second.acronym} L38`, driver: second, telemetry: b, slot: 1 },
 ];
 
 describe('traceChartOption', () => {
@@ -269,6 +282,9 @@ describe('traceChartOption', () => {
     const light = traceChartOption(lapsOf(short(), short()), { ...tokens, light: true }, 2019);
     expect(channels(light).at(-1)?.color).toBe(clampForLight('#FF8000'));
     expect(clampForLight('#FF8000')).not.toBe('#FF8000');
+    // Lap 2 drawn alone stays dashed.
+    const alone = traceChartOption(lapsOf(short(), short()).slice(1), tokens, 2019);
+    expect(channels(alone).map((s) => s.lineStyle.type)).toEqual(['dashed', 'dashed', 'dashed', 'dashed']);
   });
 
   it('names the laps in the legend, 36 px wide so a dash shows, in --fg, and strips rich-text markup', () => {
@@ -278,7 +294,7 @@ describe('traceChartOption', () => {
       itemWidth: 36,
       textStyle: { color: tokens.fg },
     });
-    const marked = traceChartOption([{ name: 'V{E|R} L41', driver: VER, telemetry: short() }], tokens, 2019);
+    const marked = traceChartOption([{ name: 'V{E|R} L41', driver: VER, telemetry: short(), slot: 0 }], tokens, 2019);
     expect(marked.legend.data).toEqual(['VER L41']);
     expect(marked.series.every((s) => s.name === 'VER L41')).toBe(true);
   });
@@ -418,5 +434,161 @@ describe('the trace chart at 390 px', () => {
     const [whole] = paths(traceChartOption(laps(false), tokens, 2019), VER.team as string);
     expect(broken?.match(/M/g)).toHaveLength(2);
     expect(whole?.match(/M/g)).toHaveLength(1);
+  });
+});
+
+// The card on the session page's Compare tab (E1): what it asks and what it says, per lap.
+describe('the telemetry card', () => {
+  let root: Root;
+  let host: HTMLElement;
+  beforeEach(() => {
+    host = document.createElement('div');
+    document.body.append(host);
+    root = createRoot(host);
+  });
+  afterEach(() => {
+    act(() => root.unmount());
+    host.remove();
+  });
+
+  // VER's best is lap 2 (purple), NOR's lap 3 (green); NOR's lap 1 has no time. A qualifying session asks nothing else.
+  const laps = [
+    lap(1, 1, { lap_ms: 90_000, colour: { lap: 'yellow', s1: null, s2: null, s3: null } }),
+    lap(1, 2, { lap_ms: 81_316, colour: { lap: 'purple', s1: null, s2: null, s3: null } }),
+    lap(1, 3, { lap_ms: 82_000, colour: { lap: 'yellow', s1: null, s2: null, s3: null } }),
+    lap(4, 1),
+    lap(4, 2, { lap_ms: 82_500, colour: { lap: 'yellow', s1: null, s2: null, s3: null } }),
+    lap(4, 3, { lap_ms: 81_900, colour: { lap: 'green', s1: null, s2: null, s3: null } }),
+  ];
+  type Answer = () => Response;
+  const ok =
+    (t: Telemetry = short()) =>
+    () =>
+      HttpResponse.json(t);
+  const mount = (answers: Record<string, Answer>, rows = laps) => {
+    const urls: string[] = [];
+    server.use(
+      http.get('*/api/v1/sessions/11000/telemetry', ({ request }) => {
+        const u = new URL(request.url);
+        urls.push(u.pathname + u.search);
+        const answer = answers[`${u.searchParams.get('driver')}-${u.searchParams.get('lap')}`];
+        return answer ? answer() : new HttpResponse(null, { status: 404 });
+      }),
+    );
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    onTestFinished(() => client.clear());
+    act(() =>
+      root.render(
+        <QueryClientProvider client={client}>
+          <Compare
+            session={11000}
+            detail={sessionDetail('Qualifying', 'Qualifying')}
+            drivers={[VER, NOR]}
+            laps={rows}
+            onReference={() => {}}
+          />
+        </QueryClientProvider>,
+      ),
+    );
+    return urls;
+  };
+  const card = () => host.querySelector('section.traces') as HTMLElement;
+  const chart = () => card().querySelector('[role="img"]')?.getAttribute('aria-label') ?? null;
+  const words = () => [...card().querySelectorAll('p.muted')].map((p) => p.textContent);
+  const select = (n: 1 | 2) => card().querySelector(`select[aria-label="Lap ${n}"]`) as HTMLSelectElement;
+  const url = (driver: number, n: number) => `/api/v1/sessions/11000/telemetry?driver=${driver}&lap=${n}&v=${REVISION}`;
+
+  it('sits after the grid and before the Reference choice, and lists every lap of the picks, grouped by driver', () => {
+    mount({ '1-2': ok(), '4-3': ok() });
+    expect(card().previousElementSibling?.className).toBe('cgrid');
+    expect(card().nextElementSibling?.querySelector('[aria-label="Reference"]')).not.toBeNull();
+    expect(card().querySelector('h2')?.textContent).toBe('Telemetry');
+    for (const n of [1, 2] as const) {
+      const groups = [...select(n).querySelectorAll('optgroup')].map((g) => [
+        g.label,
+        ...[...g.querySelectorAll('option')].map((o) => `${o.value} ${o.textContent}`),
+      ]);
+      expect(groups).toEqual([
+        ['VER', '1-1 L1 1:30.000', '1-2 L2 1:21.316', '1-3 L3 1:22.000'],
+        ['NOR', '4-1 L1 —', '4-2 L2 1:22.500', '4-3 L3 1:21.900'],
+      ]);
+    }
+    expect(card().querySelector('.keys')?.textContent).toBe(
+      "x: metres from each lap's first position sample · a gap of over 1.5 s breaks the line · ── lap 1 · ‑ ‑ lap 2",
+    );
+  });
+
+  it('asks for the two own bests by default, one request each with &v=, and draws both', async () => {
+    const urls = mount({ '1-2': ok(), '4-3': ok() });
+    expect([select(1).value, select(2).value]).toEqual(['1-2', '4-3']);
+    expect(words()).toEqual(['Loading telemetry for VER L2…', 'Loading telemetry for NOR L3…']);
+    await vi.waitFor(() =>
+      expect(chart()).toBe('Telemetry: VER L2, NOR L3: speed, throttle, brake and gear by distance'),
+    );
+    expect(words()).toEqual([]);
+    expect(urls.toSorted()).toEqual([url(1, 2), url(4, 3)]);
+  });
+
+  it('asks for the lap picked as Lap 2, one of the same driver too', async () => {
+    const urls = mount({ '1-2': ok(), '4-3': ok(), '1-3': ok() });
+    await vi.waitFor(() => expect(chart()).toMatch(/^Telemetry: VER L2, NOR L3:/));
+    act(() => {
+      select(2).value = '1-3';
+      select(2).dispatchEvent(new Event('change', { bubbles: true }));
+    });
+    await vi.waitFor(() => expect(chart()).toMatch(/^Telemetry: VER L2, VER L3:/));
+    expect(select(2).value).toBe('1-3');
+    expect(urls.toSorted()).toEqual([url(1, 2), url(1, 3), url(4, 3)]);
+  });
+
+  it('says "No telemetry" for a 404 and draws the other lap', async () => {
+    mount({ '1-2': ok() });
+    await vi.waitFor(() => expect(words()).toEqual(['No telemetry for NOR L3.']));
+    expect(chart()).toMatch(/^Telemetry: VER L2:/);
+  });
+
+  it('says a failed load in fixed words, never a body, while the other lap still draws', async () => {
+    mount({ '1-2': ok(), '4-3': () => HttpResponse.json({ error: 'secret body' }, { status: 500 }) });
+    await vi.waitFor(() => expect(words()).toEqual(['Telemetry for NOR L3 did not load: API error']));
+    expect(chart()).toMatch(/^Telemetry: VER L2:/);
+    expect(host.textContent).not.toContain('secret');
+  });
+
+  it('says which lap has no car data and which no position data, and draws no chart without a lap', async () => {
+    const posOnly = { ...short(), car: { t: [], rpm: [], speed: [], gear: [], throttle: [], brake: [], drs: null } };
+    const carOnly = { ...short(), pos: { t: [], x: [], y: [], z: [], status: [] } };
+    mount({ '1-2': ok(posOnly), '4-3': ok(carOnly) });
+    await vi.waitFor(() =>
+      expect(words()).toEqual([
+        'No car data for VER L2.',
+        'No position data for NOR L3, so no distance to draw it on.',
+      ]),
+    );
+    expect(chart()).toBeNull();
+  });
+
+  it('asks the driver without a best lap to pick one, and asks nothing for it', async () => {
+    // Without NOR's green lap 3, NOR has no own best.
+    const noBest = laps.map((l) => (l.driver_number === 4 ? { ...l, colour: { ...l.colour, lap: null } } : l));
+    const urls = mount({ '1-2': ok() }, noBest);
+    await vi.waitFor(() => expect(chart()).toMatch(/^Telemetry: VER L2:/));
+    expect(words()).toEqual(['No best lap for NOR: pick a lap.']);
+    expect(select(2).value).toBe('');
+    expect(select(2).options[0]?.textContent).toBe('Pick a lap');
+    expect(urls).toEqual([url(1, 2)]);
+  });
+
+  it('is not in the player’s comparison, which passes no traces', () => {
+    const html = renderToStaticMarkup(
+      <Comparison
+        detail={sessionDetail('Race', 'Race')}
+        drivers={[VER, NOR]}
+        laps={laps}
+        periods={[]}
+        onReference={() => {}}
+      />,
+    );
+    expect(html).toContain('<h2>Lap times</h2>');
+    expect(html).not.toContain('Telemetry');
   });
 });

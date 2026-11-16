@@ -12,6 +12,7 @@ import {
   Standings,
   Status,
   Stints,
+  Telemetry,
   Weather,
 } from '@f1/contracts';
 import { QueryClient, queryOptions, useQuery, useQueryClient } from '@tanstack/react-query';
@@ -172,6 +173,19 @@ export const useRaceControl = (key: number, enabled = true) =>
     queryFn: ({ signal }) => getJson(`/api/v1/sessions/${key}/race-control`, RaceControl, signal),
     staleTime: STALE_MS,
     enabled,
+  });
+
+/**
+ * One lap's telemetry (P7b, A§10) for the Compare tab's traces (P7c): one request per picked lap, none without a pick.
+ * Not kept offline (A§10).
+ */
+export const useTelemetry = (key: number, pick: { driver: number; lap: number } | null) =>
+  useQuery({
+    queryKey: ['telemetry', key, pick?.driver, pick?.lap],
+    enabled: pick !== null,
+    queryFn: ({ signal }) =>
+      getJson(`/api/v1/sessions/${key}/telemetry?driver=${pick?.driver}&lap=${pick?.lap}`, Telemetry, signal),
+    staleTime: STALE_MS,
   });
 
 /** The weather samples (P5a): the Weather tab and the session head's line. */

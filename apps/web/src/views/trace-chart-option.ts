@@ -57,8 +57,8 @@ export function tracePoints(t: Telemetry): ({ x: number; i: number } | null)[] {
   return out;
 }
 
-/** `name`: "VER L41". */
-export type TraceLap = { name: string; driver: Driver; telemetry: Telemetry };
+/** `name`: "VER L41"; `slot`: the card's Lap 1 (0) or Lap 2 (1), which keeps its line type when the other is not drawn. */
+export type TraceLap = { name: string; driver: Driver; telemetry: Telemetry; slot: 0 | 1 };
 
 /** The chart's accessible name. */
 export const traceLabel = (laps: readonly TraceLap[]): string =>
@@ -158,7 +158,7 @@ export function traceChartOption(laps: readonly TraceLap[], tokens: ChartTokens,
     xAxisIndex: g,
     yAxisIndex: g,
     color: colours[k],
-    lineStyle: { type: k === 0 ? ('solid' as const) : ('dashed' as const), width: 1.5 },
+    lineStyle: { type: laps[k]?.slot === 1 ? ('dashed' as const) : ('solid' as const), width: 1.5 },
     symbol: 'none',
     connectNulls: false,
     clip: true,

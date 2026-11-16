@@ -819,6 +819,17 @@ p.box {
   height: 20rem;
 }
 
+/* The telemetry card (P7c): more grids than the 20rem default, and the two lap picks with their words. */
+.traces .chart {
+  height: 30rem;
+}
+
+.traces label {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
 /* The driver picker (D2): toggle chips with the team bar of .drv, 44 px like every button. */
 .picker {
   display: flex;
