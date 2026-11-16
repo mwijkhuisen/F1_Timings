@@ -90,8 +90,9 @@ const uint = (v: unknown, max: number): v is number =>
 /**
  * A decoded CarData message, `Entries[].{Utc, Cars.<n>.Channels.{0,2,3,4,5,45}}` (A§6.2, P7b), on `positions`' rules:
  * an entry with a bad Utc is skipped, an id that is no car is skipped, and a message of over MAX_ENTRIES entries is
- * []. A car's sample is dropped, and counted in `dropped` (`bad_sample`), unless channels 0 and 2 are integers
- * 0–65,535 and 3, 4 and 5 integers 0–255. Channel 45 is kept when it is an integer 0–255, else the sample has none.
+ * []. A car's sample is dropped, and counted in `dropped` (`bad_sample`), unless channel 0 is an integer 0–65,535,
+ * channel 2 an integer 0–32,767 (the `top_kph` smallint; real speeds stop at 365) and 3, 4 and 5 integers 0–255.
+ * Channel 45 is kept when it is an integer 0–255, else the sample has none.
  */
 export function carData(value: unknown): { entries: CarEntry[]; dropped: number } {
   if (!isObj(value) || !Array.isArray(value.Entries) || value.Entries.length > MAX_ENTRIES) {
@@ -107,7 +108,7 @@ export function carData(value: unknown): { entries: CarEntry[]; dropped: number 
       if (!CAR.test(id)) continue;
       const ch = isObj(c) && isObj(c.Channels) ? c.Channels : {};
       const [rpm, speed, gear, throttle, brake, drs] = [ch['0'], ch['2'], ch['3'], ch['4'], ch['5'], ch['45']];
-      if (!uint(rpm, 65_535) || !uint(speed, 65_535) || !uint(gear, 255) || !uint(throttle, 255) || !uint(brake, 255)) {
+      if (!uint(rpm, 65_535) || !uint(speed, 32_767) || !uint(gear, 255) || !uint(throttle, 255) || !uint(brake, 255)) {
         dropped++;
         continue;
       }

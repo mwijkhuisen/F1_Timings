@@ -180,6 +180,7 @@ describe('carData (P7b, A§6.2)', () => {
     const bad = [
       { '0': 65_536 },
       { '2': -1 },
+      { '2': 32_768 }, // past the top_kph smallint
       { '3': 256 },
       { '4': 1.5 },
       { '5': '0' },
@@ -188,10 +189,10 @@ describe('carData (P7b, A§6.2)', () => {
     ].map((over) => ({ Channels: channels(over) }));
     const cars = Object.fromEntries(bad.map((c, i) => [String(i + 1), c]));
     const r = decoded([
-      at({ ...cars, '8': {}, '9': { Channels: [1] }, '10': 3, '11': { Channels: channels({ '45': 256 }) } }),
+      at({ ...cars, '9': {}, '10': { Channels: [1] }, '11': 3, '12': { Channels: channels({ '45': 256 }) } }),
     ]);
-    expect(r.dropped).toBe(10);
-    expect(r.entries[0]?.cars).toEqual([[11, { rpm: 11_000, speed: 301, gear: 7, throttle: 100, brake: 0 }]]);
+    expect(r.dropped).toBe(11);
+    expect(r.entries[0]?.cars).toEqual([[12, { rpm: 11_000, speed: 301, gear: 7, throttle: 100, brake: 0 }]]);
   });
 
   it('skips ids that are no car (not counted), an entry with a bad Utc or no Cars; anything else is []', () => {
