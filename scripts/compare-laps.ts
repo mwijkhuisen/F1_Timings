@@ -145,9 +145,10 @@ export type Input = { events: FeedEvent[]; archiveDir?: string; skipped: number 
 /**
  * A recording (a feed.jsonl, or a recorder directory: its segments, gzipped or plain, in order, then feed.jsonl) or
  * an archive directory → events. A plain file can be a pipe, such as `<(zcat …)`. Of an archive directory only the
- * archive job's TOPICS are read, as the job reads them: never a raw-only file such as a `.z` topic (P3e).
+ * topics in `keep` are read: compare-laps keeps the archive job's TOPICS, as the job reads them, never a raw-only file
+ * such as a `.z` topic (P3e).
  */
-export async function readInput(input: string): Promise<Input | undefined> {
+export async function readInput(input: string, keep: ReadonlySet<string>): Promise<Input | undefined> {
   try {
     const events: FeedEvent[] = [];
     if (!statSync(input).isDirectory()) {
@@ -160,7 +161,7 @@ export async function readInput(input: string): Promise<Input | undefined> {
       for await (const line of recordingLines(input)) events.push(...parseFeedLine(line.text));
       return { events, skipped: 0 };
     }
-    const archive = archiveEvents(readStreams(input, new Set(TOPICS)));
+    const archive = archiveEvents(readStreams(input, keep));
     return archive && { events: archive.events, archiveDir: input, skipped: archive.skipped };
   } catch {
     return undefined;
@@ -217,7 +218,7 @@ export async function compare(
   let exit = 0;
   for (const name of inputs) {
     log(`== ${name}`);
-    const input = await readInput(name);
+    const input = await readInput(name, new Set(TOPICS));
     if (input === undefined) {
       log('compare-laps: input (unreadable, or an archive without a Heartbeat t0)');
       return 1;

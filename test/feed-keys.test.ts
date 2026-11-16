@@ -120,6 +120,22 @@ describe('census', () => {
     ]);
   });
 
+  it('reads a raw-only topic of an archive with --topic (P3e), and no other raw-only file', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'f1-keys-'));
+    writeFileSync(join(dir, 'Heartbeat.jsonStream'), '﻿00:00:01.000{"Utc":"2026-01-10T12:00:01.000Z"}\r\n');
+    writeFileSync(join(dir, 'SessionInfo.jsonStream'), '﻿00:00:02.000{"Key":9002,"Type":"Race"}\r\n');
+    writeFileSync(join(dir, 'TrackStatus.jsonStream'), '﻿00:00:03.000{"Status":"1","Message":"AllClear"}\r\n');
+    writeFileSync(join(dir, 'TeamRadio.jsonStream'), '00:00:03.000{"Captures":[]}\r\nnot a line\r\n');
+    const lines: string[] = [];
+    expect(await feedKeys(['--topic', 'TrackStatus', dir], (l) => lines.push(l))).toBe(0);
+    expect(lines.slice(1)).toEqual([
+      'events 3, skipped lines 0',
+      'session 9002 Race: TrackStatus 1 messages',
+      '  Message 1',
+      '  Status 1',
+    ]);
+  });
+
   it('prints keys as printable ASCII only, and says when the topic is absent', async () => {
     const feed = join(mkdtempSync(join(tmpdir(), 'f1-keys-')), 'feed.jsonl');
     writeFileSync(feed, line(1_000, 'TimingData', { 'a\u001b[2J': 1 }, null));
