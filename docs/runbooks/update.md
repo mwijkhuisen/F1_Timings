@@ -362,8 +362,10 @@ sudo docker compose -p f1 -f /etc/f1/compose.yaml --env-file /srv/f1/state/curre
 - **Exit codes:** 0 when no session failed; 1 when one did (an unknown key, a failing source or a database error: the session's `telemetry` line is at error level with the code, and `telemetry_done` counts the failures); 64 for a usage error (keys and `--all` together or neither, a key that is not digits, an unknown flag, a directory outside the rule below); 78 without the database secret.
 - **Directories:** `--archive-dir` and `--live-dir` default to the container's paths and are not needed on the VM. They take only `/srv/f1/archive` and `/srv/f1/live` or a path with a `fixtures-private` segment (exit 64 otherwise), as `fill`.
 - **Sources:** a complete recording wins for each lap that it holds whole, and the archive fills the laps it lacks (A§7, T1). Only a complete recording counts, the earliest one of the session.
-- **A failing source** (`too_large`, `not_file`, and for a recording `recording_missing` or `incomplete`: no sealed segment) fails the session and changes nothing in it, so the archive never stands in for a recording that failed to read. Absent files are no failure: the line says `skip` with `no_files`, or `no_laps` when the session has no lap with a start.
+- **A failing source** (`too_large`, `not_file`, `too_many_samples`: over 3,000,000 samples in the lap windows, and for a recording `recording_missing` or `incomplete`: no sealed segment) fails the session and changes nothing in it, so the archive never stands in for a recording that failed to read. Absent files are no failure: the line says `skip` with `no_files`, or `no_laps` when the session has no lap with a start.
 - **A rerun** gives the same rows: each session's rows are replaced in one transaction.
+- **After a refetch or `fill` that changes a session's laps,** run `telemetry` for the session: the rows are matched to the laps by driver and lap number only, so a renumbered lap shows the old lap's figures until then (A§7).
+- **Browser cache:** as after a refetch, a final session's laps stay cached in the browser for up to 24 h (A§10, `max-age=86400`), so a `telemetry` run shows in the laps only after that or a hard reload.
 - **Check it [box]:** the `telemetry_done` line has `sessions`, `failed` and `max_rss_kb`; the sizes and the source split:
 
   ```bash
