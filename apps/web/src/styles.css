@@ -276,11 +276,12 @@ header {
   border-radius: 0 6px 6px 0;
 }
 
-/* Tables scroll inside their box, never the page (D14); the box scrolls both
+/* Wide tables scroll inside their box, never the page (D14); the box scrolls both
    ways so the sticky header row and first column hold. It is a focusable, named
    region (ui/Scroll.tsx); scroll-padding keeps a focused cell clear of the sticky
    header row and columns. It is the containing block of the .vh words inside, so
-   they never widen the page. */
+   they never widen the page. The Result tab's tables fit the page and have no box,
+   but qualifying's (#202 D1). */
 .scroll {
   position: relative;
   overflow: auto;
@@ -1404,14 +1405,33 @@ header .links {
   text-align: right;
 }
 
-.result td.team {
-  text-align: left;
-}
-
-/* The result scrolls whole: Pos comes before the driver, so neither column sticks to the left (this beats
+/* Pos comes before the driver, so neither column sticks to the left in qualifying's box (this beats
    `thead th:first-child` by coming later at the same specificity). */
 .result tr > th {
   left: auto;
+}
+
+/* Outside a box (#202 D1) the table is the containing block of the .vh words that .scroll was, and the head row
+   never sticks to the page. To fit 390 px (#202, measured), a column that has to narrow wraps at a space: a team name
+   (the line under a driver, a team's row), then a head label ("THIS / SESSION"), then, under 600 px, 6 px cell padding
+   as in .deltas (a 360 px phone has 328 px of content). Qualifying's boxed table keeps all of it as it was. */
+.result {
+  position: relative;
+}
+
+:not(.scroll) > .result thead th {
+  position: static;
+  white-space: normal;
+}
+
+:not(.scroll) > .result th.drv {
+  white-space: normal;
+}
+
+@media (max-width: 600px) {
+  :not(.scroll) > .result :is(th, td) {
+    padding: 0 6px;
+  }
 }
 
 .quali .margin,
@@ -2808,11 +2828,32 @@ section.rainmap .raintime input[type="range"] {
   }
 }
 
-/* The standings section of the Result tab (P8): the tables are .result's; the chart's head sits under them. */
-.standings .panel-title {
+/* The Result tab of an OpenF1 race or sprint (#202): the classification, the drivers' and the constructors' standings
+   (P8) as one column, or three side by side from 1400 px, never two. 1400 is measured: the three 2026 tables are
+   1212 px in Edge, and the layout test's model (×1.05) plus two gaps, the gutter and a scroll bar needs 1395.
+   Each track is its own table's max-content, so the classification keeps its place while the standings load; the
+   foot (the chart) spans every track and the empty 1fr one takes it, so it never widens a table's track. The
+   headings' 24 px margin is the space between the rows. */
+.result-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  column-gap: 24px;
+}
+
+@media (min-width: 1400px) {
+  .result-grid {
+    grid-template-columns: repeat(3, max-content) 1fr;
+  }
+}
+
+.result-foot {
+  grid-column: 1 / -1;
+}
+
+.result-foot .panel-title {
   margin-top: 24px;
 }
 
-.standings .panel-title h3 {
+.result-foot .panel-title h2 {
   margin: 0;
 }
