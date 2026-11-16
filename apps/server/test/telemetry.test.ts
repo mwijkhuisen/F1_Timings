@@ -1,6 +1,6 @@
 import { deflateRawSync, deflateSync } from 'node:zlib';
 import { describe, expect, it } from 'vitest';
-import { decodeZ, positions, type ZFail, zCounts } from '../src/live/telemetry.ts';
+import { carData, decodeZ, positions, type ZFail, zCounts } from '../src/live/telemetry.ts';
 
 // Every payload is built here from synthetic JSON (A§12.1 invariant 3): the bomb too, so no `.z` fixture exists.
 
@@ -135,5 +135,84 @@ describe('positions (P7a, A§6.2)', () => {
     expect(big.length).toBeLessThan(4_000); // deflate keeps 33 × 99 repeated samples small
     const z = decodeZ(big);
     expect(z.ok && positions(z.value)).toEqual([]);
+  });
+});
+
+describe('carData (P7b, A§6.2)', () => {
+  const channels = (over: Record<string, unknown> = {}) => ({
+    '0': 11_000,
+    '2': 301,
+    '3': 7,
+    '4': 100,
+    '5': 0,
+    ...over,
+  });
+  const decoded = (entries: unknown[]) => {
+    const r = decodeZ(json({ Entries: entries }));
+    if (!r.ok) throw new Error(r.fail);
+    return carData(r.value);
+  };
+  const at = (cars: Record<string, unknown>, Utc: unknown = '2027-01-01T12:00:00.25Z') => ({ Utc, Cars: cars });
+
+  it('maps channels 0, 2, 3, 4, 5 and 45 at each Utc; a missing 45 gives no DRS', () => {
+    const t = Date.parse('2027-01-01T12:00:00.250Z');
+    expect(
+      decoded([
+        at({ '1': { Channels: channels({ '45': 255 }) }, '44': { Channels: channels() } }),
+        at({ '1': { Channels: channels({ '0': 65_535, '2': 0, '45': 0 }) } }, '2027-01-01T12:00:00.5000000Z'),
+      ]),
+    ).toEqual({
+      entries: [
+        {
+          t,
+          cars: [
+            [1, { rpm: 11_000, speed: 301, gear: 7, throttle: 100, brake: 0, drs: 255 }],
+            [44, { rpm: 11_000, speed: 301, gear: 7, throttle: 100, brake: 0 }],
+          ],
+        },
+        { t: t + 250, cars: [[1, { rpm: 65_535, speed: 0, gear: 7, throttle: 100, brake: 0, drs: 0 }]] },
+      ],
+      dropped: 0,
+    });
+  });
+
+  it('drops and counts a sample with a channel out of range or missing; a bad 45 only loses its DRS', () => {
+    const bad = [
+      { '0': 65_536 },
+      { '2': -1 },
+      { '3': 256 },
+      { '4': 1.5 },
+      { '5': '0' },
+      { '0': undefined },
+      { '2': null },
+    ].map((over) => ({ Channels: channels(over) }));
+    const cars = Object.fromEntries(bad.map((c, i) => [String(i + 1), c]));
+    const r = decoded([
+      at({ ...cars, '8': {}, '9': { Channels: [1] }, '10': 3, '11': { Channels: channels({ '45': 256 }) } }),
+    ]);
+    expect(r.dropped).toBe(10);
+    expect(r.entries[0]?.cars).toEqual([[11, { rpm: 11_000, speed: 301, gear: 7, throttle: 100, brake: 0 }]]);
+  });
+
+  it('skips ids that are no car (not counted), an entry with a bad Utc or no Cars; anything else is []', () => {
+    const ids = ['241', '0', '100', '07', 'x'].map((id) => [id, { Channels: channels() }]);
+    expect(decoded([at({ ...Object.fromEntries(ids), '99': { Channels: channels() } })])).toEqual({
+      entries: [{ t: Date.parse('2027-01-01T12:00:00.250Z'), cars: [[99, expect.any(Object)]] }],
+      dropped: 0,
+    });
+    for (const Utc of ['yesterday', 42, null])
+      expect(decoded([at({ '1': { Channels: channels() } }, Utc)]).entries).toEqual([]);
+    expect(decoded([{ Utc: '2027-01-01T12:00:00Z' }, 7, null]).entries).toEqual([]);
+    for (const value of [null, 'x', 3, [], { Entries: {} }, { Position: [] }]) {
+      expect(carData(value)).toEqual({ entries: [], dropped: 0 });
+    }
+  });
+
+  it('a message of over 32 entries is []', () => {
+    const cars = Object.fromEntries(Array.from({ length: 22 }, (_, i) => [String(i + 1), { Channels: channels() }]));
+    const entries = (n: number) =>
+      Array.from({ length: n }, (_, i) => at(cars, new Date(Date.UTC(2027, 0, 1, 12) + i).toISOString()));
+    expect(decoded(entries(32)).entries).toHaveLength(32);
+    expect(decoded(entries(33))).toEqual({ entries: [], dropped: 0 });
   });
 });
