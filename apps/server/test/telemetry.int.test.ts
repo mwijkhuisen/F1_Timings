@@ -289,6 +289,16 @@ describe('the telemetry job (f1_ingest login, synthetic files)', { timeout: 120_
     expect(await md5(S)).toBe(before);
   });
 
+  it('a source with too many samples in its windows changes nothing: too_many_samples', async () => {
+    const before = await md5(S);
+    // Each source places under 300 samples, the two together over 500: the cap is per source.
+    expect(await telemetry({ db, log, maxSamples: 300 }, args())).toBe(true);
+    expect(one()).toMatchObject({ level: 30, rows: 5 });
+    expect(await telemetry({ db, log, maxSamples: 100 }, args())).toBe(false);
+    expect(one()).toMatchObject({ session_key: S, level: 50, error: 'too_many_samples' });
+    expect(await md5(S)).toBe(before);
+  });
+
   it('a failing recording or a source past its cap changes nothing: recording_missing, too_large', async () => {
     const before = await md5(S);
     const { id } = await admin
@@ -352,7 +362,7 @@ describe('the telemetry job (f1_ingest login, synthetic files)', { timeout: 120_
       skip: ['ms', 'session_key', 'skip'],
       ok: ['car_bytes', 'dropped', 'from', 'ms', 'pos_bytes', 'rows', 'session_key', 'too_long', 'whole', 'z'],
     };
-    const codes = /^(unknown_session|not_file|too_large|recording_missing|no_files|no_laps)$/;
+    const codes = /^(unknown_session|not_file|too_large|too_many_samples|recording_missing|no_files|no_laps)$/;
     const leaves = (v: unknown): unknown[] =>
       typeof v === 'object' && v !== null ? Object.values(v).flatMap(leaves) : [v];
     expect(seen.length).toBeGreaterThan(10);

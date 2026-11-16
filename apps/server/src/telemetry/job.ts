@@ -15,12 +15,25 @@ import { type CarRow, type Coverage, type PosRow, packCar, packPos, pick, status
 // pattern: no network, the files read before the transaction opens. Logs carry counts and fixed codes only, never a
 // value, a path or a payload (decoded telemetry is F1 data, A§12.1 invariant 3).
 
-/** `maxBytes`: both caps (a recording's kept lines, MAX_Z_BYTES; one archive file, RAW_MAX_BYTES) when a test sets it. */
-export type TelemetryDeps = { db: Kysely<DB>; log: Pick<Logger, 'info' | 'error'>; maxBytes?: number };
+/**
+ * `maxBytes`: both caps (a recording's kept lines, MAX_Z_BYTES; one archive file, RAW_MAX_BYTES), and `maxSamples`
+ * MAX_SOURCE_SAMPLES, when a test sets them.
+ */
+export type TelemetryDeps = {
+  db: Kysely<DB>;
+  log: Pick<Logger, 'info' | 'error'>;
+  maxBytes?: number;
+  maxSamples?: number;
+};
 type Source = 'f1-live' | 'f1-archive';
 
 /** A recording's kept `.z` lines in all: the bound on its decode work and memory. */
 export const MAX_Z_BYTES = 64 * 1024 * 1024;
+/**
+ * A source's samples placed in a lap window, both topics (`too_many_samples`): the bound on the objects it holds until
+ * it is packed. The largest real session, the 2021 test day 6396, places about 664 k CarData and 728 k Position samples.
+ */
+export const MAX_SOURCE_SAMPLES = 3_000_000;
 const TOPICS = ['CarData.z', 'Position.z'];
 const CHUNK = 500;
 const CHUNK_BYTES = 8 * 1024 * 1024;
@@ -139,27 +152,37 @@ async function telemetrySession(deps: TelemetryDeps, args: Omit<FillArgs, 'keys'
   const z = { 'f1-live': zCounts(), 'f1-archive': zCounts() };
   const dropped = { bad_sample: 0, bad_status: 0, drs_partial: 0 };
   let tooLong = 0;
+  const maxSamples = deps.maxSamples ?? MAX_SOURCE_SAMPLES;
   // Samples outside every window are dropped at once (garage and pre-session time).
-  // ponytail: a source's in-window samples are held as objects until it is packed, bounded by the input caps (64 MiB
-  // of lines, 2 × 32 MiB of files); pack per driver while reading if a session ever nears the 512m.
-  const take = (source: Source) => (topic: string, payload: unknown) => {
-    const d = decodeZ(payload);
-    if (!d.ok) {
-      z[source][d.fail]++;
-      return;
-    }
-    if (topic === 'CarData.z') {
-      const { entries, dropped: bad } = carData(d.value);
-      dropped.bad_sample += bad;
-      for (const { t, cars } of entries) for (const [id, s] of cars) find(byDriver.get(id), t)?.car.push({ ...s, t });
-      return;
-    }
-    for (const { t, cars } of positions(d.value)) {
-      for (const [id, s] of cars) {
-        if (statusCode(s.status) === null) dropped.bad_status++;
-        else find(byDriver.get(id), t)?.pos.push({ ...s, t });
+  // ponytail: a source's in-window samples are held as objects until it is packed, bounded by MAX_SOURCE_SAMPLES (about
+  // twice the largest real session); pack per driver while reading if a session ever nears the 768m.
+  const take = (source: Source) => {
+    let placed = 0;
+    const into = (w: Window | undefined) => {
+      if (w && ++placed > maxSamples) throw fail('too_many_samples');
+      return w;
+    };
+    return (topic: string, payload: unknown) => {
+      const d = decodeZ(payload);
+      if (!d.ok) {
+        z[source][d.fail]++;
+        return;
       }
-    }
+      if (topic === 'CarData.z') {
+        const { entries, dropped: bad } = carData(d.value);
+        dropped.bad_sample += bad;
+        for (const { t, cars } of entries) {
+          for (const [id, s] of cars) into(find(byDriver.get(id), t))?.car.push({ ...s, t });
+        }
+        return;
+      }
+      for (const { t, cars } of positions(d.value)) {
+        for (const [id, s] of cars) {
+          if (statusCode(s.status) === null) dropped.bad_status++;
+          else into(find(byDriver.get(id), t))?.pos.push({ ...s, t });
+        }
+      }
+    };
   };
   const pack = (source: Source) => {
     for (const w of [...byDriver.values()].flat()) {
