@@ -64,6 +64,14 @@ describe('run', () => {
     [['fill', '--all', '--live-dir', '/srv/f1/archive']], // the archive's default is not the live dir's
     [['fill', '--all', '--archive-dir', '/srv/f1/live']],
     [['fill', '--all', '--live-dir', '/home/x/F1_Timing/fixtures-private-evil/live']],
+    // telemetry (P7b) takes fill's arguments and rule
+    [['telemetry']],
+    [['telemetry', 'abc']],
+    [['telemetry', '11388', '--all']],
+    [['telemetry', '--force']],
+    [['telemetry', '--all', '--archive-dir', '/tmp/x']],
+    [['telemetry', '--all', '--live-dir', '/tmp/x']],
+    [['telemetry', '--all', '--live-dir', '/home/x/F1_Timing/fixtures-private-evil/live']],
     [['jolpica', '1949']],
     [['jolpica', String(new Date().getUTCFullYear() + 1)]],
     [['jolpica', '195O']],
@@ -116,6 +124,8 @@ describe('run', () => {
         '/home/x/fixtures-private/live',
       ],
     ],
+    [['telemetry', '--all']],
+    [['telemetry', '11404', '11408', '--archive-dir', '/home/x/F1_Timing/fixtures-private/archive']],
     [['jolpica']],
     [['jolpica', '1950', '2017', String(new Date().getUTCFullYear()), '--dir', '/srv/f1/jolpica']],
     [['jolpica', '--dir', '/home/x/F1_Timing/fixtures-private/jolpica/2026-10-27/csv']],
