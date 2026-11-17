@@ -12,6 +12,7 @@ import {
   Standings,
   Status,
   Stints,
+  Telemetry,
   Weather,
 } from '@f1/contracts';
 import { QueryClient, queryOptions, useQuery, useQueryClient } from '@tanstack/react-query';
@@ -54,8 +55,9 @@ const subscribe = (l: () => void) => {
 export const useStale = () => useSyncExternalStore(subscribe, isStale, isStale);
 
 export async function getJson<T>(path: string, contract: { parse(data: unknown): T }, signal: AbortSignal): Promise<T> {
-  // A per-session answer may sit in the browser cache for 24 h: `v` makes the cache key per build (A§10).
-  const url = path.includes('/api/v1/sessions/') ? `${path}?v=${REVISION}` : path;
+  // A per-session answer may sit in the browser cache for 24 h: `v` makes the cache key per build (A§10), joined with
+  // `&` to a path that has a query (the telemetry's `?driver=&lap=`).
+  const url = path.includes('/api/v1/sessions/') ? `${path}${path.includes('?') ? '&' : '?'}v=${REVISION}` : path;
   // redirect: 'error' turns Access's login redirect into a TypeError instead of an HTML page.
   const res = await fetch(url, { signal, redirect: 'error', headers: { accept: 'application/json' } });
   if (!res.ok) throw new HttpError(res.status);
@@ -171,6 +173,19 @@ export const useRaceControl = (key: number, enabled = true) =>
     queryFn: ({ signal }) => getJson(`/api/v1/sessions/${key}/race-control`, RaceControl, signal),
     staleTime: STALE_MS,
     enabled,
+  });
+
+/**
+ * One lap's telemetry (P7b, A§10) for the Compare tab's traces (P7c): one request per picked lap, none without a pick.
+ * Not kept offline (A§10).
+ */
+export const useTelemetry = (key: number, pick: { driver: number; lap: number } | null) =>
+  useQuery({
+    queryKey: ['telemetry', key, pick?.driver, pick?.lap],
+    enabled: pick !== null,
+    queryFn: ({ signal }) =>
+      getJson(`/api/v1/sessions/${key}/telemetry?driver=${pick?.driver}&lap=${pick?.lap}`, Telemetry, signal),
+    staleTime: STALE_MS,
   });
 
 /** The weather samples (P5a): the Weather tab and the session head's line. */

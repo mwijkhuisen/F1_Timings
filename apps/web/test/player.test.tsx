@@ -2745,6 +2745,9 @@ describe('Compare, Stints and the Laps tab in the player (#112)', () => {
       ['HAM', 1, '0 stops'],
     ]);
     expect(Math.max(...(await compare()).map(lastLap))).toBe(3);
+    // P7c (A§13): the telemetry card is the session page's only; the player's Compare has none.
+    expect(host.querySelector('section.traces')).toBeNull();
+    expect(host.textContent).not.toContain('Telemetry');
     // VER pits at the end of lap 3: its stint 2 from lap 4, and the lap 4 rows.
     last().emit('laps', {
       t: T + 31_000,

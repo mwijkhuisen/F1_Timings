@@ -32,6 +32,19 @@ describe('getJson', () => {
     await expect(get()).rejects.toMatchObject({ name: 'HttpError', status: 404 });
   });
 
+  it('joins v with & to a per-session path that has a query (P7c)', async () => {
+    const seen: string[] = [];
+    server.use(
+      http.get('http://web.test/api/v1/sessions/1/telemetry', ({ request }) => {
+        seen.push(new URL(request.url).search);
+        return HttpResponse.json({});
+      }),
+    );
+    const any = { parse: (d: unknown) => d };
+    await getJson('http://web.test/api/v1/sessions/1/telemetry?driver=1&lap=2', any, new AbortController().signal);
+    expect(seen).toEqual([`?driver=1&lap=2&v=${REVISION}`]);
+  });
+
   it('adds ?v=<revision> to the per-session paths only, and every fetch goes through getJson', async () => {
     const seen: string[] = [];
     server.use(

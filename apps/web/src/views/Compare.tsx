@@ -1,18 +1,21 @@
 import type { Laps, RaceControl, SessionDetail, Stints } from '@f1/contracts';
 import { type ReactNode, useCallback, useMemo, useState } from 'react';
-import { useRaceControl, useStints } from '../lib/api.ts';
+import { HttpError, useRaceControl, useStints, useTelemetry } from '../lib/api.ts';
+import { colouredBests } from '../lib/bests.ts';
 import { cycleText, PIT_WINDOW, pitCycles } from '../lib/crossings.ts';
 import { evolution, evolutionSlots, SLOT_MS } from '../lib/evolution.ts';
 import { phaseName } from '../lib/quali.ts';
 import { type Driver, plural } from '../lib/session.ts';
 import { fmtHm, fmtLap } from '../lib/time.ts';
 import { type ClockPeriod, clockPeriods, type Period, trackPeriods } from '../lib/track.ts';
+import { errorText } from '../ui/ErrorView.tsx';
 import { Scroll } from '../ui/Scroll.tsx';
 import { Chart } from './Chart.tsx';
 import { DeltaTable, Duel } from './DeltaTable.tsx';
 import { evolutionChartOption, evolutionWindow } from './evolution-chart-option.ts';
 import { gapChartLabel, gapChartOption } from './gap-chart-option.ts';
 import { type ChartTokens, lapChartOption } from './lap-chart-option.ts';
+import { lateStart, type TraceLap, traceChartOption, traceLabel, tracePoints } from './trace-chart-option.ts';
 
 /**
  * The pit cycles of every pair of the picked drivers (A§13, #115): one sentence each, from the stints, the line
@@ -86,7 +89,8 @@ function StoredPitCycles({
 /**
  * The comparison (A§13), of the selected drivers in pick order, the first the reference: the lap-time chart beside
  * the gap chart and the duel, then the reference choice and the sector deltas. `periods` band both charts; `children`
- * is the side column's last card. The session page's `Compare` and the player (#112) feed it.
+ * is the side column's last card; `traces` (the session page's telemetry card, P7c) follows the grid. The session
+ * page's `Compare` and the player (#112) feed it.
  */
 export function Comparison({
   detail,
@@ -96,6 +100,7 @@ export function Comparison({
   rcFailed = false,
   onReference,
   children,
+  traces,
 }: {
   detail: SessionDetail;
   drivers: readonly Driver[];
@@ -104,6 +109,7 @@ export function Comparison({
   rcFailed?: boolean;
   onReference: (driver: number) => void;
   children?: ReactNode;
+  traces?: ReactNode;
 }) {
   const [yWindow, setWindow] = useState<'fit' | '107'>('fit');
   // What the charts draw, by content: the player's lap rows are a new array on each `laps` event (about one a second
@@ -158,6 +164,7 @@ export function Comparison({
           {children}
         </div>
       </div>
+      {traces}
       <div className="controls">
         <span className="label" aria-hidden="true">
           Reference
@@ -262,6 +269,124 @@ export function TrackEvolution({
   );
 }
 
+/** A lap of the picks as a select value, `${driver}-${lap}`. */
+const lapValue = (driver: number, lap: number) => `${driver}-${lap}`;
+
+/** What a lap's slot shows instead of its trace (A§13), or null when it is drawn. */
+function traceState(name: string, q: ReturnType<typeof useTelemetry>): string | null {
+  if (q.error) {
+    if (q.error instanceof HttpError && q.error.status === 404) return `No telemetry for ${name}.`;
+    return `Telemetry for ${name} did not load: ${errorText(q.error)}`;
+  }
+  if (!q.data) return `Loading telemetry for ${name}…`;
+  if (q.data.car.t.length === 0) return `No car data for ${name}.`;
+  if (lateStart(q.data))
+    return `No position data in the first ${((q.data.pos.t[0] ?? 0) / 1000).toFixed(1)} s of ${name}, so its distance cannot start at the line.`;
+  if (tracePoints(q.data).filter((p) => p !== null).length < 2)
+    return `No position data for ${name}, so no distance to draw it on.`;
+  return null;
+}
+
+/**
+ * The telemetry card (P7c, A§13): two picked laps' traces along the distance (T3, E2), Lap 1 and Lap 2 picked from
+ * every lap of the picked drivers (E1), by default the first two picks' own bests. Each lap is its own request and
+ * its own state, so one failing never blocks the other. The picks are component state, never in the URL.
+ */
+function TelemetryCard({
+  session,
+  detail,
+  drivers,
+  laps,
+}: {
+  session: number;
+  detail: SessionDetail;
+  drivers: readonly Driver[];
+  laps: Laps;
+}) {
+  // Only the listed lap rows map a value back to a request, so its driver and lap are contract-checked integers.
+  const rows = useMemo(() => {
+    const picked = new Set(drivers.map((d) => d.number));
+    return new Map(
+      laps.filter((l) => picked.has(l.driver_number)).map((l) => [lapValue(l.driver_number, l.lap_number), l]),
+    );
+  }, [drivers, laps]);
+  const bests = useMemo(() => colouredBests(laps), [laps]);
+  const [chosen, setChosen] = useState<[string | null, string | null]>([null, null]);
+  const slots = ([0, 1] as const).map((k) => {
+    const own = drivers[k];
+    const best = own && bests.get(own.number);
+    const fallback = best ? lapValue(best.driver_number, best.lap_number) : null;
+    const value = chosen[k] != null && rows.has(chosen[k]) ? chosen[k] : fallback;
+    const row = value === null ? undefined : rows.get(value);
+    const driver = row && drivers.find((d) => d.number === row.driver_number);
+    return { k, own, value, row, driver, name: row && driver ? `${driver.acronym} L${row.lap_number}` : null };
+  });
+  const [one, two] = slots as [(typeof slots)[0], (typeof slots)[0]];
+  const q1 = useTelemetry(session, one.row ? { driver: one.row.driver_number, lap: one.row.lap_number } : null);
+  const q2 = useTelemetry(session, two.row ? { driver: two.row.driver_number, lap: two.row.lap_number } : null);
+  const qs = [q1, q2] as const;
+  const shown = slots.map((s) => {
+    const q = qs[s.k];
+    if (s.name === null) return { ...s, data: q.data, state: `No best lap for ${s.own?.acronym ?? '—'}: pick a lap.` };
+    return { ...s, data: q.data, state: traceState(s.name, q) };
+  });
+  const drawn = shown.flatMap((s): TraceLap[] =>
+    s.state === null && s.data && s.driver && s.name
+      ? [{ name: s.name, driver: s.driver, telemetry: s.data, slot: s.k }]
+      : [],
+  );
+  const year = detail.meeting.year;
+  // Redrawn only when what it draws changes: the laps by name, driver and slot, and their answers.
+  const shape = JSON.stringify(drawn.map((l) => [l.name, l.driver, l.slot]));
+  const [d1, d2] = drawn.map((l) => l.telemetry);
+  // biome-ignore lint/correctness/useExhaustiveDependencies: `shape`, `d1` and `d2` stand for the drawn laps.
+  const option = useCallback((t: ChartTokens) => traceChartOption(drawn, t, year), [shape, d1, d2, year]);
+
+  return (
+    <section className="card traces">
+      <h2>Telemetry</h2>
+      <div className="controls">
+        {slots.map((s) => (
+          <label key={s.k}>
+            Lap {s.k + 1}
+            <select
+              aria-label={`Lap ${s.k + 1}`}
+              value={s.value ?? ''}
+              onChange={(e) => setChosen((c) => (s.k === 0 ? [e.target.value, c[1]] : [c[0], e.target.value]))}
+            >
+              {s.value === null && <option value="">Pick a lap</option>}
+              {drivers.map((d) => (
+                <optgroup key={d.number} label={d.acronym}>
+                  {laps
+                    .filter((l) => l.driver_number === d.number)
+                    .map((l) => (
+                      <option key={l.lap_number} value={lapValue(d.number, l.lap_number)}>
+                        {`L${l.lap_number} ${l.lap_ms === null ? '—' : fmtLap(l.lap_ms)}`}
+                      </option>
+                    ))}
+                </optgroup>
+              ))}
+            </select>
+          </label>
+        ))}
+      </div>
+      <p className="keys">
+        x: metres from each lap's first position sample · a gap of over 1.5 s breaks the line ·{' '}
+        <span aria-hidden="true">──</span> lap 1 · <span aria-hidden="true">‑ ‑</span> lap 2
+      </p>
+      {drawn.length > 0 && <Chart label={traceLabel(drawn)} option={option} />}
+      {shown.map(
+        (s) =>
+          s.state !== null && (
+            <p key={s.k} className="muted">
+              {s.state}
+            </p>
+          ),
+      )}
+    </section>
+  );
+}
+
 /**
  * The session page's comparison: race control (races and practice, the same query as the Laps tab) bands both charts
  * once it arrives, and in a race the pit cycles close the side column. Outside races the track evolution follows.
@@ -299,6 +424,7 @@ export function Compare({
         periods={periods}
         rcFailed={race && rc.error != null}
         onReference={onReference}
+        traces={<TelemetryCard session={session} detail={detail} drivers={drivers} laps={laps} />}
       >
         {race && <StoredPitCycles session={session} drivers={drivers} laps={laps} periods={periods} rc={rc} />}
       </Comparison>
