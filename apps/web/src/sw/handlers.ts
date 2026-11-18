@@ -12,7 +12,7 @@ export type Deps = {
 };
 
 /** A session's answers (A§10), by pathname only, so #98's `?v=` passes. */
-const SESSION = /^\/api\/v1\/sessions\/\d{1,9}(\/(laps|stints|pits|race-control|weather|rain|standings))?$/;
+const SESSION = /^\/api\/v1\/sessions\/\d{1,9}(\/(laps|stints|pits|race-control|overtakes|weather|rain|standings))?$/;
 
 /**
  * An answer to keep: a plain 200 of the type its path serves. From the API only a final session's (the server's

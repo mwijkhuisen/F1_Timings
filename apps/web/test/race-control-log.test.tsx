@@ -1,7 +1,7 @@
 // @vitest-environment happy-dom
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { RaceControl } from '@f1/contracts';
+import { type Overtakes, RaceControl } from '@f1/contracts';
 import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
@@ -26,6 +26,7 @@ const golden = (name: string) =>
 let root: Root;
 let host: HTMLElement;
 beforeEach(() => {
+  localStorage.clear();
   host = document.createElement('div');
   document.body.append(host);
   root = createRoot(host);
@@ -39,7 +40,7 @@ const drivers: [number, string][] = [
   [81, 'PIA'],
   [4, 'NOR'],
 ];
-const show = (type: string, name: string, rows: RaceControl, phases = 0) =>
+const show = (type: string, name: string, rows: RaceControl, phases = 0, overtakes: Overtakes = []) =>
   act(() =>
     root.render(
       <RaceControlLog
@@ -49,6 +50,7 @@ const show = (type: string, name: string, rows: RaceControl, phases = 0) =>
           ...[1, 2, 3].slice(0, phases).map((p) => lap(4, p, { quali_phase: p })),
         ]}
         rows={rows}
+        overtakes={overtakes}
       />,
     ),
   );
@@ -122,5 +124,79 @@ describe('RaceControlLog', () => {
     expect(host.querySelector('img')).toBeNull();
     expect(host.querySelector('ol.feed li')?.textContent).toContain(bad);
     expect(host.querySelector('[title]')).toBeNull();
+  });
+});
+
+describe('the places gained (#236)', () => {
+  const at = (n: number) => `2026-10-25T14:${String(n).padStart(2, '0')}:00.000Z`;
+  const overtakes: Overtakes = [
+    { driver_number: 4, date: at(1), places: 2 },
+    { driver_number: 81, date: at(2), places: 1 },
+    { driver_number: 81, date: at(3), places: 1 },
+  ];
+  const race = () => show('Race', 'Race', golden('race_control-normal'), 0, overtakes);
+  const toggle = () => host.querySelector<HTMLElement>('fieldset.chips button:last-child');
+  const rows = () =>
+    [...host.querySelectorAll('ol.feed li')].filter((li) => li.querySelector('.cat')?.textContent?.startsWith('+'));
+  const note = () => host.querySelector('p.muted')?.textContent;
+
+  it('selecting the chip adds the rows and the note, deselecting removes them, the other counts stay', () => {
+    race();
+    const kinds = ['All 155', 'Flags 95', 'SC/VSC 4', 'Incidents 10', 'Track limits 30'];
+    expect(chips()).toEqual([...kinds, 'Places gained 3']);
+    expect(toggle()?.getAttribute('aria-pressed')).toBe('false');
+    expect(listed()).toBe(155);
+    expect(note()).toBeUndefined();
+
+    click('Places gained');
+    expect(toggle()?.getAttribute('aria-pressed')).toBe('true');
+    expect(chips()).toEqual([...kinds, 'Places gained 3']);
+    expect(listed()).toBe(158);
+    // Car 4 has no lap in the table: its number stands for the acronym.
+    expect(rows().map((li) => li.textContent)).toEqual([
+      expect.stringMatching(/^\d\d:\d\d:\d\dL1\+24, gained 2 places$/),
+      expect.stringMatching(/^\d\d:\d\d:\d\dL1\+1PIA, gained 1 place$/),
+      expect.stringMatching(/^\d\d:\d\d:\d\dL1\+1PIA, gained 1 place$/),
+    ]);
+    expect(note()).toBe('Places gained as the F1 feed counts them, the start and pit stops included.');
+
+    // They join whatever kind is picked.
+    click('Track limits');
+    expect(listed()).toBe(33);
+    click('All');
+    click('Places gained');
+    expect(toggle()?.getAttribute('aria-pressed')).toBe('false');
+    expect(listed()).toBe(155);
+    expect(rows()).toHaveLength(0);
+    expect(note()).toBeUndefined();
+  });
+
+  it('keeps a driver filter on its own rows, and the choice across a remount', () => {
+    race();
+    click('Places gained');
+    const select = host.querySelector('select[aria-label="Driver"]') as HTMLSelectElement;
+    act(() => {
+      select.value = '81';
+      select.dispatchEvent(new Event('change', { bubbles: true }));
+    });
+    expect(rows()).toHaveLength(2);
+    expect(chips().at(-1)).toBe('Places gained 2');
+    act(() => root.unmount());
+    root = createRoot(host);
+    race();
+    expect(toggle()?.getAttribute('aria-pressed')).toBe('true');
+    expect(rows()).toHaveLength(3);
+    click('Places gained');
+    act(() => root.unmount());
+    root = createRoot(host);
+    race();
+    expect(toggle()?.getAttribute('aria-pressed')).toBe('false');
+  });
+
+  it('has no chip without entries, or in a qualifying session', () => {
+    show('Race', 'Race', golden('race_control-normal'));
+    expect(chips()).toEqual(['All 155', 'Flags 95', 'SC/VSC 4', 'Incidents 10', 'Track limits 30']);
+    show('Qualifying', 'Qualifying', golden('race_control-quali'), 3, overtakes);
+    expect(chips().at(-1)).toBe('Track limits 8');
   });
 });

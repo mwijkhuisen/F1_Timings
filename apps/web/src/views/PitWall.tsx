@@ -12,6 +12,7 @@ import {
   type RaceControl,
   type Strip as StripData,
 } from '../lib/pitwall.ts';
+import { teamStyle } from '../lib/session.ts';
 import { Scroll } from '../ui/Scroll.tsx';
 
 // The pit wall (A§13, P4d): the session light, the status strip and the side panel, from values derived once per store
@@ -100,8 +101,28 @@ const FILTERS: [Kind | 'all', string][] = [
   ['limits', 'Track limits'],
 ];
 
+const PLACES_KEY = 'f1.places';
+
+/** The places-gained toggle (#236) is on only when stored as '1'; off when storage throws. One key for the player and the log. */
+function readPlaces(): boolean {
+  try {
+    return localStorage.getItem(PLACES_KEY) === '1';
+  } catch {
+    return false;
+  }
+}
+
+function writePlaces(on: boolean) {
+  try {
+    localStorage.setItem(PLACES_KEY, on ? '1' : '0');
+  } catch {
+    // Private mode or blocked storage: the choice just is not remembered.
+  }
+}
+
 /**
- * The race-control card: the kind chips with their counts, `filters` (the log's own, #111), then the messages as text.
+ * The race-control card: the kind chips with their counts, the places-gained toggle where the race has the topic (#236, off until chosen), `filters` (the
+ * log's own, #111), then the messages as text.
  * `yet`: the live panel's empty texts say "yet" (A§13).
  */
 export function RaceControlCard({
@@ -116,7 +137,11 @@ export function RaceControlCard({
   filters?: ReactNode;
 }) {
   const [filter, setFilter] = useState<Kind | 'all'>('all');
-  const items = filter === 'all' ? rc.items : rc.items.filter((i) => i.kind === filter);
+  const [places, setPlaces] = useState(readPlaces);
+  // The places gained join whatever kind is picked, and are never part of a kind.
+  const items = rc.items.filter((i) =>
+    i.kind === 'overtake' ? rc.overtakes && places : filter === 'all' || i.kind === filter,
+  );
   const y = yet ? ' yet' : '';
   return (
     <section className={className}>
@@ -127,7 +152,22 @@ export function RaceControlCard({
             {label} {rc.counts[kind]}
           </button>
         ))}
+        {rc.overtakes && (
+          <button
+            type="button"
+            aria-pressed={places}
+            onClick={() => {
+              setPlaces(!places);
+              writePlaces(!places);
+            }}
+          >
+            Places gained {rc.counts.overtake}
+          </button>
+        )}
       </fieldset>
+      {rc.overtakes && places && (
+        <p className="muted">Places gained as the F1 feed counts them, the start and pit stops included.</p>
+      )}
       {filters}
       {items.length === 0 ? (
         <p className="muted">{rc.items.length === 0 ? `No messages${y}.` : `No messages of this kind${y}.`}</p>
@@ -138,10 +178,20 @@ export function RaceControlCard({
               <li key={i.key}>
                 {i.time !== undefined && <span className="time">{i.time}</span>}
                 <span className="lap">{i.lap !== undefined && `L${i.lap}`}</span>
-                <span>
-                  {i.tag && <span className="cat">{i.tag}</span>}
-                  {i.text}
-                </span>
+                {i.kind === 'overtake' ? (
+                  <span>
+                    <span className="cat">{`+${i.places}`}</span>
+                    <span className="drv" style={i.driver && teamStyle(i.driver)}>
+                      {i.driver?.acronym ?? i.driver_number}
+                    </span>
+                    <span className="vh">{`, gained ${i.places} ${i.places === 1 ? 'place' : 'places'}`}</span>
+                  </span>
+                ) : (
+                  <span>
+                    {i.tag && <span className="cat">{i.tag}</span>}
+                    {i.text}
+                  </span>
+                )}
               </li>
             ))}
           </ol>

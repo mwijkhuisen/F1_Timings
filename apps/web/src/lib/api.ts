@@ -2,6 +2,7 @@ import {
   Forecast,
   Laps,
   Live,
+  Overtakes,
   Pits,
   RaceControl,
   Rain,
@@ -124,7 +125,7 @@ export function useRefetchOnFetch(key: number, fetchCount: number | undefined) {
   useEffect(() => {
     if (fetchCount === undefined) return;
     if (seen.current !== undefined && seen.current !== fetchCount)
-      for (const what of ['laps', 'stints', 'pits', 'race-control', 'weather', 'standings'])
+      for (const what of ['laps', 'stints', 'pits', 'race-control', 'overtakes', 'weather', 'standings'])
         void client.invalidateQueries({ queryKey: [what, key] });
     seen.current = fetchCount;
   }, [client, key, fetchCount]);
@@ -171,6 +172,15 @@ export const useRaceControl = (key: number, enabled = true) =>
   useQuery({
     queryKey: ['race-control', key],
     queryFn: ({ signal }) => getJson(`/api/v1/sessions/${key}/race-control`, RaceControl, signal),
+    staleTime: STALE_MS,
+    enabled,
+  });
+
+/** A race's places gained (#236, A§10), as the F1 feed's OvertakeSeries counts them: the Laps tab's log, races only. */
+export const useOvertakes = (key: number, enabled = true) =>
+  useQuery({
+    queryKey: ['overtakes', key],
+    queryFn: ({ signal }) => getJson(`/api/v1/sessions/${key}/overtakes`, Overtakes, signal),
     staleTime: STALE_MS,
     enabled,
   });

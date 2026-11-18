@@ -16,11 +16,13 @@ import { field, lap, rc, sessionDetail } from './laps.ts';
 const KEY = 11000;
 const URL_RC = `*/api/v1/sessions/${KEY}/race-control`;
 let calls = 0;
+let overtakeCalls = 0;
 let root: Root;
 let host: HTMLElement;
 
 beforeEach(() => {
   calls = 0;
+  overtakeCalls = 0;
   host = document.createElement('div');
   document.body.append(host);
   root = createRoot(host);
@@ -33,6 +35,10 @@ afterEach(() => {
 
 const answer = (status = 200) =>
   server.use(
+    http.get(`*/api/v1/sessions/${KEY}/overtakes`, () => {
+      overtakeCalls++;
+      return HttpResponse.json([{ driver_number: 1, date: '2026-10-31T21:05:00.000Z', places: 2 }]);
+    }),
     http.get(URL_RC, () => {
       calls++;
       return status === 200
@@ -113,6 +119,19 @@ describe('LapsTab', () => {
     // Wait for the answer itself: an unmount mid-fetch aborts it, and msw then logs a socket hang-up (CLAUDE.md).
     await vi.waitFor(() => expect(host.querySelector('.rclog')).not.toBeNull());
     expect(calls).toBe(1);
+  });
+
+  it('asks for the places gained in a race only, and offers their chip once they are there (#236)', async () => {
+    answer();
+    render('Race', 'Race');
+    await vi.waitFor(() => expect(host.textContent).toContain('Places gained 1'));
+    expect(overtakeCalls).toBe(1);
+    act(() => root.unmount());
+    root = createRoot(host);
+    render('Practice', 'Practice 1');
+    await vi.waitFor(() => expect(host.querySelector('.rclog')).not.toBeNull());
+    expect(host.textContent).not.toContain('Places gained');
+    expect(overtakeCalls).toBe(1);
   });
 
   it('puts the speed traps and own bests after the lap table and before the race-control log, for every type', async () => {

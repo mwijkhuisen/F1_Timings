@@ -1,4 +1,4 @@
-import type { Laps, RaceControl as Rows, SessionDetail } from '@f1/contracts';
+import type { Laps, Overtakes, RaceControl as Rows, SessionDetail } from '@f1/contracts';
 import { useMemo, useState } from 'react';
 import { countKinds, mentions, rcLog } from '../lib/pitwall.ts';
 import { phaseName } from '../lib/quali.ts';
@@ -8,10 +8,27 @@ import { RaceControlCard } from './PitWall.tsx';
 // The race-control log of a session (#111, A§13): every message, oldest first, filtered by kind (the card's
 // chips), by phase in qualifying and by driver. Every message is a text child: no markup, no title.
 
-export function RaceControlLog({ detail, laps, rows }: { detail: SessionDetail; laps: Laps; rows: Rows }) {
+export function RaceControlLog({
+  detail,
+  laps,
+  rows,
+  overtakes,
+}: {
+  detail: SessionDetail;
+  laps: Laps;
+  rows: Rows;
+  /** A race's places gained (#236); none, or not yet loaded, gives no chip. */
+  overtakes?: Overtakes | undefined;
+}) {
   const qualifying = detail.session.type === 'Qualifying';
-  const all = useMemo(() => rcLog(rows, qualifying), [rows, qualifying]);
   const drivers = useMemo(() => orderDrivers(detail, laps), [detail, laps]);
+  const all = useMemo(
+    () =>
+      rcLog(rows, qualifying, overtakes ?? [], laps).map((i) =>
+        i.kind === 'overtake' ? { ...i, driver: drivers.find((d) => d.number === i.driver_number) } : i,
+      ),
+    [rows, qualifying, overtakes, laps, drivers],
+  );
   const phases = qualifying ? Math.max(0, ...laps.map((l) => l.quali_phase ?? 0)) : 0;
   const [phase, setPhase] = useState<number | null>(null);
   const [number, setNumber] = useState<number | null>(null);
@@ -23,7 +40,7 @@ export function RaceControlLog({ detail, laps, rows }: { detail: SessionDetail; 
   );
   return (
     <RaceControlCard
-      rc={{ items, counts: countKinds(items) }}
+      rc={{ items, counts: countKinds(items), overtakes: all.some((i) => i.kind === 'overtake') }}
       className="card rclog"
       filters={
         <div className="controls">
