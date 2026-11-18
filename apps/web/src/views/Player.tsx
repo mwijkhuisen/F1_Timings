@@ -948,6 +948,7 @@ export function Player({
       freeze(v);
       setSeek(null);
       setSince(null);
+      setCatchUp(false); // Show tapped while this seek was pending: the dialog goes with its line, never to reopen alone
       setResumed(null); // the note would name an old time
       setOpen((o) => (o.at === null ? { at: v, still: true } : { at: v }));
       if (keepT) writeT(v); // last: nothing it does can lose the seek
@@ -997,10 +998,10 @@ export function Player({
     setAnnounce(on);
     writeAnnounce(on);
   };
-  // The toggle takes the focus itself: Safari does not focus a tapped or clicked button, and a focused control in the
-  // part that goes (the Position range, the head's Play/Pause) would otherwise drop the focus to the page.
   // Before a button goes, so focus is not lost to the page; a minimized bar has no Position range.
   const keepFocus = () => (minimized ? toggleRef : position).current?.focus();
+  // The toggle takes the focus itself: Safari does not focus a tapped or clicked button, and a focused control in the
+  // part that goes (the Position range, the head's Play/Pause) would otherwise drop the focus to the page.
   const toggleMinimized = () => {
     toggleRef.current?.focus();
     setMinimized(!minimized);

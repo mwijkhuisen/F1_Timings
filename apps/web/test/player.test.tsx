@@ -1689,6 +1689,17 @@ describe('the player bar', () => {
     advance(250);
     expect($('p.since span').textContent).toBe('1 SC · 2 pit stops · 1 incident noted');
     expect(host.querySelector('dialog')).toBeNull(); // never by itself
+    // The stream plays on past the seek and its feed is mutated in place: a later incident and a later stop land in it,
+    // but the list is the one the seek's snapshot gave.
+    const later = 'TURN 9 INCIDENT INVOLVING CAR 4 (DDD) NOTED';
+    last().emit('delta', {
+      t: to + 60_000,
+      topic: 'RaceControlMessages',
+      data: { Messages: { '1': { Utc: utcOf('20:31'), Category: 'Other', Message: later } } },
+    });
+    last().emit('laps', { t: to + 90_000, laps: [pitOut(3, 25, '20:31')], stints: [] });
+    advance(250);
+    expect(host.textContent).toContain(later); // in the feed: the race-control card shows it
     const show = () => $<HTMLButtonElement>('p.since button[aria-haspopup="dialog"]');
     const open = () => {
       show().focus(); // happy-dom's click() moves no focus
@@ -1696,12 +1707,24 @@ describe('the player bar', () => {
       return $<HTMLDialogElement>('dialog.catchup');
     };
     const rows = () => [...host.querySelectorAll('dialog li.ev .time')].map((r) => r.textContent);
+    const chip = (text: string) =>
+      [...host.querySelectorAll('dialog .chips button')]
+        .find((b) => b.textContent === text)
+        ?.getAttribute('aria-pressed');
     expect(show().textContent).toBe('Show');
     expect(open().open).toBe(true);
     expect(rows()).toEqual(['21:05:00', '21:10:00', '21:12:00', '21:20:00']);
+    expect($('dialog.catchup').textContent).not.toContain(later);
+    expect(chip('Pit stops 2')).toBe('true');
     button('Pit stops 2');
+    expect(chip('Pit stops 2')).toBe('false');
     expect(rows()).toEqual(['21:05:00', '21:12:00']);
-    button('Pit stops 2');
+    button('Investigations 1');
+    button('Flags 1');
+    expect(rows()).toEqual([]);
+    expect($('dialog.catchup').textContent).toContain('No events of these kinds.');
+    for (const c of ['Pit stops 2', 'Investigations 1', 'Flags 1']) button(c);
+    expect(chip('Pit stops 2')).toBe('true');
     expect(rows()).toHaveLength(4);
 
     // Esc: the browser closes the dialog with no return value.
@@ -1722,6 +1745,32 @@ describe('the player bar', () => {
     advance(400);
     expect(atOf(last())).toBe(String(Date.parse(utcOf('20:12'))));
     expect(host.querySelector('p.since')).toBeNull();
+  });
+
+  it('the catch-up dialog opened while a seek is pending goes with the commit and never reopens by itself (#234)', () => {
+    render({ recording: ended, start: T, sessionKey: 9100, detail });
+    last().emit('snapshot', { t: T, state: raceState(), laps: [], stints: [] });
+    advance(250);
+    slide('Position', Date.parse(utcOf('20:30')));
+    advance(400);
+    last().emit('snapshot', {
+      t: Date.parse(utcOf('20:30')),
+      state: raceState(),
+      laps: [pitOut(1, 21, '20:10')],
+      stints: [],
+    });
+    advance(250);
+    // A second forward seek, still pending when Show is tapped.
+    slide('Position', Date.parse(utcOf('20:40')));
+    act(() => $<HTMLButtonElement>('p.since button[aria-haspopup="dialog"]').click());
+    expect($<HTMLDialogElement>('dialog.catchup').open).toBe(true);
+    advance(400);
+    expect(host.querySelector('dialog')).toBeNull();
+    const laps = [pitOut(1, 21, '20:10'), pitOut(2, 22, '20:35')];
+    last().emit('snapshot', { t: Date.parse(utcOf('20:40')), state: raceState(), laps, stints: [] });
+    advance(250);
+    expect($('p.since span').textContent).toBe('1 pit stop'); // the new line, with its own Show
+    expect(host.querySelector('dialog')).toBeNull();
   });
 
   it('a seek while paused opens one still frame, closed by its snapshot; a new seek closes a pending one first', () => {

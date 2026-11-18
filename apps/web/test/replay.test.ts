@@ -623,6 +623,31 @@ describe('skippedEvents (#234)', () => {
       [6, 3, 1800],
     ]);
   });
+
+  it('a deleted lap takes the ruling that names its lap first, so a correction never moves a later lap (D5)', () => {
+    const rulings: Obj = {
+      RaceControlMessages: {
+        Messages: {
+          '0': msg(2, 'CAR 8 (EEE) TIME 1:30.500 DELETED - TRACK LIMITS AT TURN 4 LAP 5 20:01:40'),
+          '1': msg(4, 'CORRECTION - CAR 8 (EEE) TIME 1:30.500 DELETED - TRACK LIMITS AT TURN 4 LAP 5 20:01:40'),
+          '2': msg(8, 'CAR 8 (EEE) TIME 1:31.200 DELETED - TRACK LIMITS AT TURN 9 LAP 9 20:07:10'),
+          '3': msg(9, 'CAR 8 (EEE) LAP DELETED - TRACK LIMITS AT TURN 1'), // names no lap: taken in time order
+        },
+      },
+    };
+    const laps = [
+      lap(8, 12, { deleted: true, date_start: iso(7), lap_ms: 90_000 }),
+      lap(8, 9, { deleted: true, date_start: iso(5), lap_ms: 91_200 }),
+      lap(8, 5, { deleted: true, date_start: iso(0), lap_ms: 90_500 }),
+    ];
+    const events = skippedEvents(feed(OLD, {}, []), feed(NEW, rulings, laps)) ?? [];
+    // Lap 12 has no named ruling: the first one left in time order, the correction at 4 min (not lap 9's at 8).
+    expect(events.flatMap((e) => (e.kind === 'deleted' ? [[e.lap, s(e)]] : []))).toEqual([
+      [5, 120],
+      [12, 240],
+      [9, 480],
+    ]);
+  });
 });
 
 describe('parseT', () => {

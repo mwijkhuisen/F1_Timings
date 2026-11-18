@@ -73,7 +73,7 @@ describe('CatchUp', () => {
       '21:03:00Pit stopBBB · L12 Hhard tyres›',
       '21:04:00Lap deletedCCC · L10›',
       '21:05:00SCSafety car · L13›',
-      '21:06:00Red flagRed flag›',
+      '21:06:00REDRed flag›',
       '21:07:00Fastest lapBBB · Q2 L9 1:20.500, overall best›',
     ]);
     // The fastest-lap time is the overall best's box; the team bar is .drv with the team's custom properties.
@@ -93,10 +93,13 @@ describe('CatchUp', () => {
     expect(r[0]).toContain(`<button type="submit" value="${min(1)}" aria-label="Replay from 21:01:00">›</button>`);
   });
 
-  it('the legend shows the overall-best box', () => {
+  it('the legend shows the overall-best box, only when a fastest lap is listed', () => {
     expect(html()).toContain(
       '<ul class="legend"><li><span class="t-purple" aria-hidden="true">0:00.000</span> overall best at the time</li></ul>',
     );
+    const none = html(EVENTS.filter((e) => e.kind !== 'fastest'));
+    expect(none).not.toContain('class="legend"');
+    expect(none).toContain('class="primary">Continue at L17</button>');
   });
 
   it('an empty window says so, with no chips and no list', () => {

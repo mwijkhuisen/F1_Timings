@@ -1026,216 +1026,6 @@ header .links {
   background: none;
 }
 
-/* The catch-up dialog (#234, A§13): a native modal on --raised with a --line border, no shadow; its head, chips and
-   foot stay while the list scrolls inside. A row is time · tag · facts · ›, the tag in the label grammar at 11 px: a
-   1 px --dim border, an investigation and SC/VSC --amber, a red flag --live (colour is data). Under 600 px a
-   full-height sheet: the chips one row that scrolls in its own box, each row two lines (time and tag over the facts),
-   › at the right. Forced colours need no rule: every cue is a border or an outline, and the words name the kind. */
-.catchup {
-  width: min(720px, calc(100% - 32px));
-  max-width: none;
-  max-height: calc(100% - 32px);
-  padding: 0;
-  color: var(--fg);
-  background: var(--raised);
-  border: 1px solid var(--line);
-  border-radius: 6px;
-}
-
-.catchup[open],
-.catchup form {
-  display: flex;
-  flex-direction: column;
-  min-height: 0;
-}
-
-.catchup::backdrop {
-  background: rgb(0 0 0 / 0.6);
-}
-
-:root[data-theme="light"] .catchup::backdrop {
-  background: rgb(21 21 30 / 0.4);
-}
-
-.catchup .hd {
-  display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: 16px;
-  padding: 16px 16px 12px;
-}
-
-.catchup h2 {
-  margin: 4px 0;
-  font-family: var(--display);
-  font-size: 26px;
-  font-weight: 800;
-  line-height: 1.15;
-}
-
-.catchup .hd .muted {
-  margin: 0;
-  font-size: 13px;
-}
-
-.catchup > form > .muted {
-  padding: 0 16px 16px;
-}
-
-.catchup .chips {
-  gap: 8px;
-  margin: 0;
-  padding: 0 16px 16px;
-}
-
-.catchup ol {
-  min-height: 0;
-  margin: 0;
-  padding: 0;
-  overflow-y: auto;
-  list-style: none;
-  border-top: 1px solid var(--line);
-}
-
-/* Inside the scroll box the ring is inset, so the box never clips it. */
-.catchup ol :focus-visible {
-  outline-offset: -3px;
-}
-
-.catchup .ev {
-  display: grid;
-  grid-template-columns: 64px 116px minmax(0, 1fr) auto;
-  align-items: center;
-  gap: 12px;
-  min-height: 56px;
-  padding: 6px 16px;
-  border-bottom: 1px solid var(--line);
-  overflow-wrap: anywhere;
-}
-
-.catchup .ev:last-child {
-  border-bottom: 0;
-}
-
-.catchup .time {
-  color: var(--muted);
-  font-size: 13px;
-}
-
-.catchup .ev .t-purple {
-  margin-left: 4px;
-  padding: 1px 6px;
-  border-radius: 3px;
-}
-
-.catchup .ev button {
-  padding: 0;
-  font-size: 18px;
-}
-
-.tag {
-  justify-self: start;
-  padding: 1px 6px;
-  border: 1px solid var(--dim);
-  border-radius: 3px;
-  color: var(--muted);
-  font-size: 11px;
-  font-weight: 700;
-  letter-spacing: 0.06em;
-  text-transform: uppercase;
-  white-space: nowrap;
-}
-
-.tag.warn {
-  border-color: var(--amber);
-  color: var(--fg);
-}
-
-.tag.live {
-  border-color: var(--live);
-  color: var(--fg);
-}
-
-.catchup .ft {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px 16px;
-  padding: 12px 16px;
-  border-top: 1px solid var(--line);
-}
-
-.catchup .legend {
-  margin: 0;
-  color: var(--muted);
-  font-size: 13px;
-}
-
-/* The one primary action of a dialog (D3, #234): the --fg fill that otherwise means pressed. */
-button.primary {
-  background: var(--fg);
-  color: var(--bg);
-  border-color: var(--fg);
-  font-weight: 700;
-}
-
-@media (max-width: 600px) {
-  .catchup {
-    width: 100%;
-    height: 100%;
-    max-height: none;
-    margin: 0;
-    border: 0;
-    border-radius: 0;
-  }
-
-  .catchup form,
-  .catchup ol {
-    flex: 1;
-  }
-
-  .catchup .chips {
-    flex-wrap: nowrap;
-    overflow-x: auto;
-    padding-bottom: 12px;
-  }
-
-  .catchup .chips button {
-    flex: none;
-  }
-
-  .catchup .ev {
-    grid-template-columns: auto minmax(0, 1fr) auto;
-    grid-template-areas:
-      "time tag btn"
-      "what what btn";
-    gap: 4px 8px;
-    padding: 8px 16px;
-  }
-
-  .catchup .ev .time {
-    grid-area: time;
-  }
-
-  .catchup .ev .tag {
-    grid-area: tag;
-  }
-
-  .catchup .ev .what {
-    grid-area: what;
-  }
-
-  .catchup .ev button {
-    grid-area: btn;
-  }
-
-  .catchup .ft {
-    flex-direction: column;
-    align-items: stretch;
-  }
-}
-
 /* The player bar (A§13, P4e): sticky at the bottom, within thumb reach; every target 44 px; it never scrolls. Wide: the
    head (clock line and the Controls toggle) across, then transport | seek bar, then the chips with the announce toggle
    at the end, then the delay (live). A phone stacks them. Minimized (.min, #77) only the head stays, with Play/Pause. */
@@ -3140,5 +2930,220 @@ section.rainmap .raintime input[type="range"] {
 @media (prefers-reduced-motion: reduce) {
   .car.move {
     transition: none;
+  }
+}
+
+/* The catch-up dialog (#234, A§13): a native modal on --raised with a --line border, no shadow; its head, chips and
+   foot stay while the list scrolls inside. A row is time · tag · facts · ›, the tag in the label grammar at 11 px: a
+   1 px --dim border, an investigation and SC/VSC --amber, a red flag --live (colour is data). Under 600 px a
+   full-height sheet: the chips one row that scrolls in its own box, each row two lines (time and tag over the facts),
+   › at the right. Forced colours need no rule: every cue is a border or an outline, and the words name the kind.
+   Last in the file, generic rules first: no later, less specific button or .muted rule follows a .catchup one. */
+.tag {
+  justify-self: start;
+  padding: 1px 6px;
+  border: 1px solid var(--dim);
+  border-radius: 3px;
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+.tag.warn {
+  border-color: var(--amber);
+  color: var(--fg);
+}
+
+.tag.live {
+  border-color: var(--live);
+  color: var(--fg);
+}
+
+/* The one primary action of a dialog (D3, #234): the --fg fill that otherwise means pressed. */
+button.primary {
+  background: var(--fg);
+  color: var(--bg);
+  border-color: var(--fg);
+  font-weight: 700;
+}
+
+.catchup {
+  width: min(720px, calc(100% - 32px));
+  max-width: none;
+  max-height: calc(100% - 32px);
+  padding: 0;
+  color: var(--fg);
+  background: var(--raised);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+}
+
+.catchup[open],
+.catchup form {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+
+.catchup::backdrop {
+  background: rgb(0 0 0 / 0.6);
+}
+
+:root[data-theme="light"] .catchup::backdrop {
+  background: rgb(21 21 30 / 0.4);
+}
+
+.catchup .hd {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 16px 16px 12px;
+}
+
+.catchup .hd h2 {
+  margin: 4px 0;
+  font-family: var(--display);
+  font-size: 26px;
+  font-weight: 800;
+  line-height: 1.15;
+}
+
+.catchup > form > .muted {
+  padding: 0 16px 16px;
+}
+
+.catchup .hd .muted {
+  margin: 0;
+  font-size: 13px;
+}
+
+.catchup .chips {
+  gap: 8px;
+  margin: 0;
+  padding: 0 16px 16px;
+}
+
+.catchup ol {
+  min-height: 0;
+  margin: 0;
+  padding: 0;
+  overflow-y: auto;
+  list-style: none;
+  border-top: 1px solid var(--line);
+}
+
+/* Inside the scroll box the ring is inset, so the box never clips it. */
+.catchup ol :focus-visible {
+  outline-offset: -3px;
+}
+
+.catchup .ev {
+  display: grid;
+  grid-template-columns: 64px 116px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 12px;
+  min-height: 56px;
+  padding: 6px 16px;
+  border-bottom: 1px solid var(--line);
+  overflow-wrap: anywhere;
+}
+
+.catchup .ev:last-child {
+  border-bottom: 0;
+}
+
+.catchup .time {
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.catchup .ev .t-purple {
+  margin-left: 4px;
+  padding: 1px 6px;
+  border-radius: 3px;
+}
+
+.catchup .ev button {
+  padding: 0;
+  font-size: 18px;
+}
+
+.catchup .ft {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px 16px;
+  padding: 12px 16px;
+  border-top: 1px solid var(--line);
+}
+
+.catchup .legend {
+  margin: 0 auto 0 0; /* the legend left, Continue right; Continue alone at the right */
+  color: var(--muted);
+  font-size: 13px;
+}
+
+@media (max-width: 600px) {
+  .catchup {
+    width: 100%;
+    height: 100%;
+    max-height: none;
+    margin: 0;
+    border: 0;
+    border-radius: 0;
+  }
+
+  .catchup form,
+  .catchup ol {
+    flex: 1;
+  }
+
+  /* min-width 0 lifts the fieldset's min-content floor, so the row scrolls instead of widening the sheet; 6 px above
+     keeps the 3 px focus ring and its 2 px offset inside the scroll box. */
+  .catchup .chips {
+    flex-wrap: nowrap;
+    min-width: 0;
+    overflow-x: auto;
+    padding-top: 6px;
+    padding-bottom: 12px;
+  }
+
+  .catchup .chips button {
+    flex: none;
+  }
+
+  .catchup .ev {
+    grid-template-columns: auto minmax(0, 1fr) auto;
+    grid-template-areas:
+      "time tag btn"
+      "what what btn";
+    gap: 4px 8px;
+    padding: 8px 16px;
+  }
+
+  .catchup .ev .time {
+    grid-area: time;
+  }
+
+  .catchup .ev .tag {
+    grid-area: tag;
+  }
+
+  .catchup .ev .what {
+    grid-area: what;
+  }
+
+  .catchup .ev button {
+    grid-area: btn;
+  }
+
+  .catchup .ft {
+    flex-direction: column;
+    align-items: stretch;
   }
 }

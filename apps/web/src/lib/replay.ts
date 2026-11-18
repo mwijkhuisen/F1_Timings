@@ -161,8 +161,9 @@ const ALL = [Number.NEGATIVE_INFINITY, Number.POSITIVE_INFINITY] as const;
 /**
  * What a forward seek jumped over, in (old.t, next.t], oldest first (#234), from `next` only (its laps are what was
  * known at its T): SC, VSC and red bands that started there; the incident messages (`kindOf`, plus every NOTED one);
- * stops; laps deleted since, each at the first unused ruling of its driver in the window (in lap order), else at its
- * end clamped into the window (D5); and each valid lap that was strictly the best at its end, per qualifying part (D4).
+ * stops; laps deleted since, each at its driver's unused ruling in the window that names its lap, else the next unused
+ * one in lap order, else at its end clamped into the window (D5); and each valid lap that was strictly the best at its
+ * end, per qualifying part (D4).
  * Null unless next is later.
  */
 export function skippedEvents(old: Feed, next: Feed): CatchUpEvent[] | null {
@@ -176,7 +177,7 @@ export function skippedEvents(old: Feed, next: Feed): CatchUpEvent[] | null {
   for (const m of markersUpTo(statusSeries(next.state), next.t, ALL))
     if (m.kind !== 'start' && m.kind !== 'chequered' && inside(m.t))
       out.push({ kind: 'flag', t: m.t, flag: m.kind, lap: leaderLap(laps, m.t, info?.Type ?? null) });
-  const rulings: { t: number; car: number }[] = [];
+  const rulings: { t: number; car: number; text: string }[] = [];
   for (const m of Object.values(view(next.state, 'RaceControlMessages')?.Messages ?? {})) {
     const t = utc(m?.Utc);
     if (m?.Message === undefined || !inside(t)) continue;
@@ -184,17 +185,27 @@ export function skippedEvents(old: Feed, next: Feed): CatchUpEvent[] | null {
     if (noted || kindOf(m.Category, m.Message).kind === 'incidents')
       out.push({ kind: 'incident', t, text: m.Message, lap: m.Lap ?? null, noted });
     const car = RULING.exec(m.Message)?.[1];
-    if (car !== undefined) rulings.push({ t, car: Number(car) });
+    if (car !== undefined) rulings.push({ t, car: Number(car), text: m.Message });
   }
   rulings.sort((a, b) => a.t - b.t);
   const struck = [...next.laps]
     .filter(([key, l]) => l.deleted && old.laps.get(key)?.deleted !== true)
     .map(([, l]) => l)
     .sort((a, b) => a.lap_number - b.lap_number);
+  // First every ruling that names its lap ("… LAP 5 …"), then the rest in time order, each used once.
+  const ruled = new Map<Lap, number>();
+  for (const named of [true, false])
+    for (const l of struck) {
+      const lapWord = new RegExp(`\\bLAP ${l.lap_number}\\b`);
+      const i = ruled.has(l)
+        ? -1
+        : rulings.findIndex((r) => r.car === l.driver_number && (!named || lapWord.test(r.text)));
+      const r = i < 0 ? undefined : rulings.splice(i, 1)[0];
+      if (r) ruled.set(l, r.t);
+    }
   for (const l of struck) {
-    const i = rulings.findIndex((r) => r.car === l.driver_number);
     const end = l.date_start === null ? next.t : Date.parse(l.date_start) + (l.lap_ms ?? 0);
-    const t = i < 0 ? Math.min(next.t, Math.max(old.t + 1, end)) : (rulings.splice(i, 1)[0]?.t ?? next.t);
+    const t = ruled.get(l) ?? Math.min(next.t, Math.max(old.t + 1, end));
     out.push({ kind: 'deleted', t, driver: driver(l.driver_number), lap: l.lap_number });
   }
   for (const l of laps) {

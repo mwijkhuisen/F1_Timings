@@ -22,7 +22,7 @@ const CHIPS: [Kind, string][] = [
 
 /** The tag's word and class: colour is data, so only an investigation, SC and VSC (amber) and a red flag (live). */
 function tag(e: CatchUpEvent): [string, string] {
-  if (e.kind === 'flag') return e.flag === 'red' ? ['Red flag', 'tag live'] : [KIND_LABEL[e.flag], 'tag warn'];
+  if (e.kind === 'flag') return [KIND_LABEL[e.flag], e.flag === 'red' ? 'tag live' : 'tag warn'];
   if (e.kind === 'incident') return ['Investigation', 'tag warn'];
   return [e.kind === 'fastest' ? 'Fastest lap' : e.kind === 'stop' ? 'Pit stop' : 'Lap deleted', 'tag'];
 }
@@ -172,14 +172,16 @@ export function CatchUp({
           </ol>
         )}
         <div className="ft">
-          <ul className="legend">
-            <li>
-              <span className="t-purple" aria-hidden="true">
-                0:00.000
-              </span>{' '}
-              overall best at the time
-            </li>
-          </ul>
+          {!off.has('fastest') && count('fastest') > 0 && (
+            <ul className="legend">
+              <li>
+                <span className="t-purple" aria-hidden="true">
+                  0:00.000
+                </span>{' '}
+                overall best at the time
+              </li>
+            </ul>
+          )}
           <button type="submit" value="" className="primary">
             {laps ? `Continue at L${laps[1]}` : 'Continue'}
           </button>
