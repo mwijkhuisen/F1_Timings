@@ -255,15 +255,22 @@ describe('the fill job (f1_ingest login, synthetic files)', { timeout: 120_000 }
 
   describe('overtakes (#236)', () => {
     const KEY = 9706;
-    const overtakes = () =>
+    const PRACTICE = 9707;
+    // The fixtures' entries are of 2019-03-17 05:10 on; the session starts at 05:00 (S3: entries from an hour before).
+    const RACE_START = Date.parse('2019-03-17T05:00:00Z');
+    const series = { Overtakes: { 44: [{ Timestamp: '2019-03-17T05:10:01.000', count: 3 }] } };
+    const put = (key: number, body: string) =>
+      writeFileSync(join(archiveDir, String(key), 'OvertakeSeries.jsonStream'), `\ufeff00:00:01.000${body}\r\n`);
+    const overtakesOf = (key: number) =>
       db
         .selectFrom('overtake')
         .select(['driver_number', 'date', 'places', 'source'])
-        .where('session_key', '=', KEY)
+        .where('session_key', '=', key)
         .orderBy('date')
         .orderBy('driver_number')
         .orderBy('id')
         .execute();
+    const overtakes = () => overtakesOf(KEY);
     // fixtures/archive/overtakes/OvertakeSeries.jsonStream: its third line holds only entries to drop.
     const archived = [
       { driver_number: 8, date: new Date('2019-03-17T05:10:05Z'), places: 1, source: 'f1-archive' },
@@ -279,8 +286,8 @@ describe('the fill job (f1_ingest login, synthetic files)', { timeout: 120_000 }
           meeting_key: M,
           name: 'Race',
           type: 'Race',
-          date_start: new Date(T0 - 2 * 86_400_000),
-          date_end: new Date(T0 - 2 * 86_400_000 + 3_600_000),
+          date_start: new Date(RACE_START),
+          date_end: new Date(RACE_START + 7_200_000),
         })
         .execute();
     });
@@ -306,17 +313,79 @@ describe('the fill job (f1_ingest login, synthetic files)', { timeout: 120_000 }
 
     it("the recording's entries when the archive has no file, the archive's again once it has", async () => {
       await admin.deleteFrom('recording').where('session_key', '=', KEY).execute();
-      const series = { Overtakes: { 44: [{ Timestamp: '2026-01-10T12:00:01.000', count: 3 }] } };
       await complete(await record(KEY, `${KEY}-2`, KEY, 0, series));
       expect(await fill({ db, log }, args([KEY]))).toBe(true);
       expect(one().overtakes).toEqual({ source: 'f1-live', rows: 1 });
       expect(await overtakes()).toEqual([
-        { driver_number: 44, date: new Date(T0 + 1000), places: 3, source: 'f1-live' },
+        { driver_number: 44, date: new Date(RACE_START + 601_000), places: 3, source: 'f1-live' },
       ]);
       archiveFiles(KEY);
       expect(await fill({ db, log }, args([KEY]))).toBe(true);
       expect(one().overtakes).toEqual({ source: 'f1-archive', rows: 3 });
       expect(await overtakes()).toEqual(archived);
+    });
+
+    it('an archive that failed leaves the stored rows: the recording does not replace them (S2)', async () => {
+      archiveFiles(KEY, false); // another session's Key: key_mismatch
+      expect(await fill({ db, log }, args([KEY]))).toBe(false);
+      expect(one()).toMatchObject({
+        errors: { 'f1-archive': 'key_mismatch' },
+        sources: { 'f1-live': expect.any(Number) },
+      });
+      expect(await overtakes()).toEqual(archived);
+    });
+
+    it('a file with no valid entry is absent: the recording supplies the rows, else the stored rows stay (S1)', async () => {
+      archiveFiles(KEY);
+      put(KEY, '{"Overtakes":{}}');
+      expect(await fill({ db, log }, args([KEY]))).toBe(true);
+      expect(one().overtakes).toEqual({ source: 'f1-live', rows: 1 });
+      const stored = await overtakes();
+      expect(stored).toEqual([
+        { driver_number: 44, date: new Date(RACE_START + 601_000), places: 3, source: 'f1-live' },
+      ]);
+      await admin.deleteFrom('recording').where('session_key', '=', KEY).execute();
+      expect(await fill({ db, log }, args([KEY]))).toBe(true);
+      expect(one()).not.toHaveProperty('overtakes');
+      expect(await overtakes()).toEqual(stored);
+    });
+
+    it('only entries from an hour before date_start on are kept (S3)', async () => {
+      archiveFiles(KEY);
+      put(
+        KEY,
+        JSON.stringify({
+          Overtakes: {
+            1: [{ Timestamp: '2019-03-16T05:10:00.000Z', count: 1 }],
+            2: [{ Timestamp: '2019-03-17T03:59:59.000Z', count: 1 }],
+            3: [{ Timestamp: '2019-03-17T04:00:00.000Z', count: 2 }],
+          },
+        }),
+      );
+      expect(await fill({ db, log }, args([KEY]))).toBe(true);
+      expect(one().overtakes).toEqual({ source: 'f1-archive', rows: 1 });
+      expect(await overtakes()).toEqual([
+        { driver_number: 3, date: new Date('2019-03-17T04:00:00Z'), places: 2, source: 'f1-archive' },
+      ]);
+    });
+
+    it('a session that is no race gets no rows, file or not (S3)', async () => {
+      await admin
+        .insertInto('session')
+        .values({
+          session_key: PRACTICE,
+          source: 'openf1',
+          meeting_key: M,
+          name: 'Practice 1',
+          type: 'Practice',
+          date_start: new Date(RACE_START),
+          date_end: new Date(RACE_START + 3_600_000),
+        })
+        .execute();
+      archiveFiles(PRACTICE);
+      expect(await fill({ db, log }, args([PRACTICE]))).toBe(true);
+      expect(one()).not.toHaveProperty('overtakes');
+      expect(await overtakesOf(PRACTICE)).toEqual([]);
     });
   });
 
@@ -444,6 +513,7 @@ describe('the fill job (f1_ingest login, synthetic files)', { timeout: 120_000 }
       expect(one()).toMatchObject({ session_key: OLD, level: 50, error: 'stale_lap' });
       expect(await laps(OLD)).toEqual(before);
       expect(await candidates(OLD)).toEqual({});
+      expect(await admin.selectFrom('overtake').select('id').where('session_key', '=', OLD).execute()).toEqual([]);
       expect(
         await run(['fill', String(OLD)], { PATH: process.env.PATH, DATABASE_URL: testDb.urls.f1_ingest }, () => {}),
       ).toBe(1);

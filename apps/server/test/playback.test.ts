@@ -647,6 +647,10 @@ describe('playback', () => {
     await record(dir, [at(T0 + 100, 'OvertakeSeries', first), at(T0 + 200, 'OvertakeSeries', later)], 3_600_000);
     const streamed = start(dir, { at: T0 });
     const seen = await drain(streamed.gen, streamed.clock);
+    // The first snapshot is opened before the topic's first line: it holds none of it.
+    const opening = seen[0]?.ev;
+    expect(opening?.event).toBe('snapshot');
+    expect(opening?.event === 'snapshot' ? opening.data.state : {}).not.toHaveProperty('OvertakeSeries');
     expect(seen.flatMap(({ ev }) => (ev.event === 'delta' ? [ev.data] : []))).toEqual([
       { t: T0 + 100, topic: 'OvertakeSeries', data: first },
       { t: T0 + 200, topic: 'OvertakeSeries', data: later },

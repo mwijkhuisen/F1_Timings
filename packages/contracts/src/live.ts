@@ -208,6 +208,10 @@ export const utc = (v: unknown): number | null => {
   return Number.isNaN(at) ? null : at;
 };
 
+// A Timestamp is an ISO time of this shape only: Date.parse('5Z') is a year 2001. A date that does not exist
+// (2026-02-31) still parses, to 3 March.
+const ISO = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d{1,7})?Z?$/;
+
 /**
  * The places gained per move (#236), read by the server's fill and the web's player alike: by time, then driver, then
  * index (Object.values gives index keys in numeric order and the sort is stable). A car key is 1 to 3 digits, `count`
@@ -220,7 +224,7 @@ export function overtakesOf(
   for (const [car, entries] of Object.entries(view(state, 'OvertakeSeries')?.Overtakes ?? {})) {
     if (!/^\d{1,3}$/.test(car)) continue;
     for (const e of Object.values(entries ?? {})) {
-      const [t, places] = [utc(e?.Timestamp), e?.count];
+      const [t, places] = [ISO.test(e?.Timestamp ?? '') ? utc(e?.Timestamp) : null, e?.count];
       if (t !== null && places !== undefined && places >= 1 && places <= 99)
         out.push({ driver_number: Number(car), t, places });
     }

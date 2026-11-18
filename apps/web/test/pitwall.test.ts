@@ -243,24 +243,33 @@ const places = (car: string, ...entries: [string, number][]) => ({
   [car]: Object.fromEntries(entries.map(([Timestamp, count], i) => [String(i), { Timestamp, count }])),
 });
 const series = (cars: object): Obj => ({ OvertakeSeries: { Overtakes: cars } });
+// Driver 1 leads; driver 2 is a lap down by 14:11:30 (lap 2 while the race is on lap 3).
 const starts = [
-  lap(2, 1, { date_start: '2026-01-11T14:00:00.000Z' }),
-  lap(2, 2, { date_start: '2026-01-11T14:10:20.000Z' }),
-  lap(2, 3, { date_start: '2026-01-11T14:11:20.000Z' }),
-  lap(1, 9, { date_start: '2026-01-11T14:10:00.000Z' }),
+  lap(1, 1, { date_start: '2026-01-11T14:00:00.000Z' }),
+  lap(1, 2, { date_start: '2026-01-11T14:10:20.000Z' }),
+  lap(1, 3, { date_start: '2026-01-11T14:11:20.000Z' }),
+  lap(2, 1, { date_start: '2026-01-11T14:00:01.000Z' }),
+  lap(2, 2, { date_start: '2026-01-11T14:10:50.000Z' }),
   lap(2, 4, { date_start: null }),
 ];
 
 describe('lapAt', () => {
-  const at = lapAt(starts);
   const t = (hms: string) => Date.parse(`2026-01-11T${hms}Z`);
-  it("is the driver's last lap started by t, lap 1 before every known start or for an unknown driver", () => {
-    expect(at(2, t('14:10:19'))).toBe(1);
-    expect(at(2, t('14:10:20'))).toBe(2);
-    expect(at(2, t('14:11:30'))).toBe(3);
-    expect(at(1, t('14:10:30'))).toBe(9);
-    expect(at(2, t('13:00:00'))).toBe(1);
-    expect(at(7, t('14:11:30'))).toBe(1);
+  it("is the race lap at t: the highest lap started by any driver, so a lapped car shows the leader's lap", () => {
+    const at = lapAt(starts);
+    expect(at(t('14:10:19'))).toBe(1);
+    expect(at(t('14:10:20'))).toBe(2);
+    expect(at(t('14:11:00'))).toBe(2);
+    expect(at(t('14:11:30'))).toBe(3); // driver 2 itself is on lap 2
+  });
+  it('is lap 1 before every start when the first known lap is 1 or 2, else unknown', () => {
+    expect(lapAt(starts)(t('13:00:00'))).toBe(1);
+    expect(lapAt([lap(1, 2, { date_start: '2026-01-11T14:00:00.000Z' })])(t('13:00:00'))).toBe(1);
+    // A recording joined mid-race, or a hole in the laps: no lap is claimed.
+    const late = lapAt([lap(1, 3, { date_start: '2026-01-11T14:00:00.000Z' })]);
+    expect(late(t('13:00:00'))).toBeUndefined();
+    expect(late(t('14:00:00'))).toBe(3);
+    expect(lapAt([])(t('14:00:00'))).toBeUndefined();
   });
 });
 
@@ -281,10 +290,10 @@ describe('raceControl with the places gained', () => {
     });
     const { items, counts, overtakes } = raceControl(state, starts);
     expect(items.map((i) => [i.kind, i.text || i.driver_number, i.places, i.lap])).toEqual([
-      ['overtake', 2, 1, 3], //                     14:11:30, after the 14:11 message
+      ['overtake', 2, 1, 3], //                     14:11:30, after the 14:11 message: the race lap, not driver 2's
       ['other', 'DRS ENABLED', undefined, 2],
       ['overtake', 2, 2, 2], //                     14:10:30, driver 1 first (same time): the older rows are below
-      ['overtake', 1, 1, 9],
+      ['overtake', 1, 1, 2],
       ['flags', 'GREEN LIGHT - PIT EXIT OPEN', undefined, 1],
       ['overtake', 3, 1, 1], //                     14:09:00, before every message; no known lap
     ]);
@@ -506,7 +515,7 @@ describe('rcLog with the places gained', () => {
     ]);
     expect(items.filter((i) => i.kind === 'overtake').map((i) => [i.lap, i.driver_number, i.time])).toEqual([
       [2, 2, expect.stringMatching(/^\d\d:\d\d:\d\d$/)],
-      [9, 1, expect.stringMatching(/^\d\d:\d\d:\d\d$/)],
+      [3, 1, expect.stringMatching(/^\d\d:\d\d:\d\d$/)],
     ]);
   });
 

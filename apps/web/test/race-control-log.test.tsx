@@ -46,7 +46,7 @@ const show = (type: string, name: string, rows: RaceControl, phases = 0, overtak
       <RaceControlLog
         detail={sessionDetail(type, name, drivers)}
         laps={[
-          lap(81, 1, { quali_phase: phases || null }),
+          lap(81, 1, { quali_phase: phases || null, date_start: '2026-10-25T14:00:00.000Z' }),
           ...[1, 2, 3].slice(0, phases).map((p) => lap(4, p, { quali_phase: p })),
         ]}
         rows={rows}

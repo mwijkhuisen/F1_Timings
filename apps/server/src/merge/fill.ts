@@ -22,7 +22,7 @@ import { chunks, mergeSession, staleLap, storeCandidates } from './write.ts';
 export type FillDeps = { db: Kysely<DB>; log: Pick<Logger, 'info' | 'error'>; maxBytes?: number };
 export type FillArgs = { keys: readonly number[] | 'all'; archiveDir: string; liveDir: string };
 type Laps = Parameters<typeof storeCandidates>[3];
-type OvertakeRows = Omit<Insertable<DB['overtake']>, 'session_key' | 'source'>[];
+type OvertakeRows = (Omit<Insertable<DB['overtake']>, 'session_key' | 'source' | 'date'> & { date: Date })[];
 /**
  * `undefined`: the source has no (complete) files here, so its stored candidates stay. A throw fails that source.
  * `overtakes` is undefined when the source has no OvertakeSeries.
@@ -70,11 +70,15 @@ export const sessionKeys = async (db: Kysely<DB>, keys: FillArgs['keys']): Promi
           .execute()
       ).map((s) => s.session_key);
 
-/** One source's OvertakeSeries events, in order, as overtake rows. The Timestamps are absolute: no t0 is needed. */
-function overtakeRows(events: readonly FeedEvent[]): OvertakeRows {
+/**
+ * One source's OvertakeSeries events, in order, as overtake rows; undefined when none is valid, so the source counts
+ * as absent. The Timestamps are absolute: no t0 is needed.
+ */
+function overtakeRows(events: readonly FeedEvent[]): OvertakeRows | undefined {
   const feed = createFeed();
   for (const ev of events) feed.apply(ev);
-  return overtakesOf(feed.state).map(({ t, ...o }) => ({ ...o, date: new Date(t) }));
+  const rows = overtakesOf(feed.state).map(({ t, ...o }) => ({ ...o, date: new Date(t) }));
+  return rows.length > 0 ? rows : undefined;
 }
 
 /** `<archiveDir>/<key>/`: rows of its topic files, each read through `readCapped` within what is left of `maxBytes`. */
@@ -139,7 +143,7 @@ async function fromRecording(dir: string, key: number, maxBytes: number): Promis
   if (info.Key !== key) throw fail('key_mismatch');
   return {
     laps: rows.laps.map(({ at: _, ...lap }) => lap),
-    overtakes: series.length > 0 ? overtakeRows(series) : undefined,
+    overtakes: overtakeRows(series),
   };
 }
 
@@ -153,7 +157,7 @@ async function fillSession(deps: FillDeps, args: Omit<FillArgs, 'keys'>, key: nu
   const maxBytes = deps.maxBytes ?? MAX_SESSION_BYTES;
   const session = await db
     .selectFrom('session')
-    .select(['source', 'type'])
+    .select(['source', 'type', 'date_start'])
     .where('session_key', '=', key)
     .executeTakeFirst();
   if (!session) throw fail('unknown_session');
@@ -166,7 +170,12 @@ async function fillSession(deps: FillDeps, args: Omit<FillArgs, 'keys'>, key: nu
       if (!got) return;
       read.push([source, got.laps]);
       // The archive is read first, so its entries win; else the recording's, else the stored rows stay.
-      if (got.overtakes && !overtakes) overtakes = { source, rows: got.overtakes };
+      // Races only, from an hour before the start on: a Subscribe state or a stream can open with the day before's
+      // entries. A source with none left is absent. A failed archive leaves the stored rows: the recording must not
+      // replace them in that run.
+      const from = session.date_start.getTime() - 3_600_000;
+      const rows = session.type === 'Race' ? got.overtakes?.filter((r) => r.date.getTime() >= from) : undefined;
+      if (rows?.length && !overtakes && !errors['f1-archive']) overtakes = { source, rows };
     } catch (err) {
       errors[source] = codeOf(err);
     }

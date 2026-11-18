@@ -423,6 +423,7 @@ describe('overtakesOf (#236)', () => {
             { Timestamp: at(2), count: '2' },
             { Timestamp: 'soon', count: 1 },
             { Timestamp: 1, count: 1 },
+            { Timestamp: '5', count: 1 }, // Date.parse('5Z') is a year 2001
             { count: 1 },
             null,
             'x',

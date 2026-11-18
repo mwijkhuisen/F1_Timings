@@ -16,10 +16,10 @@ import { practiceState, raceState } from './feed-state.ts';
 
 const T = Date.parse('2026-01-11T14:20:00Z') + 65_500; // 65.5 s after the clock's Utc
 const strip = (s = raceState()) => renderToStaticMarkup(<Strip strip={stripOf(s)} now={() => T} playing={false} />);
-const panel = (s = raceState(), race = true) =>
+const panel = (s = raceState(), race = true, laps: Parameters<typeof raceControl>[1] = []) =>
   renderToStaticMarkup(
     <Panel
-      rc={raceControl(s, [])}
+      rc={raceControl(s, laps)}
       pairs={withinASecond(s)}
       fastest={fastestSoFar(s)}
       bests={bestsSoFar(s)}
@@ -173,7 +173,7 @@ describe('the places gained (#236)', () => {
     expect(html).not.toContain('Places gained as the F1 feed');
   });
 
-  it('has no chip without the topic, outside a race, or when storage throws', () => {
+  it('has no chip without the topic or outside a race, and the chip is there and off when storage throws', () => {
     expect(panel(raceState())).not.toContain('Places gained');
     expect(panel(withPlaces({ SessionInfo: { Key: 9100, Type: 'Qualifying' } }))).not.toContain('Places gained');
     vi.stubGlobal('localStorage', {
@@ -184,9 +184,24 @@ describe('the places gained (#236)', () => {
     expect(panel(withPlaces())).toContain('aria-pressed="false">Places gained 2<');
   });
 
+  it('with only places gained and the toggle off, All says there are no messages, not "of this kind"', () => {
+    stored(null);
+    const html = panel(
+      raceState({
+        msgs: [],
+        extra: { OvertakeSeries: { Overtakes: { '2': { '0': { Timestamp: t(10, 30), count: 2 } } } } },
+      }),
+    );
+    expect(html).toContain('aria-pressed="false">Places gained 1<');
+    expect(html).toContain('<p class="muted">No messages yet.</p>');
+    expect(html).not.toContain('of this kind');
+  });
+
   it('when on, shows the note and a row per entry among the messages, the driver in its team colours', () => {
     stored('1');
-    const html = panel(withPlaces());
+    const html = panel(withPlaces(), true, [
+      { driver_number: 1, lap_number: 1, date_start: '2026-01-11T14:00:00.000Z' },
+    ]);
     expect(html).toContain('aria-pressed="true">Places gained 2</button>');
     expect(html).toContain(
       '</fieldset><p class="muted">Places gained as the F1 feed counts them, the start and pit stops included.</p>',

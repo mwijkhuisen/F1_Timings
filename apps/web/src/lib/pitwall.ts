@@ -150,14 +150,25 @@ export type RcItem = {
 /** `overtakes`: the feed has the OvertakeSeries topic for this race, so the card offers its chip (#236). */
 export type RaceControl = { items: RcItem[]; counts: Record<Kind | 'all', number>; overtakes: boolean };
 
-/** The lap a car was on at `t` (#236): its last lap with a `date_start` ≤ t, lap 1 when t precedes every known start. */
-export function lapAt(laps: readonly Pick<Lap, 'driver_number' | 'lap_number' | 'date_start'>[]) {
-  const starts = laps.flatMap((l) => {
-    const s = l.date_start === null ? Number.NaN : Date.parse(l.date_start);
-    return Number.isNaN(s) ? [] : [{ d: l.driver_number, n: l.lap_number, s }];
-  });
-  return (driver: number, t: number): number =>
-    Math.max(1, ...starts.filter((x) => x.d === driver && x.s <= t).map((x) => x.n));
+/**
+ * The race lap at `t` (#236), like a message's `Lap` (the leader's): the highest `lap_number` of any driver whose
+ * `date_start` is at or before t. Before every start it is lap 1 when the earliest known lap is 1 or 2, else unknown
+ * (a recording joined mid-race, or a hole in the laps). The starts are sorted once, here.
+ */
+export function lapAt(laps: readonly Pick<Lap, 'lap_number' | 'date_start'>[]) {
+  const starts = laps
+    .flatMap((l) => {
+      const s = l.date_start === null ? Number.NaN : Date.parse(l.date_start);
+      return Number.isNaN(s) ? [] : [{ n: l.lap_number, s }];
+    })
+    .sort((a, b) => a.s - b.s);
+  let high = 0;
+  const upTo = starts.map((x) => (high = Math.max(high, x.n))); // the highest lap started by each start
+  return (t: number): number | undefined => {
+    const i = starts.findLastIndex((x) => x.s <= t);
+    if (i >= 0) return upTo[i];
+    return (starts[0]?.n ?? 3) <= 2 ? 1 : undefined; // no start at all: unknown
+  };
 }
 
 type Timed = [t: number, item: RcItem];
@@ -173,7 +184,7 @@ const overtake = (
   {
     key: -1 - i,
     time: timed ? fmtClock(o.t) : undefined,
-    lap: at(o.driver_number, o.t),
+    lap: at(o.t),
     kind: 'overtake',
     text: '',
     driver_number: o.driver_number,
@@ -212,12 +223,13 @@ export function raceControl(
 ): RaceControl {
   const overtakes = view(state, 'SessionInfo')?.Type === 'Race' && view(state, 'OvertakeSeries') !== undefined;
   const at = lapAt(laps);
+  const drivers = overtakes ? (view(state, 'DriverList') ?? {}) : {};
   const items = interleave(
     messages(state).map(({ key, m, text }) => [utc(m.Utc), { key, lap: m.Lap, ...kindOf(m.Category, text), text }]),
     overtakes
       ? overtakesOf(state).map((o, i): Timed => {
           const [t, item] = overtake(i, o, at);
-          return [t, { ...item, driver: driverOf(view(state, 'DriverList') ?? {}, String(o.driver_number)) }];
+          return [t, { ...item, driver: driverOf(drivers, String(o.driver_number)) }];
         })
       : [],
   ).reverse();

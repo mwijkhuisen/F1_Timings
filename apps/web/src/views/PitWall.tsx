@@ -170,7 +170,9 @@ export function RaceControlCard({
       )}
       {filters}
       {items.length === 0 ? (
-        <p className="muted">{rc.items.length === 0 ? `No messages${y}.` : `No messages of this kind${y}.`}</p>
+        <p className="muted">
+          {!rc.items.some((i) => i.kind !== 'overtake') ? `No messages${y}.` : `No messages of this kind${y}.`}
+        </p>
       ) : (
         <Scroll label="Race control messages">
           <ol className="feed">
