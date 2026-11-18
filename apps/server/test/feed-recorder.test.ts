@@ -143,7 +143,7 @@ describe('feed client against the fake server', () => {
     fake.behaviour.fullState = { SessionInfo: { Name: 'Practice 1' }, TimingData: { Seq: 0 } };
     const loop = runLoop(fake, rec);
     await until(() => fake.subscribes.length === 1 && rec.bytes > 0);
-    // Pinned (#96): the fake accepts the Subscribe with the pit topics, and the recording goes on below.
+    // Pinned (#96, #147): the fake accepts the Subscribe with the raw-only topics, and the recording goes on below.
     expect(fake.subscribes[0]).toEqual([
       'Heartbeat',
       'DriverList',
@@ -166,6 +166,12 @@ describe('feed client against the fake server', () => {
       'PitLaneTimeCollection',
       'PitStopSeries',
       'PitStop',
+      'TyreStintSeries',
+      'CurrentTyres',
+      'LapSeries',
+      'DriverRaceInfo',
+      'OvertakeSeries',
+      'ChampionshipPrediction',
       'CarData.z',
       'Position.z',
     ]);

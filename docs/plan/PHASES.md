@@ -659,7 +659,7 @@ Remaining 2026 weekends (OpenF1 schedule): Austin (race 25 Oct) · Mexico City 3
     - `useRadioText` polls every 15 s while the recording is open and fetches once in a replay
     - the text sits under each clip as plain text, marked as an automatic transcript
     - "Transcribing…" shows while the recording is open; nothing shows on a failure or without speech
-  - ADR-0009, speech-to-text with whisper.cpp on the VM:
+  - ADR-0010, speech-to-text with whisper.cpp on the VM:
     - licences: whisper.cpp MIT, the OpenAI weights MIT
     - the gate's numbers
     - no network

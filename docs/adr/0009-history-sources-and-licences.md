@@ -1,6 +1,6 @@
 # ADR-0009: History sources and their terms
 
-- **Status:** Proposed (the owner made the P3 decisions H1–H16 on 2026-11-10; this ADR records their sources and terms for review)
+- **Status:** Accepted as written (owner, 2026-11-16, #221). The owner made the P3 decisions H1–H16 on 2026-11-10; this ADR records their sources and terms. P3a, P3c and P3d were built on it.
 - **Date:** 2026-11-10
 - **Source:** `docs/plan/PHASES.md` P3 (decisions H1–H16); `docs/plan/ARCHITECTURE.md` A§6.2 and A§6.3
 - **Revisit:**

@@ -28,8 +28,8 @@ const USAGE =
   'usage: fetch-archive.ts <year> <session_key> --token-file <path> [--path <year/meeting/session/>] [--topic <name>]…';
 
 /**
- * The 11 topics the views need, SessionData and Heartbeat (the archive's t0), and the recorder's pit topics (#96). Each
- * `--topic` adds one.
+ * The 11 topics the views need, SessionData and Heartbeat (the archive's t0), and the recorder's raw-only topics (#96,
+ * #147). Each `--topic` adds one.
  */
 export const TOPICS = [
   'DriverList',
@@ -48,6 +48,12 @@ export const TOPICS = [
   'PitLaneTimeCollection',
   'PitStopSeries',
   'PitStop',
+  'TyreStintSeries',
+  'CurrentTyres',
+  'LapSeries',
+  'DriverRaceInfo',
+  'OvertakeSeries',
+  'ChampionshipPrediction',
 ];
 
 const describe = (error: Failure) => (error.code === 'http' ? `http ${error.status}` : error.code);
