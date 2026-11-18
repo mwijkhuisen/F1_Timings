@@ -549,8 +549,12 @@ function Seek({
   );
 }
 
-/** "Back to": the latest mark of each kind at or before T, and the focused driver's last stop; seeks only go back. */
+/**
+ * "Back to": first the T before the last seek (#237), then the latest mark of each kind at or before T and the focused
+ * driver's last stop; the marks and the stop only go back.
+ */
 function BackTo({
+  before,
   now,
   playing,
   lo,
@@ -560,6 +564,7 @@ function BackTo({
   focused,
   onSeek,
 }: {
+  before: number | null;
   now: () => number;
   playing: boolean;
   lo: number;
@@ -574,12 +579,17 @@ function BackTo({
   // Sorted by time, so the last of each kind wins.
   const latest = new Map(markersUpTo(series, T, [lo, Math.max(lo, hi())]).map((m) => [m.kind, m.t]));
   const stop = focused && lastStop(laps, focused.n, T);
-  if (latest.size === 0 && !stop) return null;
+  if (before === null && latest.size === 0 && !stop) return null;
   return (
     <fieldset className="chips" aria-label="Back to">
       <span className="label" aria-hidden="true">
         Back to
       </span>
+      {before !== null && (
+        <button type="button" onClick={() => onSeek(before)}>
+          {fmtClock(before)}
+        </button>
+      )}
       {CHIPS.map(([kind, label]) => {
         const t = latest.get(kind);
         return (
@@ -728,6 +738,7 @@ export function Player({
   const at = open.at;
   const playing = at !== null && !open.still;
   const [seek, setSeek] = useState<number | null>(null); // a pending seek, shown on the bar
+  const [before, setBefore] = useState<number | null>(null); // the T before the last committed seek (#237)
   const [tab, setTab] = useState<PlayerTab>(() =>
     keepT ? parseTab(new URLSearchParams(location.search).get('tab')) : 'tower',
   );
@@ -945,6 +956,8 @@ export function Player({
     clearTimeout(timers.current.seek);
     timers.current.seek = setTimeout(() => {
       jump.current = { from: lastFeed.current };
+      const was = nowT();
+      setBefore(Math.floor(was / 1000) === Math.floor(v / 1000) ? null : Math.round(was)); // until the next seek
       freeze(v);
       setSeek(null);
       setSince(null);
@@ -1302,6 +1315,7 @@ export function Player({
                 )}
               </div>
               <BackTo
+                before={before}
                 now={now}
                 playing={playing}
                 lo={lo}

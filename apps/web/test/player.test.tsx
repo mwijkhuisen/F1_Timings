@@ -2342,6 +2342,39 @@ describe('the player bar', () => {
   });
 });
 
+describe('the player bar (#237)', () => {
+  const T = S + 3_600_000;
+  const chips = () => [...host.querySelectorAll('section.player .chips button')].map((b) => b.textContent);
+  beforeEach(() => history.replaceState(null, '', '/'));
+
+  it('a seek leaves a chip with the T before it, and the chip is a seek that offers the T it came from', () => {
+    render({ recording: ended, start: T });
+    last().emit('snapshot', { t: T, state: {}, laps: [], stints: [] });
+    expect(chips()).toEqual([]);
+    slide('Position', T + 600_000);
+    expect(chips()).toEqual([]); // still pending
+    advance(400);
+    expect(atOf(last())).toBe(String(T + 600_000));
+    expect(chips()).toEqual([fmtClock(T)]);
+    button(fmtClock(T));
+    advance(400);
+    expect(atOf(last())).toBe(String(T + 400)); // the clock ran on for the 400 ms the seek was pending
+    expect(chips()).toEqual([fmtClock(T + 600_000)]); // the next seek replaces it
+  });
+
+  it('a seek to the same second leaves no chip', () => {
+    render({ recording: ended, start: T });
+    last().emit('snapshot', { t: T, state: {}, laps: [], stints: [] });
+    slide('Position', T + 600_000);
+    advance(400);
+    expect(chips()).toEqual([fmtClock(T)]);
+    button('Pause');
+    slide('Position', T + 600_500); // the same second: nothing to go back to, and the old chip goes
+    advance(400);
+    expect(chips()).toEqual([]);
+  });
+});
+
 describe('wake lock', () => {
   type Sentinel = { released: boolean; release: () => Promise<void> };
   let sentinels: Sentinel[];
