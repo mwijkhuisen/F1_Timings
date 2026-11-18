@@ -258,7 +258,8 @@ describe('the player tab in the URL (#100)', () => {
 
   it('replayQuery and parseFocus take one to three digits only', () => {
     for (const bad of ['', '1234', '4x', '-4', '4.5', ' 4', 'a']) expect(replayQuery(`?focus=${bad}`, {})).toBe('');
-    expect(replayQuery('?focus=007', {})).toBe('?focus=007');
+    expect(replayQuery('?focus=007', {})).toBe('?focus=7');
+    expect(parseFocus('007')).toBe('7');
     expect(parseFocus('44')).toBe('44');
     expect(parseFocus('1234')).toBeNull();
     expect(parseFocus(null)).toBeNull();

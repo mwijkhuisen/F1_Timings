@@ -122,6 +122,9 @@ describe('the cars at T', () => {
     expect(byText('AAA').classList.contains('focus')).toBe(true);
     expect(radius(byText('AAA'))).toBeCloseTo(r * 1.5, 4);
     expect(radius(byText('CCC'))).toBe(r);
+    const labelX = (g: SVGGElement) => Number(g.querySelector('text')?.getAttribute('x'));
+    expect(labelX(byText('AAA'))).toBeGreaterThan(radius(byText('AAA'))); // the label clears the larger dot
+    expect(labelX(byText('CCC'))).toBeGreaterThan(r);
     expect(host.querySelectorAll('g.car.focus')).toHaveLength(1);
     render(pos, { focus: '44' }); // a number the map does not show: nothing is marked
     expect(host.querySelector('g.car.focus')).toBeNull();

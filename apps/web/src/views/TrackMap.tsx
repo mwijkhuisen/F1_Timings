@@ -100,14 +100,15 @@ export function TrackMap({ circuit, positions, ended, drivers, focus, now, playi
         <path className="map-outline" d={outline} />
         {cars.map(({ n, c, stale, move }) => {
           const d = driverOf(drivers, n);
+          const dot = n === focus ? Number((r * 1.5).toFixed(4)) : r;
           return (
             <g
               key={n}
               className={`car${move ? ' move' : ''}${stale ? ' stale' : ''}${n === focus ? ' focus' : ''}`}
               style={{ ...teamStyle(d), ...vars({ '--x': String(c.x / 1000), '--y': String(c.y / 1000) }) }}
             >
-              <circle r={n === focus ? Number((r * 1.5).toFixed(4)) : r} />
-              <text x={r * 1.4} y={r * 0.4} fontSize={Number((size * 0.03).toFixed(4))}>
+              <circle r={dot} />
+              <text x={dot * 1.4} y={r * 0.4} fontSize={Number((size * 0.03).toFixed(4))}>
                 {d.acronym}
               </text>
             </g>

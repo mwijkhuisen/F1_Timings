@@ -190,9 +190,9 @@ export const parseTab = (param: string | null): PlayerTab =>
 
 const T_PARAM = /^\d{2}:\d{2}:\d{2}$/;
 
-/** `?focus=` (#237): the focused driver's number, one to three digits; anything else, or none, is no focus. */
+/** `?focus=` (#237): the focused driver's number, one to three digits, as the number's own string (`007` is 7); anything else, or none, is no focus. */
 export const parseFocus = (param: string | null): string | null =>
-  param !== null && /^\d{1,3}$/.test(param) ? param : null;
+  param !== null && /^\d{1,3}$/.test(param) ? String(Number(param)) : null;
 
 /**
  * The player's query with `t`, `tab` or `focus` set and the others kept: `t` first, kept only in HH:mm:ss form, ':'

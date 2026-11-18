@@ -1034,6 +1034,16 @@ describe('the pit wall in the player', () => {
     expect(host.querySelector('.strip')).not.toBeNull(); // on both tabs
   });
 
+  it('links the strip to the race-control card on the Tower tab only', () => {
+    render({ sessionKey: 9100, detail });
+    snapshot(raceState({ msgs: [[2, 'Flag', 'GREEN LIGHT - PIT EXIT OPEN']] }));
+    expect(host.querySelector('.strip a[href="#race-control"]')).not.toBeNull();
+    expect(host.querySelector('#race-control')).not.toBeNull();
+    button('Map');
+    expect(host.querySelector('.strip')).not.toBeNull();
+    expect(host.querySelector('.strip a')).toBeNull();
+  });
+
   it('filters race control by kind', () => {
     render({ sessionKey: 9100 });
     snapshot(

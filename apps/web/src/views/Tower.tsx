@@ -396,7 +396,7 @@ export function Tower({
   // Places since the start: in races, once any line has a grid position.
   const places = rows.some((r) => typeof r.places === 'number');
   const trends = trend !== undefined && view(state, 'SessionInfo')?.Type === 'Race';
-  // Header cells: Pos, Driver, ±?, Gap, Int, two trends?, and the seven after them.
+  // Header cells, wide: Pos, Driver, ±?, Gap, Int, two trends?, Last, Best; phone: Pos, Driver, Gap, Int, Last, Best, ±?, trends?; then the five after.
   const columns = 4 + 7 + (places ? 1 : 0) + (trends ? 2 : 0);
   const cut = cutAfter(state, rows.length);
   const head = (h: string) => (
