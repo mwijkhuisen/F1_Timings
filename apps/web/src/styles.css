@@ -2955,6 +2955,12 @@ section.rainmap .raintime input[type="range"] {
   stroke-width: 2px;
 }
 
+/* The focused driver (#237): a --fg ring, no new colour; its dot is larger (the r attribute) and drawn last. */
+.trackmap .car.focus circle {
+  stroke: var(--fg);
+  stroke-width: 2.5px;
+}
+
 .trackmap .car text {
   fill: var(--fg);
   paint-order: stroke;

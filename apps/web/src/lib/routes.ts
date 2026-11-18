@@ -190,15 +190,24 @@ export const parseTab = (param: string | null): PlayerTab =>
 
 const T_PARAM = /^\d{2}:\d{2}:\d{2}$/;
 
+/** `?focus=` (#237): the focused driver's number, one to three digits; anything else, or none, is no focus. */
+export const parseFocus = (param: string | null): string | null =>
+  param !== null && /^\d{1,3}$/.test(param) ? param : null;
+
 /**
- * The replay's query with `t` or `tab` set and the other kept: `t` first, kept only in HH:mm:ss form, ':' unescaped;
- * the tower is left out. '' when neither is left.
+ * The player's query with `t`, `tab` or `focus` set and the others kept: `t` first, kept only in HH:mm:ss form, ':'
+ * unescaped, then the tab (the tower is left out), then the focus (`null` clears it). '' when none is left.
  */
-export function replayQuery(search: string, set: { t?: string; tab?: PlayerTab }): string {
+export function replayQuery(search: string, set: { t?: string; tab?: PlayerTab; focus?: string | null }): string {
   const q = new URLSearchParams(search);
   const t = set.t ?? q.get('t');
   const tab = set.tab ?? parseTab(q.get('tab'));
-  const parts = [t !== null && T_PARAM.test(t) && `t=${t}`, tab !== 'tower' && `tab=${tab}`].filter(Boolean);
+  const focus = set.focus === undefined ? parseFocus(q.get('focus')) : set.focus;
+  const parts = [
+    t !== null && T_PARAM.test(t) && `t=${t}`,
+    tab !== 'tower' && `tab=${tab}`,
+    focus !== null && `focus=${focus}`,
+  ].filter(Boolean);
   return parts.length > 0 ? `?${parts.join('&')}` : '';
 }
 

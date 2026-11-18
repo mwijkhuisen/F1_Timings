@@ -1073,6 +1073,44 @@ describe('the pit wall in the player', () => {
   });
 });
 
+// #237 (item 8, D2): the focused driver lives in the URL as ?focus=<number>, on the replay and on /live.
+describe('the focus in the URL (#237)', () => {
+  afterEach(() => history.replaceState(null, '', '/'));
+  const driver = (tla: string) =>
+    [...host.querySelectorAll<HTMLButtonElement>('.tower tbody th button')].find((b) => b.textContent === tla);
+  const focused = () => [...host.querySelectorAll('.tower tr.focus th')].map((th) => th.textContent);
+  const go = (url: string, keepT: boolean) => {
+    history.replaceState(null, '', url);
+    render({ sessionKey: 9100, keepT });
+    last().emit('snapshot', { t: NOW - 1_000, state: raceState(), laps: [], stints: [] });
+    advance(250);
+  };
+
+  it('the replay focuses the row named by ?focus= on mount, and writes the focus and a clear', () => {
+    go('/replay/7?focus=2', true);
+    expect(focused()).toEqual(['BBB']);
+    act(() => driver('CCC')?.click());
+    expect(location.search).toBe('?focus=3');
+    act(() => driver('CCC')?.click());
+    expect(location.search).toBe('');
+    expect(focused()).toEqual([]);
+  });
+
+  it('/live reads and writes nothing but the focus', () => {
+    go('/live?t=20:30:00&focus=2', false);
+    expect(focused()).toEqual(['BBB']);
+    act(() => driver('CCC')?.click());
+    expect(location.pathname + location.search).toBe('/live?focus=3');
+    act(() => driver('CCC')?.click());
+    expect(location.pathname + location.search).toBe('/live');
+  });
+
+  it.each(['abc', '1234', '', '-2'])('?focus=%s is no focus', (bad) => {
+    go(`/live?focus=${bad}`, false);
+    expect(focused()).toEqual([]);
+  });
+});
+
 // #113: the Laps tab in a qualifying session, on the stream's lap rows up to T (A§13); D1: the feed adds the part each
 // line that is not KnockedOut has reached.
 describe('qualifying by phase in the player', () => {
