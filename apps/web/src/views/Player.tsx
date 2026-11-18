@@ -56,6 +56,7 @@ import {
   type Stream,
   streamUrl,
 } from '../lib/stream.ts';
+import { savedPicks, saveTable } from '../lib/tables.ts';
 import { fmtClock, parseT } from '../lib/time.ts';
 import { type ClockPeriod, KIND_LABEL, KIND_NAME, type Kind, type Period, type Track } from '../lib/track.ts';
 import { ErrorBoundary, ErrorView, OFFLINE } from '../ui/ErrorView.tsx';
@@ -288,10 +289,10 @@ const SessionTabs = memo(function SessionTabs({
     );
   // No laps, no picker (as #99 on the session page).
   if (laps.length === 0) return <p className="muted">No laps in the feed yet.</p>;
-  // Until the first pick the picks are the top 2 of the order at T. In a race the pit cycles read the stream's stints
+  // Until the first pick the picks are the saved ones the session has (#237 D1), else the top 2 of the order at T. In a race the pit cycles read the stream's stints
   // and the feed's race-control texts, and list a cycle once its after line is crossed (D1).
   const order = orderDrivers(rows.detail, laps);
-  const picks = picksOf(order, chosen, onPick);
+  const picks = picksOf(order, chosen ?? savedPicks(order), onPick);
   return (
     <>
       <DriverPicker drivers={order} selected={picks.numbers} onToggle={picks.toggle} showReference />
@@ -1239,7 +1240,10 @@ export function Player({
             lo={lo}
             reached={reachedKey}
             chosen={chosen}
-            onPick={setChosen}
+            onPick={(numbers) => {
+              setChosen(numbers);
+              saveTable('picks', numbers);
+            }}
           />
         ) : order ? (
           order

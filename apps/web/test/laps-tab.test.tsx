@@ -21,6 +21,7 @@ let root: Root;
 let host: HTMLElement;
 
 beforeEach(() => {
+  localStorage.clear();
   calls = 0;
   overtakeCalls = 0;
   host = document.createElement('div');

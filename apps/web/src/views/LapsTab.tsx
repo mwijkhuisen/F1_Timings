@@ -2,6 +2,7 @@ import type { Laps, SessionDetail } from '@f1/contracts';
 import { type ReactNode, useMemo, useState } from 'react';
 import { useOvertakes, useRaceControl } from '../lib/api.ts';
 import { type Quali, qualiPhases } from '../lib/quali.ts';
+import { readTables, saveTable } from '../lib/tables.ts';
 import { trackPeriods } from '../lib/track.ts';
 import { LapTable } from './LapTable.tsx';
 import { QualiTable } from './QualiTable.tsx';
@@ -16,15 +17,19 @@ import { QualiTiles, SessionTiles } from './Tiles.tsx';
 
 /** By phase | Every lap (component state, By phase first): the phase table, or `children` for every lap. Also the player's. */
 export function QualiSwitch({ detail, quali, children }: { detail: SessionDetail; quali: Quali; children: ReactNode }) {
-  const [byPhase, setByPhase] = useState(true);
+  const [byPhase, setByPhase] = useState(() => readTables().byPhase ?? true);
+  const set = (v: boolean) => {
+    setByPhase(v);
+    saveTable('byPhase', v);
+  };
   return (
     <>
       <div className="controls">
         <fieldset className="segmented" aria-label="View">
-          <button type="button" aria-pressed={byPhase} onClick={() => setByPhase(true)}>
+          <button type="button" aria-pressed={byPhase} onClick={() => set(true)}>
             By phase
           </button>
-          <button type="button" aria-pressed={!byPhase} onClick={() => setByPhase(false)}>
+          <button type="button" aria-pressed={!byPhase} onClick={() => set(false)}>
             Every lap
           </button>
         </fieldset>

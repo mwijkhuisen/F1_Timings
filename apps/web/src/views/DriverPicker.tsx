@@ -1,5 +1,6 @@
 import { useMemo, useState } from 'react';
 import { type Driver, teamStyle } from '../lib/session.ts';
+import { saveTable } from '../lib/tables.ts';
 
 /**
  * The picks of Compare and Mini-sectors (E1, C4) from `chosen`, in pick order, the first the reference; null `chosen`
@@ -18,11 +19,18 @@ export function picksOf(order: readonly Driver[], chosen: number[] | null, pick:
   };
 }
 
-/** The session page's picks: until the first pick `chosen` is `initial` (its `?d=`). */
+/** The session page's picks: until the first pick `chosen` is `initial` (its `?d=`, else the saved picks, #237 D1). A pick is saved. */
 export function usePicks(order: readonly Driver[], initial: number[] | null) {
   const [picked, setPicked] = useState<number[] | null>(null);
   const chosen = picked ?? initial;
-  return useMemo(() => picksOf(order, chosen, setPicked), [chosen, order]);
+  return useMemo(
+    () =>
+      picksOf(order, chosen, (numbers) => {
+        setPicked(numbers);
+        saveTable('picks', numbers);
+      }),
+    [chosen, order],
+  );
 }
 
 /**

@@ -3256,6 +3256,23 @@ describe('Compare, Stints and the Laps tab in the player (#112)', () => {
       for (let i = 0; i < 3; i++) await act(async () => {});
     };
 
+    // #237 D1: the picks are remembered in `f1.tables`; the stored ones count where the session has the drivers.
+    it('start from the stored picks the session has, else the top 2, and a pick writes them', async () => {
+      localStorage.setItem('f1.tables', JSON.stringify({ picks: [1, 99, 44] }));
+      begin(three(), laps, []);
+      await compare();
+      expect(refs()).toEqual(['VER*', 'HAM']);
+      click('Remove HAM');
+      expect(JSON.parse(localStorage.getItem('f1.tables') ?? '{}')).toEqual({ picks: [1] });
+    });
+
+    it('start from the top 2 when the stored picks are none of the session’s', async () => {
+      localStorage.setItem('f1.tables', JSON.stringify({ picks: [99, 98] }));
+      begin(three(), laps, []);
+      await compare();
+      expect(refs()).toEqual(['HAM*', 'LEC']);
+    });
+
     it('are the top 2 of the order at T until the first pick', async () => {
       begin(three(), laps, []);
       await compare();
