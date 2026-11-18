@@ -52,12 +52,13 @@ export function Session({ session, view }: { session: number; view: View }) {
   }, [canonical]);
 
   // The driver selection of Compare and Mini-sectors (E1, C4): tab state in pick order, the first the reference.
-  // It starts from `?d=`, read once; else from the saved picks the session has (#237 D1); else it is the top 2 of the
-  // lap-table order and stays out of the URL until the first pick. App's key resets it per session.
+  // It starts from `?d=`, read once; without a valid one it shows the saved picks the session has (#237 D1), else the
+  // top 2 of the lap-table order, and neither is in the URL until the first pick. App's key resets it per session.
   const [fromUrl] = useState(() => new URLSearchParams(location.search).get('d'));
   const order = useMemo(() => (d && laps.data ? orderDrivers(d, laps.data) : []), [d, laps.data]);
-  const initial = useMemo(() => parseD(fromUrl, order) ?? savedPicks(order), [fromUrl, order]);
-  const { chosen, selected, numbers, toggle, setReference } = usePicks(order, initial);
+  const initial = useMemo(() => parseD(fromUrl, order), [fromUrl, order]);
+  const saved = useMemo(() => savedPicks(order), [order]);
+  const { chosen, selected, numbers, toggle, setReference } = usePicks(order, initial, saved);
   const search = chosen !== null && numbers.length > 0 ? `?d=${formatD(numbers)}` : '';
   const picks = view === 'compare' || view === 'minisectors';
   // Written back on Compare and Mini-sectors only, without a history entry; the other tabs keep their own URL.

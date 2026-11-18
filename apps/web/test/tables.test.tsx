@@ -81,6 +81,10 @@ describe('readTables', () => {
     store({ picks: [63, 99, 1] });
     expect(savedPicks([{ number: 1 }, { number: 3 }, { number: 63 }])).toEqual([63, 1]);
     expect(savedPicks([{ number: 3 }])).toBeNull();
+    // One is no comparison: the caller's default (the top 2).
+    expect(savedPicks([{ number: 1 }, { number: 3 }])).toBeNull();
+    store({ picks: [1] });
+    expect(savedPicks([{ number: 1 }, { number: 3 }])).toBeNull();
   });
 });
 
@@ -216,6 +220,16 @@ describe('Session: the driver picks', () => {
     store({ picks: [99, 98] });
     render(`${PATH}/minisectors`);
     expect(chips()).toEqual(['VER', 'RIC']);
+  });
+
+  it('keeps the saved picks out of the URL until the first pick', () => {
+    store({ picks: [63, 3] });
+    render(`${PATH}/compare`);
+    expect(chips()).toEqual(['RUS', 'RIC']);
+    expect(location.search).toBe('');
+    expect(host.querySelector('a[href*="?d="]')).toBeNull();
+    click(host.querySelector('[aria-label="Remove RIC"]'));
+    expect(location.search).toBe('?d=63');
   });
 
   it('lets ?d= win over the stored picks', () => {

@@ -56,7 +56,7 @@ import {
   type Stream,
   streamUrl,
 } from '../lib/stream.ts';
-import { savedPicks, saveTable } from '../lib/tables.ts';
+import { savedPicks } from '../lib/tables.ts';
 import { fmtClock, parseT } from '../lib/time.ts';
 import { type ClockPeriod, KIND_LABEL, KIND_NAME, type Kind, type Period, type Track } from '../lib/track.ts';
 import { ErrorBoundary, ErrorView, OFFLINE } from '../ui/ErrorView.tsx';
@@ -260,6 +260,9 @@ const SessionTabs = memo(function SessionTabs({
       t: feed.t,
     };
   }, [detail, feed, laps, lo]);
+  // Compare's order, and the saved picks it has (#237 D1), read when the rows change, not on every render.
+  const order = useMemo(() => orderDrivers(rows.detail, laps), [rows.detail, laps]);
+  const saved = useMemo(() => (tab === 'compare' ? savedPicks(order) : null), [tab, order]);
   if (tab === 'laps')
     return (
       <PlayerLaps
@@ -289,10 +292,10 @@ const SessionTabs = memo(function SessionTabs({
     );
   // No laps, no picker (as #99 on the session page).
   if (laps.length === 0) return <p className="muted">No laps in the feed yet.</p>;
-  // Until the first pick the picks are the saved ones the session has (#237 D1), else the top 2 of the order at T. In a race the pit cycles read the stream's stints
-  // and the feed's race-control texts, and list a cycle once its after line is crossed (D1).
-  const order = orderDrivers(rows.detail, laps);
-  const picks = picksOf(order, chosen ?? savedPicks(order), onPick);
+  // Until the first pick the picks are the saved ones the session has (#237 D1), else the top 2 of the order at T. In a
+  // race the pit cycles read the stream's stints and the feed's race-control texts, and list a cycle once its after line
+  // is crossed (D1).
+  const picks = picksOf(order, chosen, onPick, saved);
   return (
     <>
       <DriverPicker drivers={order} selected={picks.numbers} onToggle={picks.toggle} showReference />
@@ -1243,10 +1246,7 @@ export function Player({
             lo={lo}
             reached={reachedKey}
             chosen={chosen}
-            onPick={(numbers) => {
-              setChosen(numbers);
-              saveTable('picks', numbers);
-            }}
+            onPick={setChosen}
           />
         ) : order ? (
           order

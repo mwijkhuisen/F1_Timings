@@ -1,10 +1,10 @@
 import type { Lap, Laps, SessionDetail } from '@f1/contracts';
-import { type ReactNode, useState } from 'react';
+import type { ReactNode } from 'react';
 import { deltaStep, ownBests } from '../lib/bests.ts';
 import { type Compound, compoundOf, tyresWords, UNKNOWN_COMPOUND } from '../lib/compound.ts';
 import { phaseName } from '../lib/quali.ts';
 import { type Driver, orderDrivers, sourceWords, statusOf, teamStyle } from '../lib/session.ts';
-import { readTables, saveTable } from '../lib/tables.ts';
+import { useTable } from '../lib/tables.ts';
 import { fmtClock, fmtDelta, fmtLap, fmtSector } from '../lib/time.ts';
 import { KIND_LABEL, KIND_NAME, type Kind, kindsAt, type Period, type Track } from '../lib/track.ts';
 import { Note } from '../ui/Note.tsx';
@@ -453,10 +453,9 @@ export function LapTable({
   /** The holes' reasons and the race result's marks (#110): the session page only. */
   marks?: boolean;
 }) {
-  const [saved] = useState(readTables);
-  const [metric, setMetric] = useState<Metric>(saved.metric ?? 'lap');
-  const [show, setShow] = useState<Show>(saved.show ?? 'times');
-  const [columns, setColumns] = useState(saved.columns ?? false);
+  const [metric = 'lap', setMetric] = useTable('metric');
+  const [show = 'times', setShow] = useTable('show');
+  const [columns = false, setColumns] = useTable('columns');
   if (laps.length === 0) return <p>No laps yet.</p>;
   const periods = track?.periods ?? [];
   return (
@@ -464,49 +463,20 @@ export function LapTable({
       <div className="controls">
         <fieldset className="segmented" aria-label="Metric">
           {Object.entries(LABEL).map(([id, label]) => (
-            <button
-              key={id}
-              type="button"
-              aria-pressed={metric === id}
-              onClick={() => {
-                setMetric(id as Metric);
-                saveTable('metric', id as Metric);
-              }}
-            >
+            <button key={id} type="button" aria-pressed={metric === id} onClick={() => setMetric(id as Metric)}>
               {label}
             </button>
           ))}
         </fieldset>
         <fieldset className="segmented" aria-label="Values">
-          <button
-            type="button"
-            aria-pressed={show === 'times'}
-            onClick={() => {
-              setShow('times');
-              saveTable('show', 'times');
-            }}
-          >
+          <button type="button" aria-pressed={show === 'times'} onClick={() => setShow('times')}>
             Times
           </button>
-          <button
-            type="button"
-            aria-pressed={show === 'delta'}
-            onClick={() => {
-              setShow('delta');
-              saveTable('show', 'delta');
-            }}
-          >
+          <button type="button" aria-pressed={show === 'delta'} onClick={() => setShow('delta')}>
             Δ to own best
           </button>
         </fieldset>
-        <button
-          type="button"
-          aria-pressed={columns}
-          onClick={() => {
-            setColumns(!columns);
-            saveTable('columns', !columns);
-          }}
-        >
+        <button type="button" aria-pressed={columns} onClick={() => setColumns(!columns)}>
           Drivers as columns
         </button>
       </div>

@@ -18,6 +18,13 @@ export function errorText(error: unknown): string {
   return 'API error';
 }
 
+/** Whether a second try can help: offline or an API error, never an expired session, a missing page or a new version. */
+function retryable(error: unknown): boolean {
+  if (error instanceof ZodError) return false;
+  if (error instanceof TypeError) return navigator.onLine === false;
+  return !(error instanceof HttpError && (error.status === 401 || error.status === 404));
+}
+
 /** The app-wide reload banner: another revision answered, or an answer failed its contract (A§13). */
 export const NewVersion = () => (useStale() ? <p role="alert">{NEW_VERSION}</p> : null);
 
@@ -25,19 +32,16 @@ export const NewVersion = () => (useStale() ? <p role="alert">{NEW_VERSION}</p> 
  * The error line. With `retry` (a query's refetch, #237) a "Try again" button follows it when a second try can help:
  * offline or "API error", never an expired session (reload to sign in), a missing page or a new version.
  */
-export const ErrorView = ({ error, retry }: { error: unknown; retry?: (() => void) | undefined }) => {
-  const text = errorText(error);
-  return (
-    <>
-      <p role="alert">{text}</p>
-      {retry && (text === OFFLINE || text === 'API error') && (
-        <button type="button" onClick={retry}>
-          Try again
-        </button>
-      )}
-    </>
-  );
-};
+export const ErrorView = ({ error, retry }: { error: unknown; retry?: (() => void) | undefined }) => (
+  <>
+    <p role="alert">{errorText(error)}</p>
+    {retry && retryable(error) && (
+      <button type="button" onClick={retry}>
+        Try again
+      </button>
+    )}
+  </>
+);
 
 /** A query without data yet: its error (with `retry`, as ErrorView), or a loading line. */
 export const Pending = ({ error, retry }: { error: unknown; retry?: (() => void) | undefined }) =>

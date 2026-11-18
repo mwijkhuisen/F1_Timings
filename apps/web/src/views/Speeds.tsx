@@ -1,9 +1,8 @@
 import type { Lap, Laps, SessionDetail } from '@f1/contracts';
-import { useState } from 'react';
 import { type Speed, speedTable, speedTops } from '../lib/bests.ts';
 import { phaseName } from '../lib/quali.ts';
 import { orderDrivers, teamStyle } from '../lib/session.ts';
-import { readTables, saveTable } from '../lib/tables.ts';
+import { useTable } from '../lib/tables.ts';
 import { fmtDelta, fmtLap } from '../lib/time.ts';
 import { Note } from '../ui/Note.tsx';
 import { Scroll } from '../ui/Scroll.tsx';
@@ -35,8 +34,9 @@ export function SpeedTable({
   const phases = qualifying
     ? [...new Set(laps.flatMap((l) => (l.quali_phase === null ? [] : [l.quali_phase])))].sort((a, b) => a - b)
     : [];
-  // Opens on the latest phase with laps, and follows it while no phase is picked.
-  const [picked, setPicked] = useState<number | null>(() => readTables().phase ?? null);
+  // Opens on the latest phase with laps and follows it until a phase is picked; a stored pick (#237 D1) counts while the
+  // session has that phase.
+  const [picked = null, setPicked] = useTable('phase');
   const phase = picked !== null && phases.includes(picked) ? picked : (phases.at(-1) ?? null);
   const rows = speedTable(laps, phase);
   const tops = speedTops(laps);
@@ -55,15 +55,7 @@ export function SpeedTable({
           </span>
           <fieldset className="segmented" aria-label="Phase">
             {phases.map((p) => (
-              <button
-                key={p}
-                type="button"
-                aria-pressed={p === phase}
-                onClick={() => {
-                  setPicked(p);
-                  saveTable('phase', p);
-                }}
-              >
+              <button key={p} type="button" aria-pressed={p === phase} onClick={() => setPicked(p)}>
                 {phaseName(detail.session.name, p)}
               </button>
             ))}

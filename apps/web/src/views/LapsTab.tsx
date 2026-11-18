@@ -1,8 +1,8 @@
 import type { Laps, SessionDetail } from '@f1/contracts';
-import { type ReactNode, useMemo, useState } from 'react';
+import { type ReactNode, useMemo } from 'react';
 import { useOvertakes, useRaceControl } from '../lib/api.ts';
 import { type Quali, qualiPhases } from '../lib/quali.ts';
-import { readTables, saveTable } from '../lib/tables.ts';
+import { useTable } from '../lib/tables.ts';
 import { trackPeriods } from '../lib/track.ts';
 import { LapTable } from './LapTable.tsx';
 import { QualiTable } from './QualiTable.tsx';
@@ -17,11 +17,7 @@ import { QualiTiles, SessionTiles } from './Tiles.tsx';
 
 /** By phase | Every lap (component state, By phase first): the phase table, or `children` for every lap. Also the player's. */
 export function QualiSwitch({ detail, quali, children }: { detail: SessionDetail; quali: Quali; children: ReactNode }) {
-  const [byPhase, setByPhase] = useState(() => readTables().byPhase ?? true);
-  const set = (v: boolean) => {
-    setByPhase(v);
-    saveTable('byPhase', v);
-  };
+  const [byPhase = true, set] = useTable('byPhase');
   return (
     <>
       <div className="controls">

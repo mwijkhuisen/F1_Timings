@@ -3,6 +3,8 @@
 // each field is checked against its allowed values and anything else is dropped, so a throwing, empty or
 // tampered storage gives the defaults. Read and written in try/catch as lib/theme.ts does.
 
+import { useState } from 'react';
+
 export type Tables = {
   metric: 'lap' | 's1' | 's2' | 's3';
   show: 'times' | 'delta';
@@ -52,9 +54,21 @@ export function saveTable<K extends keyof Tables>(key: K, value: Tables[K]) {
   }
 }
 
-/** The saved picks that `order` has, in saved order; null when none is left (the caller's default). */
+/** A remembered setting: the saved value on mount (undefined when there is none), and a setter that also saves it. */
+export function useTable<K extends keyof Tables>(key: K): [Tables[K] | undefined, (v: Tables[K]) => void] {
+  const [value, setValue] = useState(() => readTables()[key]);
+  return [
+    value,
+    (v) => {
+      setValue(v);
+      saveTable(key, v);
+    },
+  ];
+}
+
+/** The saved picks that `order` has, in saved order; null unless two are left (one is no comparison: the caller's default). */
 export function savedPicks(order: readonly { number: number }[]): number[] | null {
   const known = new Set(order.map((d) => d.number));
   const out = [...new Set(readTables().picks ?? [])].filter((n) => known.has(n));
-  return out.length > 0 ? out : null;
+  return out.length > 1 ? out : null;
 }

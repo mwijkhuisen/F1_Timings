@@ -4,33 +4,36 @@ import { saveTable } from '../lib/tables.ts';
 
 /**
  * The picks of Compare and Mini-sectors (E1, C4) from `chosen`, in pick order, the first the reference; null `chosen`
- * (before the first pick) is the top 2 of `order`. `pick` stores a new choice. The player (#112) holds `chosen` itself,
- * so the picks survive a tab switch.
+ * (before the first pick) is `fallback` (the saved picks the session has, #237 D1) or else the top 2 of `order`. `pick`
+ * stores a new choice, which is also saved. The player (#112) holds `chosen` itself, so the picks survive a tab switch.
  */
-export function picksOf(order: readonly Driver[], chosen: number[] | null, pick: (numbers: number[]) => void) {
-  const selected = chosen === null ? order.slice(0, 2) : chosen.flatMap((n) => order.filter((x) => x.number === n));
+export function picksOf(
+  order: readonly Driver[],
+  chosen: number[] | null,
+  pick: (numbers: number[]) => void,
+  fallback: number[] | null = null,
+) {
+  const from = chosen ?? fallback;
+  const selected = from === null ? order.slice(0, 2) : from.flatMap((n) => order.filter((x) => x.number === n));
   const numbers = selected.map((x) => x.number);
+  const set = (picks: number[]) => {
+    pick(picks);
+    saveTable('picks', picks);
+  };
   return {
     chosen,
     selected,
     numbers,
-    toggle: (n: number) => pick(numbers.includes(n) ? numbers.filter((x) => x !== n) : [...numbers, n]),
-    setReference: (n: number) => pick([n, ...numbers.filter((x) => x !== n)]),
+    toggle: (n: number) => set(numbers.includes(n) ? numbers.filter((x) => x !== n) : [...numbers, n]),
+    setReference: (n: number) => set([n, ...numbers.filter((x) => x !== n)]),
   };
 }
 
-/** The session page's picks: until the first pick `chosen` is `initial` (its `?d=`, else the saved picks, #237 D1). A pick is saved. */
-export function usePicks(order: readonly Driver[], initial: number[] | null) {
+/** The session page's picks: until the first pick `chosen` is `initial` (its `?d=`), then `saved` (#237 D1), then the top 2. */
+export function usePicks(order: readonly Driver[], initial: number[] | null, saved: number[] | null = null) {
   const [picked, setPicked] = useState<number[] | null>(null);
   const chosen = picked ?? initial;
-  return useMemo(
-    () =>
-      picksOf(order, chosen, (numbers) => {
-        setPicked(numbers);
-        saveTable('picks', numbers);
-      }),
-    [chosen, order],
-  );
+  return useMemo(() => picksOf(order, chosen, setPicked, saved), [chosen, order, saved]);
 }
 
 /**

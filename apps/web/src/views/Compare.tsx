@@ -6,7 +6,7 @@ import { cycleText, PIT_WINDOW, pitCycles } from '../lib/crossings.ts';
 import { evolution, evolutionSlots, SLOT_MS } from '../lib/evolution.ts';
 import { phaseName } from '../lib/quali.ts';
 import { type Driver, plural } from '../lib/session.ts';
-import { readTables, saveTable } from '../lib/tables.ts';
+import { useTable } from '../lib/tables.ts';
 import { fmtHm, fmtLap } from '../lib/time.ts';
 import { type ClockPeriod, clockPeriods, type Period, trackPeriods } from '../lib/track.ts';
 import { errorText } from '../ui/ErrorView.tsx';
@@ -112,7 +112,7 @@ export function Comparison({
   children?: ReactNode;
   traces?: ReactNode;
 }) {
-  const [yWindow, setWindow] = useState<'fit' | '107'>(() => readTables().window ?? 'fit');
+  const [yWindow = 'fit', setWindow] = useTable('window');
   // What the charts draw, by content: the player's lap rows are a new array on each `laps` event (about one a second
   // in a race, mostly for other cars), and a redraw resets the tooltip (#112).
   const picked = new Set(drivers.map((d) => d.number));
@@ -136,24 +136,10 @@ export function Comparison({
           <div className="panel-title">
             <h2>Lap times</h2>
             <fieldset className="segmented" aria-label="Window">
-              <button
-                type="button"
-                aria-pressed={yWindow === 'fit'}
-                onClick={() => {
-                  setWindow('fit');
-                  saveTable('window', 'fit');
-                }}
-              >
+              <button type="button" aria-pressed={yWindow === 'fit'} onClick={() => setWindow('fit')}>
                 Fit
               </button>
-              <button
-                type="button"
-                aria-pressed={yWindow === '107'}
-                onClick={() => {
-                  setWindow('107');
-                  saveTable('window', '107');
-                }}
-              >
+              <button type="button" aria-pressed={yWindow === '107'} onClick={() => setWindow('107')}>
                 107 %
               </button>
             </fieldset>
