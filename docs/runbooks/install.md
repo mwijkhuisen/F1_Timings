@@ -9,7 +9,7 @@ Debian 13, Docker 29, the Waterheight VM (A§14.1). Every [box] command runs as 
 | A1 | The VM is 6 vCPU / 12 GB (Hyper-V, VM off). |
 | A2, A3 | Tunnel, token file and Access application: `docs/runbooks/cloudflare.md`. You need the tunnel token, the Access team name and the AUD tag. |
 | A5 | After the first release run on `main`: GitHub, Packages, `f1-server` and `f1-web` → Package settings → Change visibility → Public (both). Dependabot is on (Settings → Code security). Branch protection on `main` stays as it is (A§12.4). |
-| A5b | Before merging P1f: Settings → Environments → New environment `production`. Required reviewers = the owner, "Prevent self-review" unchecked, Deployment branches and tags = Selected branches and tags → `main`. From then on every merge to `main` waits in the Actions run for your approval before the `release` job touches GHCR; after you approve, `f1-update` picks the images up within 10 minutes. The environment must exist before the job first runs: otherwise GitHub creates it without protection. |
+| A5b | Before merging P1f: Settings → Environments → New environment `production`. Required reviewers = the owner, "Prevent self-review" unchecked, Deployment branches and tags = Selected branches and tags → `main`. From then on every merge to `main` that changes a build input waits in the Actions run for your approval before the `release` job touches GHCR (a merge that changes none releases nothing, #208); after you approve, `f1-update` picks the images up within 10 minutes. The environment must exist before the job first runs: otherwise GitHub creates it without protection. |
 | A6 | healthchecks.io: see "A6" below. |
 | A8 | **Hard precondition for step 6.** The fine-grained agent token, see "A8" below. |
 
