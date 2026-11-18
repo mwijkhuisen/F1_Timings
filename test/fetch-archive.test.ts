@@ -150,7 +150,7 @@ describe('fetchArchive', () => {
     expect(existsSync(join(root, 'archive/11397/DriverList.jsonStream'))).toBe(false);
   });
 
-  it('downloads the 13 topics and the pit topics of the recorder (#96)', () => {
+  it('downloads the 13 topics and the raw-only topics of the recorder (#96, #147)', () => {
     expect(TOPICS).toEqual([
       'DriverList',
       'TimingData',
@@ -168,6 +168,12 @@ describe('fetchArchive', () => {
       'PitLaneTimeCollection',
       'PitStopSeries',
       'PitStop',
+      'TyreStintSeries',
+      'CurrentTyres',
+      'LapSeries',
+      'DriverRaceInfo',
+      'OvertakeSeries',
+      'ChampionshipPrediction',
     ]);
   });
 
@@ -180,7 +186,7 @@ describe('fetchArchive', () => {
         return new HttpResponse('data');
       }),
     );
-    const argv = ['2026', '11397', '--token-file', tokenFile(FRESH), '--topic', 'TyreStintSeries'];
+    const argv = ['2026', '11397', '--token-file', tokenFile(FRESH), '--topic', 'DriverTracker'];
     expect(
       await fetchArchive(
         [...argv, '--topic', 'PitStop', '--topic', 'CarData.z'],
@@ -192,8 +198,8 @@ describe('fetchArchive', () => {
     ).toBe(0);
     expect(files).toHaveLength((TOPICS.length + 2) * 2);
     expect(files.slice(-4)).toEqual([
-      'TyreStintSeries.jsonStream',
-      'TyreStintSeries.json',
+      'DriverTracker.jsonStream',
+      'DriverTracker.json',
       'CarData.z.jsonStream',
       'CarData.z.json',
     ]);
