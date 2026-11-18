@@ -21,7 +21,7 @@ import { createLaps } from '../src/live/laps.ts';
 import { createFeed } from '../src/live/merge.ts';
 import { OUTLINES } from '../src/live/outlines.ts';
 import { lapRows, type PlaybackEvent, playback } from '../src/live/playback.ts';
-import { parseFeedLine } from '../src/live/read.ts';
+import { parseFeedLine, UNPARSED } from '../src/live/read.ts';
 import { openRecording, type Recording } from '../src/live/recording.ts';
 import { type ZFail, zCounts } from '../src/live/telemetry.ts';
 import { along, type Car, session } from './track.ts';
@@ -598,22 +598,34 @@ describe('playback', () => {
     expect(seen).toHaveLength(2);
   });
 
-  it('never sends a recorded topic it does not parse yet (#96): no delta, and none in a snapshot', async () => {
+  it('never sends a recorded topic it does not parse yet (#96, #147): no delta, and none in a snapshot', async () => {
     const dir = tmp();
-    const pit = { PitTimes: { 7: { RacingNumber: '7', Duration: '20.0', Lap: '3' } } };
+    // Synthetic payloads in the archive's key paths (A§11.1), one per UNPARSED topic.
+    const raw: Record<string, unknown> = {
+      PitLaneTimeCollection: { PitTimes: { 7: { RacingNumber: '7', Duration: '20.0', Lap: '3' } } },
+      PitStopSeries: { PitTimes: { 7: [{ Timestamp: iso(T0), PitStop: { PitStopTime: '2.5' } }] } },
+      PitStop: { RacingNumber: '7', PitStopTime: '2.5' },
+      TyreStintSeries: { Stints: { 7: [{ Compound: 'SOFT', New: 'true', StartLaps: 0, TotalLaps: 3 }] } },
+      CurrentTyres: { Tyres: { 7: { Compound: 'SOFT', New: true } } },
+      LapSeries: { 7: { RacingNumber: '7', LapPosition: ['3'] } },
+      DriverRaceInfo: { 7: { RacingNumber: '7', Catching: 1, OvertakeState: 2, PitStops: 1 } },
+      OvertakeSeries: { Overtakes: { 7: [{ Timestamp: iso(T0), count: 1 }] } },
+      ChampionshipPrediction: { Drivers: { 7: { RacingNumber: '7', PredictedPosition: 3 } } },
+    };
+    expect(Object.keys(raw).sort()).toEqual([...UNPARSED].sort());
     const values: Value[] = [
-      [T0, '_subscribe', { PitLaneTimeCollection: pit, PitStopSeries: { PitTimes: {} }, PitStop: { Lap: '2' } }],
-      at(T0 + 1000, 'PitLaneTimeCollection', pit),
-      at(T0 + 2000, 'PitStopSeries', { PitTimes: { 7: [{ Timestamp: iso(T0), PitStop: { PitStopTime: '2.5' } }] } }),
-      at(T0 + 3000, 'PitStop', { RacingNumber: '7', PitStopTime: '2.5' }),
+      [T0, '_subscribe', raw],
+      ...Object.entries(raw).map(([topic, payload], i) => at(T0 + 100 * (i + 1), topic, payload)),
       at(T0 + 4000, 'TimingData', { Lines: { 7: { NumberOfLaps: 3 } } }),
     ];
+    const keys = ['PitTimes', 'PitStopTime', 'Stints', 'Tyres', 'LapPosition', 'Catching', 'Overtake', 'Predicted'];
+    const absent = new RegExp([...UNPARSED, ...keys].join('|'));
     await record(dir, values, 3_600_000);
     for (const t of [T0, T0 + 5000]) {
       const { gen, clock } = start(dir, { at: t });
       const sent = JSON.stringify(await drain(gen, clock));
       expect(sent).toContain('NumberOfLaps'); // the stream itself goes on: a delta from T0, in the snapshot after
-      expect(sent).not.toMatch(/PitLaneTimeCollection|PitStop|PitTimes|PitStopTime/);
+      expect(sent).not.toMatch(absent);
     }
   });
 

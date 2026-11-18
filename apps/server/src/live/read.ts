@@ -28,8 +28,18 @@
 
 export type FeedEvent = { t: number /* epoch ms */; topic: string; payload: unknown; full?: true };
 
-/** Recorded, not parsed yet (#96): the playback and the map frame's finder skip them, as the `.z` topics. */
-export const UNPARSED: ReadonlySet<string> = new Set(['PitLaneTimeCollection', 'PitStopSeries', 'PitStop']);
+/** Recorded, not parsed yet (#96, #147): the playback and the map frame's finder skip them, as the `.z` topics. */
+export const UNPARSED: ReadonlySet<string> = new Set([
+  'PitLaneTimeCollection',
+  'PitStopSeries',
+  'PitStop',
+  'TyreStintSeries',
+  'CurrentTyres',
+  'LapSeries',
+  'DriverRaceInfo',
+  'OvertakeSeries',
+  'ChampionshipPrediction',
+]);
 
 /** A plain object: not null, not an array. */
 export const isObj = (v: unknown): v is Record<string, unknown> =>
