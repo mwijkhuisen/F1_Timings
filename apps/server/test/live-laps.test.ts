@@ -1,6 +1,6 @@
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import type { Obj } from '@f1/contracts';
+import { type Obj, view } from '@f1/contracts';
 import fc from 'fast-check';
 import { describe, expect, it } from 'vitest';
 import { createLaps, type LapRow, type StintRow } from '../src/live/laps.ts';
@@ -587,6 +587,69 @@ describe('createLaps', () => {
         'f1-archive',
       );
       expect(laps.map((l) => [l.lap_number, l.s1_ms, l.is_pit_out])).toEqual([[1, 30_000, false]]);
+    });
+  });
+
+  describe("a reconnect's Subscribe state (#223, A§11.3)", () => {
+    type Value = [r: number, topic: string, payload: unknown, ts?: string];
+    // practice.jsonl as recording lines; a Subscribe state is a `_subscribe` line built from the state of some of them.
+    const all = readFileSync(join(import.meta.dirname, 'fixtures/live/practice.jsonl'), 'utf8')
+      .trim()
+      .split('\n')
+      .map((line) => JSON.parse(line) as Value);
+    const events = (values: readonly Value[]) => values.flatMap((v) => parseFeedLine(JSON.stringify(v)));
+    const replay = (values: readonly Value[]) => {
+      const feed = createFeed();
+      for (const ev of events(values)) feed.apply(ev);
+      return feed.state;
+    };
+    const plain = (v: unknown) => JSON.parse(JSON.stringify(v)) as Obj;
+    const subscribe = (r: number, values: readonly Value[]): Value => [r, '_subscribe', plain(replay(values))];
+
+    it('never rolls back a delta that came 1 ms before it on its connection: the state, a typed view and the rows', () => {
+      // At every point k: the new connection's line k arrives 1 ms before the completion, whose state is older (it
+      // holds lines 0..k-1 only). Without the fold the state takes line k's values back.
+      for (let k = 1; k < all.length; k++) {
+        const [head, d] = [all.slice(0, k), all[k] as Value];
+        const lines = [...head, d, subscribe(d[0] + 1, head)];
+        const got = replay(lines);
+        expect(plain(got)).toEqual(plain(replay([...head, d])));
+        expect(view(got, 'TimingData')).toEqual(view(replay([...head, d]), 'TimingData'));
+        expect(build(events([...lines, ...all.slice(k + 1)]), 9001)).toEqual(PRACTICE);
+      }
+      // One by name: 7's S2 of lap 2, where the older state holds lap 1's.
+      const k = all.findIndex((v) => JSON.stringify(v[2]).includes('"33.050"'));
+      const got = replay([...all.slice(0, k + 1), subscribe((all[k] as Value)[0] + 1, all.slice(0, k))]);
+      expect(view(got, 'TimingData')?.Lines?.['7']?.Sectors?.['1']?.Value).toBe('33.050');
+    });
+
+    it('the reverse: a value only the state has still arrives, and a repeat after it is dropped', () => {
+      // Line k is lost in the gap and only the state holds it; line k + 1 came 1 ms before the completion.
+      for (let k = 1; k < all.length - 1; k++) {
+        const [head, lost, d] = [all.slice(0, k), all[k] as Value, all[k + 1] as Value];
+        const lines = [...head, d, subscribe(d[0] + 1, [...head, lost])];
+        const rest = all.slice(k + 2);
+        expect(plain(replay(lines))).toEqual(plain(replay([...head, lost, d])));
+        // The new connection sends line k + 1 again after the state: the duplicate window drops it.
+        const feed = createFeed();
+        for (const ev of events(lines)) feed.apply(ev);
+        for (const ev of events([d])) expect(feed.apply(ev)).toBeUndefined();
+        expect(build(events([...lines, d, ...rest]), 9001)).toEqual(build(events([...lines, ...rest]), 9001));
+      }
+    });
+
+    it("limit (C), pinned: a lap start first seen in the state gets the state's receive time", () => {
+      // 7's count of 3 is lost: no ordering can date it, its own message never arrived (A§11.3).
+      const k = all.findIndex((v) => JSON.stringify(v[2]) === '{"Lines":{"7":{"NumberOfLaps":3}}}');
+      const lost = all[k] as Value;
+      const r = lost[0] + 2_500;
+      const { laps } = build(
+        events([...all.slice(0, k), subscribe(r, all.slice(0, k + 1)), ...all.slice(k + 1)]),
+        9001,
+      );
+      const lap3 = laps.find((l) => l.driver_number === 7 && l.lap_number === 3);
+      expect(lap3?.date_start).toBe(new Date(r).toISOString());
+      expect(lap3?.date_start).not.toBe(new Date(Date.parse(lost[3] as string)).toISOString());
     });
   });
 

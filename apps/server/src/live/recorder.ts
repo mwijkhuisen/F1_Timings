@@ -166,7 +166,7 @@ export async function startRecorder(deps: RecorderDeps): Promise<void> {
     tickMs = 30_000,
     connect: open = connect,
     login: signIn = login,
-    backoffMs = 1000,
+    backoffMs = 1000, // never below merge.ts's FOLD_MS: a Subscribe state must not fold the previous connection's lines
     maxBackoffMs = 30_000,
     statfs = freeBytes,
   } = deps;
