@@ -180,6 +180,8 @@ const views = {
   LapCount: z.looseObject({ CurrentLap: int, TotalLaps: int }),
   RaceControlMessages: z.looseObject({ Messages: rec(Message) }),
   ExtrapolatedClock: z.looseObject({ Utc: str, Remaining: str, Extrapolating: bool }),
+  // #236 (A§11.1): Overtakes.<car>.<i>, one entry per move with the places it gained (U1) at the message's own time.
+  OvertakeSeries: z.looseObject({ Overtakes: rec(rec(z.looseObject({ Timestamp: str, count: int }))) }),
   WeatherData: z.looseObject({
     AirTemp: str,
     Humidity: str,
@@ -198,4 +200,30 @@ export function view<N extends keyof Views>(state: Readonly<Record<string, unkno
   if (!Object.hasOwn(state, name)) return undefined;
   const parsed = views[name].safeParse(state[name]);
   return parsed.success ? (parsed.data as Views[N]) : undefined;
+}
+
+/** A feed `Utc` or `Timestamp` as UTC, with or without its Z: epoch ms, or null. */
+export const utc = (v: unknown): number | null => {
+  const at = typeof v === 'string' ? Date.parse(v.endsWith('Z') ? v : `${v}Z`) : Number.NaN;
+  return Number.isNaN(at) ? null : at;
+};
+
+/**
+ * The places gained per move (#236), read by the server's fill and the web's player alike: by time, then driver, then
+ * index (Object.values gives index keys in numeric order and the sort is stable). A car key is 1 to 3 digits, `count`
+ * an integer 1–99 and `Timestamp` a time; any other entry is dropped.
+ */
+export function overtakesOf(
+  state: Readonly<Record<string, unknown>>,
+): { driver_number: number; t: number; places: number }[] {
+  const out: { driver_number: number; t: number; places: number }[] = [];
+  for (const [car, entries] of Object.entries(view(state, 'OvertakeSeries')?.Overtakes ?? {})) {
+    if (!/^\d{1,3}$/.test(car)) continue;
+    for (const e of Object.values(entries ?? {})) {
+      const [t, places] = [utc(e?.Timestamp), e?.count];
+      if (t !== null && places !== undefined && places >= 1 && places <= 99)
+        out.push({ driver_number: Number(car), t, places });
+    }
+  }
+  return out.sort((a, b) => a.t - b.t || a.driver_number - b.driver_number);
 }

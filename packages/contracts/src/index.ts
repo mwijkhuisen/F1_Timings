@@ -187,6 +187,10 @@ export const RaceControl = z.array(
   }),
 );
 
+// #236 (A§10): the places gained per move as the F1 feed's OvertakeSeries counts them, the start and pit stops
+// included (U4), by date.
+export const Overtakes = z.array(z.strictObject({ driver_number: int, date, places: int }));
+
 // P5a: the track-side station's samples, by date (A§7). Temperatures °C, humidity %, pressure mbar (hPa), rainfall
 // 0 or 1, wind direction in degrees, wind speed m/s; any of them may be null.
 const reading = z.number().nullable();
@@ -428,6 +432,7 @@ export type Telemetry = z.infer<typeof Telemetry>;
 export type Stints = z.infer<typeof Stints>;
 export type Pits = z.infer<typeof Pits>;
 export type RaceControl = z.infer<typeof RaceControl>;
+export type Overtakes = z.infer<typeof Overtakes>;
 export type Weather = z.infer<typeof Weather>;
 export type Rain = z.infer<typeof Rain>;
 export type Forecast = z.infer<typeof Forecast>;
