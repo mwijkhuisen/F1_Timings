@@ -1,11 +1,17 @@
 import { describe, expect, it } from 'vitest';
-import { decide, isComplete, type Link } from '../src/live/recorder.ts';
+import { FOLD_MS } from '../src/live/merge.ts';
+import { BACKOFF_MS, decide, isComplete, type Link } from '../src/live/recorder.ts';
 
 const MIN = 60_000;
 const START = Date.parse('2026-11-08T12:00:00Z');
 const END = START + 60 * MIN;
 const session = { dateStart: START, dateEnd: END, cancelled: false };
 const idle = { session, startedSeen: false, endsAt: undefined };
+
+it('waits at least FOLD_MS before a reconnect, so a Subscribe state never folds the previous connection (#223)', () => {
+  // The connect itself (OPTIONS, negotiate, upgrade, handshake, Subscribe) adds to it.
+  expect(BACKOFF_MS).toBeGreaterThanOrEqual(FOLD_MS);
+});
 
 describe('decide', () => {
   it.each([

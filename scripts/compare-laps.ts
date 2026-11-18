@@ -5,19 +5,21 @@ import { parseArgs } from 'node:util';
 import { archiveEvents, readStreams, reconstruct, safe } from '../apps/server/src/archive/files.ts';
 import { TOPICS } from '../apps/server/src/archive/job.ts';
 import { normaliseSession } from '../apps/server/src/ingest/normalise.ts';
+import { createFeed, FOLD_MS } from '../apps/server/src/live/merge.ts';
 import { type FeedEvent, parseFeedLine } from '../apps/server/src/live/read.ts';
 import { recordingLines, SEGMENT } from '../apps/server/src/live/recording.ts';
 import { EXIT_USAGE } from '../apps/server/src/main.ts';
 import { createClient } from '../apps/server/src/openf1/client.ts';
 import { parse } from '../apps/server/src/openf1/schemas.ts';
-import { merge } from '../packages/contracts/src/index.ts';
+import { merge, view } from '../packages/contracts/src/index.ts';
 
 export { reconstruct };
 
 // The P2b [box] judge: laps reconstructed from a recording (feed.jsonl or a recorder directory) or an
 // archive directory (fetch-archive.ts) against OpenF1's laps and stints. Run on the owner's machine
 // only: CI never calls OpenF1 (A§12.1 invariant 4). It prints lap and stint numbers, times and the
-// compared fields, plus merge paths; never a raw payload value.
+// compared fields, plus merge paths; never a raw payload value. Given a recording and the archive of
+// the same session, it also checks each reconnect's typed state against the archive (#223).
 
 const USAGE = 'usage: compare-laps.ts <feed.jsonl | recording dir | archive dir>…';
 export const BAR = 0.99;
@@ -136,6 +138,111 @@ export function mergeCheck(topic: string, state: Record<string, unknown>, json: 
   return safe(`merge ${topic}: ${d === undefined ? 'equal' : `differs at ${d || '(root)'}`}`);
 }
 
+/** A typed view's leaves, path → JSON. `_kf` marks a keyframe, it is no value. */
+const leaves = (v: unknown, path = '', out = new Map<string, string>()): Map<string, string> => {
+  if (isObj(v)) {
+    for (const [k, x] of Object.entries(v)) if (k !== '_kf') leaves(x, `${path}.${k}`, out);
+  } else if (v !== undefined) out.set(path, JSON.stringify(v));
+  return out;
+};
+const keyOf = (v: unknown) => (isObj(v) && typeof v.Key === 'number' ? v.Key : undefined);
+
+export type Reconnect = {
+  window: number;
+  folded: number;
+  raw: number;
+  foldedWindow: number;
+  rawWindow: number;
+  paths: Record<string, number>;
+};
+
+/**
+ * #223's [weekend] check: at each Subscribe state that follows a delta of the recording, the typed TimingData against
+ * the archive's just before the first delta after that state (the newest the state can be). `window` is the leaves that
+ * TimingData deltas received in the FOLD_MS before the state set; `folded` and `raw` the leaves that differ from the
+ * archive with the fold and without it (the events' `r` dropped), `…Window` those of them in the window, and `paths`
+ * the folded ones by path shape. A roll-back shows as rawWindow > 0, a fold that put an older delta on top as
+ * foldedWindow > 0. The state is cleared at a switch to another session, as in the playback.
+ */
+export function reconnectCheck(live: readonly FeedEvent[], archive: readonly FeedEvent[]): Reconnect[] {
+  const [folded, raw, ref] = [createFeed(), createFeed(), createFeed()];
+  const out: Reconnect[] = [];
+  let applied = 0; // archive events
+  let newest = Number.NEGATIVE_INFINITY; // the newest F1 time of a delta so far
+  let start = 0; // the current Subscribe line's first event
+  for (let i = 0; i < live.length; i++) {
+    const ev = live[i] as FeedEvent;
+    if (ev.topic === 'SessionInfo' && keyOf(ev.payload) !== undefined) {
+      for (const feed of [folded, raw]) {
+        if (keyOf(feed.state.SessionInfo) === keyOf(ev.payload)) continue;
+        for (const topic of Object.keys(feed.state)) delete feed.state[topic];
+      }
+    }
+    const { r: _, ...unstamped } = ev;
+    folded.apply(ev);
+    raw.apply(unstamped);
+    if (!ev.full) {
+      newest = Math.max(newest, ev.t);
+      continue;
+    }
+    const [prev, next] = [live[i - 1], live[i + 1]];
+    if (!prev?.full || prev.r !== ev.r) start = i;
+    if ((next?.full && next.r === ev.r) || newest === Number.NEGATIVE_INFINITY) continue;
+    const after = live.slice(i + 1).find((e) => !e.full);
+    const T = Math.max(newest, (after?.t ?? newest + 1) - 1);
+    for (; applied < archive.length && (archive[applied] as FeedEvent).t <= T; applied++) {
+      ref.apply(archive[applied] as FeedEvent);
+    }
+    const window = new Set<string>();
+    for (let j = start - 1; j >= 0; j--) {
+      const d = live[j] as FeedEvent;
+      if (d.full || (d.r ?? Number.NEGATIVE_INFINITY) < ev.t - FOLD_MS) break;
+      if (d.topic !== 'TimingData') continue;
+      const normal = {};
+      merge(normal, d.payload);
+      for (const path of leaves(normal).keys()) window.add(path);
+    }
+    const truth = leaves(view(ref.state, 'TimingData'));
+    const differ = (state: Record<string, unknown>) => {
+      const mine = leaves(view(state, 'TimingData'));
+      return [...new Set([...mine.keys(), ...truth.keys()])].filter((path) => mine.get(path) !== truth.get(path));
+    };
+    const [f, r] = [differ(folded.state), differ(raw.state)];
+    const paths: Record<string, number> = {};
+    for (const path of f) {
+      const shape = path.replace(/\.\d+(?=\.|$)/g, '.#');
+      paths[shape] = (paths[shape] ?? 0) + 1;
+    }
+    out.push({
+      window: window.size,
+      folded: f.length,
+      raw: r.length,
+      foldedWindow: f.filter((path) => window.has(path)).length,
+      rawWindow: r.filter((path) => window.has(path)).length,
+      paths,
+    });
+  }
+  return out;
+}
+
+/** The check's lines: counts and path shapes only, and its verdict (no window leaf wrong with the fold). */
+export function reconnectLines(found: readonly Reconnect[]): { lines: string[]; pass: boolean } {
+  const lines = found.map((c, k) => {
+    const top = Object.entries(c.paths)
+      .sort(([a, x], [b, y]) => y - x || (a < b ? -1 : 1))
+      .slice(0, 5)
+      .map(([shape, n]) => `${shape} ${n}`);
+    return safe(
+      `  reconnect ${k + 1}: window ${c.window} leaves; differ from the archive: folded ${c.folded} (window ${c.foldedWindow}), without the fold ${c.raw} (window ${c.rawWindow})${top.length > 0 ? `; ${top.join(', ')}` : ''}`,
+    );
+  });
+  const wrong = found.reduce((n, c) => n + c.foldedWindow, 0);
+  lines.push(
+    `reconnects ${found.length}: window leaves wrong after the state ${wrong}: ${wrong === 0 ? 'PASS' : 'FAIL'}`,
+  );
+  return { lines, pass: wrong === 0 };
+}
+
 const show = (v: unknown) => JSON.stringify(v);
 const line = (d: Diff, what: string) =>
   safe(`  driver ${d.driver} ${what} ${d.n} ${d.field}: openf1 ${show(d.theirs)} ours ${show(d.ours)}`);
@@ -216,6 +323,7 @@ export async function compare(
   }
 
   let exit = 0;
+  const read: { name: string; key: number; events: FeedEvent[]; archive: boolean }[] = [];
   for (const name of inputs) {
     log(`== ${name}`);
     const input = await readInput(name, new Set(TOPICS));
@@ -231,6 +339,7 @@ export async function compare(
       continue;
     }
     log(`session ${info.Key} type ${safe(info.Type ?? 'unknown')}`);
+    read.push({ name, key: info.Key, events: input.events, archive: input.archiveDir !== undefined });
     const theirs = await oracle(info.Key, info.Type ?? null);
     if (typeof theirs === 'string') {
       log(`compare-laps: openf1 ${theirs}`);
@@ -267,6 +376,14 @@ export async function compare(
       }
     }
     if (laps.rate < BAR) exit = 1;
+  }
+  for (const rec of read.filter((r) => !r.archive)) {
+    const ref = read.find((r) => r.archive && r.key === rec.key);
+    if (!ref) continue;
+    log(safe(`== reconnects of ${rec.name} against ${ref.name}`));
+    const { lines, pass } = reconnectLines(reconnectCheck(rec.events, ref.events));
+    for (const l of lines) log(l);
+    if (!pass) exit = 1;
   }
   return exit;
 }

@@ -4,6 +4,7 @@ import { join } from 'node:path';
 import { gzipSync } from 'node:zlib';
 import { describe, expect, it } from 'vitest';
 import { TOPICS } from '../apps/server/src/archive/job.ts';
+import { type FeedEvent, parseJsonStream } from '../apps/server/src/live/read.ts';
 import {
   BAR,
   compare,
@@ -15,6 +16,8 @@ import {
   type Oracle,
   type Row,
   readInput,
+  reconnectCheck,
+  reconnectLines,
   reconstruct,
 } from '../scripts/compare-laps.ts';
 
@@ -175,6 +178,93 @@ describe('readInput and compare', () => {
     expect(await compare(['x'], { CI: 'true' }, (l) => lines.push(l))).toBe(1);
     expect(await compare([], {}, (l) => lines.push(l))).toBe(64);
     expect(lines[0]).toBe('compare-laps refuses to run under CI (A§12.1 invariant 4)');
+  });
+});
+
+describe('reconnectCheck (#223): the typed state at each reconnect against the archive', () => {
+  // Synthetic: the archive holds every message; the recording lost one in the gap and got the state after it.
+  const td = (t: number, line: Record<string, unknown>, r?: number): FeedEvent => ({
+    t,
+    topic: 'TimingData',
+    payload: { Lines: { '7': line } },
+    ...(r === undefined ? {} : { r }),
+  });
+  const state = (r: number, line: Record<string, unknown>): FeedEvent => ({
+    ...td(r, { ...line, _kf: true }, r),
+    full: true,
+  });
+  const archive = [
+    td(1_000, { GapToLeader: '+1.0', NumberOfLaps: 3 }),
+    td(4_000, { GapToLeader: '+1.5' }),
+    td(5_000, { GapToLeader: '+2.0' }),
+    td(6_000, { NumberOfLaps: 4 }),
+    td(9_000, { GapToLeader: '+2.5' }),
+  ];
+
+  it('a state older than the delta just before it: wrong without the fold, right with it', () => {
+    const live = [
+      td(1_000, { GapToLeader: '+1.0', NumberOfLaps: 3 }, 2_000),
+      td(6_000, { NumberOfLaps: 4 }, 7_999), // the new connection's, 1 ms before its state
+      state(8_000, { GapToLeader: '+2.0', NumberOfLaps: 3 }), // taken between 5 000 and 6 000
+      td(9_000, { GapToLeader: '+2.5' }, 10_000),
+    ];
+    const found = reconnectCheck(live, archive);
+    expect(found).toEqual([{ window: 1, folded: 0, raw: 1, foldedWindow: 0, rawWindow: 1, paths: {} }]);
+    expect(reconnectLines(found).lines).toEqual([
+      '  reconnect 1: window 1 leaves; differ from the archive: folded 0 (window 0), without the fold 1 (window 1)',
+      'reconnects 1: window leaves wrong after the state 0: PASS',
+    ]);
+  });
+
+  it('a delta older than the state put on top by the fold fails the check', () => {
+    const live = [
+      td(1_000, { GapToLeader: '+1.0', NumberOfLaps: 3 }, 2_000),
+      td(4_000, { GapToLeader: '+1.5' }, 7_999), // older than the state, which already holds 5 000's value
+      state(8_000, { GapToLeader: '+2.0', NumberOfLaps: 4 }),
+      td(9_000, { GapToLeader: '+2.5' }, 10_000),
+    ];
+    const found = reconnectCheck(live, archive);
+    expect(found).toEqual([
+      { window: 1, folded: 1, raw: 0, foldedWindow: 1, rawWindow: 0, paths: { '.Lines.#.GapToLeader': 1 } },
+    ]);
+    expect(reconnectLines(found)).toEqual({
+      lines: [
+        '  reconnect 1: window 1 leaves; differ from the archive: folded 1 (window 1), without the fold 0 (window 0); .Lines.#.GapToLeader 1',
+        'reconnects 1: window leaves wrong after the state 1: FAIL',
+      ],
+      pass: false,
+    });
+  });
+
+  it('checks no first connect (no delta before it)', () => {
+    expect(reconnectCheck([state(500, { GapToLeader: '+1.0', NumberOfLaps: 3 })], archive)).toEqual([]);
+  });
+
+  it('compare prints it when a recording and the archive of its session are both given', async () => {
+    // The archive form of the synthetic practice feed, as live-laps.test.ts writes it, against practice-reconnect.
+    const live = join(import.meta.dirname, '../apps/server/test/fixtures/live');
+    const events = ((await readInput(join(live, 'practice.jsonl'), new Set(TOPICS))) as Input).events;
+    const t0 = (events[0] as FeedEvent).t;
+    const files = new Map<string, string>();
+    for (const ev of events) {
+      const at = `${new Date(ev.t - t0).toISOString().slice(11, 23)}${JSON.stringify(ev.payload)}\r\n`;
+      files.set(ev.topic, (files.get(ev.topic) ?? '\uFEFF') + at);
+    }
+    expect(parseJsonStream(files.get('Heartbeat') ?? '', 'Heartbeat', 0).events.length).toBeGreaterThan(0);
+    const dir = mkdtempSync(join(tmpdir(), 'f1-compare-archive-'));
+    for (const [topic, text] of files) writeFileSync(join(dir, `${topic}.jsonStream`), text);
+    const recording = join(live, 'practice-reconnect.jsonl');
+    const { rows } = reconstruct(events, 'f1-live');
+    const lines: string[] = [];
+    const exit = await compare(
+      [recording, dir],
+      {},
+      (l) => lines.push(l),
+      async () => rows as NonNullable<typeof rows>,
+    );
+    expect(lines).toContain(`== reconnects of ${recording} against ${dir}`);
+    expect(lines.at(-1)).toBe('reconnects 1: window leaves wrong after the state 0: PASS');
+    expect(exit).toBe(0);
   });
 });
 

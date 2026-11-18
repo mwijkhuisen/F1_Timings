@@ -40,6 +40,9 @@ export const DISK_LOW_BYTES = 5 * 1024 ** 3;
 const DISK_FLOOR_BYTES = 1024 ** 3;
 const DISK_COOLDOWN_MS = 5 * MINUTE;
 const BACKOFF_RESET_MS = 60_000;
+/** The first reconnect's wait, and the floor: never below merge.ts's FOLD_MS, or a Subscribe state would fold lines of
+ * the previous connection (A§11.2). */
+export const BACKOFF_MS = 1000;
 /** The recordings (A§11.2): the live role writes them, the api reads them read-only. */
 export const LIVE_DIR = '/srv/f1/live';
 
@@ -166,7 +169,7 @@ export async function startRecorder(deps: RecorderDeps): Promise<void> {
     tickMs = 30_000,
     connect: open = connect,
     login: signIn = login,
-    backoffMs = 1000,
+    backoffMs = BACKOFF_MS,
     maxBackoffMs = 30_000,
     statfs = freeBytes,
   } = deps;

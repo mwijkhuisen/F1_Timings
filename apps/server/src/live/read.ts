@@ -24,11 +24,12 @@
 // SOFTWARE.
 
 // Feed input → events (A§11.3). Pure: a P2a recording line or an archive .jsonStream file becomes
-// FeedEvents; `full` marks a topic's full state from the Subscribe completion.
+// FeedEvents; `full` marks a topic's full state from the Subscribe completion, and `r` is a recording line's receivedAt
+// (an archive event has none).
 
 import { utc } from '@f1/contracts';
 
-export type FeedEvent = { t: number /* epoch ms */; topic: string; payload: unknown; full?: true };
+export type FeedEvent = { t: number /* epoch ms */; topic: string; payload: unknown; full?: true; r?: number };
 
 /** Recorded, not parsed yet (#96, #147): the playback and the map frame's finder skip them, as the `.z` topics. */
 export const UNPARSED: ReadonlySet<string> = new Set([
@@ -104,7 +105,8 @@ export function parseJsonStream(text: string, topic: string, t0Ms: number): { ev
  * timestamp when it parses, else at receivedAtMs (the native client writes a missing one as
  * "undefined", the library one as null). `[receivedAtMs, "_subscribe", result]` is one `full` event
  * per topic at receivedAtMs, SessionInfo first: the other topics belong to its session, which laps.ts
- * checks before it reads them (F1 sends RaceControlMessages before it). Anything malformed is [].
+ * checks before it reads them (F1 sends RaceControlMessages before it). Every event carries the
+ * line's receivedAtMs as `r`. Anything malformed is [].
  */
 export function parseFeedLine(line: string): FeedEvent[] {
   let v: unknown;
@@ -120,10 +122,10 @@ export function parseFeedLine(line: string): FeedEvent[] {
     if (!isObj(payload)) return [];
     return Object.entries(payload)
       .sort(([a], [b]) => Number(b === 'SessionInfo') - Number(a === 'SessionInfo'))
-      .map(([name, value]) => ({ t: receivedAt, topic: name, payload: value, full: true }));
+      .map(([name, value]) => ({ t: receivedAt, topic: name, payload: value, full: true, r: receivedAt }));
   }
   const at = typeof ts === 'string' ? Date.parse(ts) : Number.NaN;
-  return [{ t: Number.isNaN(at) ? receivedAt : at, topic, payload }];
+  return [{ t: Number.isNaN(at) ? receivedAt : at, topic, payload, r: receivedAt }];
 }
 
 // A feed `Utc` as UTC, with or without its Z: in @f1/contracts since #236, where overtakesOf reads Timestamps with it.

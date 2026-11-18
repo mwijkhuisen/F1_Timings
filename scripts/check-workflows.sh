@@ -5,7 +5,9 @@
 #   - no pull_request_target, workflow_run or issue_comment trigger;
 #   - no actions/cache, no setup-node `cache:` input, no buildx cache-from/cache-to, and
 #     package-manager-cache: false on every setup-node (a PR run must never seed a main run);
-#   - every actions/checkout sets persist-credentials: false.
+#   - every actions/checkout sets persist-credentials: false;
+#   - the top-level concurrency group ends in the commit for any run but a PR's (#208): in a shared
+#     group a run waits behind a release's approval, and GitHub cancels it when a third run arrives.
 # Usage: scripts/check-workflows.sh [workflow-dir]   (default .github/workflows)
 set -euo pipefail
 
@@ -36,6 +38,9 @@ for f in "${files[@]}"; do
   checkouts=$(grep -cE 'uses:[[:space:]]*actions/checkout@' "$f" || true)
   no_persist=$(grep -cE '^[[:space:]]+persist-credentials:[[:space:]]*false[[:space:]]*$' "$f" || true)
   ((checkouts == no_persist)) || bad "$f: $checkouts checkout(s) but $no_persist persist-credentials: false"
+  group=$(sed -n '/^concurrency:/,/^[^[:space:]#]/{/^  group:/p}' "$f")
+  [[ $group == *"-\${{ github.event_name == 'pull_request' && 'pr' || github.sha }}" ]] ||
+    bad "$f: the top-level concurrency group has no github.sha part for a push"
 done
 
 ((fail == 0)) || exit 1

@@ -12,8 +12,9 @@ on:
 permissions: {}
 
 concurrency:
-  group: security-${{ github.ref }}
-  # Cancel superseded runs on PRs only; every commit on main is checked to the end.
+  # A PR's runs share one group and cancel superseded ones; any other run's group carries its commit
+  # (#208): GitHub keeps one pending run per group, so a per-ref group would cancel a waiting run.
+  group: security-${{ github.ref }}-${{ github.event_name == 'pull_request' && 'pr' || github.sha }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 defaults:
