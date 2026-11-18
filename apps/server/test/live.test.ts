@@ -1,7 +1,7 @@
 import { MAX_DEPTH, merge, type Obj, view } from '@f1/contracts';
 import fc from 'fast-check';
 import { describe, expect, it } from 'vitest';
-import { createFeed } from '../src/live/merge.ts';
+import { createFeed, FOLD_MS } from '../src/live/merge.ts';
 import { archiveT0, duration, type FeedEvent, parseFeedLine, parseJsonStream } from '../src/live/read.ts';
 
 // Nested deltas the way the feed sends them: index-keyed objects, arrays, nulls, leaves. The few
@@ -166,6 +166,46 @@ describe('createFeed', () => {
     });
   });
 
+  it('folds the deltas of its topic received up to FOLD_MS before a full event into it, never one earlier (#223)', () => {
+    const at = (r: number, topic: string, payload: unknown, full?: true): FeedEvent => ({
+      t: full ? r : r - 1500, // a delta's F1 time runs behind its receipt; a state's t is its line's receivedAt
+      topic,
+      payload,
+      r,
+      ...(full ? { full } : {}),
+    });
+    const feed = createFeed();
+    const S = 10_000;
+    // The previous connection's last line, then (after the backoff) the new connection's, right before its state.
+    feed.apply(at(S - FOLD_MS - 1, 'TimingData', { Lines: { '7': { Position: '4', GapToLeader: '+1.0' } } }));
+    feed.apply(at(S - FOLD_MS, 'TimingData', { Lines: { '7': { Status: 2051, _deleted: ['Gone'] } } }));
+    feed.apply(at(S - 1, 'DriverList', { '7': { Tla: 'NEW' } }));
+    feed.apply(at(S - 1, 'CarData.z', 'new='));
+    const state = { Lines: { '7': { Position: '3', GapToLeader: '+0.5', Status: 2049, Gone: 1 } } };
+    const payload = structuredClone(state);
+    // The state is older than the new connection's line (Status, the deletion) and newer than the previous one's.
+    expect(feed.apply(at(S, 'TimingData', payload, true))).toEqual({
+      Lines: { '7': { Position: '3', GapToLeader: '+0.5' } },
+    });
+    expect(feed.apply(at(S, 'CarData.z', 'old=', true))).toBeUndefined();
+    expect(feed.state).toEqual({
+      TimingData: { Lines: { '7': { Position: '3', GapToLeader: '+0.5', Status: 2051 } } },
+      DriverList: { '7': { Tla: 'NEW' } },
+      'CarData.z': 'new=',
+    });
+    expect(payload).toEqual(state); // the event's own payload is never written
+  });
+
+  it('a receive time that steps back starts the window again, and a delta received after the state is never folded', () => {
+    const feed = createFeed();
+    feed.apply({ t: 0, topic: 'TimingData', payload: { A: 'ahead' }, r: 50_000 }); // then the clock stepped back
+    feed.apply({ t: 1, topic: 'TimingData', payload: { B: 'new' }, r: 10_000 });
+    expect(feed.apply({ t: 10_001, topic: 'TimingData', payload: { A: 'S', B: 'S' }, full: true })).toEqual({ A: 'S' });
+    feed.apply({ t: 2, topic: 'DriverList', payload: { C: 'later' }, r: 10_005 });
+    feed.apply({ t: 10_002, topic: 'DriverList', payload: { C: 'S' }, full: true });
+    expect(feed.state).toEqual({ TimingData: { A: 'S', B: 'new' }, DriverList: { C: 'S' } });
+  });
+
   it('replaces a topic whose payload is no object', () => {
     const feed = createFeed();
     expect(feed.apply({ t: 0, topic: 'CarData.z', payload: 'abc=' })).toBe('abc=');
@@ -245,22 +285,22 @@ describe('read', () => {
   it('parses both feed.jsonl line shapes and rejects garbage', () => {
     const at = Date.parse('2026-10-30T18:30:00.123Z');
     expect(parseFeedLine(`[1000,"TimingData",{"a":1},"2026-10-30T18:30:00.1234567Z"]`)).toEqual([
-      { t: at, topic: 'TimingData', payload: { a: 1 } },
+      { t: at, topic: 'TimingData', payload: { a: 1 }, r: 1000 },
     ]);
     // The native client writes a missing timestamp as "undefined", the library one as null.
     expect(parseFeedLine('[1000,"TimingData",{"a":1},"undefined"]')).toEqual([
-      { t: 1000, topic: 'TimingData', payload: { a: 1 } },
+      { t: 1000, topic: 'TimingData', payload: { a: 1 }, r: 1000 },
     ]);
     expect(parseFeedLine('[1000,"Position.z","abc=",null]')).toEqual([
-      { t: 1000, topic: 'Position.z', payload: 'abc=' },
+      { t: 1000, topic: 'Position.z', payload: 'abc=', r: 1000 },
     ]);
     // SessionInfo first, the rest in order.
     expect(
       parseFeedLine('[2000,"_subscribe",{"Heartbeat":{"Utc":"x"},"SessionInfo":{"Key":1},"CarData.z":"abc="}]'),
     ).toEqual([
-      { t: 2000, topic: 'SessionInfo', payload: { Key: 1 }, full: true },
-      { t: 2000, topic: 'Heartbeat', payload: { Utc: 'x' }, full: true },
-      { t: 2000, topic: 'CarData.z', payload: 'abc=', full: true },
+      { t: 2000, topic: 'SessionInfo', payload: { Key: 1 }, full: true, r: 2000 },
+      { t: 2000, topic: 'Heartbeat', payload: { Utc: 'x' }, full: true, r: 2000 },
+      { t: 2000, topic: 'CarData.z', payload: 'abc=', full: true, r: 2000 },
     ]);
     for (const garbage of [
       '',
