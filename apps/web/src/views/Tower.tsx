@@ -1,5 +1,5 @@
 import { type Obj, type Views, view } from '@f1/contracts';
-import { Fragment, type ReactNode } from 'react';
+import { Fragment, type ReactNode, useSyncExternalStore } from 'react';
 import { compoundOf, tyresWords, UNKNOWN_COMPOUND } from '../lib/compound.ts';
 import type { Trend } from '../lib/crossings.ts';
 import { phaseName } from '../lib/quali.ts';
@@ -357,6 +357,16 @@ function cutAfter(state: Obj, rows: number): { index: number; label: string } | 
   };
 }
 
+/** The phone width of the stylesheet's `@media (max-width: 640px)` rules. A table cannot reorder cells in CSS. */
+const PHONE = '(max-width: 640px)';
+const onPhone = () => typeof matchMedia === 'function' && matchMedia(PHONE).matches;
+const watchPhone = (cb: () => void) => {
+  if (typeof matchMedia !== 'function') return () => {};
+  const q = matchMedia(PHONE);
+  q.addEventListener('change', cb);
+  return () => q.removeEventListener('change', cb);
+};
+
 export function Tower({
   state,
   sessionKey,
@@ -376,6 +386,8 @@ export function Tower({
   /** The session's `meeting.year`, for its compounds; null (no session detail yet) is today's map. */
   year?: number | null | undefined;
 }) {
+  // Under 640 px (#237) the columns run Pos, Driver, Gap, Int, Last, Best, ±, the trends: Last is on screen.
+  const phone = useSyncExternalStore(watchPhone, onPhone, onPhone);
   // After a session switch the feed shows the previous session until the new one's SessionInfo arrives.
   if (sessionKey !== undefined && view(state, 'SessionInfo')?.Key !== sessionKey)
     return <p className="muted">Waiting for the session: the feed still shows the previous one.</p>;
@@ -392,6 +404,21 @@ export function Tower({
       {h}
     </th>
   );
+  const placesHead = places && (
+    <th scope="col" title="Places since the start">
+      <span aria-hidden="true">±</span>
+      <span className="vh">Places since the start</span>
+    </th>
+  );
+  const trendHeads =
+    trends &&
+    ['1 lap', '3 laps'].map((h) => (
+      <th key={h} scope="col">
+        <span className="vh">Interval change at the line over </span>
+        {h}
+      </th>
+    ));
+  const timeHeads = ['Last', 'Best'].map(head);
   return (
     <>
       <MsLegend>
@@ -415,21 +442,22 @@ export function Tower({
           <thead>
             <tr>
               {['Pos', 'Driver'].map(head)}
-              {places && (
-                <th scope="col" title="Places since the start">
-                  <span aria-hidden="true">±</span>
-                  <span className="vh">Places since the start</span>
-                </th>
+              {phone ? (
+                <>
+                  {['Gap', 'Int'].map(head)}
+                  {timeHeads}
+                  {placesHead}
+                  {trendHeads}
+                </>
+              ) : (
+                <>
+                  {placesHead}
+                  {['Gap', 'Int'].map(head)}
+                  {trendHeads}
+                  {timeHeads}
+                </>
               )}
-              {['Gap', 'Int'].map(head)}
-              {trends &&
-                ['1 lap', '3 laps'].map((h) => (
-                  <th key={h} scope="col">
-                    <span className="vh">Interval change at the line over </span>
-                    {h}
-                  </th>
-                ))}
-              {['Last', 'Best', 'S1', 'S2', 'S3', 'Tyre', 'Pits'].map(head)}
+              {['S1', 'S2', 'S3', 'Tyre', 'Pits'].map(head)}
             </tr>
           </thead>
           <tbody>
@@ -444,6 +472,37 @@ export function Tower({
               const cls = [out ? 'out' : '', focused ? 'focus' : '', i === cut?.index ? 'cut' : '']
                 .filter(Boolean)
                 .join(' ');
+              const placesCell = places && <PlacesCell places={r.places} number={r.driver.number} />;
+              const gapCells = (
+                <>
+                  <GapCell gap={r.gap} id={`tower-gap-${n}`} className="gap">
+                    <OutBadge line={line} />
+                  </GapCell>
+                  {r.close && 'value' in r.interval ? (
+                    <td className="int close">
+                      {r.interval.value}
+                      <span className="vh">, within a second</span>
+                    </td>
+                  ) : (
+                    <GapCell gap={r.interval} id={`tower-int-${n}`} className="int" />
+                  )}
+                </>
+              );
+              const trendCells = trends && (
+                <>
+                  <TrendCell trend={own?.one} id={`tower-t1-${n}`} />
+                  <TrendCell trend={own?.three} id={`tower-t3-${n}`} />
+                </>
+              );
+              const timeCells = (
+                <>
+                  <td className={last?.className}>
+                    {r.last}
+                    <Words f={last} />
+                  </td>
+                  <td>{r.best}</td>
+                </>
+              );
               return (
                 <Fragment key={n}>
                   <tr className={cls || undefined}>
@@ -457,29 +516,21 @@ export function Tower({
                         r.driver.acronym
                       )}
                     </th>
-                    {places && <PlacesCell places={r.places} number={r.driver.number} />}
-                    <GapCell gap={r.gap} id={`tower-gap-${n}`}>
-                      <OutBadge line={line} />
-                    </GapCell>
-                    {r.close && 'value' in r.interval ? (
-                      <td className="int close">
-                        {r.interval.value}
-                        <span className="vh">, within a second</span>
-                      </td>
-                    ) : (
-                      <GapCell gap={r.interval} id={`tower-int-${n}`} />
-                    )}
-                    {trends && (
+                    {phone ? (
                       <>
-                        <TrendCell trend={own?.one} id={`tower-t1-${n}`} />
-                        <TrendCell trend={own?.three} id={`tower-t3-${n}`} />
+                        {gapCells}
+                        {timeCells}
+                        {placesCell}
+                        {trendCells}
+                      </>
+                    ) : (
+                      <>
+                        {placesCell}
+                        {gapCells}
+                        {trendCells}
+                        {timeCells}
                       </>
                     )}
-                    <td className={last?.className}>
-                      {r.last}
-                      <Words f={last} />
-                    </td>
-                    <td>{r.best}</td>
                     {SECTORS.map((i) => (
                       <Sector key={i} s={line.Sectors?.[i]} />
                     ))}
