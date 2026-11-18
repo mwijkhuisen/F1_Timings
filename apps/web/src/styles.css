@@ -1013,11 +1013,14 @@ header .links {
   color: var(--fg);
 }
 
+/* Both columns explicit: a button with a row but no column would be auto-placed in column 1, before the text. */
 .since button {
+  grid-column: 2;
   grid-row: 1 / span 2;
 }
 
 .since button:last-child {
+  grid-column: 3;
   padding: 0;
   border: 0;
   background: none;
