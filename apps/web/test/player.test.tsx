@@ -2361,8 +2361,19 @@ describe('the player bar (#237)', () => {
     expect(chips()).toEqual([fmtClock(T)]);
     button(fmtClock(T));
     advance(400);
-    expect(atOf(last())).toBe(String(T + 400)); // the clock ran on for the 400 ms the seek was pending
+    expect(atOf(last())).toBe(String(T));
     expect(chips()).toEqual([fmtClock(T + 600_000)]); // the next seek replaces it
+  });
+
+  it('a burst of nudges while playing leaves the T before the first one, not the T the burst ended at', () => {
+    render({ recording: ended, start: T });
+    last().emit('snapshot', { t: T, state: {}, laps: [], stints: [] });
+    for (let i = 0; i < 4; i++) {
+      click('5 seconds later');
+      advance(390); // inside the 400 ms: one gesture, 1.2 s long
+    }
+    advance(400);
+    expect(chips()).toEqual([fmtClock(T)]);
   });
 
   it('minimized, a paused live session has Live in the head, after Play', () => {
@@ -2395,7 +2406,6 @@ describe('the player bar (#237)', () => {
     last().emit('snapshot', { t: T, state: {}, laps: [], stints: [] });
     expect([$('.clockline .pill').className, pill()]).toEqual(['pill', 'Replay']);
     // Live too: the warning has no live dot.
-    last().emit('error');
     act(() => root.unmount());
     root = createRoot(host);
     render({ recording: open, start: 'live' });
@@ -2408,22 +2418,42 @@ describe('the player bar (#237)', () => {
     expect([$('.clockline .pill').className, pill()]).toEqual(['pill warn', 'Stale']);
   });
 
+  it('Stale beats Reconnecting when both apply', () => {
+    render({ recording: ended, start: T });
+    last().emit('snapshot', { t: T, state: {}, laps: [], stints: [] });
+    last().emit('error');
+    expect(pill()).toBe('Reconnecting');
+    advance(1_000); // the retry's new stream
+    last().emit('snapshot', { t: 'x' });
+    expect([$('.clockline .pill').className, pill()]).toEqual(['pill warn', 'Stale']);
+  });
+
+  it('the minimized head of an ended recording has no Live, paused or not', () => {
+    localStorage.setItem('f1.minimized', '1');
+    render({ recording: ended, start: T });
+    button('Pause');
+    expect([...$('.barhead').children].map((c) => c.className)).toEqual(['clockline', 'play', 'bartoggle']);
+  });
+
   describe('live nudges (item 9)', () => {
     const nudges = () =>
       Object.fromEntries(
         [...host.querySelectorAll<HTMLButtonElement>('.transport button[aria-label]')].map((b) => [
           b.getAttribute('aria-label'),
-          b.disabled,
+          b.getAttribute('aria-disabled') === 'true',
         ]),
       );
     const later = ['1 second later', '5 seconds later', '30 seconds later'];
     const earlier = ['30 seconds earlier', '5 seconds earlier', '1 second earlier'];
 
-    it('a nudge that would do nothing is disabled: later at delay 0, earlier at 120', () => {
+    it('a nudge that would do nothing is aria-disabled and does nothing: later at delay 0, earlier at 120', () => {
       render({});
       const n = nudges();
       for (const l of later) expect(n[l]).toBe(true);
       for (const l of earlier) expect(n[l]).toBe(false);
+      click('5 seconds later'); // a no-op, not a delay of -5
+      expect(delayShown()).toBe(0);
+      expect(host.querySelectorAll('.transport button:disabled')).toHaveLength(0); // aria-disabled keeps the focus
       slide('Delay', 60);
       for (const b of Object.values(nudges())) expect(b).toBe(false);
       slide('Delay', 120);
@@ -2462,16 +2492,16 @@ describe('the player bar (#237)', () => {
     });
   });
 
-  it('a seek to the same second leaves no chip', () => {
+  it('a seek to the same second keeps the earlier chip', () => {
     render({ recording: ended, start: T });
     last().emit('snapshot', { t: T, state: {}, laps: [], stints: [] });
     slide('Position', T + 600_000);
     advance(400);
     expect(chips()).toEqual([fmtClock(T)]);
     button('Pause');
-    slide('Position', T + 600_500); // the same second: nothing to go back to, and the old chip goes
+    slide('Position', T + 600_500); // the same second: nothing new to go back to, the earlier chip stays
     advance(400);
-    expect(chips()).toEqual([]);
+    expect(chips()).toEqual([fmtClock(T)]);
   });
 });
 
@@ -2766,6 +2796,7 @@ describe('the failure probe (#100, D3)', () => {
     failing(3);
     await settle();
     expect(host.textContent).toContain(MISSING);
+    expect([$('.clockline .pill').className, $('.clockline .pill').textContent]).toEqual(['pill warn', 'Stopped']);
     const opened = FakeES.all.length;
     advance(60_000);
     expect(FakeES.all).toHaveLength(opened);
@@ -2775,6 +2806,7 @@ describe('the failure probe (#100, D3)', () => {
     expect(FakeES.all).toHaveLength(opened + 1);
     expect(atOf(last())).toBe(String(start + 3_000)); // where it stopped
     expect(host.textContent).not.toContain(MISSING);
+    expect($('.clockline .pill').textContent).toBe('Replay');
   });
 });
 

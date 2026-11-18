@@ -2,7 +2,6 @@ import { type Lap, type Obj, type SessionDetail, view, type Weather } from '@f1/
 import {
   type CSSProperties,
   memo,
-  type ReactNode,
   type Ref,
   useEffect,
   useId,
@@ -77,7 +76,7 @@ import { WeatherPanels } from './Weather.tsx';
 
 // The player (A§13): one playback stream at a time; the bar holds the clock line, the seek bar with the marks at or
 // before T, the transport, the "Back to" chips, the delay slider (live) and the announcements toggle; minimized
-// (`f1.minimized`), only the clock line, Play/Pause and the Controls toggle, while the stream plays on. `open.at` is the
+// (`f1.minimized`), only the clock line, Play/Pause, Live and the Controls toggle, while the stream plays on. `open.at` is the
 // open stream's start: 'live', epoch ms (replay), or null while paused; a `still` stream only fetches the state at a
 // paused T and closes on its snapshot. Only the clock line, the seek bar, the Back to chips and the strip's LEFT cell
 // (and, on the Weather tab, the rain map) tick each second, from values derived per flush (no state parsing per tick);
@@ -748,6 +747,7 @@ export function Player({
   const playing = at !== null && !open.still;
   const [seek, setSeek] = useState<number | null>(null); // a pending seek, shown on the bar
   const [before, setBefore] = useState<number | null>(null); // the T before the last committed seek (#237)
+  const seekFrom = useRef<number | undefined>(undefined); // the T at the first seek of a burst: a drag or nudges move T on
   const [tab, setTab] = useState<PlayerTab>(() =>
     keepT ? parseTab(new URLSearchParams(location.search).get('tab')) : 'tower',
   );
@@ -769,7 +769,7 @@ export function Player({
   const [catchUp, setCatchUp] = useState(false); // the dialog is open; it never opens by itself
   const showRef = useRef<HTMLButtonElement>(null);
   const [announce, setAnnounce] = useState(readAnnounce);
-  // Minimized, the bar keeps only its head (the clock line, Play/Pause and the toggle); the stream is untouched.
+  // Minimized, the bar keeps only its head (the clock line, Play/Pause, Live and the toggle); the stream is untouched.
   const [minimized, setMinimized] = useState(readMinimized);
   const controlsId = useId();
   const toggleRef = useRef<HTMLButtonElement>(null);
@@ -959,14 +959,17 @@ export function Player({
   // A seek, a nudge or a chip: shown at once; 400 ms after the last one, T moves there and the stream reopens there,
   // or, while paused, a still frame fetches the state at that T. A pending still frame closes at the first input.
   const seekTo = (t: number) => {
+    seekFrom.current ??= nowT();
     const v = Math.round(clamp(t, lo, hi()));
     setSeek(v);
     setOpen((o) => (o.still ? { at: null } : o));
     clearTimeout(timers.current.seek);
     timers.current.seek = setTimeout(() => {
       jump.current = { from: lastFeed.current };
-      const was = nowT();
-      setBefore(Math.floor(was / 1000) === Math.floor(v / 1000) ? null : Math.round(was)); // until the next seek
+      const was = seekFrom.current ?? nowT();
+      seekFrom.current = undefined;
+      const same = Math.floor(was / 1000) === Math.floor(v / 1000);
+      setBefore((b) => (same ? b : Math.round(was))); // until the next seek; one into the same second keeps the chip
       freeze(v);
       setSeek(null);
       setSince(null);
@@ -1003,6 +1006,7 @@ export function Player({
     setOpen({ at: t });
   };
   const goLive = () => {
+    keepFocus(); // the Live button that was clicked goes
     rearm();
     clearTimeout(timers.current.delay); // a pending live delay reopen: this open supersedes it
     freeze(Date.now() - delay * 1000);
@@ -1155,7 +1159,8 @@ export function Player({
       ? 'Replay'
       : 'Paused';
   // The pill says when the stream is not delivering (#237): stale wins; the reconnect line stays as the detail.
-  const warning = stale ? 'Stale' : at !== null && fails > 0 ? 'Reconnecting' : null;
+  const stopped = probe === 'missing' && at === null;
+  const warning = stale ? 'Stale' : stopped ? 'Stopped' : at !== null && fails > 0 ? 'Reconnecting' : null;
   // A live delay increase holds T (`floor`, #101): the seconds left of it, rounded up, read at each tick.
   const holding = () => {
     const c = clock.current;
@@ -1163,16 +1168,18 @@ export function Player({
     return live && c.floor !== undefined ? Math.ceil((c.floor - (c.t + Date.now() - c.wall)) / 1000) : 0;
   };
   const pillWord = () => {
+    if (warning) return warning;
     const n = holding();
-    return warning ?? (n > 0 ? `LIVE, holding ${n} s` : mode);
+    return n > 0 ? `LIVE, holding ${n} s` : mode;
   };
-  // Live, a nudge that would move nothing (later at no delay, earlier at the most) is off (#237).
+  // Live, a nudge that would move nothing (later at no delay, earlier at the most) is off (#237): aria-disabled, not
+  // `disabled`, so a focused button keeps the focus; the click does nothing at the clamp.
   const nudgeButton = (s: number) => (
     <button
       key={s}
       type="button"
       aria-label={nudgeLabel(s)}
-      disabled={live && (s > 0 ? delay === 0 : delay === MAX_DELAY)}
+      aria-disabled={live && (s > 0 ? delay === 0 : delay === MAX_DELAY) ? 'true' : undefined}
       onClick={() => nudge(s)}
     >
       {signed(s)}
@@ -1195,7 +1202,7 @@ export function Player({
   // hint after FAILING errors, or "Reconnecting…".
   const line = stale
     ? null
-    : probe === 'missing' && at === null
+    : stopped
       ? PROBE_TEXT.missing
       : at === null || fails === 0
         ? null
@@ -1312,7 +1319,7 @@ export function Player({
       </ErrorBoundary>
       {!detail && detailError != null && <ErrorView error={detailError} />}
       <section className={minimized ? 'player min' : 'player'} aria-label="Playback controls">
-        {/* The head stays when minimized: the clock line, Play/Pause (from the transport) and the toggle. */}
+        {/* The head stays when minimized: the clock line, Play/Pause and Live (from the transport) and the toggle. */}
         <div className="barhead">
           <Clock
             now={now}
