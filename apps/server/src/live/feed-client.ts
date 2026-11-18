@@ -41,8 +41,8 @@ export const TOPICS = [
   'AudioStreams',
   'ContentStreams',
   // The pit-lane and stop times OpenF1 lacks (#96), and the tyre, lap-position, race-info, overtake and prediction
-  // topics (#147, A§11.1): recorded raw, not parsed or streamed yet. A topic added here that the web does not parse
-  // goes into read.ts's UNPARSED too, or it reaches every browser.
+  // topics (#147, A§11.1): recorded raw, not parsed or streamed yet, but OvertakeSeries (#236). A topic added here
+  // that the web does not parse goes into read.ts's UNPARSED too, or it reaches every browser.
   'PitLaneTimeCollection',
   'PitStopSeries',
   'PitStop',

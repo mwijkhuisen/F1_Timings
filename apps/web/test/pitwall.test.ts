@@ -6,6 +6,7 @@ import {
   fastestSoFar,
   fmtLeft,
   LIGHT,
+  lapAt,
   leftAt,
   lightOf,
   mentions,
@@ -17,6 +18,7 @@ import {
 } from '../src/lib/pitwall.ts';
 import { fmtRange, reading, summarise } from '../src/lib/weather.ts';
 import { messages, practiceState, qualifyingState, raceState } from './feed-state.ts';
+import { lap } from './laps.ts';
 
 // The pit wall's state functions (A§13, P4d) on synthetic feed states.
 
@@ -182,9 +184,9 @@ describe('raceControl', () => {
   it('grows with T, newest first: the state merged up to T1, then to T2', () => {
     const state: Obj = Object.create(null);
     merge(state, { RaceControlMessages: messages([[1, 'Flag', 'GREEN LIGHT - PIT EXIT OPEN']]) });
-    expect(raceControl(state).items.map((i) => i.text)).toEqual(['GREEN LIGHT - PIT EXIT OPEN']);
+    expect(raceControl(state, []).items.map((i) => i.text)).toEqual(['GREEN LIGHT - PIT EXIT OPEN']);
     merge(state, { RaceControlMessages: messages([[3, 'Other', 'DRS ENABLED']], 1) });
-    expect(raceControl(state).items.map((i) => [i.key, i.lap, i.text])).toEqual([
+    expect(raceControl(state, []).items.map((i) => [i.key, i.lap, i.text])).toEqual([
       [1, 3, 'DRS ENABLED'],
       [0, 1, 'GREEN LIGHT - PIT EXIT OPEN'],
     ]);
@@ -192,7 +194,7 @@ describe('raceControl', () => {
 
   it('sorts keys as numbers, not text', () => {
     const rc = { Messages: { '9': { Message: 'NINE' }, '10': { Message: 'TEN' }, '2': { Message: 'TWO' } } };
-    expect(raceControl({ RaceControlMessages: rc }).items.map((i) => i.text)).toEqual(['TEN', 'NINE', 'TWO']);
+    expect(raceControl({ RaceControlMessages: rc }, []).items.map((i) => i.text)).toEqual(['TEN', 'NINE', 'TWO']);
   });
 
   it('gives each message its kind and tag, the first match winning, and counts them', () => {
@@ -210,6 +212,7 @@ describe('raceControl', () => {
           [13, 'Flag', 'CAR 4 (DDD) TIME DELETED, FLAG'], // a Flag category wins over its text
         ],
       }),
+      [],
     );
     expect(items.map((i) => [i.lap, i.kind, i.tag])).toEqual([
       [13, 'flags', 'FLAG'],
@@ -222,15 +225,107 @@ describe('raceControl', () => {
       [5, 'sc', 'VSC'],
       [1, 'flags', 'FLAG'],
     ]);
-    expect(counts).toEqual({ all: 9, flags: 3, sc: 2, incidents: 2, limits: 1, other: 1 });
+    expect(counts).toEqual({ all: 9, flags: 3, sc: 2, incidents: 2, limits: 1, other: 1, overtake: 0 });
   });
 
   it('is empty without messages, and skips one without a text', () => {
-    expect(raceControl({})).toEqual({
+    expect(raceControl({}, [])).toEqual({
       items: [],
-      counts: { all: 0, flags: 0, sc: 0, incidents: 0, limits: 0, other: 0 },
+      counts: { all: 0, flags: 0, sc: 0, incidents: 0, limits: 0, other: 0, overtake: 0 },
+      overtakes: false,
     });
-    expect(raceControl({ RaceControlMessages: { Messages: { '0': { Lap: 1 } } } }).items).toEqual([]);
+    expect(raceControl({ RaceControlMessages: { Messages: { '0': { Lap: 1 } } } }, []).items).toEqual([]);
+  });
+});
+
+// #236: OvertakeSeries.Overtakes.<car>.<i>.{Timestamp, count}; the messages sit at 14:10, 14:11, … (feed-state.ts).
+const places = (car: string, ...entries: [string, number][]) => ({
+  [car]: Object.fromEntries(entries.map(([Timestamp, count], i) => [String(i), { Timestamp, count }])),
+});
+const series = (cars: object): Obj => ({ OvertakeSeries: { Overtakes: cars } });
+// Driver 1 leads; driver 2 is a lap down by 14:11:30 (lap 2 while the race is on lap 3).
+const starts = [
+  lap(1, 1, { date_start: '2026-01-11T14:00:00.000Z' }),
+  lap(1, 2, { date_start: '2026-01-11T14:10:20.000Z' }),
+  lap(1, 3, { date_start: '2026-01-11T14:11:20.000Z' }),
+  lap(2, 1, { date_start: '2026-01-11T14:00:01.000Z' }),
+  lap(2, 2, { date_start: '2026-01-11T14:10:50.000Z' }),
+  lap(2, 4, { date_start: null }),
+];
+
+describe('lapAt', () => {
+  const t = (hms: string) => Date.parse(`2026-01-11T${hms}Z`);
+  it("is the race lap at t: the highest lap started by any driver, so a lapped car shows the leader's lap", () => {
+    const at = lapAt(starts);
+    expect(at(t('14:10:19'))).toBe(1);
+    expect(at(t('14:10:20'))).toBe(2);
+    expect(at(t('14:11:00'))).toBe(2);
+    expect(at(t('14:11:30'))).toBe(3); // driver 2 itself is on lap 2
+  });
+  it('is lap 1 before every start when the first known lap is 1 or 2, else unknown', () => {
+    expect(lapAt(starts)(t('13:00:00'))).toBe(1);
+    expect(lapAt([lap(1, 2, { date_start: '2026-01-11T14:00:00.000Z' })])(t('13:00:00'))).toBe(1);
+    // A recording joined mid-race, or a hole in the laps: no lap is claimed.
+    const late = lapAt([lap(1, 3, { date_start: '2026-01-11T14:00:00.000Z' })]);
+    expect(late(t('13:00:00'))).toBeUndefined();
+    expect(late(t('14:00:00'))).toBe(3);
+    expect(lapAt([])(t('14:00:00'))).toBeUndefined();
+  });
+});
+
+describe('raceControl with the places gained', () => {
+  const msgs: Parameters<typeof raceState>[0] = {
+    msgs: [
+      [1, 'Flag', 'GREEN LIGHT - PIT EXIT OPEN'],
+      [2, 'Other', 'DRS ENABLED'],
+    ],
+  };
+  const withPlaces = (s: Obj, cars: object) => ({ ...s, ...series(cars) });
+
+  it('puts each entry among the messages by its Timestamp, newest first, with its lap, driver and places', () => {
+    const state = withPlaces(raceState(msgs), {
+      ...places('2', ['2026-01-11T14:10:30.000', 2], ['2026-01-11T14:11:30.000', 1]),
+      ...places('1', ['2026-01-11T14:10:30.000Z', 1]),
+      ...places('3', ['2026-01-11T14:09:00.000', 1]),
+    });
+    const { items, counts, overtakes } = raceControl(state, starts);
+    expect(items.map((i) => [i.kind, i.text || i.driver_number, i.places, i.lap])).toEqual([
+      ['overtake', 2, 1, 3], //                     14:11:30, after the 14:11 message: the race lap, not driver 2's
+      ['other', 'DRS ENABLED', undefined, 2],
+      ['overtake', 2, 2, 2], //                     14:10:30, driver 1 first (same time): the older rows are below
+      ['overtake', 1, 1, 2],
+      ['flags', 'GREEN LIGHT - PIT EXIT OPEN', undefined, 1],
+      ['overtake', 3, 1, 1], //                     14:09:00, before every message; no known lap
+    ]);
+    expect(overtakes).toBe(true);
+    expect(items[0]?.driver).toEqual({ number: 2, acronym: 'BBB', name: 'Bob B', team: '#00FF00' });
+    expect(counts).toMatchObject({ all: 2, flags: 1, other: 1, overtake: 4 });
+    expect(items.every((i) => i.kind !== 'overtake' || i.time === undefined)).toBe(true);
+    expect(new Set(items.map((i) => i.key)).size).toBe(items.length);
+  });
+
+  it('has no chip without the topic, in a state without entries it has the topic and none', () => {
+    expect(raceControl(raceState(msgs), starts).overtakes).toBe(false);
+    expect(raceControl(withPlaces(raceState(msgs), {}), starts)).toMatchObject({
+      overtakes: true,
+      counts: { all: 2, overtake: 0 },
+    });
+  });
+
+  it('gives a message without a Utc its place, and drops what the contract rejects', () => {
+    const state = withPlaces(
+      {
+        ...raceState(),
+        RaceControlMessages: { Messages: { '0': { Message: 'A', Utc: '2026-01-11T14:10:00' }, '1': { Message: 'B' } } },
+      },
+      { ...places('4', ['2026-01-11T14:20:00', 1]), x: [], ...places('5', ['bad', 1], ['2026-01-11T14:20:00', 0]) },
+    );
+    expect(raceControl(state, []).items.map((i) => i.text || i.driver_number)).toEqual([4, 'B', 'A']);
+  });
+
+  it('has none outside a race', () => {
+    const state = withPlaces(practiceState(), places('2', ['2026-01-11T14:10:30.000', 1]));
+    expect(raceControl(state, starts)).toMatchObject({ overtakes: false, counts: { overtake: 0 } });
   });
 });
 
@@ -358,8 +453,17 @@ describe('countKinds', () => {
       incidents: 0,
       limits: 1,
       other: 1,
+      overtake: 0,
     });
     expect(countKinds([]).all).toBe(0);
+  });
+
+  it('counts the places gained apart: never in All', () => {
+    expect(countKinds([{ kind: 'overtake' }, { kind: 'overtake' }, { kind: 'flags' }])).toMatchObject({
+      all: 1,
+      flags: 1,
+      overtake: 2,
+    });
   });
 });
 
@@ -382,6 +486,51 @@ describe('mentions', () => {
   });
 });
 
+describe('rcLog with the places gained', () => {
+  const row = (date: string | null, message: string, driver_number: number | null = null) => ({
+    date,
+    category: 'Other',
+    flag: null,
+    scope: null,
+    sector: null,
+    driver_number,
+    lap_number: 3,
+    qualifying_phase: null,
+    message,
+  });
+  const rows = [row('2026-01-11T14:10:00.000Z', 'A'), row(null, 'NO DATE'), row('2026-01-11T14:12:00.000Z', 'B', 2)];
+  const ov = [
+    { driver_number: 2, date: '2026-01-11T14:11:00.000Z', places: 2 },
+    { driver_number: 1, date: '2026-01-11T14:13:00.000Z', places: 1 },
+  ];
+
+  it('sorts the rows among the messages by time, oldest first, a message without a date keeping its place', () => {
+    const items = rcLog(rows, false, ov, starts);
+    expect(items.map((i) => (i.kind === 'overtake' ? `+${i.places}` : i.text))).toEqual([
+      'A',
+      'NO DATE',
+      '+2',
+      'B',
+      '+1',
+    ]);
+    expect(items.filter((i) => i.kind === 'overtake').map((i) => [i.lap, i.driver_number, i.time])).toEqual([
+      [2, 2, expect.stringMatching(/^\d\d:\d\d:\d\d$/)],
+      [3, 1, expect.stringMatching(/^\d\d:\d\d:\d\d$/)],
+    ]);
+  });
+
+  it('counts the rows, and a driver filter keeps that driver', () => {
+    const items = rcLog(rows, false, ov, starts);
+    expect(countKinds(items)).toMatchObject({ all: 3, overtake: 2 });
+    const pia = { number: 2, acronym: 'PIA', name: null, team: null };
+    expect(items.filter((i) => mentions(i, pia)).map((i) => i.kind)).toEqual(['overtake', 'other']);
+  });
+
+  it('has none in a qualifying session', () => {
+    expect(rcLog(rows, true, ov, starts).map((i) => i.kind)).toEqual(['other', 'other', 'other']);
+  });
+});
+
 describe('rcLog', () => {
   const row = (qualifying_phase: number | null, message: string | null, extra: object = {}) => ({
     date: '2026-10-24T20:47:08.000Z',
@@ -398,18 +547,18 @@ describe('rcLog', () => {
 
   it('carries the last phase forward, and infers Q1 before a first phase row above 1 in qualifying', () => {
     const rows = [row(null, 'A'), row(2, 'B'), row(null, 'C'), row(3, 'D'), row(null, 'E')];
-    expect(rcLog(rows, true).map((i) => i.phase)).toEqual([1, 2, 2, 3, 3]);
+    expect(rcLog(rows, true, [], []).map((i) => i.phase)).toEqual([1, 2, 2, 3, 3]);
     // Not qualifying, or a first phase row of 1: the rows before it have no phase.
-    expect(rcLog(rows, false).map((i) => i.phase)).toEqual([undefined, 2, 2, 3, 3]);
-    expect(rcLog([row(null, 'A'), row(1, 'B')], true).map((i) => i.phase)).toEqual([undefined, 1]);
+    expect(rcLog(rows, false, [], []).map((i) => i.phase)).toEqual([undefined, 2, 2, 3, 3]);
+    expect(rcLog([row(null, 'A'), row(1, 'B')], true, [], []).map((i) => i.phase)).toEqual([undefined, 1]);
     // A first phase row of 3 (as A§9): the rows before it have no phase.
-    expect(rcLog([row(null, 'A'), row(3, 'B')], true).map((i) => i.phase)).toEqual([undefined, 3]);
+    expect(rcLog([row(null, 'A'), row(3, 'B')], true, [], []).map((i) => i.phase)).toEqual([undefined, 3]);
     // A row without a date shows a dash, so the log's grid keeps its columns.
-    expect(rcLog([row(null, 'A', { date: null })], false).map((i) => i.time)).toEqual(['—']);
+    expect(rcLog([row(null, 'A', { date: null })], false, [], []).map((i) => i.time)).toEqual(['—']);
   });
 
   it('drops a row without a message but keeps the phase it carries, and keeps API order', () => {
-    const items = rcLog([row(1, null), row(null, 'DELETED', { lap_number: 3 })], true);
+    const items = rcLog([row(1, null), row(null, 'DELETED', { lap_number: 3 })], true, [], []);
     expect(items.map((i) => [i.key, i.phase, i.lap, i.kind])).toEqual([[1, 1, 3, 'limits']]);
   });
 });

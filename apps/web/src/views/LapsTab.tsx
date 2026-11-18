@@ -1,6 +1,6 @@
 import type { Laps, SessionDetail } from '@f1/contracts';
 import { type ReactNode, useMemo, useState } from 'react';
-import { useRaceControl } from '../lib/api.ts';
+import { useOvertakes, useRaceControl } from '../lib/api.ts';
 import { type Quali, qualiPhases } from '../lib/quali.ts';
 import { trackPeriods } from '../lib/track.ts';
 import { LapTable } from './LapTable.tsx';
@@ -39,6 +39,7 @@ export function LapsTab({ session, detail, laps }: { session: number; detail: Se
   const qualifying = detail.session.type === 'Qualifying';
   // The session page shows its reason instead of this tab when there are no laps (#99).
   const rc = useRaceControl(session);
+  const overtakes = useOvertakes(session, race);
   const track = useMemo(() => (race && rc.data ? trackPeriods(rc.data) : null), [race, rc.data]);
   const quali = useMemo(
     () => (qualifying ? qualiPhases(laps, detail.results) : null),
@@ -57,7 +58,7 @@ export function LapsTab({ session, detail, laps }: { session: number; detail: Se
         <LapTable detail={detail} laps={laps} track={track} marks />
       )}
       <SpeedTable detail={detail} laps={laps} telemetry />
-      {rc.data && <RaceControlLog detail={detail} laps={laps} rows={rc.data} />}
+      {rc.data && <RaceControlLog detail={detail} laps={laps} rows={rc.data} overtakes={overtakes.data} />}
       {!race && rc.error && <p className="muted">Race control did not load.</p>}
     </>
   );

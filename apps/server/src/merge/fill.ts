@@ -1,32 +1,43 @@
 import { readdirSync } from 'node:fs';
 import { join } from 'node:path';
-import type { Kysely } from 'kysely';
+import { overtakesOf } from '@f1/contracts';
+import type { Insertable, Kysely } from 'kysely';
 import type { Logger } from 'pino';
 import { MAX_SESSION_BYTES, reconstruct } from '../archive/files.ts';
 import { TOPICS } from '../archive/job.ts';
 import { archiveRows } from '../archive/rows.ts';
 import { codeOf, type DB } from '../db/db.ts';
-import { type FeedEvent, parseFeedLine } from '../live/read.ts';
+import { createFeed } from '../live/merge.ts';
+import { type FeedEvent, parseFeedLine, parseJsonStream } from '../live/read.ts';
 import { readCapped, segment, segments } from '../live/recording.ts';
 import type { Source } from './merge.ts';
-import { mergeSession, staleLap, storeCandidates } from './write.ts';
+import { chunks, mergeSession, staleLap, storeCandidates } from './write.ts';
 
 // The fill job (P3b, A§4): reads a session's archive files and complete recording from disk, stores their laps as
 // candidates and merges the session again. No network: nothing here reaches the F1 host or OpenF1. Only OpenF1
 // sessions get file candidates (a session of another source has its own rows). Logs carry counts, ids and codes only.
+// #236: the same read also replaces the session's `overtake` rows, the archive's entries first.
 
 /** `maxBytes`: the size cap of one source's files, MAX_SESSION_BYTES unless a test sets it. */
 export type FillDeps = { db: Kysely<DB>; log: Pick<Logger, 'info' | 'error'>; maxBytes?: number };
 export type FillArgs = { keys: readonly number[] | 'all'; archiveDir: string; liveDir: string };
 type Laps = Parameters<typeof storeCandidates>[3];
-/** `undefined`: the source has no (complete) files here, so its stored candidates stay. A throw fails that source. */
-type Read = Laps | undefined;
+type OvertakeRows = (Omit<Insertable<DB['overtake']>, 'session_key' | 'source' | 'date'> & { date: Date })[];
+/**
+ * `undefined`: the source has no (complete) files here, so its stored candidates stay. A throw fails that source.
+ * `overtakes` is undefined when the source has no OvertakeSeries.
+ */
+type Read = { laps: Laps; overtakes: OvertakeRows | undefined } | undefined;
 
 const fail = (code: string) => Object.assign(new Error(code), { code });
 const absent = (err: unknown) => codeOf(err) === 'ENOENT';
-/** The topics the archive job downloads and archiveRows reads; any other `*.jsonStream` (P3e's telemetry) is ignored. */
-const FILES = new Set<string>(TOPICS.map((t) => `${t}.jsonStream`));
-const PARSED = new Set<string>(TOPICS);
+/**
+ * The topics the archive job downloads and archiveRows reads, and OvertakeSeries (#236), which only the overtake rows
+ * read; any other `*.jsonStream` (P3e's telemetry) is ignored.
+ */
+const SERIES = 'OvertakeSeries';
+const FILES = new Set<string>([...TOPICS, SERIES].map((t) => `${t}.jsonStream`));
+const PARSED = new Set<string>([...TOPICS, SERIES]);
 /** A recording's path, as its CHECK pins it: checked again before it is joined to a directory (fill, telemetry). */
 export const RECORDING = /^[0-9]+-[0-9]+$/;
 
@@ -59,6 +70,17 @@ export const sessionKeys = async (db: Kysely<DB>, keys: FillArgs['keys']): Promi
           .execute()
       ).map((s) => s.session_key);
 
+/**
+ * One source's OvertakeSeries events, in order, as overtake rows; undefined when none is valid, so the source counts
+ * as absent. The Timestamps are absolute: no t0 is needed.
+ */
+function overtakeRows(events: readonly FeedEvent[]): OvertakeRows | undefined {
+  const feed = createFeed();
+  for (const ev of events) feed.apply(ev);
+  const rows = overtakesOf(feed.state).map(({ t, ...o }) => ({ ...o, date: new Date(t) }));
+  return rows.length > 0 ? rows : undefined;
+}
+
 /** `<archiveDir>/<key>/`: rows of its topic files, each read through `readCapped` within what is left of `maxBytes`. */
 async function fromArchive(dir: string, key: number, type: string | null, maxBytes: number): Promise<Read> {
   let names: string[];
@@ -76,21 +98,25 @@ async function fromArchive(dir: string, key: number, type: string | null, maxByt
     left -= buf.length;
     files.set(f.slice(0, -'.jsonStream'.length), buf.toString('utf8'));
   }
+  const series = files.get(SERIES);
+  files.delete(SERIES);
   const built = archiveRows(files, key, type);
   if (!built.ok && built.error === 'incomplete') return undefined; // no t0: as the archive job, not a failure
   if (!built.ok) throw fail(built.error);
   // The Heartbeat t0 can be minutes off (A§6.2): such times must not fill OpenF1's.
   if (built.value.stats.t0 === 'heartbeat') throw fail('t0_heartbeat');
-  return built.value.rows.lap;
+  const overtakes = series === undefined ? undefined : overtakeRows(parseJsonStream(series, SERIES, 0).events);
+  return { laps: built.value.rows.lap, overtakes };
 }
 
 /**
- * Every sealed segment of a complete recording in file order, the events not sorted. Only the archive job's topics are
- * kept (so no `.z` topic): the parser reads no other. The directory must exist (`recording_missing`) and hold a sealed
- * segment and SessionInfo (`incomplete`).
+ * Every sealed segment of a complete recording in file order, the events not sorted. Only the archive job's topics and
+ * OvertakeSeries are kept (so no `.z` topic): the parsers read no other. The directory must exist (`recording_missing`)
+ * and hold a sealed segment and SessionInfo (`incomplete`).
  */
 async function fromRecording(dir: string, key: number, maxBytes: number): Promise<Read> {
   const events: FeedEvent[] = [];
+  const series: FeedEvent[] = [];
   let bytes = 0;
   let found: Awaited<ReturnType<typeof segments>>;
   try {
@@ -109,13 +135,16 @@ async function fromRecording(dir: string, key: number, maxBytes: number): Promis
       // runs unattended.
       bytes += Buffer.byteLength(line.text);
       if (bytes > maxBytes) throw fail('too_large');
-      events.push(...kept);
+      for (const ev of kept) (ev.topic === SERIES ? series : events).push(ev);
     }
   }
   const { info, rows } = reconstruct(events, 'f1-live');
   if (info?.Key === undefined || rows === undefined) throw fail('incomplete');
   if (info.Key !== key) throw fail('key_mismatch');
-  return rows.laps.map(({ at: _, ...lap }) => lap);
+  return {
+    laps: rows.laps.map(({ at: _, ...lap }) => lap),
+    overtakes: overtakeRows(series),
+  };
 }
 
 /**
@@ -128,16 +157,25 @@ async function fillSession(deps: FillDeps, args: Omit<FillArgs, 'keys'>, key: nu
   const maxBytes = deps.maxBytes ?? MAX_SESSION_BYTES;
   const session = await db
     .selectFrom('session')
-    .select(['source', 'type'])
+    .select(['source', 'type', 'date_start'])
     .where('session_key', '=', key)
     .executeTakeFirst();
   if (!session) throw fail('unknown_session');
   const read: [Source, Laps][] = [];
   const errors: Partial<Record<Source, string>> = {};
+  let overtakes: { source: Source; rows: OvertakeRows } | undefined;
   const attempt = async (source: Source, get: () => Read | Promise<Read>) => {
     try {
-      const laps = await get();
-      if (laps) read.push([source, laps]);
+      const got = await get();
+      if (!got) return;
+      read.push([source, got.laps]);
+      // The archive is read first, so its entries win; else the recording's, else the stored rows stay.
+      // Races only, from an hour before the start on: a Subscribe state or a stream can open with the day before's
+      // entries. A source with none left is absent. A failed archive leaves the stored rows: the recording must not
+      // replace them in that run.
+      const from = session.date_start.getTime() - 3_600_000;
+      const rows = session.type === 'Race' ? got.overtakes?.filter((r) => r.date.getTime() >= from) : undefined;
+      if (rows?.length && !overtakes && !errors['f1-archive']) overtakes = { source, rows };
     } catch (err) {
       errors[source] = codeOf(err);
     }
@@ -158,9 +196,24 @@ async function fillSession(deps: FillDeps, args: Omit<FillArgs, 'keys'>, key: nu
   const merge = await db.transaction().execute(async (trx) => {
     if (await staleLap(trx, key)) throw fail('stale_lap');
     for (const [source, laps] of read) await storeCandidates(trx, key, source, laps);
+    if (overtakes) {
+      const { source, rows } = overtakes;
+      await trx.deleteFrom('overtake').where('session_key', '=', key).execute();
+      for (const chunk of chunks(rows))
+        await trx
+          .insertInto('overtake')
+          .values(chunk.map((r) => ({ ...r, session_key: key, source })))
+          .execute();
+    }
     return mergeSession(trx, key);
   });
-  return { sources: Object.fromEntries(read.map(([source, laps]) => [source, laps.length])), errors, recording, merge };
+  return {
+    sources: Object.fromEntries(read.map(([source, laps]) => [source, laps.length])),
+    errors,
+    recording,
+    ...(overtakes && { overtakes: { source: overtakes.source, rows: overtakes.rows.length } }),
+    merge,
+  };
 }
 
 /**

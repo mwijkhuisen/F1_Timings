@@ -370,6 +370,21 @@ export function createApp({
     return c.json(body, 200, cache(session.state, session.v));
   });
 
+  // #236: the places gained per move, as fill stored them from the F1 feed; [] for a session without the topic.
+  api.get('/sessions/:key/overtakes', async (c) => {
+    const session = await lookup(c);
+    if (session instanceof Response) return session;
+    const body = await db
+      .selectFrom('overtake')
+      .select(['driver_number', 'date', 'places'])
+      .where('session_key', '=', session.key)
+      .orderBy('date')
+      .orderBy('driver_number')
+      .orderBy('id')
+      .execute();
+    return c.json(body, 200, cache(session.state, session.v));
+  });
+
   api.get('/sessions/:key/weather', async (c) => {
     const session = await lookup(c);
     if (session instanceof Response) return session;

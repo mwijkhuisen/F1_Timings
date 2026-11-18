@@ -1,5 +1,5 @@
 import { renderToStaticMarkup } from 'react-dom/server';
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   bestsSoFar,
   fastestSoFar,
@@ -16,9 +16,15 @@ import { practiceState, raceState } from './feed-state.ts';
 
 const T = Date.parse('2026-01-11T14:20:00Z') + 65_500; // 65.5 s after the clock's Utc
 const strip = (s = raceState()) => renderToStaticMarkup(<Strip strip={stripOf(s)} now={() => T} playing={false} />);
-const panel = (s = raceState(), race = true) =>
+const panel = (s = raceState(), race = true, laps: Parameters<typeof raceControl>[1] = []) =>
   renderToStaticMarkup(
-    <Panel rc={raceControl(s)} pairs={withinASecond(s)} fastest={fastestSoFar(s)} bests={bestsSoFar(s)} race={race} />,
+    <Panel
+      rc={raceControl(s, laps)}
+      pairs={withinASecond(s)}
+      fastest={fastestSoFar(s)}
+      bests={bestsSoFar(s)}
+      race={race}
+    />,
   );
 
 describe('SessionLight', () => {
@@ -127,7 +133,7 @@ describe('Panel', () => {
 
   it('says when there is nothing yet, and has no "within a second" outside races', () => {
     const empty = renderToStaticMarkup(
-      <Panel rc={raceControl({})} pairs={[]} fastest={undefined} bests={[]} race={true} />,
+      <Panel rc={raceControl({}, [])} pairs={[]} fastest={undefined} bests={[]} race={true} />,
     );
     expect(empty).toContain('<p class="muted">No messages yet.</p>');
     expect(empty).toContain('No car within a second of the one ahead.');
@@ -135,6 +141,88 @@ describe('Panel', () => {
     expect(empty).not.toContain('Fastest lap so far');
     expect(empty).not.toContain('class="scroll"');
     expect(panel(practiceState(), false)).not.toContain('Within a second');
+  });
+});
+
+describe('the places gained (#236)', () => {
+  const t = (m: number, sec = 0) => `2026-01-11T14:${String(m).padStart(2, '0')}:${String(sec).padStart(2, '0')}`;
+  const withPlaces = (extra: object = {}) =>
+    raceState({
+      msgs: [[2, 'Other', 'DRS ENABLED']],
+      extra: {
+        OvertakeSeries: {
+          Overtakes: {
+            '2': { '0': { Timestamp: t(10, 30), count: 2 } },
+            '1': { '0': { Timestamp: t(10, 40), count: 1 } },
+          },
+        },
+        ...extra,
+      },
+    });
+  const stored = (v: string | null) => vi.stubGlobal('localStorage', { getItem: () => v, setItem: () => undefined });
+  afterEach(() => vi.unstubAllGlobals());
+
+  it('offers a toggle chip after the kinds with its count, off by default, and lists no row', () => {
+    const html = panel(withPlaces());
+    expect(html).toContain(
+      '<button type="button" aria-pressed="false">Track limits 0</button>' +
+        '<button type="button" aria-pressed="false">Places gained 2</button></fieldset>',
+    );
+    expect(html).toContain('<button type="button" aria-pressed="true">All 1</button>');
+    expect(html).not.toContain('cat">+');
+    expect(html).not.toContain('Places gained as the F1 feed');
+  });
+
+  it('has no chip without the topic or outside a race, and the chip is there and off when storage throws', () => {
+    expect(panel(raceState())).not.toContain('Places gained');
+    expect(panel(withPlaces({ SessionInfo: { Key: 9100, Type: 'Qualifying' } }))).not.toContain('Places gained');
+    vi.stubGlobal('localStorage', {
+      getItem: () => {
+        throw new Error('blocked');
+      },
+    });
+    expect(panel(withPlaces())).toContain('aria-pressed="false">Places gained 2<');
+  });
+
+  it('with only places gained and the toggle off, All says there are no messages, not "of this kind"', () => {
+    stored(null);
+    const html = panel(
+      raceState({
+        msgs: [],
+        extra: { OvertakeSeries: { Overtakes: { '2': { '0': { Timestamp: t(10, 30), count: 2 } } } } },
+      }),
+    );
+    expect(html).toContain('aria-pressed="false">Places gained 1<');
+    expect(html).toContain('<p class="muted">No messages yet.</p>');
+    expect(html).not.toContain('of this kind');
+  });
+
+  it('when on, shows the note and a row per entry among the messages, the driver in its team colours', () => {
+    stored('1');
+    const html = panel(withPlaces(), true, [
+      { driver_number: 1, lap_number: 1, date_start: '2026-01-11T14:00:00.000Z' },
+    ]);
+    expect(html).toContain('aria-pressed="true">Places gained 2</button>');
+    expect(html).toContain(
+      '</fieldset><p class="muted">Places gained as the F1 feed counts them, the start and pit stops included.</p>',
+    );
+    expect(html).toContain(
+      '<li><span class="lap">L1</span><span><span class="cat">+1</span>' +
+        '<span class="drv" style="--team:#FF0000;--team-l:#FF0000">AAA</span>' +
+        '<span class="vh">, gained 1 place</span></span></li>',
+    );
+    expect(html).toContain('<span class="vh">, gained 2 places</span>');
+    // The newest first: the entries (14:10:40, 14:10:30) sit above the 14:10 message, All stays 1.
+    expect(html.indexOf('gained 1 place')).toBeLessThan(html.indexOf('gained 2 places'));
+    expect(html.indexOf('gained 2 places')).toBeLessThan(html.indexOf('DRS ENABLED'));
+    expect(html).toContain('>All 1<');
+  });
+
+  it('sets no style but the team custom properties', () => {
+    stored('1');
+    const styles = [...panel(withPlaces()).matchAll(/style="([^"]*)"/g)].map((m) => m[1]);
+    expect(styles.length).toBeGreaterThan(0);
+    for (const s of styles) expect(s).toMatch(/^--team:#[0-9A-F]{6};--team-l:#[0-9A-Fa-f]{6}$/);
   });
 });
 

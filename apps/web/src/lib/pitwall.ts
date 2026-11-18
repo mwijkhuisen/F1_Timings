@@ -1,4 +1,13 @@
-import { type Obj, type RaceControl as RcRows, type Views, view, weatherRow } from '@f1/contracts';
+import {
+  type Lap,
+  type Obj,
+  type Overtakes as OvRows,
+  overtakesOf,
+  type RaceControl as RcRows,
+  type Views,
+  view,
+  weatherRow,
+} from '@f1/contracts';
 import { driverOf, towerRows } from '../views/Tower.tsx';
 import type { Driver } from './session.ts';
 import { utc } from './stream.ts';
@@ -124,7 +133,7 @@ export function fmtLeft(seconds: number): string {
 }
 
 /** The race-control kinds (D2): the filter chips. A message of no kind shows under All only. */
-export type Kind = 'flags' | 'sc' | 'incidents' | 'limits' | 'other';
+export type Kind = 'flags' | 'sc' | 'incidents' | 'limits' | 'other' | 'overtake';
 export type RcItem = {
   key: number;
   /** The clock time (Amsterdam) of an OpenF1 row; the feed's messages carry none. */
@@ -133,8 +142,66 @@ export type RcItem = {
   kind: Kind;
   tag?: string | undefined;
   text: string;
+  /** An `overtake` item (#236): the car, the places it gained and, once the card knows the cars, who it is. */
+  driver_number?: number | null | undefined;
+  places?: number | undefined;
+  driver?: Driver | undefined;
 };
-export type RaceControl = { items: RcItem[]; counts: Record<Kind | 'all', number> };
+/** `overtakes`: the feed has the OvertakeSeries topic for this race, so the card offers its chip (#236). */
+export type RaceControl = { items: RcItem[]; counts: Record<Kind | 'all', number>; overtakes: boolean };
+
+/**
+ * The race lap at `t` (#236), like a message's `Lap` (the leader's): the highest `lap_number` of any driver whose
+ * `date_start` is at or before t. Before every start it is lap 1 when the earliest known lap is 1 or 2, else unknown
+ * (a recording joined mid-race, or a hole in the laps). The starts are sorted once, here.
+ */
+export function lapAt(laps: readonly Pick<Lap, 'lap_number' | 'date_start'>[]) {
+  const starts = laps
+    .flatMap((l) => {
+      const s = l.date_start === null ? Number.NaN : Date.parse(l.date_start);
+      return Number.isNaN(s) ? [] : [{ n: l.lap_number, s }];
+    })
+    .sort((a, b) => a.s - b.s);
+  let high = 0;
+  const upTo = starts.map((x) => (high = Math.max(high, x.n))); // the highest lap started by each start
+  return (t: number): number | undefined => {
+    const i = starts.findLastIndex((x) => x.s <= t);
+    if (i >= 0) return upTo[i];
+    return (starts[0]?.n ?? 3) <= 2 ? 1 : undefined; // no start at all: unknown
+  };
+}
+
+type Timed = [t: number, item: RcItem];
+
+/** An overtake item: no text, the lap from `at`; a negative key never meets a message's. */
+const overtake = (
+  i: number,
+  o: { driver_number: number; t: number; places: number },
+  at: ReturnType<typeof lapAt>,
+  timed = false,
+): Timed => [
+  o.t,
+  {
+    key: -1 - i,
+    time: timed ? fmtClock(o.t) : undefined,
+    lap: at(o.t),
+    kind: 'overtake',
+    text: '',
+    driver_number: o.driver_number,
+    places: o.places,
+  },
+];
+
+/** The messages oldest first with each overtake before the first message that is later; an untimed message (NaN) keeps its place. */
+function interleave(msgs: Timed[], ovs: Timed[]): RcItem[] {
+  const out: RcItem[] = [];
+  let i = 0;
+  for (const [t, item] of msgs) {
+    while (i < ovs.length && (ovs[i] as Timed)[0] < t) out.push((ovs[i++] as Timed)[1]);
+    out.push(item);
+  }
+  return out.concat(ovs.slice(i).map(([, item]) => item));
+}
 
 /** A message's kind and tag, first match wins. The incidents, track limits and 2026's red-flag text are Category Other. */
 export function kindOf(category: string | undefined, text: string): { kind: Kind; tag?: string } {
@@ -147,20 +214,33 @@ export function kindOf(category: string | undefined, text: string): { kind: Kind
 
 /**
  * The race-control messages newest first, each with its kind, and the count per kind. "Up to T" is the state itself:
- * the stream sends nothing after T and replays from the first line on a seek (A§11.3).
+ * the stream sends nothing after T and replays from the first line on a seek (A§11.3). In a race whose state has the
+ * OvertakeSeries, its places gained join the messages by time (#236); the messages' `Utc` places them.
  */
-export function raceControl(state: Obj): RaceControl {
-  const items = messages(state)
-    .reverse()
-    .map(({ key, m, text }) => ({ key, lap: m.Lap, ...kindOf(m.Category, text), text }));
-  return { items, counts: countKinds(items) };
+export function raceControl(
+  state: Obj,
+  laps: readonly Pick<Lap, 'driver_number' | 'lap_number' | 'date_start'>[],
+): RaceControl {
+  const overtakes = view(state, 'SessionInfo')?.Type === 'Race' && view(state, 'OvertakeSeries') !== undefined;
+  const at = lapAt(laps);
+  const drivers = overtakes ? (view(state, 'DriverList') ?? {}) : {};
+  const items = interleave(
+    messages(state).map(({ key, m, text }) => [utc(m.Utc), { key, lap: m.Lap, ...kindOf(m.Category, text), text }]),
+    overtakes
+      ? overtakesOf(state).map((o, i): Timed => {
+          const [t, item] = overtake(i, o, at);
+          return [t, { ...item, driver: driverOf(drivers, String(o.driver_number)) }];
+        })
+      : [],
+  ).reverse();
+  return { items, counts: countKinds(items), overtakes };
 }
 
 /** The number of items per kind, and all of them. */
 export function countKinds(items: readonly { kind: Kind }[]): RaceControl['counts'] {
-  const counts = { all: 0, flags: 0, sc: 0, incidents: 0, limits: 0, other: 0 };
+  const counts = { all: 0, flags: 0, sc: 0, incidents: 0, limits: 0, other: 0, overtake: 0 };
   for (const { kind } of items) {
-    counts.all++;
+    if (kind !== 'overtake') counts.all++; // the places gained are a toggle beside the kinds, never part of All (#236)
     counts[kind]++;
   }
   return counts;
@@ -173,24 +253,41 @@ export type RcLogItem = RcItem & { phase?: number | undefined; driver_number: nu
  * non-null `qualifying_phase` at or before it (A§9's lap rule: deletions and stewards' notes carry none); in
  * qualifying, rows before a first phase row of 2 are Q1. Other rows before any phase row have none.
  */
-export function rcLog(rows: RcRows, qualifying: boolean): RcLogItem[] {
+export function rcLog(
+  rows: RcRows,
+  qualifying: boolean,
+  overtakes: OvRows,
+  laps: readonly Pick<Lap, 'driver_number' | 'lap_number' | 'date_start'>[],
+): RcLogItem[] {
   const first = rows.find((r) => r.qualifying_phase !== null)?.qualifying_phase ?? undefined;
   let phase = qualifying && first !== undefined && first === 2 ? 1 : undefined;
-  return rows.flatMap((r, key) => {
+  const msgs = rows.flatMap((r, key): [number, RcLogItem][] => {
     if (r.qualifying_phase !== null) phase = r.qualifying_phase;
     if (r.message === null) return [];
+    const t = r.date === null ? Number.NaN : Date.parse(r.date);
     return [
-      {
-        key,
-        time: r.date === null ? '—' : fmtClock(Date.parse(r.date)),
-        lap: r.lap_number ?? undefined,
-        phase,
-        ...kindOf(r.category ?? undefined, r.message),
-        text: r.message,
-        driver_number: r.driver_number,
-      },
+      [
+        t,
+        {
+          key,
+          time: r.date === null ? '—' : fmtClock(t),
+          lap: r.lap_number ?? undefined,
+          phase,
+          ...kindOf(r.category ?? undefined, r.message),
+          text: r.message,
+          driver_number: r.driver_number,
+        },
+      ],
     ];
   });
+  // A qualifying session has no places gained (races only, #236).
+  const at = lapAt(laps);
+  const ovs = qualifying
+    ? []
+    : overtakes.map((o, i) =>
+        overtake(i, { driver_number: o.driver_number, t: Date.parse(o.date), places: o.places }, at, true),
+      );
+  return interleave(msgs, ovs) as RcLogItem[];
 }
 
 const CAR_ACRONYM = /\b(\d{1,3}) \(([A-Z]{3})\)/g;

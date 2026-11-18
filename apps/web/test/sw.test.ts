@@ -38,7 +38,7 @@ function setup(net: ((url: string) => Response) | 'offline' = () => json()) {
 }
 
 const SESSION = '/api/v1/sessions/9158';
-const ROUTES = ['', '/laps', '/stints', '/pits', '/race-control', '/weather', '/rain', '/standings'];
+const ROUTES = ['', '/laps', '/stints', '/pits', '/race-control', '/overtakes', '/weather', '/rain', '/standings'];
 
 describe("a final session's answers", () => {
   it.each(ROUTES.flatMap((r) => [`${SESSION}${r}`, `${SESSION}${r}?v=abc123`]))(

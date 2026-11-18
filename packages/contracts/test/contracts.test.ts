@@ -4,6 +4,10 @@ import {
   type Lap,
   Laps,
   MAX_WEATHER_ROWS,
+  merge,
+  type Obj,
+  Overtakes,
+  overtakesOf,
   Pits,
   RaceControl,
   Rain,
@@ -120,6 +124,7 @@ const cases = [
     [{ driver_number: 1, lap_number: 5, date: null, pit_ms: null, lane_ms: null, stop_ms: 2300 }],
     'lap_number',
   ],
+  ['Overtakes', Overtakes, [{ driver_number: 7, date: iso, places: 2 }], 'date'],
   [
     'RaceControl',
     RaceControl,
@@ -369,5 +374,70 @@ describe('Rain', () => {
     expect(Rain.safeParse({ grid: { ...grid, state: 'done' }, frames }).success).toBe(false);
     expect(Rain.safeParse({ grid: { ...grid, source: 'x' }, frames }).success).toBe(false);
     expect(Rain.safeParse({ grid, frames: [{ date: '2026-03-14 05:00', mm: [] }] }).success).toBe(false);
+  });
+});
+
+describe('overtakesOf (#236)', () => {
+  // The feed's Timestamp, with or without its Z; synthetic times.
+  const at = (s: number) => `2026-11-22T06:00:${String(s).padStart(2, '0')}.000`;
+  const ms = (s: number) => Date.parse(`${at(s)}Z`);
+
+  it('the entries per driver in time order, a later message merged into the earlier state', () => {
+    const state: Obj = {};
+    merge(state, { OvertakeSeries: { Overtakes: { 7: [{ Timestamp: at(10), count: 1 }] } } });
+    expect(overtakesOf(state)).toEqual([{ driver_number: 7, t: ms(10), places: 1 }]);
+    merge(state, {
+      OvertakeSeries: {
+        Overtakes: {
+          7: { 1: { Timestamp: `${at(30)}Z`, count: 2 } },
+          44: [
+            { Timestamp: at(20), count: 3 },
+            { Timestamp: at(20), count: 1 },
+          ],
+        },
+      },
+    });
+    // By time, then driver, then index.
+    expect(overtakesOf(state)).toEqual([
+      { driver_number: 7, t: ms(10), places: 1 },
+      { driver_number: 44, t: ms(20), places: 3 },
+      { driver_number: 44, t: ms(20), places: 1 },
+      { driver_number: 7, t: ms(30), places: 2 },
+    ]);
+  });
+
+  it('drops a bad car key, count or time, and keeps the rest', () => {
+    const good = { Timestamp: at(1), count: 1 };
+    const state: Obj = {};
+    merge(state, {
+      OvertakeSeries: {
+        Overtakes: {
+          1000: [good],
+          x: [good],
+          '-1': [good],
+          '1.5': [good],
+          7: [
+            { Timestamp: at(2), count: 0 },
+            { Timestamp: at(2), count: 100 },
+            { Timestamp: at(2), count: 1.5 },
+            { Timestamp: at(2), count: '2' },
+            { Timestamp: 'soon', count: 1 },
+            { Timestamp: 1, count: 1 },
+            { Timestamp: '5', count: 1 }, // Date.parse('5Z') is a year 2001
+            { count: 1 },
+            null,
+            'x',
+            { Timestamp: at(2), count: 99 },
+          ],
+          8: 'x',
+        },
+      },
+    });
+    expect(overtakesOf(state)).toEqual([{ driver_number: 7, t: ms(2), places: 99 }]);
+  });
+
+  it('is empty without the topic, or with one that holds no overtakes', () => {
+    for (const state of [{}, { OvertakeSeries: 'x' }, { OvertakeSeries: {} }, { OvertakeSeries: { Overtakes: 1 } }])
+      expect(overtakesOf(state)).toEqual([]);
   });
 });

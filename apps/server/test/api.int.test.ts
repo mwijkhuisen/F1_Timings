@@ -4,6 +4,7 @@ import { join } from 'node:path';
 import {
   Forecast,
   Laps,
+  Overtakes,
   Pits,
   RaceControl,
   Rain,
@@ -107,6 +108,7 @@ const ROUTES = [
   [`/api/v1/sessions/${QUALI}/stints`, 'Stints', Stints],
   [`/api/v1/sessions/${QUALI}/pits`, 'Pits', Pits],
   [`/api/v1/sessions/${QUALI}/race-control`, 'RaceControl', RaceControl],
+  [`/api/v1/sessions/${QUALI}/overtakes`, 'Overtakes', Overtakes],
   [`/api/v1/sessions/${QUALI}/weather`, 'Weather', Weather],
   [`/api/v1/sessions/${QUALI}/rain`, 'Rain', Rain],
   [`/api/v1/meetings/${VEGAS}/forecast`, 'Forecast', Forecast],
@@ -343,7 +345,7 @@ describe('api (f1_api login, Access JWT)', { timeout: 120_000 }, () => {
     expect(text).not.toMatch(/eyJ|\?|cf-access/i);
   });
 
-  const TAILS = ['', '/laps', '/stints', '/pits', '/race-control', '/weather', '/rain'];
+  const TAILS = ['', '/laps', '/stints', '/pits', '/race-control', '/overtakes', '/weather', '/rain'];
 
   it('?v=<the api revision> changes nothing: status, body, cache-control and f1-revision', async () => {
     for (const session of [QUALI, RACE])
@@ -395,7 +397,7 @@ describe('api (f1_api login, Access JWT)', { timeout: 120_000 }, () => {
 
   it('Cache-Control: private, max-age=86400 for a final session, no-store otherwise and on every error', async () => {
     const cacheOf = async (path: string, method = 'GET') => (await get(path, method)).headers.get('cache-control');
-    for (const tail of ['', '/laps', '/stints', '/pits', '/race-control', '/weather', '/rain']) {
+    for (const tail of TAILS) {
       expect(await cacheOf(`/api/v1/sessions/${QUALI}${tail}`)).toBe('private, max-age=86400');
       expect(await cacheOf(`/api/v1/sessions/${QUALI}${tail}`, 'HEAD')).toBe('private, max-age=86400');
       expect(await cacheOf(`/api/v1/sessions/${RACE}${tail}`)).toBe('no-store');
@@ -414,6 +416,7 @@ describe('api (f1_api login, Access JWT)', { timeout: 120_000 }, () => {
       ['/api/v1/sessions/999999', 404, 'not found'],
       ['/api/v1/sessions/999999/laps', 404, 'not found'],
       ['/api/v1/sessions/999999/weather', 404, 'not found'],
+      ['/api/v1/sessions/999999/overtakes', 404, 'not found'],
       ['/api/v1/sessions/-1/rain', 400, 'bad request'],
       ['/api/v1/sessions/1234567890/rain', 400, 'bad request'],
       ['/api/v1/sessions/999999/rain', 404, 'not found'],
@@ -498,6 +501,36 @@ describe('api (f1_api login, Access JWT)', { timeout: 120_000 }, () => {
       });
     } finally {
       await admin.deleteFrom('telemetry_lap').where('session_key', '=', RACE).execute();
+    }
+  });
+
+  it('overtakes (#236): by date, driver and id; a session without rows answers []', async () => {
+    const row = (driver_number: number, date: string, places: number) => ({
+      session_key: RACE,
+      driver_number,
+      date,
+      places,
+      source: 'f1-archive',
+    });
+    await admin
+      .insertInto('overtake')
+      .values([
+        row(44, '2026-10-11T13:05:00Z', 1),
+        row(16, '2026-10-11T13:05:00Z', 2),
+        row(16, '2026-10-11T13:01:00Z', 3),
+        row(16, '2026-10-11T13:05:00Z', 1),
+      ])
+      .execute();
+    try {
+      expect(await body(`/api/v1/sessions/${RACE}/overtakes`, Overtakes)).toEqual([
+        { driver_number: 16, date: '2026-10-11T13:01:00.000Z', places: 3 },
+        { driver_number: 16, date: '2026-10-11T13:05:00.000Z', places: 2 },
+        { driver_number: 16, date: '2026-10-11T13:05:00.000Z', places: 1 },
+        { driver_number: 44, date: '2026-10-11T13:05:00.000Z', places: 1 },
+      ]);
+      expect(await body(`/api/v1/sessions/${QUALI}/overtakes`, Overtakes)).toEqual([]);
+    } finally {
+      await admin.deleteFrom('overtake').execute();
     }
   });
 

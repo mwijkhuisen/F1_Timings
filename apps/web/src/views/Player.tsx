@@ -1040,7 +1040,7 @@ export function Player({
       running: running(view(s, 'SessionStatus')?.Status),
       type,
       race: type === 'Race',
-      rc: raceControl(s),
+      rc: raceControl(s, snap.laps),
       pairs: withinASecond(s),
       fastest: fastestSoFar(s),
       bests: bestsSoFar(s),
