@@ -784,14 +784,16 @@ describe('mono times and the position face (#235)', () => {
     expect(rule('.t-green')).toContain('font-weight: 700;');
     expect(rule('.tower td.int.close')).toBe('font-weight: 700;');
     expect(renderToStaticMarkup(<Tower state={state} />)).toMatch(
-      /<td class="t-purple">1:30.000.*<td class="t-green">1:31.000/,
+      /<td class="t-purple">1:30\.000.*<td class="t-green">1:31\.000/,
     );
     expect(renderToStaticMarkup(<Tower state={raceState()} />)).toContain('<td class="int close">+0.400');
     expect(rule('.tower td :is(.muted, .badge, .pop)')).toBe('font-family: system-ui, sans-serif;');
   });
 
   it('sets the position in --display, 18 px bold, centred in its sticky 48 px column, and not the cut label', () => {
-    expect(rule('.tower td:first-child')).toBe('width: 48px;\n  min-width: 48px;\n  text-align: center;');
+    expect(css).toContain(
+      '\n.tower thead tr:first-child th:first-child,\n.tower td:first-child {\n  width: 48px;\n  min-width: 48px;\n  text-align: center;\n}',
+    );
     expect(css).toContain(
       '.tower td:first-child {\n  position: sticky;\n  left: 0;\n  background: var(--bg);\n  font-family: var(--display);\n  font-size: 18px;\n  font-weight: 700;\n}',
     );

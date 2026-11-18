@@ -982,10 +982,10 @@ header .links {
   min-width: 4.5em;
 }
 
-/* Times and gaps in --mono at 14 px (#235), so a column lines up on every device and bold (a personal best, a close
-   interval) never widens it: the cells after the driver but the places (.pc), the trends (.tr), Tyre and Pits (the
-   last two), which are Gap, Int, Last, Best and S1–S3. The "Leader" word, the RET and STOP badges and a reason's popover
-   in those cells stay in the system face. */
+/* Times and gaps in --mono at 14 px (#235), so values of one length line up digit for digit on any face and bold (a
+   personal best, a close interval) never widens a column: the cells after the driver but the places (.pc), the trends
+   (.tr), Tyre and Pits (the last two), which are Gap, Int, Last, Best and S1–S3. A reason's — is mono too; the "Leader"
+   word, the RET and STOP badges and the reason's popover in those cells stay in the system face. */
 .tower th.drv ~ td:not(.pc, .tr, :nth-last-child(-n + 2)) {
   font-family: var(--mono);
   font-size: 14px;
