@@ -2345,6 +2345,7 @@ describe('the player bar', () => {
 describe('the player bar (#237)', () => {
   const T = S + 3_600_000;
   const chips = () => [...host.querySelectorAll('section.player .chips button')].map((b) => b.textContent);
+  const pill = () => $('.clockline .pill').textContent;
   beforeEach(() => history.replaceState(null, '', '/'));
 
   it('a seek leaves a chip with the T before it, and the chip is a seek that offers the T it came from', () => {
@@ -2379,6 +2380,30 @@ describe('the player bar (#237)', () => {
     button('Pause');
     expect(host.querySelectorAll('.golive')).toHaveLength(1);
     expect($('.transport .golive').textContent).toBe('Live');
+  });
+
+  it('the pill says Reconnecting after an error and Stale after a bad event, and the mode again after a snapshot', () => {
+    render({ recording: ended, start: T });
+    last().emit('snapshot', { t: T, state: {}, laps: [], stints: [] });
+    expect([$('.clockline .pill').className, pill()]).toEqual(['pill', 'Replay']);
+    last().emit('error');
+    expect([$('.clockline .pill').className, pill()]).toEqual(['pill warn', 'Reconnecting']);
+    expect(host.textContent).toContain('Reconnecting…'); // the line stays as the detail
+    advance(1_000);
+    last().emit('snapshot', { t: T, state: {}, laps: [], stints: [] });
+    expect([$('.clockline .pill').className, pill()]).toEqual(['pill', 'Replay']);
+    // Live too: the warning has no live dot.
+    last().emit('error');
+    act(() => root.unmount());
+    root = createRoot(host);
+    render({ recording: open, start: 'live' });
+    last().emit('error');
+    expect([$('.clockline .pill').className, pill()]).toEqual(['pill warn', 'Reconnecting']);
+    act(() => root.unmount());
+    root = createRoot(host);
+    render({ recording: ended, start: T });
+    last().emit('snapshot', { t: 'x' });
+    expect([$('.clockline .pill').className, pill()]).toEqual(['pill warn', 'Stale']);
   });
 
   it('a seek to the same second leaves no chip', () => {

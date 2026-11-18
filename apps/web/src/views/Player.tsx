@@ -461,20 +461,26 @@ const isBand = (k: MarkKind): k is Kind => k === 'sc' || k === 'vsc' || k === 'r
 const markClass = (m: Mark) =>
   isBand(m.kind) ? `marker m-band m-${m.kind}${m.open ? ' open' : ''}` : `marker m-${m.kind}`;
 
-/** The clock line: T, ticking locally, the time left and the lap (from the strip's values), then the mode. */
+/**
+ * The clock line: T, ticking locally, the time left and the lap (from the strip's values), then the pill. The pill's
+ * word is a function, so it is read at each tick (#237: a hold counts down).
+ */
 function Clock({
   now,
   stateNow,
   playing,
   strip,
-  children,
+  pill,
+  word,
 }: {
   now: () => number;
   /** The T the state stands at, for the time left (as the strip's LEFT). */
   stateNow: () => number;
   playing: boolean;
   strip: StripData | undefined;
-  children: ReactNode;
+  /** The pill's class, and its word per tick. */
+  pill: string;
+  word: () => string;
 }) {
   useTick(playing);
   const T = now();
@@ -488,7 +494,10 @@ function Clock({
           {strip.lap.total !== undefined && `/${strip.lap.total}`}
         </span>
       )}
-      {children}
+      <span className={pill}>
+        <span className="dot" aria-hidden="true" />
+        <span className="mode">{word()}</span>
+      </span>
     </p>
   );
 }
@@ -1145,6 +1154,8 @@ export function Player({
     : playing
       ? 'Replay'
       : 'Paused';
+  // The pill says when the stream is not delivering (#237): stale wins; the reconnect line stays as the detail.
+  const warning = stale ? 'Stale' : at !== null && fails > 0 ? 'Reconnecting' : null;
   const nudgeButton = (s: number) => (
     <button key={s} type="button" aria-label={nudgeLabel(s)} onClick={() => nudge(s)}>
       {signed(s)}
@@ -1286,12 +1297,14 @@ export function Player({
       <section className={minimized ? 'player min' : 'player'} aria-label="Playback controls">
         {/* The head stays when minimized: the clock line, Play/Pause (from the transport) and the toggle. */}
         <div className="barhead">
-          <Clock now={now} stateNow={stateNow} playing={playing} strip={wall?.strip}>
-            <span className={live ? 'pill live' : 'pill'}>
-              <span className="dot" aria-hidden="true" />
-              <span className="mode">{mode}</span>
-            </span>
-          </Clock>
+          <Clock
+            now={now}
+            stateNow={stateNow}
+            playing={playing}
+            strip={wall?.strip}
+            pill={warning ? 'pill warn' : live ? 'pill live' : 'pill'}
+            word={() => warning ?? mode}
+          />
           {minimized && playButton}
           {minimized && liveButton}
           <button
