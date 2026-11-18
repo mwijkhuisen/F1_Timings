@@ -27,6 +27,7 @@ The owner wants the same kind of stack as Waterheight (`mwijkhuisen/Waterheight`
   - A§3 gives a one-line reason for each.
 - **Deploy:** CI pushes images to GHCR by digest, and a systemd timer on the VM pulls them, migrates, smoke-tests and rolls back on failure.
 - **Backups:** none. All database data can be re-fetched. The owner accepts losing raw live recordings if the disk dies.
+  - amended (owner, 2026-11-16, #221, #224): still no database backup, but the archive files and the live recordings get one copy off the VM, because F1 may stop serving a season (it did for 2022) and a recording cannot be fetched again. A§3 says so; #224 holds the mechanism.
 
 ## Consequences
 
