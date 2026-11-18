@@ -1,6 +1,7 @@
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import type { Obj } from '@f1/contracts';
+import { Window } from 'happy-dom';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, expect, it } from 'vitest';
 import type { Trend } from '../src/lib/crossings.ts';
@@ -718,5 +719,82 @@ describe('the finish-line speed', () => {
       TimingStats: { Lines: { '1': { BestSpeeds: { FL: { Value: '333' } } } } },
     };
     expect(renderToStaticMarkup(<Tower state={s} />)).not.toContain('333');
+  });
+});
+
+describe('mono times and the position face (#235)', () => {
+  const css = readFileSync(fileURLToPath(new URL('../src/styles.css', import.meta.url)), 'utf8').replace(
+    /\/\*[\s\S]*?\*\//g,
+    '',
+  );
+  const rule = (selector: string) => {
+    const at = css.indexOf(`\n${selector} {\n`);
+    return at < 0 ? undefined : css.slice(css.indexOf('{', at) + 1, css.indexOf('}', at)).trim();
+  };
+  const STACK = 'ui-monospace, "SF Mono", "Cascadia Mono", Menlo, Consolas, monospace';
+  const MONO = '.tower th.drv ~ td:not(.pc, .tr, :nth-last-child(-n + 2))';
+  const RIGHT = '.tower :is(th.drv, td.pc) + td:not(.pc),\n.tower :is(th.drv, td.pc) + td:not(.pc) + td';
+
+  it('names a mono face only in the --mono token; every other font is a stack variable or the system face', () => {
+    expect(rule(':root')).toContain(`--mono: ${STACK};`);
+    const rest = css.replace(`--mono: ${STACK};`, '').replaceAll('var(--mono)', '');
+    expect(rest).not.toMatch(/mono|menlo|consolas|courier|monaco/i);
+    const fonts = [...css.matchAll(/[\s;{]font(?:-family)?:\s*([^;]+);/g)].map((m) => m[1]);
+    expect(fonts).toContain('var(--mono)');
+    const allowed = ['var(--mono)', 'var(--display)', 'system-ui, sans-serif', 'inherit'];
+    expect(fonts.filter((f) => !allowed.includes(f ?? ''))).toEqual([]);
+  });
+
+  it('sets Gap, Int, Last, Best and S1–S3 in --mono at 14 px and right-aligns Gap and Int, no other cell, and adds no style', async () => {
+    expect(rule(MONO)).toBe('font-family: var(--mono);\n  font-size: 14px;');
+    expect(rule(RIGHT)).toBe('text-align: right;');
+    const trend = new Map<number, { one: Trend; three: Trend }>([[2, { one: { delta: -400 }, three: { delta: 200 } }]]);
+    const window = new Window();
+    const doc = window.document;
+    // With and without the places and trend columns, a purple and a green last lap, badges and a close interval.
+    for (const tower of [
+      <Tower key="a" state={state} />,
+      <Tower key="b" state={raceState()} trend={trend} />,
+      <Tower key="c" state={practiceState()} />,
+      <Tower key="d" state={qualifyingState()} />,
+    ]) {
+      const html = renderToStaticMarkup(tower);
+      // The only style attributes are the driver cells' team colours, as custom properties.
+      for (const [s] of html.matchAll(/ style="[^"]*"/g)) expect(s).toMatch(/^ style="(--team(-l)?:[^;"]+;?)+"$/);
+      doc.body.innerHTML = html;
+      const heads = [...doc.querySelectorAll('thead th')].map((th) => th.textContent);
+      const rows = [...doc.querySelectorAll('tbody tr')].filter((tr) => tr.querySelector('th.drv'));
+      expect(rows.length).toBeGreaterThan(0);
+      const cells = (tr: (typeof rows)[number], selector: string) =>
+        [...tr.children].flatMap((c, i) => (c.matches(selector) ? [heads[i]] : []));
+      for (const tr of rows) {
+        expect(cells(tr, MONO)).toEqual(['Gap', 'Int', 'Last', 'Best', 'S1', 'S2', 'S3']);
+        expect(cells(tr, RIGHT)).toEqual(['Gap', 'Int']);
+      }
+    }
+    await window.happyDOM.close();
+  });
+
+  it('keeps the purple box, the green bold and the close interval on a mono cell, the words and badges in the system face', () => {
+    // The mono rule sets the face and size only. A mono face gives bold the advance of regular, so a personal best
+    // or a close interval never widens its column.
+    expect(rule('.t-purple')).toMatch(/font-weight: 700;[\s\S]*outline: 2px solid currentColor;/);
+    expect(rule('.t-green')).toContain('font-weight: 700;');
+    expect(rule('.tower td.int.close')).toBe('font-weight: 700;');
+    expect(renderToStaticMarkup(<Tower state={state} />)).toMatch(
+      /<td class="t-purple">1:30\.000.*<td class="t-green">1:31\.000/,
+    );
+    expect(renderToStaticMarkup(<Tower state={raceState()} />)).toContain('<td class="int close">+0.400');
+    expect(rule('.tower td :is(.muted, .badge, .pop)')).toBe('font-family: system-ui, sans-serif;');
+  });
+
+  it('sets the position in --display, 18 px bold, centred in its sticky 48 px column, and not the cut label', () => {
+    expect(css).toContain(
+      '\n.tower thead tr:first-child th:first-child,\n.tower td:first-child {\n  width: 48px;\n  min-width: 48px;\n  text-align: center;\n}',
+    );
+    expect(css).toContain(
+      '.tower td:first-child {\n  position: sticky;\n  left: 0;\n  background: var(--bg);\n  font-family: var(--display);\n  font-size: 18px;\n  font-weight: 700;\n}',
+    );
+    expect(rule('.tower tr.cutlabel td:first-child')).toContain('font: inherit;');
   });
 });

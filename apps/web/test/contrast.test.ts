@@ -51,8 +51,8 @@ const COMPOUNDS = [
   'unknown',
 ];
 // Lines, washes and rings: drawn next to text, never as text or a meaning of their own; the rain map's water and roads
-// are context under the rain (P5c, D2).
-const DECORATION = ['line', 'line-soft', 'cmp-ring', 'on-cmp', 'display', 'map-water', 'map-road'];
+// are context under the rain (P5c, D2). The font stacks (--display, --mono) are no colour.
+const DECORATION = ['line', 'line-soft', 'cmp-ring', 'on-cmp', 'display', 'mono', 'map-water', 'map-road'];
 // Translucent washes behind text (`rgb(r g b / a)`), checked composited over --bg.
 const WASHES = ['purple-wash', 'heat-1', 'heat-2', 'heat-3'];
 // Chart bands (P5a): drawn translucent under the lines, named by a text key whose swatch is the full colour.
