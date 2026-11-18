@@ -3,7 +3,7 @@ import { expect, it } from 'vitest';
 
 // The same pin lives in several files and Dependabot or a hand edit can move only one (#106).
 // pinErrors takes the file texts, so the negative cases below can plant a mismatch in one of them.
-type File = 'ci' | 'compose' | 'dependabot' | 'server' | 'web' | 'nodeVersion';
+type File = 'ci' | 'compose' | 'dependabot' | 'server' | 'web' | 'nodeVersion' | 'dockerignore';
 
 // PGDATA is per major (/var/lib/postgresql/<major>/docker): this moves only with the runbook
 // docs/runbooks/update.md "A PostgreSQL major upgrade", never with a Dependabot PR.
@@ -73,6 +73,21 @@ function pinErrors(t: Record<File, string>): string[] {
       .filter((item) => /dependency-name: postgres$/m.test(item) && item.includes('version-update:semver-major'));
     if (ignores.length !== 1) errors.push(`dependabot_postgres_major: dependabot has ${ignores.length} matches`);
   }
+
+  // #208: ci.yml's `changes` job releases only when one of its paths changed, so a build input
+  // missing from its list would never release: the .dockerignore allowlist, .dockerignore itself and
+  // the two Dockerfiles, in any order.
+  const listed = one('image_inputs', 'ci', /^[ \t]+paths=\(\n([^)]*)^[ \t]+\)$/gm)
+    ?.split(/\s+/)
+    .filter(Boolean);
+  if (listed !== undefined) {
+    const inputs = [...t.dockerignore.matchAll(/^!(\S+)$/gm)].map((m) => m[1] ?? '');
+    inputs.push('.dockerignore', 'deploy/server/Dockerfile', 'deploy/web/Dockerfile');
+    const missing = inputs.filter((p) => !listed.includes(p));
+    const extra = listed.filter((p) => !inputs.includes(p));
+    if (missing.length > 0) errors.push(`image_inputs: ci lacks ${missing.join(' ')}`);
+    if (extra.length > 0) errors.push(`image_inputs: ci lists ${extra.join(' ')}, not a build input`);
+  }
   return errors;
 }
 
@@ -84,6 +99,7 @@ const real: Record<File, string> = {
   server: read('deploy/server/Dockerfile'),
   web: read('deploy/web/Dockerfile'),
   nodeVersion: read('.node-version'),
+  dockerignore: read('.dockerignore'),
 };
 
 // A replacement that keeps the capture and swaps the rest, whatever the current value is.
@@ -103,6 +119,9 @@ it.each<[string, File, (s: string) => string]>([
   ['node_major', 'server', swap(/^(FROM gcr\.io\/distroless\/nodejs)\d+/m, '27')],
   ['dependabot_postgres_major', 'dependabot', (s) => s.replace(/^.*dependency-name: postgres$/m, '')],
   ['dependabot_postgres_major', 'dependabot', (s) => s.replaceAll('version-update:semver-major', '')],
+  ['image_inputs', 'dockerignore', (s) => s.replace(/^!db\/migrations$/m, '$&\n!db/seeds')],
+  ['image_inputs', 'ci', (s) => s.replace(/^[ \t]+deploy\/web\/Dockerfile\n/m, '')],
+  ['image_inputs', 'ci', swap(/^([ \t]+)package\.json$/m, 'package.json\n            docs')],
 ])('a planted mismatch fails %s (%#)', (pin, file, mutate) => {
   expect(pinNames(pinErrors({ ...real, [file]: mutate(real[file]) }))).toEqual([pin]);
 });
