@@ -16,11 +16,17 @@ const empty = (): Obj => Object.create(null);
 type Payload = NonNullable<unknown>;
 type Recent = { topic: string; payload: Payload; r: number };
 
-/** A full event's payload with the recent deltas of its topic merged into a copy, in order, by apply's own rules. */
+/**
+ * A full event's payload with the recent deltas of its topic merged into a copy, in order, by apply's own rules. It
+ * assumes what a Subscribe result is (A§11.3): an object without `_deleted`, or a `.z` string, never older than a delta
+ * of its own connection.
+ * ponytail: one pass over `recent` per topic of the state, ~30 × the lines of 1 s; index `recent` by topic if a crafted
+ * recording with a huge state after many lines of one ms ever matters.
+ */
 function folded({ topic, t }: FeedEvent, payload: Payload, recent: readonly Recent[]): Payload {
   let value = payload;
   for (const d of recent) {
-    if (d.topic !== topic || d.r < t - FOLD_MS) continue;
+    if (d.topic !== topic || d.r < t - FOLD_MS || d.r > t) continue;
     if (!isObj(d.payload)) value = d.payload;
     else {
       if (value === payload || !isObj(value)) {
@@ -62,6 +68,8 @@ export function createFeed(): { state: Obj; apply(ev: FeedEvent): unknown } {
         if (seen.has(key)) return undefined;
         seen.set(key, ev.t);
         if (ev.r !== undefined) {
+          // A receive time that went back (a clock step) starts the window again, so `recent` spans FOLD_MS at most.
+          if ((recent.at(-1)?.r ?? ev.r) > ev.r) recent.length = 0;
           recent.push({ topic: ev.topic, payload: ev.payload, r: ev.r });
           while ((recent[0] as Recent).r < ev.r - FOLD_MS) recent.shift();
         }

@@ -196,6 +196,16 @@ describe('createFeed', () => {
     expect(payload).toEqual(state); // the event's own payload is never written
   });
 
+  it('a receive time that steps back starts the window again, and a delta received after the state is never folded', () => {
+    const feed = createFeed();
+    feed.apply({ t: 0, topic: 'TimingData', payload: { A: 'ahead' }, r: 50_000 }); // then the clock stepped back
+    feed.apply({ t: 1, topic: 'TimingData', payload: { B: 'new' }, r: 10_000 });
+    expect(feed.apply({ t: 10_001, topic: 'TimingData', payload: { A: 'S', B: 'S' }, full: true })).toEqual({ A: 'S' });
+    feed.apply({ t: 2, topic: 'DriverList', payload: { C: 'later' }, r: 10_005 });
+    feed.apply({ t: 10_002, topic: 'DriverList', payload: { C: 'S' }, full: true });
+    expect(feed.state).toEqual({ TimingData: { A: 'S', B: 'new' }, DriverList: { C: 'S' } });
+  });
+
   it('replaces a topic whose payload is no object', () => {
     const feed = createFeed();
     expect(feed.apply({ t: 0, topic: 'CarData.z', payload: 'abc=' })).toBe('abc=');
