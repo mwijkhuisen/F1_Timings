@@ -1663,6 +1663,67 @@ describe('the player bar', () => {
     expect(since()).toBeNull();
   });
 
+  it('the catch-up dialog (#234): Show opens it, a chip filters it, › replays from its T, Esc gives the focus back', () => {
+    render({ recording: ended, start: T, sessionKey: 9100, detail });
+    last().emit('snapshot', { t: T, state: raceState(), laps: [], stints: [] });
+    advance(250);
+    const to = Date.parse(utcOf('20:30'));
+    slide('Position', to);
+    advance(400);
+    const state = raceState({
+      extra: {
+        SessionData: {
+          StatusSeries: statusSeries([
+            ['20:05', 'TrackStatus', 'SCDeployed'],
+            ['20:08', 'TrackStatus', 'AllClear'],
+          ]),
+        },
+        RaceControlMessages: {
+          Messages: {
+            '0': { Utc: utcOf('20:12'), Category: 'Other', Message: 'TURN 4 INCIDENT INVOLVING CAR 3 (CCC) NOTED' },
+          },
+        },
+      },
+    });
+    last().emit('snapshot', { t: to, state, laps: [pitOut(1, 21, '20:10'), pitOut(2, 22, '20:20')], stints: [] });
+    advance(250);
+    expect($('p.since span').textContent).toBe('1 SC · 2 pit stops · 1 incident noted');
+    expect(host.querySelector('dialog')).toBeNull(); // never by itself
+    const show = () => $<HTMLButtonElement>('p.since button[aria-haspopup="dialog"]');
+    const open = () => {
+      show().focus(); // happy-dom's click() moves no focus
+      act(() => show().click());
+      return $<HTMLDialogElement>('dialog.catchup');
+    };
+    const rows = () => [...host.querySelectorAll('dialog li.ev .time')].map((r) => r.textContent);
+    expect(show().textContent).toBe('Show');
+    expect(open().open).toBe(true);
+    expect(rows()).toEqual(['21:05:00', '21:10:00', '21:12:00', '21:20:00']);
+    button('Pit stops 2');
+    expect(rows()).toEqual(['21:05:00', '21:12:00']);
+    button('Pit stops 2');
+    expect(rows()).toHaveLength(4);
+
+    // Esc: the browser closes the dialog with no return value.
+    const streams = FakeES.all.length;
+    act(() => $<HTMLDialogElement>('dialog.catchup').close());
+    expect(host.querySelector('dialog')).toBeNull();
+    expect(document.activeElement).toBe(show());
+    advance(400);
+    expect(FakeES.all).toHaveLength(streams); // no seek
+
+    // A row's ›: through the seek commit, from the incident's T; the line goes with the commit, so the focus is on the bar.
+    open();
+    const opened = FakeES.all.length;
+    click('Replay from 21:12:00');
+    expect(host.querySelector('dialog')).toBeNull();
+    expect(document.activeElement).toBe($('input[aria-label="Position"]'));
+    expect(FakeES.all).toHaveLength(opened); // not before the 400 ms debounce
+    advance(400);
+    expect(atOf(last())).toBe(String(Date.parse(utcOf('20:12'))));
+    expect(host.querySelector('p.since')).toBeNull();
+  });
+
   it('a seek while paused opens one still frame, closed by its snapshot; a new seek closes a pending one first', () => {
     render({ recording: ended, start: T });
     expect(stillOf(last())).toBeNull(); // playing
