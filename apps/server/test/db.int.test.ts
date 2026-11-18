@@ -27,6 +27,7 @@ const TABLES = [
   'forecast',
   'forecast_hour',
   'telemetry_lap',
+  'overtake',
   'recording',
   'recorder_status',
   'ingest_status',

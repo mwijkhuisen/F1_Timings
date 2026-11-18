@@ -146,6 +146,15 @@ export interface Meeting {
   year: number;
 }
 
+export interface Overtake {
+  date: Timestamp;
+  driver_number: number;
+  id: Generated<Int8>;
+  places: number;
+  session_key: number;
+  source: string;
+}
+
 export interface Pit {
   date: Timestamp | null;
   driver_number: number;
@@ -304,6 +313,7 @@ export interface DB {
   lap: Lap;
   lap_source: LapSource;
   meeting: Meeting;
+  overtake: Overtake;
   pit: Pit;
   race_control: RaceControl;
   rain_frame: RainFrame;

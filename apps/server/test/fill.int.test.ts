@@ -22,8 +22,9 @@ import { staleLap, writeLaps } from '../src/merge/write.ts';
 import { createTestDb, type TestDb } from './db.ts';
 
 // The fill job against a real PostgreSQL 18 (f1_ingest login). Every file is synthetic and built under a temp dir:
-// the archive streams are fixtures/archive/race with its session Key changed, the recordings are fixtures/live/
-// practice.jsonl written through openRecording.
+// the archive streams are fixtures/archive/race with its session Key changed, plus fixtures/archive/overtakes (its own
+// folder, so the archive job's tests over race/ stay as they are), the recordings are fixtures/live/practice.jsonl
+// written through openRecording.
 
 const M = 9700;
 const [OPENF1, BARE, ARCHIVED] = [9701, 9702, 9703];
@@ -61,11 +62,15 @@ const candidates = async (key: number) => {
   return n;
 };
 
-/** `<archiveDir>/<key>/`: the synthetic race streams with the session Key changed (unless `sessionKey` is false). */
+/**
+ * `<archiveDir>/<key>/`: the synthetic race streams and OvertakeSeries, with the session Key changed (unless
+ * `sessionKey` is false).
+ */
 function archiveFiles(key: number, sessionKey = true) {
   const dir = join(archiveDir, String(key));
   rmSync(dir, { recursive: true, force: true });
   cpSync(join(FIXTURES, 'archive/race'), dir, { recursive: true });
+  cpSync(join(FIXTURES, 'archive/overtakes'), dir, { recursive: true });
   const info = join(dir, 'SessionInfo.jsonStream');
   if (sessionKey) writeFileSync(info, readFileSync(info, 'utf8').replace('"Key":9102', `"Key":${key}`));
   return dir;
@@ -73,9 +78,9 @@ function archiveFiles(key: number, sessionKey = true) {
 
 /**
  * A recording of the synthetic practice feed as session `key`, sealed (gzip) through the real recorder. `pad`: the
- * size of an extra TimingStats line, a topic the parser does not read.
+ * size of an extra TimingStats line, a topic the parser does not read. `overtakes`: an OvertakeSeries line.
  */
-async function record(key: number, path: string, session = key, pad = 0) {
+async function record(key: number, path: string, session = key, pad = 0, overtakes?: Record<string, unknown>) {
   const rec = openRecording({ dir: join(liveDir, path), now: () => T0 });
   const feed = readFileSync(join(FIXTURES, 'live/practice.jsonl'), 'utf8').trim().split('\n');
   for (const [i, line] of feed.entries()) {
@@ -86,6 +91,7 @@ async function record(key: number, path: string, session = key, pad = 0) {
     } else rec.feed(T0 + i * 50, topic, payload, ts ?? 'undefined');
   }
   if (pad > 0) rec.feed(T0, 'TimingStats', { pad: 'x'.repeat(pad) }, 'undefined');
+  if (overtakes) rec.feed(T0, 'OvertakeSeries', overtakes, 'undefined');
   await rec.finish();
   const { id } = await admin
     .insertInto('recording')
@@ -223,7 +229,9 @@ describe('the fill job (f1_ingest login, synthetic files)', { timeout: 120_000 }
     await complete(await record(ARCHIVED, `${ARCHIVED}-1`));
     const before = await laps(ARCHIVED);
     expect(await fill({ db, log }, args([ARCHIVED]))).toBe(true);
-    expect(one()).toMatchObject({ session_key: ARCHIVED, sources: {} });
+    const line = one();
+    expect(line).toMatchObject({ session_key: ARCHIVED, sources: {} });
+    expect(line).not.toHaveProperty('overtakes'); // nor overtakes
     expect(await candidates(ARCHIVED)).toEqual({ 'f1-archive': 1 });
     expect(await laps(ARCHIVED)).toEqual(before);
   });
@@ -243,6 +251,73 @@ describe('the fill job (f1_ingest login, synthetic files)', { timeout: 120_000 }
     const all = lines.splice(0);
     expect(all.filter((l) => l.msg === 'fill').map((l) => l.session_key)).toEqual([ARCHIVED, BARE, OPENF1]);
     expect(all.at(-1)).toMatchObject({ msg: 'fill_done', sessions: 3, failed: 1 });
+  });
+
+  describe('overtakes (#236)', () => {
+    const KEY = 9706;
+    const overtakes = () =>
+      db
+        .selectFrom('overtake')
+        .select(['driver_number', 'date', 'places', 'source'])
+        .where('session_key', '=', KEY)
+        .orderBy('date')
+        .orderBy('driver_number')
+        .orderBy('id')
+        .execute();
+    // fixtures/archive/overtakes/OvertakeSeries.jsonStream: its third line holds only entries to drop.
+    const archived = [
+      { driver_number: 8, date: new Date('2019-03-17T05:10:05Z'), places: 1, source: 'f1-archive' },
+      { driver_number: 3, date: new Date('2019-03-17T05:12:10Z'), places: 2, source: 'f1-archive' },
+      { driver_number: 8, date: new Date('2019-03-17T05:12:10Z'), places: 1, source: 'f1-archive' },
+    ];
+    beforeAll(async () => {
+      await admin
+        .insertInto('session')
+        .values({
+          session_key: KEY,
+          source: 'openf1',
+          meeting_key: M,
+          name: 'Race',
+          type: 'Race',
+          date_start: new Date(T0 - 2 * 86_400_000),
+          date_end: new Date(T0 - 2 * 86_400_000 + 3_600_000),
+        })
+        .execute();
+    });
+
+    it("the archive's file gives the rows, its bad entries dropped, and a second fill replaces them", async () => {
+      archiveFiles(KEY);
+      for (let i = 0; i < 2; i++) {
+        expect(await fill({ db, log }, args([KEY]))).toBe(true);
+        expect(one().overtakes).toEqual({ source: 'f1-archive', rows: 3 });
+        expect(await overtakes()).toEqual(archived);
+      }
+    });
+
+    it('without the file and without a recording that has the topic, the stored rows stay', async () => {
+      rmSync(join(archiveDir, String(KEY), 'OvertakeSeries.jsonStream'));
+      await complete(await record(KEY, `${KEY}-1`));
+      expect(await fill({ db, log }, args([KEY]))).toBe(true);
+      const line = one();
+      expect(line.sources).toEqual({ 'f1-archive': expect.any(Number), 'f1-live': expect.any(Number) });
+      expect(line).not.toHaveProperty('overtakes');
+      expect(await overtakes()).toEqual(archived);
+    });
+
+    it("the recording's entries when the archive has no file, the archive's again once it has", async () => {
+      await admin.deleteFrom('recording').where('session_key', '=', KEY).execute();
+      const series = { Overtakes: { 44: [{ Timestamp: '2026-01-10T12:00:01.000', count: 3 }] } };
+      await complete(await record(KEY, `${KEY}-2`, KEY, 0, series));
+      expect(await fill({ db, log }, args([KEY]))).toBe(true);
+      expect(one().overtakes).toEqual({ source: 'f1-live', rows: 1 });
+      expect(await overtakes()).toEqual([
+        { driver_number: 44, date: new Date(T0 + 1000), places: 3, source: 'f1-live' },
+      ]);
+      archiveFiles(KEY);
+      expect(await fill({ db, log }, args([KEY]))).toBe(true);
+      expect(one().overtakes).toEqual({ source: 'f1-archive', rows: 3 });
+      expect(await overtakes()).toEqual(archived);
+    });
   });
 
   describe('per source', () => {

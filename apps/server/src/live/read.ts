@@ -26,6 +26,8 @@
 // Feed input → events (A§11.3). Pure: a P2a recording line or an archive .jsonStream file becomes
 // FeedEvents; `full` marks a topic's full state from the Subscribe completion.
 
+import { utc } from '@f1/contracts';
+
 export type FeedEvent = { t: number /* epoch ms */; topic: string; payload: unknown; full?: true };
 
 /** Recorded, not parsed yet (#96, #147): the playback and the map frame's finder skip them, as the `.z` topics. */
@@ -37,7 +39,6 @@ export const UNPARSED: ReadonlySet<string> = new Set([
   'CurrentTyres',
   'LapSeries',
   'DriverRaceInfo',
-  'OvertakeSeries',
   'ChampionshipPrediction',
 ]);
 
@@ -125,11 +126,8 @@ export function parseFeedLine(line: string): FeedEvent[] {
   return [{ t: Number.isNaN(at) ? receivedAt : at, topic, payload }];
 }
 
-/** A feed `Utc` as UTC, with or without its Z: epoch ms, or null. */
-export const utc = (v: unknown): number | null => {
-  const at = typeof v === 'string' ? Date.parse(v.endsWith('Z') ? v : `${v}Z`) : Number.NaN;
-  return Number.isNaN(at) ? null : at;
-};
+// A feed `Utc` as UTC, with or without its Z: in @f1/contracts since #236, where overtakesOf reads Timestamps with it.
+export { utc };
 
 const values = (v: unknown): unknown[] => (typeof v === 'object' && v !== null ? Object.values(v) : []);
 

@@ -6,6 +6,7 @@ import {
   type Lap,
   merge,
   type Obj,
+  overtakesOf,
   PlaybackPing,
   PlaybackPos,
   type Stints,
@@ -609,7 +610,6 @@ describe('playback', () => {
       CurrentTyres: { Tyres: { 7: { Compound: 'SOFT', New: true } } },
       LapSeries: { 7: { RacingNumber: '7', LapPosition: ['3'] } },
       DriverRaceInfo: { 7: { RacingNumber: '7', Catching: 1, OvertakeState: 2, PitStops: 1 } },
-      OvertakeSeries: { Overtakes: { 7: [{ Timestamp: iso(T0), count: 1 }] } },
       ChampionshipPrediction: { Drivers: { 7: { RacingNumber: '7', PredictedPosition: 3 } } },
     };
     expect(Object.keys(raw).sort()).toEqual([...UNPARSED].sort());
@@ -618,7 +618,16 @@ describe('playback', () => {
       ...Object.entries(raw).map(([topic, payload], i) => at(T0 + 100 * (i + 1), topic, payload)),
       at(T0 + 4000, 'TimingData', { Lines: { 7: { NumberOfLaps: 3 } } }),
     ];
-    const keys = ['PitTimes', 'PitStopTime', 'Stints', 'Tyres', 'LapPosition', 'Catching', 'Overtake', 'Predicted'];
+    const keys = [
+      'PitTimes',
+      'PitStopTime',
+      'Stints',
+      'Tyres',
+      'LapPosition',
+      'Catching',
+      'OvertakeState',
+      'Predicted',
+    ];
     const absent = new RegExp([...UNPARSED, ...keys].join('|'));
     await record(dir, values, 3_600_000);
     for (const t of [T0, T0 + 5000]) {
@@ -627,6 +636,30 @@ describe('playback', () => {
       expect(sent).toContain('NumberOfLaps'); // the stream itself goes on: a delta from T0, in the snapshot after
       expect(sent).not.toMatch(absent);
     }
+  });
+
+  it('sends OvertakeSeries (#236): its deltas, and the merged entries in a snapshot after', async () => {
+    const dir = tmp();
+    const first = { Overtakes: { 7: [{ Timestamp: iso(T0 + 100), count: 1 }] } };
+    const later = {
+      Overtakes: { 7: { 1: { Timestamp: iso(T0 + 200), count: 2 } }, 44: [{ Timestamp: iso(T0 + 200), count: 1 }] },
+    };
+    await record(dir, [at(T0 + 100, 'OvertakeSeries', first), at(T0 + 200, 'OvertakeSeries', later)], 3_600_000);
+    const streamed = start(dir, { at: T0 });
+    const seen = await drain(streamed.gen, streamed.clock);
+    expect(seen.flatMap(({ ev }) => (ev.event === 'delta' ? [ev.data] : []))).toEqual([
+      { t: T0 + 100, topic: 'OvertakeSeries', data: first },
+      { t: T0 + 200, topic: 'OvertakeSeries', data: later },
+    ]);
+    const after = start(dir, { at: T0 + 5000 });
+    const [snapshot] = await drain(after.gen, after.clock);
+    expect(snapshot?.ev.event).toBe('snapshot');
+    const state = snapshot?.ev.event === 'snapshot' ? snapshot.ev.data.state : {};
+    expect(overtakesOf(state)).toEqual([
+      { driver_number: 7, t: T0 + 100, places: 1 },
+      { driver_number: 7, t: T0 + 200, places: 2 },
+      { driver_number: 44, t: T0 + 200, places: 1 },
+    ]);
   });
 
   it('sends a heartbeat event with T after 15 s without a write', async () => {
