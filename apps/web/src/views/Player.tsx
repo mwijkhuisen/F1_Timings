@@ -1156,6 +1156,13 @@ export function Player({
     </button>
   );
 
+  // In replay of an open recording: a mode switch, in the transport and, minimized, in the head after Play (#237).
+  const liveButton = !live && recording.ended_at === null && (
+    <button type="button" className="golive" onClick={goLive}>
+      Live
+    </button>
+  );
+
   // The reconnect line (A§13): a 404 stops the player and says so until Play; then the probe's answer, the reload
   // hint after FAILING errors, or "Reconnecting…".
   const line = stale
@@ -1286,6 +1293,7 @@ export function Player({
             </span>
           </Clock>
           {minimized && playButton}
+          {minimized && liveButton}
           <button
             ref={toggleRef}
             type="button"
@@ -1308,11 +1316,7 @@ export function Player({
                 {NUDGES.slice(0, 3).map(nudgeButton)}
                 {playButton}
                 {NUDGES.slice(3).map(nudgeButton)}
-                {!live && recording.ended_at === null && (
-                  <button type="button" className="golive" onClick={goLive}>
-                    Live
-                  </button>
-                )}
+                {liveButton}
               </div>
               <BackTo
                 before={before}

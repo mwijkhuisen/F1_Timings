@@ -2362,6 +2362,25 @@ describe('the player bar (#237)', () => {
     expect(chips()).toEqual([fmtClock(T + 600_000)]); // the next seek replaces it
   });
 
+  it('minimized, a paused live session has Live in the head, after Play', () => {
+    localStorage.setItem('f1.minimized', '1');
+    render({ recording: open, start: 'live' });
+    const head = () => [...$('.barhead').children].map((c) => c.className);
+    expect(head()).toEqual(['clockline', 'play', 'bartoggle']); // live: nothing to go to
+    button('Pause');
+    expect(head()).toEqual(['clockline', 'play', 'golive', 'bartoggle']);
+    expect($('.barhead .golive').textContent).toBe('Live');
+    button('Live');
+    expect(atOf(last())).toBe('live');
+    expect(openCount()).toBe(1);
+    expect(head()).toEqual(['clockline', 'play', 'bartoggle']);
+    // Expanded, it is in the transport again, and only there.
+    act(() => $<HTMLButtonElement>('button.bartoggle').click());
+    button('Pause');
+    expect(host.querySelectorAll('.golive')).toHaveLength(1);
+    expect($('.transport .golive').textContent).toBe('Live');
+  });
+
   it('a seek to the same second leaves no chip', () => {
     render({ recording: ended, start: T });
     last().emit('snapshot', { t: T, state: {}, laps: [], stints: [] });
