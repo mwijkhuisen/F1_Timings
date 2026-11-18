@@ -62,6 +62,7 @@ function Watch({
         start={start}
         detail={session.data}
         detailError={session.error}
+        retryDetail={() => void session.refetch()}
         keepT={keepT}
       />
     </>
@@ -110,7 +111,7 @@ export function Live() {
   const [watched, setWatched] = useState<number>();
   const open = live.data?.recording?.ended_at === null ? live.data.recording.id : undefined;
   if (open !== undefined && open !== watched) setWatched(open); // derived state, set during render
-  if (!live.data) return <Pending error={live.error} />;
+  if (!live.data) return <Pending error={live.error} retry={() => void live.refetch()} />;
   const { session, recording } = live.data;
   return (
     <>
@@ -136,14 +137,18 @@ export function Replays() {
   return (
     <>
       <h1 tabIndex={-1}>Replays</h1>
-      {recordings.data ? <RecordingsList recordings={recordings.data} /> : <Pending error={recordings.error} />}
+      {recordings.data ? (
+        <RecordingsList recordings={recordings.data} />
+      ) : (
+        <Pending error={recordings.error} retry={() => void recordings.refetch()} />
+      )}
     </>
   );
 }
 
 export function Replay({ recording: id }: { recording: number }) {
   const recordings = useRecordings();
-  if (!recordings.data) return <Pending error={recordings.error} />;
+  if (!recordings.data) return <Pending error={recordings.error} retry={() => void recordings.refetch()} />;
   const r = recordings.data.find((x) => x.id === id);
   if (!r) return <NotFound />;
   // The session's scheduled start, clamped into what was recorded.

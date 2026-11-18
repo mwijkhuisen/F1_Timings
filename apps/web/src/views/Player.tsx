@@ -701,6 +701,7 @@ export function Player({
   start,
   detail,
   detailError = null,
+  retryDetail,
   keepT = false,
 }: {
   recording: PlayerRecording;
@@ -712,6 +713,8 @@ export function Player({
   detail: SessionDetail | undefined;
   /** The session query's error: shown under the tower while there is no detail (#100). */
   detailError?: unknown;
+  /** The session query's refetch, for the error's Try again. */
+  retryDetail?: (() => void) | undefined;
   /** The replay keeps T and the tab in the URL (`?t=`, `?tab=`) and resumes from them on load; `/live` never does. */
   keepT?: boolean;
 }) {
@@ -1266,7 +1269,7 @@ export function Player({
           tower
         )}
       </ErrorBoundary>
-      {!detail && detailError != null && <ErrorView error={detailError} />}
+      {!detail && detailError != null && <ErrorView error={detailError} retry={retryDetail} />}
       <section className={minimized ? 'player min' : 'player'} aria-label="Playback controls">
         {/* The head stays when minimized: the clock line, Play/Pause (from the transport) and the toggle. */}
         <div className="barhead">

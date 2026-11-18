@@ -232,7 +232,7 @@ export function Season({ year }: { year: number }) {
   const recordings = useRecordings(polling(season.data, now) && WEEKEND_POLL_MS);
   const weekend = season.data ? thisWeekend(season.data, now, live.data ?? null) : null;
   const forecast = useForecast(weekend?.meeting_key ?? null);
-  if (!season.data) return <Pending error={season.error} />;
+  if (!season.data) return <Pending error={season.error} retry={() => void season.refetch()} />;
   return (
     <SeasonView
       year={year}
@@ -281,7 +281,7 @@ export function Start() {
   if (path === null) return <p>No seasons yet.</p>;
   return (
     <>
-      <Pending error={seasons.error} />
+      <Pending error={seasons.error} retry={() => void seasons.refetch()} />
       <SavedList saved={saved.data ?? []} />
     </>
   );

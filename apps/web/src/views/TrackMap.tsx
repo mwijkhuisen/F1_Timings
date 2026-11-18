@@ -69,7 +69,7 @@ export function TrackMap({ circuit, positions, ended, drivers, now, playing }: P
 
   if (circuit === undefined) return <Pending error={null} />; // which venue is not known yet
   if (id === null) return <p>{NO_OUTLINE}</p>;
-  if (!map.data) return <Pending error={map.error} />;
+  if (!map.data) return <Pending error={map.error} retry={() => void map.refetch()} />;
   if (outline === null || box === null) return <p>{NO_OUTLINE}</p>;
 
   const T = now();

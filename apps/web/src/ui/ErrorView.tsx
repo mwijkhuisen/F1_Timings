@@ -21,11 +21,27 @@ export function errorText(error: unknown): string {
 /** The app-wide reload banner: another revision answered, or an answer failed its contract (A§13). */
 export const NewVersion = () => (useStale() ? <p role="alert">{NEW_VERSION}</p> : null);
 
-export const ErrorView = ({ error }: { error: unknown }) => <p role="alert">{errorText(error)}</p>;
+/**
+ * The error line. With `retry` (a query's refetch, #237) a "Try again" button follows it when a second try can help:
+ * offline or "API error", never an expired session (reload to sign in), a missing page or a new version.
+ */
+export const ErrorView = ({ error, retry }: { error: unknown; retry?: (() => void) | undefined }) => {
+  const text = errorText(error);
+  return (
+    <>
+      <p role="alert">{text}</p>
+      {retry && (text === OFFLINE || text === 'API error') && (
+        <button type="button" onClick={retry}>
+          Try again
+        </button>
+      )}
+    </>
+  );
+};
 
-/** A query without data yet: its error, or a loading line. */
-export const Pending = ({ error }: { error: unknown }) =>
-  error ? <ErrorView error={error} /> : <p className="muted">Loading…</p>;
+/** A query without data yet: its error (with `retry`, as ErrorView), or a loading line. */
+export const Pending = ({ error, retry }: { error: unknown; retry?: (() => void) | undefined }) =>
+  error ? <ErrorView error={error} retry={retry} /> : <p className="muted">Loading…</p>;
 
 export const NotFound = () => <p>Page not found.</p>;
 

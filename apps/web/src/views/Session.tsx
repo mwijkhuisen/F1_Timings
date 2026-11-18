@@ -65,7 +65,7 @@ export function Session({ session, view }: { session: number; view: View }) {
     if (picks && chosen !== null) history.replaceState(history.state, '', location.pathname + search + location.hash);
   }, [picks, chosen, search]);
 
-  if (!d) return <Pending error={detail.error} />;
+  if (!d) return <Pending error={detail.error} retry={() => void detail.refetch()} />;
   const race = d.session.type === 'Race';
   return (
     <>
@@ -94,7 +94,7 @@ export function Session({ session, view }: { session: number; view: View }) {
         // The result needs no laps (9900 has official times and none); once they load, an official time without one is marked.
         <ResultTab detail={d} laps={laps.data ?? null} live={live} now={now} />
       ) : !laps.data ? (
-        <Pending error={laps.error} />
+        <Pending error={laps.error} retry={() => void laps.refetch()} />
       ) : laps.data.length === 0 ? (
         <NoData session={d.session} live={live} what={view === 'stints' ? 'stints' : 'laps'} now={now} />
       ) : view === 'laps' ? (
