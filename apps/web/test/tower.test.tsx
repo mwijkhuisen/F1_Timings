@@ -733,6 +733,7 @@ describe('mono times and the position face (#235)', () => {
   };
   const STACK = 'ui-monospace, "SF Mono", "Cascadia Mono", Menlo, Consolas, monospace';
   const MONO = '.tower th.drv ~ td:not(.pc, .tr, :nth-last-child(-n + 2))';
+  const RIGHT = '.tower :is(th.drv, td.pc) + td:not(.pc),\n.tower :is(th.drv, td.pc) + td:not(.pc) + td';
 
   it('names a mono face only in the --mono token; every other font is a stack variable or the system face', () => {
     expect(rule(':root')).toContain(`--mono: ${STACK};`);
@@ -744,8 +745,9 @@ describe('mono times and the position face (#235)', () => {
     expect(fonts.filter((f) => !allowed.includes(f ?? ''))).toEqual([]);
   });
 
-  it('sets Gap, Int, Last, Best and S1–S3 in --mono at 14 px, no other cell, and adds no style', async () => {
+  it('sets Gap, Int, Last, Best and S1–S3 in --mono at 14 px and right-aligns Gap and Int, no other cell, and adds no style', async () => {
     expect(rule(MONO)).toBe('font-family: var(--mono);\n  font-size: 14px;');
+    expect(rule(RIGHT)).toBe('text-align: right;');
     const trend = new Map<number, { one: Trend; three: Trend }>([[2, { one: { delta: -400 }, three: { delta: 200 } }]]);
     const window = new Window();
     const doc = window.document;
@@ -763,16 +765,12 @@ describe('mono times and the position face (#235)', () => {
       const heads = [...doc.querySelectorAll('thead th')].map((th) => th.textContent);
       const rows = [...doc.querySelectorAll('tbody tr')].filter((tr) => tr.querySelector('th.drv'));
       expect(rows.length).toBeGreaterThan(0);
-      for (const tr of rows)
-        expect([...tr.children].flatMap((c, i) => (c.matches(MONO) ? [heads[i]] : []))).toEqual([
-          'Gap',
-          'Int',
-          'Last',
-          'Best',
-          'S1',
-          'S2',
-          'S3',
-        ]);
+      const cells = (tr: (typeof rows)[number], selector: string) =>
+        [...tr.children].flatMap((c, i) => (c.matches(selector) ? [heads[i]] : []));
+      for (const tr of rows) {
+        expect(cells(tr, MONO)).toEqual(['Gap', 'Int', 'Last', 'Best', 'S1', 'S2', 'S3']);
+        expect(cells(tr, RIGHT)).toEqual(['Gap', 'Int']);
+      }
     }
     await window.happyDOM.close();
   });

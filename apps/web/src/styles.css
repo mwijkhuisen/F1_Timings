@@ -2098,6 +2098,13 @@ header .theme[aria-pressed="true"] {
   font-size: 12px;
 }
 
+/* Gap and Int right-aligned (owner, 2026-11-18, #235), so their decimal points line up whatever the value's length;
+   their heads stay centred, as in the lap table. They are the two cells after the driver and the places (.pc). */
+.tower :is(th.drv, td.pc) + td:not(.pc),
+.tower :is(th.drv, td.pc) + td:not(.pc) + td {
+  text-align: right;
+}
+
 /* An interval under a second in a race: bold, after a dot. */
 .tower td.int.close {
   font-weight: 700;
