@@ -375,6 +375,7 @@ describe('skipped', () => {
       stops: 2,
       deleted: 2,
       incidents: 2,
+      fastest: 0, // no lap time in these rows
     });
   });
 
@@ -422,14 +423,15 @@ describe('skipped', () => {
   });
 
   it('skippedText lists the non-zero counts, singular or plural', () => {
-    const none = { sc: 0, vsc: 0, red: 0, stops: 0, deleted: 0, incidents: 0 };
-    expect(skippedText({ sc: 1, vsc: 1, red: 0, stops: 21, deleted: 1, incidents: 1 })).toBe(
-      '1 SC · 1 VSC · 21 pit stops · 1 lap deleted · 1 incident noted',
+    const none = { sc: 0, vsc: 0, red: 0, stops: 0, deleted: 0, incidents: 0, fastest: 0 };
+    expect(skippedText({ sc: 1, vsc: 1, red: 0, stops: 21, deleted: 1, incidents: 1, fastest: 4 })).toBe(
+      '1 SC · 1 VSC · 21 pit stops · 1 lap deleted · 1 incident noted · 4 fastest laps',
     );
     expect(skippedText({ ...none, red: 2, stops: 1, deleted: 3, incidents: 2 })).toBe(
       '2 red flags · 1 pit stop · 3 laps deleted · 2 incidents noted',
     );
     expect(skippedText({ ...none, red: 1 })).toBe('1 red flag');
+    expect(skippedText({ ...none, fastest: 1 })).toBe('1 fastest lap'); // a window of fastest laps only gets a line
     expect(skippedText(none)).toBe('');
   });
 });
@@ -530,9 +532,9 @@ describe('skippedEvents (#234)', () => {
     expect(red).toMatchObject({ flag: 'red', lap: 17 });
   });
 
-  it('agrees with skipped: the flags, stops, deletions and incidents noted', () => {
+  it('agrees with skipped: the flags, stops, deletions, incidents noted and fastest laps', () => {
     const [old, next] = [feed(OLD, {}, before), feed(NEW, state, after)];
-    const counts = { sc: 1, vsc: 0, red: 1, stops: 2, deleted: 1, incidents: 2 };
+    const counts = { sc: 1, vsc: 0, red: 1, stops: 2, deleted: 1, incidents: 2, fastest: 1 };
     expect(tally(skippedEvents(old, next) ?? [])).toEqual(counts);
     expect(skipped(old, next)).toEqual(counts);
   });

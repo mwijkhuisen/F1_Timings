@@ -137,7 +137,15 @@ export function lastStop(laps: Iterable<Lap>, driver: number, T: number): { t: n
   return last;
 }
 
-export type Skipped = { sc: number; vsc: number; red: number; stops: number; deleted: number; incidents: number };
+export type Skipped = {
+  sc: number;
+  vsc: number;
+  red: number;
+  stops: number;
+  deleted: number;
+  incidents: number;
+  fastest: number;
+};
 
 /** The first race-control message of an incident (A§11.3); its investigation and verdict repeat it. */
 const NOTED = /INCIDENT INVOLVING\b.*\bNOTED\b/;
@@ -239,14 +247,15 @@ export function skippedEvents(old: Feed, next: Feed): CatchUpEvent[] | null {
   return out.sort((a, b) => a.t - b.t);
 }
 
-/** The counts `skippedText` reads: SC, VSC and red bands, stops, deletions and incidents noted. */
+/** The counts `skippedText` reads: SC, VSC and red bands, stops, deletions, incidents noted and fastest laps. */
 export function tally(events: readonly CatchUpEvent[]): Skipped {
-  const n: Skipped = { sc: 0, vsc: 0, red: 0, stops: 0, deleted: 0, incidents: 0 };
+  const n: Skipped = { sc: 0, vsc: 0, red: 0, stops: 0, deleted: 0, incidents: 0, fastest: 0 };
   for (const e of events)
     if (e.kind === 'flag') n[e.flag]++;
     else if (e.kind === 'stop') n.stops++;
     else if (e.kind === 'deleted') n.deleted++;
     else if (e.kind === 'incident' && e.noted) n.incidents++;
+    else if (e.kind === 'fastest') n.fastest++;
   return n;
 }
 
@@ -269,7 +278,7 @@ export function skippedWindow(old: Feed, next: Feed): { laps: [number, number] |
 
 const count = (n: number, word: string) => `${n} ${word}${n === 1 ? '' : 's'}`;
 
-/** "1 SC · 1 VSC · 21 pit stops · 1 lap deleted · 1 incident noted": the non-zero counts; '' when there are none. */
+/** "1 SC · 21 pit stops · 1 lap deleted · 1 incident noted · 4 fastest laps": the non-zero counts; '' when none. */
 export function skippedText(s: Skipped): string {
   return [
     s.sc > 0 && `${s.sc} SC`,
@@ -278,6 +287,7 @@ export function skippedText(s: Skipped): string {
     s.stops > 0 && count(s.stops, 'pit stop'),
     s.deleted > 0 && `${count(s.deleted, 'lap')} deleted`,
     s.incidents > 0 && `${count(s.incidents, 'incident')} noted`,
+    s.fastest > 0 && count(s.fastest, 'fastest lap'),
   ]
     .filter((p) => typeof p === 'string')
     .join(' · ');
