@@ -5,8 +5,11 @@ How a change reaches the VM (A§14.4). Commands run as root (`sudo`) on the VM. 
 1. A merge to `main` that changes a build input runs the CI `release` job after your approval (the `production` environment). It builds `ghcr.io/mwijkhuisen/f1-server` and `f1-web` and pushes `:main` and `:sha-<git>`. The build inputs are the `.dockerignore` allowlist, `.dockerignore` and the two Dockerfiles. A merge that changes none of them (docs, tests, `deploy/bin`, `compose.yaml`) releases nothing (#208, A§14.4):
    - The run's `changes` job notes `no build input changed since <sha>: no release`, `release` is skipped and no approval is asked. `f1-update` keeps logging `up to date`.
    - When the `:main` labels cannot be read or differ, `changes` notes that and releases anyway.
-   - A release approved after a newer commit reached `main` ends with the notice `main has moved on from <sha>: no release` and pushes nothing. The newer commit's run releases, and its diff includes the older commit's changes. So approve the newest waiting release. An older one never moves `:main` backwards.
-   - A newer release replaces one that is still pending. The checks on `main` never wait behind a release: each push run has its own concurrency group.
+   - A release approved after a newer commit reached `main` ends with the notice `main has moved on from <sha> to <tip>: no release` and pushes nothing, so an older one never moves `:main` backwards. The newer commit's run releases, and its diff includes the older commit's changes. If that run is red or its release was rejected, re-run its failed jobs.
+   - Approve or reject waiting releases oldest first.
+   - A rejected release comes back at the next merge, because its changes are still in the diff from what `:main` carries.
+   - A newer queued release replaces an older queued one. Not verified yet: whether a release that waits for approval holds the group, so that newer releases queue behind it without asking. The first [owner] check on #208 shows it.
+   - The checks on `main` never wait behind a release: each push run's concurrency group carries its commit.
 2. `f1-update.timer` (every 10 minutes, `:00 :10 …`) runs `f1-update`, which deploys the new `:main` digests.
 3. `f1-tick.timer` (`:05 :15 …`, five minutes after each update) runs `f1-tick`.
 

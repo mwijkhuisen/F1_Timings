@@ -81,7 +81,7 @@ function pinErrors(t: Record<File, string>): string[] {
     ?.split(/\s+/)
     .filter(Boolean);
   if (listed !== undefined) {
-    const inputs = [...t.dockerignore.matchAll(/^!(\S+)$/gm)].map((m) => m[1] ?? '');
+    const inputs = [...t.dockerignore.matchAll(/^!(\S+)[ \t]*$/gm)].map((m) => m[1] ?? '');
     inputs.push('.dockerignore', 'deploy/server/Dockerfile', 'deploy/web/Dockerfile');
     const missing = inputs.filter((p) => !listed.includes(p));
     const extra = listed.filter((p) => !inputs.includes(p));
