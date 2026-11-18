@@ -2181,6 +2181,14 @@ header .theme[aria-pressed="true"] {
   text-overflow: ellipsis;
 }
 
+/* The message as a link to the race-control card (#237): a 44 px target, still on one line with an ellipsis (a flex link would not truncate). */
+.strip .msg a {
+  display: block;
+  overflow: hidden;
+  line-height: 44px;
+  text-overflow: ellipsis;
+}
+
 /* The session light: red, yellow and green lamps in fixed places and the state in words. No glow: a shadow would
    vanish under forced colours (contrast.test.ts). */
 .light {

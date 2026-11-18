@@ -330,6 +330,9 @@ const TABS: [PlayerTab, string][] = [
   ['map', 'Map'],
 ];
 
+/** The race-control card's id, the target of the strip's message (#237). */
+const RC_ID = 'race-control';
+
 export const MAX_DELAY = 120;
 const DELAY_KEY = 'f1.delay';
 const ANNOUNCE_KEY = 'f1.announce';
@@ -1169,7 +1172,15 @@ export function Player({
         </p>
       )}
       {resumed !== null && <p className="muted">Resumed at {fmtClock(resumed)}: press Play when the video is there.</p>}
-      {wall && <Strip strip={wall.strip} now={stateNow} playing={playing} />}
+      {/* The strip's message links to the race-control card only where the card is on the page: the Tower tab's pit wall (#237). */}
+      {wall && (
+        <Strip
+          strip={wall.strip}
+          now={stateNow}
+          playing={playing}
+          target={state && shown === 'tower' ? RC_ID : undefined}
+        />
+      )}
       {since !== null && (
         <p className="since">
           <b>Before this point</b> <span>{since.text}</span>
@@ -1256,7 +1267,14 @@ export function Player({
         ) : wall ? (
           <div className="pitwall">
             <div>{tower}</div>
-            <Panel rc={wall.rc} pairs={wall.pairs} fastest={wall.fastest} bests={wall.bests} race={wall.race} />
+            <Panel
+              rc={wall.rc}
+              pairs={wall.pairs}
+              fastest={wall.fastest}
+              bests={wall.bests}
+              race={wall.race}
+              id={RC_ID}
+            />
           </div>
         ) : (
           tower
