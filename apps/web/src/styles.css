@@ -5,8 +5,10 @@
  * --live is live, a red flag or a failure; --amber is SC and VSC. Every text token reaches 4.5:1 on --bg, --panel and --raised and every mini-sector fill
  * 3:1 on --bg, and purple, green and --fg stay apart for colour-blind vision (test/contrast.test.ts).
  * Team colours go through .drv and --tc: --team, or on the light theme --team-l (lib/session.ts).
- * Type (px): 11 badge and compound · 12 label (upper case) · 14 body and tables · 15 tower · 17 heads ·
- * 20 clock · 26 title, the titles and the clock in the installed --display stack (no font file).
+ * Type (px): 11 badge and compound · 12 label (upper case) · 14 body and tables, the tower's times · 15 tower ·
+ * 17 heads · 18 the tower's position · 20 clock · 26 title. Three stacks of installed fonts (no font file): the system
+ * face for text; --display for the titles, the clock and the tower's position; --mono for times, gaps and clocks and
+ * nothing else, so far the tower's Gap, Int, Last, Best and sectors (#235; test/tower.test.tsx pins it).
  * Cues are outlines and borders, never shadows, so forced colours keep them. The lap table (P4b): purple
  * boxed on --purple-wash, green bold, in- and out-laps --dim, a --line rule at a new run, an --amber (SC,
  * VSC) or --live (red) header band, the --heat steps behind a Δ, and a frozen Driver (72 px) and Best
@@ -71,6 +73,8 @@
   --cmp-ring: transparent;
   /* Installed fonts only, for titles and the clock: no font file. */
   --display: "DIN Alternate", Bahnschrift, system-ui, sans-serif;
+  /* Installed fonts only, for times, gaps and clocks (#235): every glyph one width, the colon, the dot and the + too. */
+  --mono: ui-monospace, "SF Mono", "Cascadia Mono", Menlo, Consolas, monospace;
 }
 
 /* Every team colour goes through .drv and --tc: --team in the dark theme, --team-l in the light one. */
@@ -941,17 +945,22 @@ header .links {
   font-size: 15px;
 }
 
-/* Pos is a fixed 48 px (fits "POS" in the label style and two digits), so the driver column's left is a px that agrees in the head (12 px) and the body (15 px). */
+/* Pos is a fixed 48 px (fits "POS" in the label style and two digits), so the driver column's left is a px that agrees in the head (12 px) and the body (18 px); both centred. */
 .tower thead tr:first-child th:first-child,
 .tower td:first-child {
   width: 48px;
   min-width: 48px;
+  text-align: center;
 }
 
+/* The position in --display, 18 px bold (#235): the tower's strong left edge. */
 .tower td:first-child {
   position: sticky;
   left: 0;
   background: var(--bg);
+  font-family: var(--display);
+  font-size: 18px;
+  font-weight: 700;
 }
 
 .tower tbody th,
@@ -971,6 +980,19 @@ header .links {
 .tower td.sector > span:first-child {
   display: block;
   min-width: 4.5em;
+}
+
+/* Times and gaps in --mono at 14 px (#235), so a column lines up on every device and bold (a personal best, a close
+   interval) never widens it: the cells after the driver but the places (.pc), the trends (.tr), Tyre and Pits (the
+   last two), which are Gap, Int, Last, Best and S1–S3. The "Leader" word, the RET and STOP badges and a reason's popover
+   in those cells stay in the system face. */
+.tower th.drv ~ td:not(.pc, .tr, :nth-last-child(-n + 2)) {
+  font-family: var(--mono);
+  font-size: 14px;
+}
+
+.tower td :is(.muted, .badge, .pop) {
+  font-family: system-ui, sans-serif;
 }
 
 .tower .ms {
@@ -1471,11 +1493,12 @@ header .links {
   text-align: left;
 }
 
-/* The tower's label cell is no Pos cell: no 48 px width, no sticky left. */
+/* The tower's label cell is no Pos cell: no 48 px width, no sticky left, not the position's face. */
 .tower tr.cutlabel td:first-child {
   width: auto;
   min-width: 0;
   position: static;
+  font: inherit;
 }
 
 .cutlabel span {
