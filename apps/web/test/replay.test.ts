@@ -7,8 +7,11 @@ import {
   lastStop,
   markersUpTo,
   skipped,
+  skippedEvents,
   skippedText,
+  skippedWindow,
   statusSeries,
+  tally,
 } from '../src/lib/replay.ts';
 import { type Feed, openStream } from '../src/lib/stream.ts';
 import { fmtClock, parseT } from '../src/lib/time.ts';
@@ -372,6 +375,7 @@ describe('skipped', () => {
       stops: 2,
       deleted: 2,
       incidents: 2,
+      fastest: 0, // no lap time in these rows
     });
   });
 
@@ -419,15 +423,232 @@ describe('skipped', () => {
   });
 
   it('skippedText lists the non-zero counts, singular or plural', () => {
-    const none = { sc: 0, vsc: 0, red: 0, stops: 0, deleted: 0, incidents: 0 };
-    expect(skippedText({ sc: 1, vsc: 1, red: 0, stops: 21, deleted: 1, incidents: 1 })).toBe(
-      '1 SC · 1 VSC · 21 pit stops · 1 lap deleted · 1 incident noted',
+    const none = { sc: 0, vsc: 0, red: 0, stops: 0, deleted: 0, incidents: 0, fastest: 0 };
+    expect(skippedText({ sc: 1, vsc: 1, red: 0, stops: 21, deleted: 1, incidents: 1, fastest: 4 })).toBe(
+      '1 SC · 1 VSC · 21 pit stops · 1 lap deleted · 1 incident noted · 4 fastest laps',
     );
     expect(skippedText({ ...none, red: 2, stops: 1, deleted: 3, incidents: 2 })).toBe(
       '2 red flags · 1 pit stop · 3 laps deleted · 2 incidents noted',
     );
     expect(skippedText({ ...none, red: 1 })).toBe('1 red flag');
+    expect(skippedText({ ...none, fastest: 1 })).toBe('1 fastest lap'); // a window of fastest laps only gets a line
     expect(skippedText(none)).toBe('');
+  });
+});
+
+describe('skippedEvents (#234)', () => {
+  const OLD = at('2026-10-25T20:00:00Z');
+  const NEW = at('2026-10-25T20:30:00Z');
+  const iso = (min: number) => new Date(OLD + min * 60_000).toISOString();
+  const feedUtc = (min: number) => iso(min).replace('Z', ''); // the feed's Utc has no Z
+  const feed = (t: number, state: Obj, laps: ReturnType<typeof lap>[]): Feed => ({
+    t,
+    state,
+    laps: new Map(laps.map((l) => [`${l.driver_number}:${l.lap_number}`, l])),
+    stints: new Map(),
+    weather: [],
+  });
+  const msg = (min: number, Message: string, Lap?: number) => ({ Utc: feedUtc(min), Category: 'Other', Message, Lap });
+  const base = (Type: string, Name: string): Obj => ({
+    SessionInfo: { Type, Name },
+    DriverList: { '1': { Tla: 'AAA', TeamColour: '3671C6' }, '2': { Tla: 'BBB' }, '3': { Tla: 'CCC' } },
+  });
+  const state: Obj = {
+    ...base('Race', 'Race'),
+    ...seriesState([
+      { Utc: feedUtc(-10), TrackStatus: 'SCDeployed' }, // started before the window
+      { Utc: feedUtc(-5), TrackStatus: 'AllClear' },
+      { Utc: feedUtc(0), TrackStatus: 'VSCDeployed' }, // at the old T: outside (old T, new T]
+      { Utc: feedUtc(1), TrackStatus: 'AllClear' },
+      { Utc: feedUtc(10), TrackStatus: 'SCDeployed' },
+      { Utc: feedUtc(14), TrackStatus: 'AllClear' },
+      { Utc: feedUtc(30), TrackStatus: 'Red' }, // at the new T: inside
+      { Utc: feedUtc(40), TrackStatus: 'VSCDeployed' }, // after the new T (a synthetic future)
+    ]),
+    RaceControlMessages: {
+      Messages: {
+        '0': msg(0, 'TURN 1 INCIDENT INVOLVING CARS 1 (AAA) AND 2 (BBB) NOTED'),
+        '1': msg(5, 'TURN 4 INCIDENT INVOLVING CAR 3 (CCC) NOTED - CAUSING A COLLISION', 12),
+        '2': msg(
+          7,
+          'FIA STEWARDS: TURN 4 INCIDENT INVOLVING CAR 3 (CCC) UNDER INVESTIGATION - CAUSING A COLLISION',
+          13,
+        ),
+        '3': msg(8, 'CAR 2 (BBB) TIME 1:31.000 DELETED - TRACK LIMITS AT TURN 6 LAP 10 20:07:55'),
+        '4': msg(20, 'FIA STEWARDS: 5 SECOND TIME PENALTY FOR CAR 3 (CCC) - CAUSING A COLLISION'),
+        '5': msg(30, 'TURN 9 INCIDENT INVOLVING CAR 1 (AAA) NOTED', 17),
+        '6': msg(31, 'TURN 2 INCIDENT INVOLVING CAR 2 (BBB) NOTED'),
+      },
+    },
+  };
+  const before = [
+    lap(1, 11, { date_start: iso(-1) }), // the leader on lap 11 at the old T
+    lap(2, 5, { deleted: true }), // deleted before the window: never listed
+    lap(2, 10, { date_start: iso(-2), lap_ms: 91_000 }),
+    lap(3, 9, { is_pit_out: true, date_start: iso(0) }), // a stop at the old T: outside
+  ];
+  const after = [
+    ...before.slice(0, 2),
+    lap(2, 10, { date_start: iso(-2), lap_ms: 91_000, deleted: true }), // struck by the ruling at +8 min
+    before[3] as ReturnType<typeof lap>,
+    lap(1, 12, { date_start: iso(4) }),
+    lap(1, 13, { is_pit_out: true, date_start: iso(9), compound: 'HARD' }),
+    lap(1, 14, { date_start: iso(15), lap_ms: 88_000 }),
+    lap(1, 17, { date_start: iso(29) }), // the leader on lap 17 at the new T
+    lap(3, 1, { is_pit_out: true, date_start: iso(2) }), // lap 1 is no stop
+    lap(3, 15, { is_pit_out: true, date_start: iso(30), compound: 'MEDIUM' }), // at the new T: inside
+    lap(2, 16, { is_pit_out: true, date_start: iso(31) }), // after the new T
+  ];
+  const s = (e: { t: number }) => (e.t - OLD) / 1000;
+
+  it('lists each kind in (old T, new T], oldest first, and nothing at the old T or after the new one', () => {
+    const events = skippedEvents(feed(OLD, {}, before), feed(NEW, state, after)) ?? [];
+    expect(events.map((e) => [e.kind, s(e)])).toEqual([
+      ['incident', 300],
+      ['incident', 420],
+      ['deleted', 480],
+      ['stop', 540],
+      ['flag', 600],
+      ['fastest', 988],
+      ['incident', 1200],
+      ['flag', 1800],
+      ['incident', 1800],
+      ['stop', 1800],
+    ]);
+    const [noted, investigation, deleted, stop, sc, fastest, penalty, red] = events;
+    expect(noted).toEqual({
+      kind: 'incident',
+      t: OLD + 300_000,
+      text: 'TURN 4 INCIDENT INVOLVING CAR 3 (CCC) NOTED - CAUSING A COLLISION',
+      lap: 12,
+      noted: true,
+    });
+    expect(investigation).toMatchObject({ lap: 13, noted: false });
+    expect(penalty).toMatchObject({ lap: null, noted: false });
+    expect(deleted).toMatchObject({ driver: { number: 2, acronym: 'BBB' }, lap: 10 });
+    expect(stop).toMatchObject({ driver: { number: 1, acronym: 'AAA', team: '#3671C6' }, lap: 12, compound: 'HARD' });
+    expect(sc).toEqual({ kind: 'flag', t: OLD + 600_000, flag: 'sc', lap: 13 }); // the leader's lap then
+    expect(fastest).toMatchObject({ driver: { number: 1 }, lap: 14, ms: 88_000, part: null });
+    expect(red).toMatchObject({ flag: 'red', lap: 17 });
+  });
+
+  it('agrees with skipped: the flags, stops, deletions, incidents noted and fastest laps', () => {
+    const [old, next] = [feed(OLD, {}, before), feed(NEW, state, after)];
+    const counts = { sc: 1, vsc: 0, red: 1, stops: 2, deleted: 1, incidents: 2, fastest: 1 };
+    expect(tally(skippedEvents(old, next) ?? [])).toEqual(counts);
+    expect(skipped(old, next)).toEqual(counts);
+  });
+
+  it('is null unless the new T is later', () => {
+    expect(skippedEvents(feed(NEW, state, after), feed(OLD, {}, before))).toBeNull();
+    expect(skippedEvents(feed(NEW, state, after), feed(NEW, state, after))).toBeNull();
+  });
+
+  it('the window: the leader’s laps at both ends in a race, and whole minutes, at least one', () => {
+    expect(skippedWindow(feed(OLD, {}, before), feed(NEW, state, after))).toEqual({ laps: [11, 17], minutes: 30 });
+    const practice = { ...state, ...base('Practice', 'Practice 1') };
+    expect(skippedWindow(feed(OLD, {}, before), feed(OLD + 20_000, practice, after))).toEqual({
+      laps: null,
+      minutes: 1,
+    });
+    // Before lap 1 started, the window starts at lap 1.
+    const early = [lap(1, 1, { date_start: iso(2) })];
+    expect(skippedWindow(feed(OLD, {}, []), feed(NEW, state, early)).laps).toEqual([1, 1]);
+  });
+
+  it('a fastest lap was the best when it ended: never a deleted lap, an in- or out-lap, a tie or one still running', () => {
+    const timed = (n: number, l: number, start: number, lap_ms: number, extra = {}) =>
+      lap(n, l, { date_start: iso(start), lap_ms, ...extra });
+    const laps = [
+      timed(1, 2, -3, 90_000), // the best before the window: the baseline only
+      timed(2, 3, 1, 89_000), // beats it
+      timed(3, 3, 2, 89_500),
+      timed(1, 4, 3, 88_000, { deleted: true }),
+      timed(2, 5, 4, 87_000, { is_pit_in: true }),
+      timed(3, 6, 5, 87_500, { is_pit_out: true }),
+      timed(1, 7, 6, 89_000), // a tie: the earlier lap keeps it (A§9)
+      timed(2, 8, 7, 88_500), // beats 89.000
+      timed(3, 9, 29, 80_000), // ends after the new T
+    ];
+    const events = skippedEvents(feed(OLD, {}, []), feed(NEW, base('Race', 'Race'), laps)) ?? [];
+    expect(events.flatMap((e) => (e.kind === 'fastest' ? [[e.driver.acronym, e.lap, e.ms, s(e)]] : []))).toEqual([
+      ['BBB', 3, 89_000, 149],
+      ['BBB', 8, 88_500, 508.5],
+    ]);
+  });
+
+  it('in qualifying the best starts again in each part, and the row names it (D4)', () => {
+    const laps = [
+      lap(1, 3, { date_start: iso(-20), lap_ms: 80_000, quali_phase: 1 }),
+      lap(2, 8, { date_start: iso(2), lap_ms: 81_000, quali_phase: 2 }), // slower than Q1's best, the best of Q2
+      lap(1, 9, { date_start: iso(4), lap_ms: 80_500, quali_phase: 2 }),
+      lap(3, 10, { date_start: iso(6), lap_ms: 80_800, quali_phase: 2 }),
+    ];
+    const parts = (name: string) =>
+      (skippedEvents(feed(OLD, {}, []), feed(NEW, base('Qualifying', name), laps)) ?? []).flatMap((e) =>
+        e.kind === 'fastest' ? [[e.lap, e.part]] : [],
+      );
+    expect(parts('Qualifying')).toEqual([
+      [8, 'Q2'],
+      [9, 'Q2'],
+    ]);
+    expect(parts('Sprint Qualifying')).toEqual([
+      [8, 'SQ2'],
+      [9, 'SQ2'],
+    ]);
+  });
+
+  it('a deleted lap sits at its ruling, paired per driver in order; without one at its end inside the window (D5)', () => {
+    const rulings: Obj = {
+      RaceControlMessages: {
+        Messages: {
+          '0': msg(-1, 'CAR 4 (DDD) TIME 1:30.100 DELETED - TRACK LIMITS AT TURN 4 LAP 3 19:59:00'), // before
+          '1': msg(3, 'CAR 4 (DDD) TIME 1:30.500 DELETED - TRACK LIMITS AT TURN 4 LAP 5 20:02:40'),
+          '2': msg(6, 'CORRECTION - CAR 4 (DDD) LAP DELETED - TRACK LIMITS AT TURN 9 LAP 7 20:05:10'),
+        },
+      },
+    };
+    const struck = (n: number, l: number, extra = {}) => lap(n, l, { deleted: true, ...extra });
+    const laps = [
+      struck(4, 7, { date_start: iso(4), lap_ms: 90_000 }),
+      struck(4, 5, { date_start: iso(1), lap_ms: 90_500 }),
+      struck(5, 2, { date_start: iso(-5), lap_ms: 90_000 }), // ended before the window: at its first ms
+      struck(6, 3), // no start: at the new T
+      struck(7, 4, { date_start: iso(10), lap_ms: 90_000 }), // ended inside: at its end
+    ];
+    const events = skippedEvents(feed(OLD, {}, []), feed(NEW, rulings, laps)) ?? [];
+    expect(events.flatMap((e) => (e.kind === 'deleted' ? [[e.driver.number, e.lap, s(e)]] : []))).toEqual([
+      [5, 2, 0.001],
+      [4, 5, 180],
+      [4, 7, 360],
+      [7, 4, 690],
+      [6, 3, 1800],
+    ]);
+  });
+
+  it('a deleted lap takes the ruling that names its lap first, so a correction never moves a later lap (D5)', () => {
+    const rulings: Obj = {
+      RaceControlMessages: {
+        Messages: {
+          '0': msg(2, 'CAR 8 (EEE) TIME 1:30.500 DELETED - TRACK LIMITS AT TURN 4 LAP 5 20:01:40'),
+          '1': msg(4, 'CORRECTION - CAR 8 (EEE) TIME 1:30.500 DELETED - TRACK LIMITS AT TURN 4 LAP 5 20:01:40'),
+          '2': msg(8, 'CAR 8 (EEE) TIME 1:31.200 DELETED - TRACK LIMITS AT TURN 9 LAP 9 20:07:10'),
+          '3': msg(9, 'CAR 8 (EEE) LAP DELETED - TRACK LIMITS AT TURN 1'), // names no lap: taken in time order
+        },
+      },
+    };
+    const laps = [
+      lap(8, 12, { deleted: true, date_start: iso(7), lap_ms: 90_000 }),
+      lap(8, 9, { deleted: true, date_start: iso(5), lap_ms: 91_200 }),
+      lap(8, 5, { deleted: true, date_start: iso(0), lap_ms: 90_500 }),
+    ];
+    const events = skippedEvents(feed(OLD, {}, []), feed(NEW, rulings, laps)) ?? [];
+    // Lap 12 has no named ruling: the first one left in time order, the correction at 4 min (not lap 9's at 8).
+    expect(events.flatMap((e) => (e.kind === 'deleted' ? [[e.lap, s(e)]] : []))).toEqual([
+      [5, 120],
+      [12, 240],
+      [9, 480],
+    ]);
   });
 });
 

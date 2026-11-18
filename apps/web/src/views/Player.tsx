@@ -27,6 +27,7 @@ import {
 } from '../lib/pitwall.ts';
 import { feedReached, qualiPhases } from '../lib/quali.ts';
 import {
+  type CatchUpEvent,
   feedClock,
   feedRaceControl,
   lapPeriods,
@@ -35,9 +36,11 @@ import {
   type MarkKind,
   markersUpTo,
   type Status,
-  skipped,
+  skippedEvents,
   skippedText,
+  skippedWindow,
   statusSeries,
+  tally,
 } from '../lib/replay.ts';
 import { type PlayerTab, parseTab, replayQuery, setTitleWord } from '../lib/routes.ts';
 import { paceRuns } from '../lib/runs.ts';
@@ -56,6 +59,7 @@ import {
 import { fmtClock, parseT } from '../lib/time.ts';
 import { type ClockPeriod, KIND_LABEL, KIND_NAME, type Kind, type Period, type Track } from '../lib/track.ts';
 import { ErrorBoundary, ErrorView, OFFLINE } from '../ui/ErrorView.tsx';
+import { CatchUp } from './CatchUp.tsx';
 import { Comparison, PitCycles, TrackEvolution } from './Compare.tsx';
 import { DriverPicker, picksOf } from './DriverPicker.tsx';
 import { QualiSwitch } from './LapsTab.tsx';
@@ -737,7 +741,13 @@ export function Player({
   const probing = useRef<AbortController | undefined>(undefined);
   // The reload hint lets the screen lock (owner, 2026-11-13): an expired Access session never comes back by itself.
   useWakeLock(playing && fails < FAILING && !stale);
-  const [since, setSince] = useState<string | null>(null); // what the last forward seek skipped
+  // What the last forward seek skipped (#234): the counts' text, and the events for the catch-up dialog, kept as they
+  // were at its snapshot (the feed is mutated in place after it, so they are never derived later).
+  const [since, setSince] = useState<
+    ({ text: string; events: CatchUpEvent[] } & ReturnType<typeof skippedWindow>) | null
+  >(null);
+  const [catchUp, setCatchUp] = useState(false); // the dialog is open; it never opens by itself
+  const showRef = useRef<HTMLButtonElement>(null);
   const [announce, setAnnounce] = useState(readAnnounce);
   // Minimized, the bar keeps only its head (the clock line, Play/Pause and the toggle); the stream is untouched.
   const [minimized, setMinimized] = useState(readMinimized);
@@ -808,9 +818,10 @@ export function Player({
         const j = jump.current;
         if (j) {
           jump.current = undefined;
-          const s = j.from && skipped(j.from, feed);
-          const text = s ? skippedText(s) : '';
-          setSince(text || null);
+          const from = j.from;
+          const events = from && skippedEvents(from, feed);
+          const text = events ? skippedText(tally(events)) : '';
+          setSince(from && events && text ? { text, events, ...skippedWindow(from, feed) } : null);
           voice.say(`At ${fmtClock(feed.t)}.${text ? ` Before this point: ${text}.` : ''}`);
         }
         // A still frame has what it came for: it closes itself (the cleanup's second close is a no-op).
@@ -937,6 +948,7 @@ export function Player({
       freeze(v);
       setSeek(null);
       setSince(null);
+      setCatchUp(false); // Show tapped while this seek was pending: the dialog goes with its line, never to reopen alone
       setResumed(null); // the note would name an old time
       setOpen((o) => (o.at === null ? { at: v, still: true } : { at: v }));
       if (keepT) writeT(v); // last: nothing it does can lose the seek
@@ -986,6 +998,8 @@ export function Player({
     setAnnounce(on);
     writeAnnounce(on);
   };
+  // Before a button goes, so focus is not lost to the page; a minimized bar has no Position range.
+  const keepFocus = () => (minimized ? toggleRef : position).current?.focus();
   // The toggle takes the focus itself: Safari does not focus a tapped or clicked button, and a focused control in the
   // part that goes (the Position range, the head's Play/Pause) would otherwise drop the focus to the page.
   const toggleMinimized = () => {
@@ -1158,19 +1172,39 @@ export function Player({
       {wall && <Strip strip={wall.strip} now={stateNow} playing={playing} />}
       {since !== null && (
         <p className="since">
-          <b>Before this point</b> <span>{since}</span>
+          <b>Before this point</b> <span>{since.text}</span>
+          <button ref={showRef} type="button" aria-haspopup="dialog" onClick={() => setCatchUp(true)}>
+            Show
+          </button>
           <button
             type="button"
             aria-label="Dismiss"
             onClick={() => {
-              // Before the button goes, so focus is not lost to the page; a minimized bar has no Position range.
-              (minimized ? toggleRef : position).current?.focus();
+              keepFocus();
               setSince(null);
             }}
           >
             ×
           </button>
         </p>
+      )}
+      {catchUp && since !== null && (
+        <CatchUp
+          events={since.events}
+          laps={since.laps}
+          minutes={since.minutes}
+          year={year}
+          onReplay={(t) => {
+            // The seek commit drops the line and its Show button: the focus goes where Dismiss sends it.
+            setCatchUp(false);
+            keepFocus();
+            seekTo(t);
+          }}
+          onClose={() => {
+            setCatchUp(false);
+            showRef.current?.focus(); // the browser restores it too; happy-dom does not
+          }}
+        />
       )}
       {detail && (
         <fieldset className="segmented views" aria-label="View">
