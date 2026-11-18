@@ -1156,8 +1156,25 @@ export function Player({
       : 'Paused';
   // The pill says when the stream is not delivering (#237): stale wins; the reconnect line stays as the detail.
   const warning = stale ? 'Stale' : at !== null && fails > 0 ? 'Reconnecting' : null;
+  // A live delay increase holds T (`floor`, #101): the seconds left of it, rounded up, read at each tick.
+  const holding = () => {
+    const c = clock.current;
+    // No clamp at 0, unlike `clockT`: `wall` is ahead of now for the length of the hold.
+    return live && c.floor !== undefined ? Math.ceil((c.floor - (c.t + Date.now() - c.wall)) / 1000) : 0;
+  };
+  const pillWord = () => {
+    const n = holding();
+    return warning ?? (n > 0 ? `LIVE, holding ${n} s` : mode);
+  };
+  // Live, a nudge that would move nothing (later at no delay, earlier at the most) is off (#237).
   const nudgeButton = (s: number) => (
-    <button key={s} type="button" aria-label={nudgeLabel(s)} onClick={() => nudge(s)}>
+    <button
+      key={s}
+      type="button"
+      aria-label={nudgeLabel(s)}
+      disabled={live && (s > 0 ? delay === 0 : delay === MAX_DELAY)}
+      onClick={() => nudge(s)}
+    >
       {signed(s)}
     </button>
   );
@@ -1303,7 +1320,7 @@ export function Player({
             playing={playing}
             strip={wall?.strip}
             pill={warning ? 'pill warn' : live ? 'pill live' : 'pill'}
-            word={() => warning ?? mode}
+            word={pillWord}
           />
           {minimized && playButton}
           {minimized && liveButton}

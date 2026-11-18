@@ -387,7 +387,7 @@ describe('Player', () => {
       advance(1_250); // T = NOW + 1.5 s
 
       click('5 seconds earlier'); // renders the clock line at once
-      expect(pill()).toBe('LIVE, 5 s behind');
+      expect(pill()).toBe('LIVE, holding 5 s');
       expect(clock()).toBe(fmtClock(NOW + 1_000));
       // T stands at NOW + 1.5 s for the 5 s the page is now further behind.
       advance(1_000);
@@ -1451,6 +1451,8 @@ describe('the player bar', () => {
     expect($('.transport button:nth-child(4)').className).toBe('play');
     click('5 seconds earlier');
     expect(delayShown()).toBe(5);
+    expect(pill()).toBe('LIVE, holding 5 s'); // #237: T stands still for the added delay
+    advance(5_000);
     expect(pill()).toBe('LIVE, 5 s behind');
     click('5 seconds later');
     expect(delayShown()).toBe(0);
@@ -1459,7 +1461,7 @@ describe('the player bar', () => {
     expect(delayShown()).toBe(0);
     for (let i = 0; i < 5; i++) click('30 seconds earlier');
     expect(delayShown()).toBe(120);
-    expect(pill()).toBe('LIVE, 120 s behind');
+    expect(pill()).toBe('LIVE, holding 120 s');
     act(() => root.unmount());
 
     root = createRoot(host);
@@ -2404,6 +2406,60 @@ describe('the player bar (#237)', () => {
     render({ recording: ended, start: T });
     last().emit('snapshot', { t: 'x' });
     expect([$('.clockline .pill').className, pill()]).toEqual(['pill warn', 'Stale']);
+  });
+
+  describe('live nudges (item 9)', () => {
+    const nudges = () =>
+      Object.fromEntries(
+        [...host.querySelectorAll<HTMLButtonElement>('.transport button[aria-label]')].map((b) => [
+          b.getAttribute('aria-label'),
+          b.disabled,
+        ]),
+      );
+    const later = ['1 second later', '5 seconds later', '30 seconds later'];
+    const earlier = ['30 seconds earlier', '5 seconds earlier', '1 second earlier'];
+
+    it('a nudge that would do nothing is disabled: later at delay 0, earlier at 120', () => {
+      render({});
+      const n = nudges();
+      for (const l of later) expect(n[l]).toBe(true);
+      for (const l of earlier) expect(n[l]).toBe(false);
+      slide('Delay', 60);
+      for (const b of Object.values(nudges())) expect(b).toBe(false);
+      slide('Delay', 120);
+      const m = nudges();
+      for (const l of later) expect(m[l]).toBe(false);
+      for (const l of earlier) expect(m[l]).toBe(true);
+    });
+
+    it('in replay no nudge is disabled', () => {
+      render({ recording: ended, start: T });
+      for (const b of Object.values(nudges())) expect(b).toBe(false);
+    });
+
+    it('a delay increase says it is holding, counts down by the second, then says the delay', () => {
+      render({});
+      last().emit('snapshot', { t: NOW, state: {}, laps: [], stints: [] });
+      expect(pill()).toBe('LIVE · Delay not set');
+      click('30 seconds earlier');
+      expect(pill()).toBe('LIVE, holding 30 s');
+      advance(1_000);
+      expect(pill()).toBe('LIVE, holding 29 s');
+      advance(28_000);
+      expect(pill()).toBe('LIVE, holding 1 s');
+      advance(1_000);
+      expect(pill()).toBe('LIVE, 30 s behind');
+      advance(2_000);
+      expect(pill()).toBe('LIVE, 30 s behind');
+    });
+
+    it('a warning wins over the hold', () => {
+      render({});
+      last().emit('snapshot', { t: NOW, state: {}, laps: [], stints: [] });
+      click('30 seconds earlier');
+      last().emit('error');
+      expect(pill()).toBe('Reconnecting');
+    });
   });
 
   it('a seek to the same second leaves no chip', () => {

@@ -1202,6 +1202,11 @@ header .links {
   flex: none;
 }
 
+/* A nudge that would move nothing (#237): the button's own colour is inherited, so the browser's grey does not show. */
+.transport button:disabled {
+  opacity: 0.4;
+}
+
 .player .play {
   min-width: 56px;
   background: var(--fg);
