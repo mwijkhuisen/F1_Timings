@@ -14,8 +14,10 @@ on:
 permissions: {}
 
 concurrency:
-  group: ci-${{ github.ref }}
-  # Cancel superseded runs on PRs only; every commit on main is checked to the end.
+  # A PR's runs share one group and cancel superseded ones. Any other run's group carries its commit
+  # (#208): a run whose release waits for approval holds its group, and GitHub keeps one pending run
+  # per group, so in a per-ref group the next push would wait and a third one cancel it unchecked.
+  group: ci-${{ github.ref }}-${{ github.event_name == 'pull_request' && 'pr' || github.sha }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 defaults:
@@ -174,12 +176,84 @@ jobs:
           echo "$NEEDS" | jq -r 'to_entries[] | "\(.key): \(.value.result)"'
           echo "$NEEDS" | jq -e 'all(.[]; .result == "success")' >/dev/null
 
-  # Push to main only, after the aggregate is green. The one job with packages: write.
-  # Runs queue (never cancelled) so :main ends on the newest commit. No cosign/attest/SBOM.
+  # #208: a release only when a build input changed since the commit that :main carries, so a
+  # docs-only merge asks no approval and redeploys nothing. It runs before the environment gate and
+  # holds no secret: it reads the public images' config (no pull, nothing runs) and diffs two commits.
+  # The inputs are the .dockerignore allowlist, .dockerignore and the two Dockerfiles
+  # (test/pins.test.ts holds the list equal). Labels that cannot be read or differ release.
+  changes:
+    name: changes
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    outputs:
+      release: ${{ steps.diff.outputs.release }}
+    env:
+      REGISTRY_PREFIX: ghcr.io/mwijkhuisen
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      - name: Did a build input change since the released commit?
+        id: diff
+        run: |
+          set -f # the entries are git pathspecs (below), not shell globs
+          paths=(
+            package.json
+            pnpm-lock.yaml
+            pnpm-workspace.yaml
+            tsconfig.base.json
+            scripts/install-pnpm.sh
+            apps/*/package.json
+            apps/*/tsconfig.json
+            apps/*/src
+            apps/web/index.html
+            apps/web/vite.config.ts
+            apps/web/icon.ts
+            apps/web/public
+            packages/*/package.json
+            packages/*/tsconfig.json
+            packages/*/src
+            db/migrations
+            deploy/web/Caddyfile
+            .dockerignore
+            deploy/server/Dockerfile
+            deploy/web/Dockerfile
+          )
+          # Docker's matching: * stays inside one path segment, and a directory covers what is below it.
+          specs=()
+          for p in "${paths[@]}"; do specs+=(":(glob)$p" ":(glob)$p/**"); done
+          label() {
+            timeout 60 docker buildx imagetools inspect "$REGISTRY_PREFIX/f1-$1:main" --format '{{json .Image}}' |
+              jq -r '(if has("config") then . else .["linux/amd64"] end).config.Labels["org.opencontainers.image.revision"] // empty'
+          }
+          server=$(label server) || server=''
+          web=$(label web) || web=''
+          if [[ ! $server =~ ^[0-9a-f]{40}$ || $web != "$server" ]] || ! git merge-base --is-ancestor "$server" HEAD; then
+            echo "::notice::the revision labels of :main cannot be read, differ or name no ancestor of this commit: releasing"
+            release=true
+          elif git diff --quiet "$server" HEAD -- "${specs[@]}"; then
+            echo "::notice::no build input changed since $server: no release"
+            release=false
+          else
+            echo "build inputs changed since $server:"
+            git diff --name-only "$server" HEAD -- "${specs[@]}"
+            release=true
+          fi
+          echo "release=$release" >>"$GITHUB_OUTPUT"
+
+  # Push to main only, after the aggregate is green and when `changes` found a changed build input.
+  # The one job with packages: write. Its own group runs one release at a time; GitHub keeps one
+  # pending job per group, so a newer queued release replaces an older queued one. An approval given
+  # after a newer commit reached main stops at the first step, so :main never moves backwards.
+  # No cosign/attest/SBOM.
   release:
     name: release
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-    needs: [ci]
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main' && needs.changes.outputs.release == 'true'
+    needs: [ci, changes]
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     permissions:
@@ -196,13 +270,30 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+      # The public repository answers ls-remote without a token. Its pattern also matches refs that
+      # end in refs/heads/main, hence the exact name. A failed or unexpected answer fails the job.
+      - name: Stop unless this commit is still the tip of main
+        id: tip
+        run: |
+          tip=$(git ls-remote "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY" refs/heads/main | awk '$2 == "refs/heads/main" { print $1 }')
+          if [[ ! $tip =~ ^[0-9a-f]{40}$ ]]; then
+            echo "::error::cannot read the tip of main: no release"
+            exit 1
+          elif [[ $tip == "$F1_REVISION" ]]; then
+            echo "newest=true" >>"$GITHUB_OUTPUT"
+          else
+            echo "::notice::main has moved on from $F1_REVISION to $tip: no release. The run of $tip releases; if it does not (red, or its release rejected), re-run its failed jobs."
+            echo "newest=false" >>"$GITHUB_OUTPUT"
+          fi
       - name: Build f1-server and f1-web with their tags
+        if: steps.tip.outputs.newest == 'true'
         run: |
           for img in server web; do
             docker build -f "deploy/$img/Dockerfile" --build-arg "F1_REVISION=$F1_REVISION" \
               -t "$REGISTRY_PREFIX/f1-$img:sha-$F1_REVISION" -t "$REGISTRY_PREFIX/f1-$img:main" .
           done
       - name: Log in to ghcr.io and push all four tags
+        if: steps.tip.outputs.newest == 'true'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
@@ -212,6 +303,7 @@ jobs:
             docker push "$REGISTRY_PREFIX/f1-$img:main"
           done
       - name: Record the pushed digests
+        if: steps.tip.outputs.newest == 'true'
         run: |
           {
             echo '### Pushed images (RepoDigests)'
