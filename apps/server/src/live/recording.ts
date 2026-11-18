@@ -2,7 +2,6 @@ import {
   closeSync,
   constants,
   createReadStream,
-  createWriteStream,
   mkdirSync,
   openSync,
   readSync,
@@ -11,10 +10,9 @@ import {
   statSync,
   writeSync,
 } from 'node:fs';
-import { type FileHandle, open, readdir, rename, rm, writeFile } from 'node:fs/promises';
-import { join } from 'node:path';
+import { type FileHandle, open, readdir, rename, rm } from 'node:fs/promises';
+import { dirname, join } from 'node:path';
 import { pipeline } from 'node:stream';
-import { pipeline as pipelineAsync } from 'node:stream/promises';
 import { createGunzip, createGzip } from 'node:zlib';
 import type { Obj } from '@f1/contracts';
 import { codeOf } from '../db/db.ts';
@@ -25,8 +23,8 @@ import { parseFeedLine } from './read.ts';
 // `feed-<firstReceivedMs>.jsonl.gz` a finished one, and `recording.json` what the recorder wrote when it closed the
 // recording (writeRecordingJson; the reindex takes `complete` from it). Since #109 no snapshots are written; an older
 // directory can still hold a `snapshots/` folder, which nothing reads. Lines go out synchronously, one whole line per
-// writeSync, so there is no buffer to lose. Gzip runs in the background and removes the plain file only after it
-// succeeds. Nothing here logs or throws into the socket handler: the recorder reads `failed`.
+// writeSync, so there is no buffer to lose. Gzip runs in the background and removes the plain file only after the gzip
+// and its directory are synced (#210). Nothing here logs or throws into the socket handler: the recorder reads `failed`.
 
 const PLAIN = /^feed(-\d+)?\.jsonl$/;
 // Files from `live`, which parses the untrusted feed (A§12.1): no file is read through a symlink (ELOOP) or unless it is
@@ -109,29 +107,44 @@ export type RecordingMeta = {
   complete: boolean;
 };
 
-/** Plain → `<plain>.gz` through a tmp name. On failure the plain file stays and the promise rejects. */
-async function gzipFile(plain: string): Promise<void> {
-  const tmp = `${plain}.gz.tmp`;
+/**
+ * `to` through `<to>.tmp`, 0600: `write` fills the tmp handle, which is synced and closed before the rename, and the
+ * directory is synced after it, so `to` is whole on disk once this resolves (#210). On failure no tmp stays and it
+ * rejects.
+ */
+async function writeSynced(to: string, write: (fh: FileHandle) => Promise<void>): Promise<void> {
+  const tmp = `${to}.tmp`;
   try {
-    await pipelineAsync(createReadStream(plain), createGzip(), createWriteStream(tmp, { mode: 0o600 }));
-    await rename(tmp, `${plain}.gz`);
+    const fh = await open(tmp, 'w', 0o600);
+    try {
+      await write(fh);
+      await fh.sync();
+    } finally {
+      await fh.close();
+    }
+    await rename(tmp, to);
   } catch (e) {
     await rm(tmp, { force: true }).catch(() => {});
     throw e;
   }
+  const d = await open(dirname(to), 'r');
+  try {
+    await d.sync();
+  } finally {
+    await d.close();
+  }
+}
+
+/** Plain → `<plain>.gz` (writeSynced), and only then the plain file goes. On failure it stays and the promise rejects. */
+async function gzipFile(plain: string): Promise<void> {
+  // The callback pipeline: a read or gzip error ends writeFile's loop, and a write error destroys both streams.
+  await writeSynced(`${plain}.gz`, (fh) => fh.writeFile(pipeline(createReadStream(plain), createGzip(), () => {})));
   await rm(plain);
 }
 
-/** `<dir>/recording.json` through a tmp name, 0600. On failure no tmp stays and the promise rejects. */
+/** `<dir>/recording.json` through writeSynced. On failure no tmp stays and the promise rejects. */
 export async function writeRecordingJson(dir: string, meta: RecordingMeta): Promise<void> {
-  const tmp = join(dir, 'recording.json.tmp');
-  try {
-    await writeFile(tmp, `${JSON.stringify(meta)}\n`, { mode: 0o600 });
-    await rename(tmp, join(dir, 'recording.json'));
-  } catch (e) {
-    await rm(tmp, { force: true }).catch(() => {});
-    throw e;
-  }
+  await writeSynced(join(dir, 'recording.json'), (fh) => fh.writeFile(`${JSON.stringify(meta)}\n`));
 }
 
 export function openRecording({
