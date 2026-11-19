@@ -402,10 +402,11 @@ export const Recordings = z.array(
 
 // The SSE events of /playback/:recording/stream (A§10); each event's data is one of these as JSON. `state` is
 // {topic: value}; a delta's `data` is merged into state[topic] when it is an object, else it replaces it. A snapshot
-// carries every lap and stint row so far; `laps` only the rows that changed since the last snapshot or `laps`, which
-// replace the rows of the same (driver_number, lap_number) or (driver_number, stint_number). `weather` holds every
-// WeatherData sample since the stream's last session switch, one row per applied WeatherData delta, at most the last
-// MAX_WEATHER_ROWS; the client adds weatherRow of the merged view at the delta's t with withWeatherRow.
+// carries every lap, stint and pit row so far; `laps` only the rows that changed since the last snapshot or `laps`,
+// which replace the rows of the same (driver_number, lap_number), (driver_number, stint_number) or pit (driver_number,
+// lap_number). The pit rows (#219) are derived on the server from the pit-lane topics, which are never sent.
+// `weather` holds every WeatherData sample since the stream's last session switch, one row per applied WeatherData
+// delta, at most the last MAX_WEATHER_ROWS; the client adds weatherRow of the merged view at the delta's t with withWeatherRow.
 // With `pos=1` (P7a, A§11.3): `pos` events, at most one per 500 ms of t, each one Position timestamp on the receive
 // axis with every car of it as [x, y] in integer metres of the circuit outline's frame (x east, y south, from its
 // centre). The snapshot's `pos` is the last one before T, null while the session has no fitted frame; without `pos=1`
@@ -419,10 +420,11 @@ export const PlaybackSnapshot = z.strictObject({
   state: z.record(z.string(), z.unknown()),
   laps: Laps,
   stints: Stints,
+  pits: Pits,
   weather: Weather,
   pos: PlaybackPos.nullable().optional(),
 });
-export const PlaybackLaps = z.strictObject({ t: int, laps: Laps, stints: Stints });
+export const PlaybackLaps = z.strictObject({ t: int, laps: Laps, stints: Stints, pits: Pits });
 export const PlaybackDelta = z.strictObject({ t: int, topic: z.string(), data: z.unknown() });
 export const PlaybackEnd = z.strictObject({ t: int });
 // The heartbeat after 15 s without a write: a real event, because EventSource never delivers a comment to JS.
