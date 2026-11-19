@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { useMemo, useRef, useState } from 'react';
 import { type Driver, teamStyle } from '../lib/session.ts';
 import { saveTable } from '../lib/tables.ts';
 
@@ -52,6 +52,7 @@ export function DriverPicker({
   onToggle: (driver: number) => void;
   showReference?: boolean;
 }) {
+  const add = useRef<HTMLDetailsElement>(null);
   const picked = selected.flatMap((n) => drivers.filter((d) => d.number === n));
   return (
     <fieldset className="picked" aria-label="Drivers">
@@ -64,7 +65,7 @@ export function DriverPicker({
           </button>
         </span>
       ))}
-      <details className="add">
+      <details className="add" ref={add}>
         <summary>Add driver</summary>
         <fieldset className="picker">
           <legend>All drivers</legend>
@@ -76,7 +77,13 @@ export function DriverPicker({
               style={teamStyle(d)}
               title={d.name ?? undefined}
               aria-pressed={selected.includes(d.number)}
-              onClick={() => onToggle(d.number)}
+              onClick={() => {
+                onToggle(d.number);
+                // A pick closes the disclosure (#238).
+                if (add.current) add.current.open = false;
+                // Focus was on a toggle inside it: keep it on the summary, not on body.
+                add.current?.querySelector('summary')?.focus();
+              }}
             >
               {d.acronym}
             </button>

@@ -1,6 +1,7 @@
 import type { Laps, SessionDetail } from '@f1/contracts';
 import { type ReactNode, useMemo } from 'react';
 import { useOvertakes, useRaceControl } from '../lib/api.ts';
+import { rcLog } from '../lib/pitwall.ts';
 import { type Quali, qualiPhases } from '../lib/quali.ts';
 import { useTable } from '../lib/tables.ts';
 import { trackPeriods } from '../lib/track.ts';
@@ -46,19 +47,37 @@ export function LapsTab({ session, detail, laps }: { session: number; detail: Se
     () => (qualifying ? qualiPhases(laps, detail.results) : null),
     [qualifying, laps, detail.results],
   );
+  // The race-control link only when the log renders its card (RaceControlLog: no items, no card).
+  const hasRc = useMemo(
+    () => rc.data !== undefined && rcLog(rc.data, qualifying, overtakes.data ?? [], laps).length > 0,
+    [rc.data, qualifying, overtakes.data, laps],
+  );
   return (
     <>
+      <p className="jump">
+        <a href="#laps">Laps</a> · <a href="#speeds">Speed traps</a>
+        {hasRc && (
+          <>
+            {' · '}
+            <a href="#race-control">Race control</a>
+          </>
+        )}
+      </p>
       {quali && <QualiTiles detail={detail} quali={quali} />}
       <SessionTiles detail={detail} laps={laps} />
       {race && rc.error && <p className="muted">Race control did not load: no SC, VSC or red-flag bands.</p>}
-      {quali ? (
-        <QualiSwitch detail={detail} quali={quali}>
-          <LapTable detail={detail} laps={laps} track={track} />
-        </QualiSwitch>
-      ) : (
-        <LapTable detail={detail} laps={laps} track={track} marks />
-      )}
-      <SpeedTable detail={detail} laps={laps} telemetry />
+      <div id="laps">
+        {quali ? (
+          <QualiSwitch detail={detail} quali={quali}>
+            <LapTable detail={detail} laps={laps} track={track} />
+          </QualiSwitch>
+        ) : (
+          <LapTable detail={detail} laps={laps} track={track} marks />
+        )}
+      </div>
+      <div id="speeds">
+        <SpeedTable detail={detail} laps={laps} telemetry />
+      </div>
       {rc.data && <RaceControlLog detail={detail} laps={laps} rows={rc.data} overtakes={overtakes.data} />}
       {!race && rc.error && <p className="muted">Race control did not load.</p>}
     </>

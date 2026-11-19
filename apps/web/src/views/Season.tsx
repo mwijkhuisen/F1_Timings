@@ -174,7 +174,7 @@ export function SeasonView({
                 {upNext.name} · <time dateTime={upNext.date_start}>{fmtInstant(upNext.date_start)}</time>
               </p>
               <Link className="btnlink" to="/live">
-                Open Live
+                Follow
               </Link>
             </div>
           )}

@@ -347,6 +347,15 @@ describe('the lap grid', () => {
     const html = renderToStaticMarkup(<LapTable detail={detail} laps={laps} />);
     expect(html).toMatch(/<button type="button" aria-pressed="true">Lap<\/button>/);
     expect(html).toMatch(/aria-pressed="false">Drivers as columns</);
+    // The two switch groups carry a visible label (#238), inside the fieldset as the player's Back to chips do, so a
+    // label wraps with its buttons on a phone; Drivers as columns is its own label.
+    expect(html).toContain(
+      '<fieldset class="segmented" aria-label="Metric"><span class="label" aria-hidden="true">Metric</span><button',
+    );
+    expect(html).toContain(
+      '<fieldset class="segmented" aria-label="Values"><span class="label" aria-hidden="true">Values</span><button',
+    );
+    expect(html.match(/class="label"/g)).toHaveLength(2);
     expect(html).toContain(
       '<div class="scroll" tabindex="0" role="region" aria-label="Lap times"><table class="laps lap-grid" aria-label="Lap times">',
     );

@@ -226,15 +226,26 @@ header {
 
 .tabs {
   display: flex;
-  flex-wrap: wrap;
-  gap: 4px 16px;
+  gap: 16px;
+  overflow-x: auto;
   border-bottom: 1px solid var(--line);
   margin-bottom: 12px;
 }
 
 .tabs a {
+  flex: none;
   text-decoration: none;
   border-bottom: 3px solid transparent;
+}
+
+/* Inside the scroll box the ring is inset, so the box never clips it. */
+.tabs :focus-visible {
+  outline-offset: -3px;
+}
+
+/* The Laps tab's jump links (#238): a short name keeps its 44 px box, its text centred. */
+.jump a {
+  justify-content: center;
 }
 
 .tabs a[aria-current="page"] {
@@ -275,8 +286,14 @@ header {
   border-radius: 0;
 }
 
-.segmented button:first-child {
+.segmented button:first-of-type {
   border-radius: 6px 0 0 6px;
+}
+
+/* A label inside the fieldset (#238) wraps with its buttons. */
+.segmented > .label {
+  align-self: center;
+  margin-right: 8px;
 }
 
 .segmented button:last-child {
