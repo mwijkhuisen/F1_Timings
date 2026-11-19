@@ -166,11 +166,15 @@ describe('topic names (P3e)', () => {
       expect(indexTopics(bad), bad).toBeUndefined();
   });
 
-  it('OLD_TOPICS is the 29 topics of the 2018 races before the US GP, with every parsed topic but SessionData', () => {
+  it('OLD_TOPICS is the 29 topics of the 2018 races before the US GP, with every parsed topic but SessionData and PitStopSeries', () => {
     expect(OLD_TOPICS).toHaveLength(29);
     expect(new Set(OLD_TOPICS).size).toBe(29);
     expect(OLD_TOPICS.every(isTopic)).toBe(true);
-    expect(TOPICS.filter((t) => !(OLD_TOPICS as readonly string[]).includes(t))).toEqual(['SessionData']);
+    // PitStopSeries (#219) is in the 2025 and 2026 archives only.
+    expect(TOPICS.filter((t) => !(OLD_TOPICS as readonly string[]).includes(t))).toEqual([
+      'SessionData',
+      'PitStopSeries',
+    ]);
   });
 });
 
@@ -246,8 +250,10 @@ describe('archiveEvents', () => {
   });
 });
 
+/** The race's date_start (the Index); no fixture here has a pit-lane topic, so it changes no row. */
+const START = Date.parse('2019-03-17T05:10:00Z');
 const built = (files: ReadonlyMap<string, string>, key: number, type: string) => {
-  const got = archiveRows(files, key, type);
+  const got = archiveRows(files, key, type, START);
   if (!got.ok) throw new Error(got.error);
   return got.value;
 };
@@ -264,7 +270,9 @@ describe('archiveRows: the race', () => {
       phases: 0,
       rules: { deleted: 0, reinstated: 0, unmatched: 0, unparsed: 0 },
       skipped_lines: 0,
+      pit_skipped: 0,
     });
+    expect(race.rows.pit).toEqual([]); // no pit-lane topic in the fixture
   });
 
   it('builds the laps: lap 1 from the Started Utc to lap 2 at the corrected t0, the pit stop, no lap after the flag', () => {
@@ -351,7 +359,7 @@ describe('archiveRows: the race', () => {
     for (const topic of ['SessionInfo', 'TimingData']) {
       const files = new Map(streams('race'));
       files.delete(topic);
-      expect(archiveRows(files, 9102, 'Race')).toEqual({ ok: false, error: 'incomplete' });
+      expect(archiveRows(files, 9102, 'Race', START)).toEqual({ ok: false, error: 'incomplete' });
     }
     expect(
       archiveRows(
@@ -361,12 +369,13 @@ describe('archiveRows: the race', () => {
         ]),
         9102,
         'Race',
+        START,
       ),
     ).toEqual({
       ok: false,
       error: 'incomplete', // no t0
     });
-    expect(archiveRows(streams('race'), 9101, 'Race')).toEqual({ ok: false, error: 'key_mismatch' });
+    expect(archiveRows(streams('race'), 9101, 'Race', START)).toEqual({ ok: false, error: 'key_mismatch' });
   });
 });
 

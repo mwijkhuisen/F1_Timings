@@ -3,13 +3,14 @@ import type { Insertable } from 'kysely';
 import type { DB } from '../db/db.ts';
 import { qualifyingParts } from '../live/laps.ts';
 import { createFeed } from '../live/merge.ts';
+import { pitsSince } from '../live/pits.ts';
 import { type FeedEvent, isObj, type T0From, utc } from '../live/read.ts';
 import type { Result } from '../openf1/schemas.ts';
 import { markLaps, type RuleCounts, type RuleMessage } from '../timing/rules.ts';
 import { archiveEvents, byTime, type IndexSession, isArchivePath, reconstruct } from './files.ts';
 
 // The F1 archive (A§6.2) → A§7 rows with source 'f1-archive'. Pure: the Index gives the meeting and session rows,
-// one session's streams the child rows. No pit rows: no view reads them yet.
+// one session's streams the child rows.
 
 const source = 'f1-archive';
 type Rows<T extends keyof DB> = Insertable<DB[T]>[];
@@ -17,6 +18,8 @@ export type ArchiveRows = {
   driver: Rows<'driver'>;
   lap: Rows<'lap'>;
   stint: Rows<'stint'>;
+  /** #219: written through writePits, never with the other child rows. */
+  pit: Rows<'pit'>;
   race_control: Rows<'race_control'>;
   result: Rows<'result'>;
   weather: Rows<'weather'>;
@@ -25,7 +28,8 @@ export type Planned = {
   key: number;
   path: string;
   type: string | null;
-  /** The session's end, epoch ms. */
+  /** The session's start and end, epoch ms. */
+  start: number;
   end: number;
   meeting: Insertable<DB['meeting']>;
   session: Insertable<DB['session']>;
@@ -111,6 +115,7 @@ export function planSessions(
       key,
       path: s.Path,
       type: str(s.Type),
+      start,
       end,
       meeting: {
         meeting_key: meetingKey,
@@ -177,16 +182,20 @@ export type Stats = {
   phases: number;
   rules: RuleCounts;
   skipped_lines: number;
+  /** Pit-lane entries the parser dropped (live/pits.ts). */
+  pit_skipped: number;
 };
 
 /**
  * One session's streams (topic → text) → its child rows, SessionData rebuilt when absent (rebuildSessionData). `incomplete` without SessionInfo, TimingData or a t0;
- * `key_mismatch` when SessionInfo's Key is not the Index Key.
+ * `key_mismatch` when SessionInfo's Key is not the Index Key. `start`: the session's date_start, epoch ms (the pit
+ * rows are kept from an hour before it on).
  */
 export function archiveRows(
   files: ReadonlyMap<string, string>,
   key: number,
   type: string | null,
+  start: number,
 ): Result<{ rows: ArchiveRows; stats: Stats }, 'incomplete' | 'key_mismatch'> {
   const archive = files.has('SessionInfo') && files.has('TimingData') ? archiveEvents(files) : undefined;
   if (archive === undefined) return { ok: false, error: 'incomplete' };
@@ -269,6 +278,10 @@ export function archiveRows(
     weather.set(ev.t, { session_key: key, source, ...weatherRow(view(feed.state, 'WeatherData'), ev.t) });
   }
 
+  // #219: the pit-lane topics' stops and passes, on the t0 like every event (no stop time before 2025, A§6.2).
+  const pits = pitsSince(archive.events, start);
+  const pit = pits.rows.map((p) => ({ session_key: key, source, ...p, date: iso(p.date), pit_ms: null }));
+
   return {
     ok: true,
     value: {
@@ -276,6 +289,7 @@ export function archiveRows(
         driver,
         lap,
         stint: rows.stints,
+        pit,
         race_control,
         result,
         weather: [...weather.values()],
@@ -286,6 +300,7 @@ export function archiveRows(
         phases: phases.length,
         rules,
         skipped_lines: archive.skipped,
+        pit_skipped: pits.skipped,
       },
     },
   };

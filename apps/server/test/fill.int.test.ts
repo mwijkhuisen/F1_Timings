@@ -10,11 +10,12 @@ import {
 } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import type { Kysely } from 'kysely';
+import { type Kysely, sql } from 'kysely';
 import pino from 'pino';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { MAX_SESSION_BYTES } from '../src/archive/files.ts';
 import { createDb, type DB } from '../src/db/db.ts';
+import { replaceRows } from '../src/ingest/ingest.ts';
 import { openRecording } from '../src/live/recording.ts';
 import { run } from '../src/main.ts';
 import { fill } from '../src/merge/fill.ts';
@@ -78,9 +79,17 @@ function archiveFiles(key: number, sessionKey = true) {
 
 /**
  * A recording of the synthetic practice feed as session `key`, sealed (gzip) through the real recorder. `pad`: the
- * size of an extra TimingStats line, a topic the parser does not read. `overtakes`: an OvertakeSeries line.
+ * size of an extra TimingStats line, a topic the parser does not read. `overtakes`: an OvertakeSeries line. `more`:
+ * further lines, [topic, payload, F1 timestamp].
  */
-async function record(key: number, path: string, session = key, pad = 0, overtakes?: Record<string, unknown>) {
+async function record(
+  key: number,
+  path: string,
+  session = key,
+  pad = 0,
+  overtakes?: Record<string, unknown>,
+  more: readonly [string, unknown, string][] = [],
+) {
   const rec = openRecording({ dir: join(liveDir, path), now: () => T0 });
   const feed = readFileSync(join(FIXTURES, 'live/practice.jsonl'), 'utf8').trim().split('\n');
   for (const [i, line] of feed.entries()) {
@@ -92,6 +101,7 @@ async function record(key: number, path: string, session = key, pad = 0, overtak
   }
   if (pad > 0) rec.feed(T0, 'TimingStats', { pad: 'x'.repeat(pad) }, 'undefined');
   if (overtakes) rec.feed(T0, 'OvertakeSeries', overtakes, 'undefined');
+  for (const [topic, payload, ts] of more) rec.feed(T0, topic, payload, ts);
   await rec.finish();
   const { id } = await admin
     .insertInto('recording')
@@ -386,6 +396,164 @@ describe('the fill job (f1_ingest login, synthetic files)', { timeout: 120_000 }
       expect(await fill({ db, log }, args([PRACTICE]))).toBe(true);
       expect(one()).not.toHaveProperty('overtakes');
       expect(await overtakesOf(PRACTICE)).toEqual([]);
+    });
+  });
+
+  describe('pits (#219)', () => {
+    const KEY = 9708;
+    // fixtures/archive/pits on the race's t0: 8/2 a stop (PLTC + PSS), 3/3 a pass, a stale entry and two bad ones.
+    const START = Date.parse('2019-03-17T05:10:00Z');
+    // OpenF1's rows: 8/2 without a stop time, its date 2 s and its lane 88 ms off the feed's; 44/10 OpenF1's alone.
+    const OPENF1_PITS = [
+      {
+        driver_number: 8,
+        lap_number: 2,
+        date: '2019-03-17T05:13:42.300Z',
+        pit_ms: 45_400,
+        lane_ms: 45_400,
+        stop_ms: null,
+      },
+      {
+        driver_number: 44,
+        lap_number: 10,
+        date: '2019-03-17T05:30:00Z',
+        pit_ms: 22_000,
+        lane_ms: 22_000,
+        stop_ms: 2500,
+      },
+    ].map((p) => ({ ...p, session_key: KEY, source: 'openf1' }));
+    const none = { driver: [], lap: [], stint: [], race_control: [], result: [], weather: [] };
+    /** OpenF1's rows through the ingest's own write path. */
+    const ingest = () => db.transaction().execute((trx) => replaceRows(trx, KEY, { ...none, pit: OPENF1_PITS }));
+    const pits = () =>
+      db
+        .selectFrom('pit')
+        .select(['driver_number', 'lap_number', 'source', 'date', 'pit_ms', 'lane_ms', 'stop_ms', 'filled'])
+        .where('session_key', '=', KEY)
+        .orderBy('driver_number')
+        .orderBy('lap_number')
+        .execute();
+    const hash = async () =>
+      (
+        await sql<{ h: string }>`SELECT md5(string_agg(to_jsonb(p)::text, ',' ORDER BY to_jsonb(p)::text)) AS h
+          FROM pit p WHERE session_key = ${KEY}`.execute(admin)
+      ).rows[0]?.h;
+    const MERGED = [
+      {
+        driver_number: 3,
+        lap_number: 3,
+        source: 'f1-archive',
+        date: new Date('2019-03-17T05:14:30Z'),
+        pit_ms: null,
+        lane_ms: 21_600,
+        stop_ms: null,
+        filled: {},
+      },
+      {
+        driver_number: 8,
+        lap_number: 2,
+        source: 'f1-archive',
+        date: new Date('2019-03-17T05:13:40.300Z'),
+        pit_ms: 45_400,
+        lane_ms: 45_312,
+        stop_ms: 2400,
+        filled: { pit_ms: 'openf1' },
+      },
+      {
+        driver_number: 44,
+        lap_number: 10,
+        source: 'openf1',
+        date: new Date('2019-03-17T05:30:00Z'),
+        pit_ms: 22_000,
+        lane_ms: 22_000,
+        stop_ms: 2500,
+        filled: {},
+      },
+    ];
+    beforeAll(async () => {
+      await admin
+        .insertInto('session')
+        .values({
+          session_key: KEY,
+          source: 'openf1',
+          meeting_key: M,
+          name: 'Race',
+          type: 'Race',
+          date_start: new Date(START),
+          date_end: new Date(START + 7_200_000),
+        })
+        .execute();
+      await ingest();
+    });
+
+    it("the archive's pit-lane topics give the stop time OpenF1 lacks; the feed's lane and date win, OpenF1's fill is marked", async () => {
+      cpSync(join(FIXTURES, 'archive/pits'), archiveFiles(KEY), { recursive: true });
+      expect(await fill({ db, log }, args([KEY]))).toBe(true);
+      const line = one();
+      expect(line.pits).toEqual({ 'f1-archive': 2 });
+      expect(line.pit_merge).toEqual({
+        rows: 3,
+        added: { openf1: 1 },
+        filled: { openf1: { pit_ms: 1 } },
+        diffs: { openf1: { date: 1, lane_ms: 1 } },
+      });
+      expect(await pits()).toEqual(MERGED);
+    });
+
+    it('a second fill changes nothing, and neither does an OpenF1 rewrite through the ingest: the fills stay', async () => {
+      const before = await hash();
+      expect(await fill({ db, log }, args([KEY]))).toBe(true);
+      expect(one().pits).toEqual({ 'f1-archive': 2 });
+      expect(await hash()).toBe(before);
+      expect((await ingest()).pits).toMatchObject({ rows: 3, filled: { openf1: { pit_ms: 1 } } });
+      expect(await hash()).toBe(before);
+      expect(await pits()).toEqual(MERGED);
+    });
+
+    it('an archive without the pit-lane topics is absent for the pits: the stored candidates stay', async () => {
+      const before = await hash();
+      for (const t of ['PitLaneTimeCollection', 'PitStopSeries'])
+        rmSync(join(archiveDir, String(KEY), `${t}.jsonStream`));
+      expect(await fill({ db, log }, args([KEY]))).toBe(true);
+      const line = one();
+      expect(line.sources).toEqual({ 'f1-archive': expect.any(Number) }); // its laps still read
+      expect(line.pits).toEqual({});
+      expect(line).not.toHaveProperty('pit_merge');
+      expect(await hash()).toBe(before);
+    });
+
+    it("a recording's entries are f1-live candidates under the archive's: a row of its own, no value over the archive's", async () => {
+      cpSync(join(FIXTURES, 'archive/pits'), join(archiveDir, String(KEY)), { recursive: true });
+      const entries = {
+        PitTimes: {
+          8: { RacingNumber: '8', Lap: '2', Duration: '45.0' },
+          16: { RacingNumber: '16', Lap: '5', Duration: '23.0' },
+        },
+      };
+      const id = await record(KEY, `${KEY}-1`, KEY, 0, undefined, [
+        ['PitLaneTimeCollection', entries, '2019-03-17T05:20:00.000Z'],
+      ]);
+      await complete(id);
+      expect(await fill({ db, log }, args([KEY]))).toBe(true);
+      const line = one();
+      expect(line.pits).toEqual({ 'f1-archive': 2, 'f1-live': 2 });
+      expect(line.pit_merge).toMatchObject({
+        rows: 4,
+        added: { openf1: 1, 'f1-live': 1 },
+        diffs: { openf1: { date: 1, lane_ms: 1 }, 'f1-live': { date: 1, lane_ms: 1 } },
+      });
+      const rows = await pits();
+      expect(rows.filter((r) => r.driver_number !== 16)).toEqual(MERGED);
+      expect(rows.find((r) => r.driver_number === 16)).toEqual({
+        driver_number: 16,
+        lap_number: 5,
+        source: 'f1-live',
+        date: new Date('2019-03-17T05:20:00Z'),
+        pit_ms: null,
+        lane_ms: 23_000,
+        stop_ms: null,
+        filled: {},
+      });
     });
   });
 
