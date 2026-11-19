@@ -243,6 +243,11 @@ header {
   outline-offset: -3px;
 }
 
+/* The Laps tab's jump links (#238): a short name keeps its 44 px box, its text centred. */
+.jump a {
+  justify-content: center;
+}
+
 .tabs a[aria-current="page"] {
   border-bottom-color: var(--fg);
   font-weight: 600;
@@ -281,8 +286,14 @@ header {
   border-radius: 0;
 }
 
-.segmented button:first-child {
+.segmented button:first-of-type {
   border-radius: 6px 0 0 6px;
+}
+
+/* A label inside the fieldset (#238) wraps with its buttons. */
+.segmented > .label {
+  align-self: center;
+  margin-right: 8px;
 }
 
 .segmented button:last-child {
