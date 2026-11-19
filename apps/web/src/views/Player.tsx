@@ -41,7 +41,7 @@ import {
   statusSeries,
   tally,
 } from '../lib/replay.ts';
-import { type PlayerTab, parseTab, replayQuery, setTitleWord } from '../lib/routes.ts';
+import { type PlayerTab, parseFocus, parseTab, replayQuery, setTitleWord } from '../lib/routes.ts';
 import { paceRuns } from '../lib/runs.ts';
 import { orderDrivers } from '../lib/session.ts';
 import {
@@ -329,6 +329,9 @@ const TABS: [PlayerTab, string][] = [
   ['map', 'Map'],
 ];
 
+/** The race-control card's id, the target of the strip's message (#237). */
+const RC_ID = 'race-control';
+
 export const MAX_DELAY = 120;
 const DELAY_KEY = 'f1.delay';
 const ANNOUNCE_KEY = 'f1.announce';
@@ -390,10 +393,10 @@ function writeMinimized(on: boolean) {
   }
 }
 
-/** T or the tab in the replay's URL (`?t=HH:mm:ss&tab=…`): replaceState only, so the route stays and nothing is dispatched. */
-function writeQuery(set: { t?: string; tab?: PlayerTab }) {
+/** T, the tab or the focus in the player's URL (`?t=HH:mm:ss&tab=…&focus=44`): replaceState only, so the route stays and nothing is dispatched. */
+function writeQuery(set: { t?: string; tab?: PlayerTab; focus?: string | null }, search = location.search) {
   try {
-    history.replaceState(history.state, '', `${location.pathname}${replayQuery(location.search, set)}`);
+    history.replaceState(history.state, '', `${location.pathname}${replayQuery(search, set)}`);
   } catch {
     // A browser that rate-limits replaceState throws (SecurityError): the URL just lags behind T.
   }
@@ -751,8 +754,9 @@ export function Player({
   const [tab, setTab] = useState<PlayerTab>(() =>
     keepT ? parseTab(new URLSearchParams(location.search).get('tab')) : 'tower',
   );
-  // The focused driver's number (a tap on the tower's driver cell); page state that the player bar reads.
-  const [focus, setFocus] = useState<string | null>(null);
+  // The focused driver's number (a tap on the tower's driver cell); page state that the player bar reads. Kept in the
+  // URL (`?focus=`, #237) on the replay and on /live, read once on mount.
+  const [focus, setFocus] = useState(() => parseFocus(new URLSearchParams(location.search).get('focus')));
   const [chosen, setChosen] = useState<number[] | null>(null); // Compare's picks (#112), null until the first one
   const [stale, setStale] = useState(false); // an event failed its contract: reload, no retry
   const [fails, setFails] = useState(0); // errors since the last snapshot
@@ -1064,10 +1068,15 @@ export function Player({
           sessionKey={sessionKey}
           year={year}
           focus={focus}
-          onFocus={(n) => setFocus((f) => (f === n ? null : n))}
+          onFocus={(n) => {
+            const next = focus === n ? null : n;
+            setFocus(next);
+            // /live keeps nothing else in its URL: the other params are not read there.
+            writeQuery({ focus: next }, keepT ? location.search : '');
+          }}
         />
       ),
-    [snap, series, lo, sessionKey, year, focus],
+    [snap, series, lo, sessionKey, year, focus, keepT],
   );
   // The pit wall, once the feed shows this session (as the tower waits): the previous session's chequered flag would
   // otherwise light up.
@@ -1224,7 +1233,15 @@ export function Player({
         </p>
       )}
       {resumed !== null && <p className="muted">Resumed at {fmtClock(resumed)}: press Play when the video is there.</p>}
-      {wall && <Strip strip={wall.strip} now={stateNow} playing={playing} />}
+      {/* The strip's message links to the race-control card only where the card is on the page: the Tower tab's pit wall (#237). */}
+      {wall && (
+        <Strip
+          strip={wall.strip}
+          now={stateNow}
+          playing={playing}
+          target={state && shown === 'tower' ? RC_ID : undefined}
+        />
+      )}
       {since !== null && (
         <p className="since">
           <b>Before this point</b> <span>{since.text}</span>
@@ -1280,6 +1297,7 @@ export function Player({
             positions={store.pos}
             ended={recording.ended_at !== null}
             drivers={drivers}
+            focus={focus}
             now={now}
             playing={playing}
           />
@@ -1311,7 +1329,14 @@ export function Player({
         ) : wall ? (
           <div className="pitwall">
             <div>{tower}</div>
-            <Panel rc={wall.rc} pairs={wall.pairs} fastest={wall.fastest} bests={wall.bests} race={wall.race} />
+            <Panel
+              rc={wall.rc}
+              pairs={wall.pairs}
+              fastest={wall.fastest}
+              bests={wall.bests}
+              race={wall.race}
+              id={RC_ID}
+            />
           </div>
         ) : (
           tower

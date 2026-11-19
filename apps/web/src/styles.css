@@ -2111,9 +2111,8 @@ header .theme[aria-pressed="true"] {
 }
 
 /* Gap and Int right-aligned (owner, 2026-11-18, #235), so their decimal points line up whatever the value's length;
-   their heads stay centred, as in the lap table. They are the two cells after the driver and the places (.pc). */
-.tower :is(th.drv, td.pc) + td:not(.pc),
-.tower :is(th.drv, td.pc) + td:not(.pc) + td {
+   their heads stay centred, as in the lap table. They carry a class, since under 640 px the columns run in another order (#237). */
+.tower td:is(.gap, .int) {
   text-align: right;
 }
 
@@ -2185,6 +2184,32 @@ header .theme[aria-pressed="true"] {
   font-size: 13px;
   font-weight: 500;
   text-overflow: ellipsis;
+}
+
+/* The message as a link to the race-control card (#237): plain text in the one-line cell, so the strip keeps its height. The whole cell (54 px) is the target through a stretched ::after, which the dd's overflow does not clip (its containing block is the cell); the focus ring sits on that overlay. */
+.strip .msg {
+  position: relative;
+}
+
+.msg a {
+  display: inline;
+  min-width: 0;
+  min-height: 0;
+}
+
+.msg a::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+}
+
+.msg a:focus-visible {
+  outline: none;
+}
+
+.msg a:focus-visible::after {
+  outline: 3px solid var(--fg);
+  outline-offset: -3px;
 }
 
 /* The session light: red, yellow and green lamps in fixed places and the state in words. No glow: a shadow would
@@ -2951,6 +2976,12 @@ section.rainmap .raintime input[type="range"] {
   fill: var(--bg);
   stroke: var(--tc);
   stroke-width: 2px;
+}
+
+/* The focused driver (#237): a --fg ring, no new colour; its dot is larger (the r attribute) and drawn last. */
+.trackmap .car.focus circle {
+  stroke: var(--fg);
+  stroke-width: 2.5px;
 }
 
 .trackmap .car text {

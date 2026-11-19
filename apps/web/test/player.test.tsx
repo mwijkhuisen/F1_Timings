@@ -1034,6 +1034,16 @@ describe('the pit wall in the player', () => {
     expect(host.querySelector('.strip')).not.toBeNull(); // on both tabs
   });
 
+  it('links the strip to the race-control card on the Tower tab only', () => {
+    render({ sessionKey: 9100, detail });
+    snapshot(raceState({ msgs: [[2, 'Flag', 'GREEN LIGHT - PIT EXIT OPEN']] }));
+    expect(host.querySelector('.strip a[href="#race-control"]')).not.toBeNull();
+    expect(host.querySelector('#race-control')).not.toBeNull();
+    button('Map');
+    expect(host.querySelector('.strip')).not.toBeNull();
+    expect(host.querySelector('.strip a')).toBeNull();
+  });
+
   it('filters race control by kind', () => {
     render({ sessionKey: 9100 });
     snapshot(
@@ -1070,6 +1080,44 @@ describe('the pit wall in the player', () => {
     act(() => driver('CCC')?.click());
     expect(focused()).toEqual([]);
     expect(host.querySelectorAll('.tower [aria-pressed="true"]')).toHaveLength(0);
+  });
+});
+
+// #237 (item 8, D2): the focused driver lives in the URL as ?focus=<number>, on the replay and on /live.
+describe('the focus in the URL (#237)', () => {
+  afterEach(() => history.replaceState(null, '', '/'));
+  const driver = (tla: string) =>
+    [...host.querySelectorAll<HTMLButtonElement>('.tower tbody th button')].find((b) => b.textContent === tla);
+  const focused = () => [...host.querySelectorAll('.tower tr.focus th')].map((th) => th.textContent);
+  const go = (url: string, keepT: boolean) => {
+    history.replaceState(null, '', url);
+    render({ sessionKey: 9100, keepT });
+    last().emit('snapshot', { t: NOW - 1_000, state: raceState(), laps: [], stints: [] });
+    advance(250);
+  };
+
+  it('the replay focuses the row named by ?focus= on mount, and writes the focus and a clear', () => {
+    go('/replay/7?focus=2', true);
+    expect(focused()).toEqual(['BBB']);
+    act(() => driver('CCC')?.click());
+    expect(location.search).toBe('?focus=3');
+    act(() => driver('CCC')?.click());
+    expect(location.search).toBe('');
+    expect(focused()).toEqual([]);
+  });
+
+  it('/live reads and writes nothing but the focus', () => {
+    go('/live?t=20:30:00&focus=2', false);
+    expect(focused()).toEqual(['BBB']);
+    act(() => driver('CCC')?.click());
+    expect(location.pathname + location.search).toBe('/live?focus=3');
+    act(() => driver('CCC')?.click());
+    expect(location.pathname + location.search).toBe('/live');
+  });
+
+  it.each(['abc', '1234', '', '-2'])('?focus=%s is no focus', (bad) => {
+    go(`/live?focus=${bad}`, false);
+    expect(focused()).toEqual([]);
   });
 });
 

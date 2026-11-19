@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   formatD,
   parseD,
+  parseFocus,
   parseTab,
   type Route,
   replayQuery,
@@ -244,6 +245,24 @@ describe('the player tab in the URL (#100)', () => {
     expect(replayQuery('?t=abc&tab=laps', { tab: 'weather' })).toBe('?tab=weather');
     expect(replayQuery('?t=21:00', {})).toBe('');
     expect(replayQuery('?t=21:00:15&tab=junk&d=1,44', {})).toBe('?t=21:00:15');
+  });
+
+  it('replayQuery writes the focus last, keeps it, and clears it with null (#237)', () => {
+    expect(replayQuery('?t=21:00:15&tab=map', { focus: '44' })).toBe('?t=21:00:15&tab=map&focus=44');
+    expect(replayQuery('?focus=44&tab=map&t=21:00:15', { tab: 'laps' })).toBe('?t=21:00:15&tab=laps&focus=44');
+    expect(replayQuery('?focus=44', { t: '21:00:15' })).toBe('?t=21:00:15&focus=44');
+    expect(replayQuery('', { focus: '4' })).toBe('?focus=4');
+    expect(replayQuery('?t=21:00:15&focus=44', { focus: null })).toBe('?t=21:00:15');
+    expect(replayQuery('?focus=44', { focus: null })).toBe('');
+  });
+
+  it('replayQuery and parseFocus take one to three digits only', () => {
+    for (const bad of ['', '1234', '4x', '-4', '4.5', ' 4', 'a']) expect(replayQuery(`?focus=${bad}`, {})).toBe('');
+    expect(replayQuery('?focus=007', {})).toBe('?focus=7');
+    expect(parseFocus('007')).toBe('7');
+    expect(parseFocus('44')).toBe('44');
+    expect(parseFocus('1234')).toBeNull();
+    expect(parseFocus(null)).toBeNull();
   });
 
   it("replayQuery leaves ':' unescaped", () => {

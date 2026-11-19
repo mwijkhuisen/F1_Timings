@@ -57,6 +57,17 @@ describe('Strip', () => {
     );
   });
 
+  it('links the latest message to the race-control card when given its id (#237), else leaves it text', () => {
+    const s = raceState({ msgs: [[11, 'SafetyCar', 'SAFETY CAR DEPLOYED']] });
+    const linked = renderToStaticMarkup(
+      <Strip strip={stripOf(s)} now={() => T} playing={false} target="race-control" />,
+    );
+    expect(linked).toContain(
+      '<dd class="v" title="SAFETY CAR DEPLOYED"><a href="#race-control">SAFETY CAR DEPLOYED</a></dd>',
+    );
+    expect(strip(s)).not.toContain('<a ');
+  });
+
   it('leaves out the cells without data', () => {
     const html = strip(practiceState());
     expect(html).not.toContain('<dt>Lap</dt>');
@@ -129,6 +140,14 @@ describe('Panel', () => {
     expect(bestsHtml).toContain('<li><span>Finish line <b>BBB</b></span><span>310 km/h</span></li>');
     expect(bestsHtml.indexOf('Lap <b>')).toBeLessThan(bestsHtml.indexOf('S2 <b>'));
     expect(bestsHtml.indexOf('S2 <b>')).toBeLessThan(bestsHtml.indexOf('Finish line'));
+  });
+
+  it('gives the race-control card the id the strip links to (#237), and none without it', () => {
+    const rc = raceControl({}, []);
+    const card = (id?: string) =>
+      renderToStaticMarkup(<Panel rc={rc} pairs={[]} fastest={undefined} bests={[]} race={true} id={id} />);
+    expect(card('race-control')).toContain('<section class="card" id="race-control"><h2>Race control</h2>');
+    expect(card()).not.toContain(' id=');
   });
 
   it('says when there is nothing yet, and has no "within a second" outside races', () => {

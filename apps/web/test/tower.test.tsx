@@ -3,7 +3,7 @@ import { fileURLToPath } from 'node:url';
 import type { Obj } from '@f1/contracts';
 import { Window } from 'happy-dom';
 import { renderToStaticMarkup } from 'react-dom/server';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import type { Trend } from '../src/lib/crossings.ts';
 import { Tower, towerRows } from '../src/views/Tower.tsx';
 import { practiceState, qualifyingState, raceState } from './feed-state.ts';
@@ -272,20 +272,20 @@ describe('the tower', () => {
 
   it('shows the gap and interval as text, and — with its reason in the title and the popover', () => {
     expect(row('AAA')).toContain(
-      '<td><span class="muted">Leader</span></td><td><button type="button" class="note" popoverTarget="tower-int-1" ' +
+      '<td class="gap"><span class="muted">Leader</span></td><td class="int"><button type="button" class="note" popoverTarget="tower-int-1" ' +
         'aria-describedby="tower-int-1" title="Leader: no car ahead">—</button>',
     );
     expect(row('BBB')).toMatch(
-      /<td>\+1\.5<span class="badge"[^>]*>STOP<\/span><span class="vh">, stopped<\/span><\/td><td>\+1\.5<\/td>/,
+      /<td class="gap">\+1\.5<span class="badge"[^>]*>STOP<\/span><span class="vh">, stopped<\/span><\/td><td class="int">\+1\.5<\/td>/,
     );
     expect(row('DDD')).toContain(
-      '<td><button type="button" class="note" popoverTarget="tower-gap-4" aria-describedby="tower-gap-4" ' +
+      '<td class="gap"><button type="button" class="note" popoverTarget="tower-gap-4" aria-describedby="tower-gap-4" ' +
         'title="No gap in the feed">—</button><div popover="auto" id="tower-gap-4" class="pop">No gap in the feed</div></td>',
     );
     expect(row('DDD')).toMatch(/<div popover="auto" id="tower-int-4" class="pop">No interval in the feed<\/div>/);
     // A retired driver keeps the values the feed still sends.
     expect(row('CCC')).toMatch(
-      /<td>\+9\.1<span class="badge"[^>]*>RET<\/span><span class="vh">, retired<\/span><\/td><td>\+4\.2<\/td>/,
+      /<td class="gap">\+9\.1<span class="badge"[^>]*>RET<\/span><span class="vh">, retired<\/span><\/td><td class="int">\+4\.2<\/td>/,
     );
   });
 
@@ -435,7 +435,7 @@ describe('the tower', () => {
       />,
     );
     expect(evil).toContain('&lt;b&gt;');
-    expect(evil).toContain('<td>&lt;i&gt;</td><td>&amp;x</td>');
+    expect(evil).toContain('<td class="gap">&lt;i&gt;</td><td class="int">&amp;x</td>');
   });
 });
 
@@ -506,15 +506,15 @@ describe('the tower in a race', () => {
   const row = (tla: string) => html.split('<tr').find((r) => r.includes(`>${tla}</th>`)) ?? '';
 
   it('names the leader "Leader", muted, with an Int reason', () => {
-    expect(row('AAA')).toContain('<td><span class="muted">Leader</span></td>');
+    expect(row('AAA')).toContain('<td class="gap"><span class="muted">Leader</span></td>');
     expect(row('AAA')).toContain('<div popover="auto" id="tower-int-1" class="pop">Leader: no car ahead</div>');
   });
 
   it('marks an Int under a second bold with a dot and the words, not 1.000 s, a lapped or a retired car', () => {
     expect(row('BBB')).toContain('<td class="int close">+0.400<span class="vh">, within a second</span></td>');
     expect(html.match(/within a second/g)).toHaveLength(1);
-    expect(row('CCC')).toContain('<td>+1.000</td>');
-    expect(row('EEE')).toContain('<td>+0.200</td>');
+    expect(row('CCC')).toContain('<td class="int">+1.000</td>');
+    expect(row('EEE')).toContain('<td class="int">+0.200</td>');
   });
 
   it('marks nothing within a second outside races', () => {
@@ -733,7 +733,7 @@ describe('mono times and the position face (#235)', () => {
   };
   const STACK = 'ui-monospace, "SF Mono", "Cascadia Mono", Menlo, Consolas, monospace';
   const MONO = '.tower th.drv ~ td:not(.pc, .tr, :nth-last-child(-n + 2))';
-  const RIGHT = '.tower :is(th.drv, td.pc) + td:not(.pc),\n.tower :is(th.drv, td.pc) + td:not(.pc) + td';
+  const RIGHT = '.tower td:is(.gap, .int)';
 
   it('names a mono face only in the --mono token; every other font is a stack variable or the system face', () => {
     expect(rule(':root')).toContain(`--mono: ${STACK};`);
@@ -796,5 +796,72 @@ describe('mono times and the position face (#235)', () => {
       '.tower td:first-child {\n  position: sticky;\n  left: 0;\n  background: var(--bg);\n  font-family: var(--display);\n  font-size: 18px;\n  font-weight: 700;\n}',
     );
     expect(rule('.tower tr.cutlabel td:first-child')).toContain('font: inherit;');
+  });
+});
+
+describe('the phone column order (#237)', () => {
+  const trend = new Map<number, { one: Trend; three: Trend }>([[2, { one: { delta: -400 }, three: { delta: 200 } }]]);
+  const s = raceState();
+  Object.assign((s.TimingData as { Lines: Record<string, object> }).Lines['2'] ?? {}, {
+    LastLapTime: { Value: '1:31.111' },
+    BestLapTime: { Value: '1:30.222' },
+  });
+  const window = new Window();
+  const words = (h: string) => h.replace(/(Places since the start|Interval change at the line over )/, '');
+  /** The heads and BBB's cells, with matchMedia answering `(max-width: 640px)` with `matches`, or missing. */
+  const render = (matches: boolean | undefined) => {
+    if (matches !== undefined)
+      vi.stubGlobal('matchMedia', (q: string) => ({ matches: matches && q === '(max-width: 640px)' }));
+    try {
+      window.document.body.innerHTML = renderToStaticMarkup(<Tower state={s} trend={trend} />);
+    } finally {
+      vi.unstubAllGlobals();
+    }
+    const doc = window.document;
+    const row = [...doc.querySelectorAll('tbody tr')].find((tr) => tr.querySelector('th.drv')?.textContent === 'BBB');
+    return {
+      heads: [...doc.querySelectorAll('thead th')].map((th) => words(th.textContent ?? '')),
+      cells: [...(row?.children ?? [])],
+    };
+  };
+
+  it('runs Pos, Driver, Gap, Int, Last, Best, ±, 1 lap, 3 laps under 640 px, the cells under their heads', () => {
+    const { heads, cells } = render(true);
+    expect(heads).toEqual([
+      'Pos',
+      'Driver',
+      'Gap',
+      'Int',
+      'Last',
+      'Best',
+      '±',
+      '1 lap',
+      '3 laps',
+      'S1',
+      'S2',
+      'S3',
+      'Tyre',
+      'Pits',
+    ]);
+    expect(cells).toHaveLength(heads.length);
+    expect(cells[2]?.textContent).toBe('+0.400');
+    expect(cells[3]?.textContent).toBe('+0.400, within a second');
+    expect(cells[4]?.textContent).toBe('1:31.111');
+    expect(cells[5]?.textContent).toBe('1:30.222');
+    expect(cells.slice(6, 9).map((c) => c.className)).toEqual(['pc', 'tr', 'tr']);
+  });
+
+  it('keeps the wide order without the match or without matchMedia', () => {
+    for (const matches of [false, undefined]) {
+      const { heads, cells } = render(matches);
+      expect(heads.slice(0, 9)).toEqual(['Pos', 'Driver', '±', 'Gap', 'Int', '1 lap', '3 laps', 'Last', 'Best']);
+      expect(cells[7]?.textContent).toBe('1:31.111');
+    }
+  });
+
+  it('marks Gap and Int by class, so no rule depends on their place', () => {
+    const { cells } = render(true);
+    expect(cells[2]?.classList.contains('gap')).toBe(true);
+    expect(cells[3]?.classList.contains('int')).toBe(true);
   });
 });

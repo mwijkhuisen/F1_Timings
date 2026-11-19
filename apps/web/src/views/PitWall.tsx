@@ -50,7 +50,18 @@ function Left({ clock, now, playing }: { clock: Clock; now: () => number; playin
 }
 
 /** The status strip: the light, then each cell the feed has data for. */
-export function Strip({ strip, now, playing }: { strip: StripData; now: () => number; playing: boolean }) {
+export function Strip({
+  strip,
+  now,
+  playing,
+  target,
+}: {
+  strip: StripData;
+  now: () => number;
+  playing: boolean;
+  /** The id of the race-control card on the page (#237): the message links to it. Without it the message is text. */
+  target?: string | undefined;
+}) {
   const { lap, clock, weather, latest } = strip;
   return (
     <dl className="strip" aria-label="Session state">
@@ -85,7 +96,7 @@ export function Strip({ strip, now, playing }: { strip: StripData; now: () => nu
         <div className="msg">
           <dt>Race control{latest.lap !== undefined && ` · L${latest.lap}`}</dt>
           <dd className="v" title={latest.text}>
-            {latest.text}
+            {target ? <a href={`#${target}`}>{latest.text}</a> : latest.text}
           </dd>
         </div>
       )}
@@ -130,11 +141,14 @@ export function RaceControlCard({
   yet = false,
   className = 'card',
   filters,
+  id,
 }: {
   rc: RaceControl;
   yet?: boolean;
   className?: string;
   filters?: ReactNode;
+  /** The section's id, the target of the strip's link (#237). */
+  id?: string | undefined;
 }) {
   const [filter, setFilter] = useState<Kind | 'all'>('all');
   const [places, setPlaces] = useState(readPlaces);
@@ -144,7 +158,7 @@ export function RaceControlCard({
   );
   const y = yet ? ' yet' : '';
   return (
-    <section className={className}>
+    <section className={className} id={id}>
       <h2>Race control</h2>
       <fieldset className="chips" aria-label="Filter">
         {FILTERS.map(([kind, label]) => (
@@ -210,16 +224,19 @@ export function Panel({
   fastest,
   bests,
   race,
+  id,
 }: {
   rc: RaceControl;
   pairs: Pair[];
   fastest: Fastest | undefined;
   bests: Best[];
   race: boolean;
+  /** The race-control card's id, for the strip's link (#237). */
+  id?: string | undefined;
 }) {
   return (
     <aside className="side" aria-label="Session details">
-      <RaceControlCard rc={rc} yet />
+      <RaceControlCard rc={rc} yet id={id} />
       {race && (
         <section className="card">
           <h2>Within a second</h2>

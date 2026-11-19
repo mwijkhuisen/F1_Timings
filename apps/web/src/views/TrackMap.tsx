@@ -48,12 +48,14 @@ type Props = {
   /** The recording has ended: no frame now means none for good. */
   ended: boolean;
   drivers: Views['DriverList'];
+  /** The focused driver's number as the tower uses it (#237): that car is larger, ringed and drawn last. */
+  focus: string | null;
   /** T, in epoch ms. */
   now: () => number;
   playing: boolean;
 };
 
-export function TrackMap({ circuit, positions, ended, drivers, now, playing }: Props) {
+export function TrackMap({ circuit, positions, ended, drivers, focus, now, playing }: Props) {
   const pos = useSyncExternalStore(positions.subscribe, positions.get);
   const name = circuit ?? '';
   const id = Object.hasOwn(CIRCUITS, name) ? (CIRCUITS[name]?.id ?? null) : null;
@@ -79,7 +81,7 @@ export function TrackMap({ circuit, positions, ended, drivers, now, playing }: P
       const was = drawn.current.get(n);
       return { n, c, stale, move: !stale && was !== undefined && was >= c.run && was <= c.t };
     })
-    .sort((a, b) => Number(a.n) - Number(b.n));
+    .sort((a, b) => Number(a.n === focus) - Number(b.n === focus) || Number(a.n) - Number(b.n)); // the focus last: on top
   const lost = cars.filter((k) => k.stale).length;
   const label =
     cars.length > 0
@@ -98,14 +100,15 @@ export function TrackMap({ circuit, positions, ended, drivers, now, playing }: P
         <path className="map-outline" d={outline} />
         {cars.map(({ n, c, stale, move }) => {
           const d = driverOf(drivers, n);
+          const dot = n === focus ? Number((r * 1.5).toFixed(4)) : r;
           return (
             <g
               key={n}
-              className={`car${move ? ' move' : ''}${stale ? ' stale' : ''}`}
+              className={`car${move ? ' move' : ''}${stale ? ' stale' : ''}${n === focus ? ' focus' : ''}`}
               style={{ ...teamStyle(d), ...vars({ '--x': String(c.x / 1000), '--y': String(c.y / 1000) }) }}
             >
-              <circle r={r} />
-              <text x={r * 1.4} y={r * 0.4} fontSize={Number((size * 0.03).toFixed(4))}>
+              <circle r={dot} />
+              <text x={dot * 1.4} y={r * 0.4} fontSize={Number((size * 0.03).toFixed(4))}>
                 {d.acronym}
               </text>
             </g>

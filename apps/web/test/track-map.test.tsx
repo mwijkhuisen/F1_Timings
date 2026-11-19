@@ -40,7 +40,7 @@ const channel = (pos: Positions | null | undefined) => ({ get: () => pos, subscr
 /** `circuit: undefined` overrides Interlagos: the session not loaded yet. */
 const render = (
   pos: Positions | null | undefined,
-  { now = T, ...over }: { now?: number; circuit?: string | undefined; ended?: boolean } = {},
+  { now = T, ...over }: { now?: number; circuit?: string | undefined; ended?: boolean; focus?: string | null } = {},
 ) =>
   act(() =>
     root.render(
@@ -48,6 +48,7 @@ const render = (
         <TrackMap
           circuit="Interlagos"
           ended={false}
+          focus={null}
           {...over}
           positions={channel(pos)}
           drivers={drivers}
@@ -109,6 +110,24 @@ describe('the cars at T', () => {
     expect(host.querySelector('svg.trackmap')?.getAttribute('aria-label')).toBe(
       `Car positions at ${fmtClock(T)}: 2 cars, 1 without a recent position`,
     );
+  });
+
+  it('marks the focused car (#237): a class, a dot 1.5 times larger, drawn last; none without a focus', () => {
+    render(pos);
+    expect(host.querySelector('g.car.focus')).toBeNull();
+    const radius = (g: SVGGElement) => Number(g.querySelector('circle')?.getAttribute('r'));
+    const r = radius(byText('AAA'));
+    render(pos, { focus: '1' });
+    expect(cars().map((g) => g.querySelector('text')?.textContent)).toEqual(['CCC', '9', 'AAA']); // on top
+    expect(byText('AAA').classList.contains('focus')).toBe(true);
+    expect(radius(byText('AAA'))).toBeCloseTo(r * 1.5, 4);
+    expect(radius(byText('CCC'))).toBe(r);
+    const labelX = (g: SVGGElement) => Number(g.querySelector('text')?.getAttribute('x'));
+    expect(labelX(byText('AAA'))).toBeGreaterThan(radius(byText('AAA'))); // the label clears the larger dot
+    expect(labelX(byText('CCC'))).toBeGreaterThan(r);
+    expect(host.querySelectorAll('g.car.focus')).toHaveLength(1);
+    render(pos, { focus: '44' }); // a number the map does not show: nothing is marked
+    expect(host.querySelector('g.car.focus')).toBeNull();
   });
 
   it('hollows a car 1.6 s behind the newest sample, and never moves it', () => {
