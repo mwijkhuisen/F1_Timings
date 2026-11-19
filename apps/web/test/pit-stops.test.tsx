@@ -21,6 +21,8 @@ const pits = Pits.parse(
     pit_ms: ms(r.pit_duration),
     lane_ms: ms(r.lane_duration),
     stop_ms: ms(r.stop_duration),
+    source: 'openf1',
+    filled: {},
   })),
 );
 

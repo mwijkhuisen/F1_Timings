@@ -338,7 +338,7 @@ export function createApp({
     if (session instanceof Response) return session;
     const body = await db
       .selectFrom('pit')
-      .select(['driver_number', 'lap_number', 'date', 'pit_ms', 'lane_ms', 'stop_ms'])
+      .select(['driver_number', 'lap_number', 'date', 'pit_ms', 'lane_ms', 'stop_ms', 'source', 'filled'])
       .where('session_key', '=', session.key)
       .orderBy('date')
       .orderBy('driver_number')

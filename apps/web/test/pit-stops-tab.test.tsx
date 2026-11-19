@@ -28,7 +28,16 @@ afterEach(() => {
   host.remove();
 });
 
-const pit = { driver_number: 4, lap_number: 5, date: null, pit_ms: 22000, lane_ms: 22000, stop_ms: null };
+const pit = {
+  driver_number: 4,
+  lap_number: 5,
+  date: null,
+  pit_ms: 22000,
+  lane_ms: 22000,
+  stop_ms: null,
+  source: 'openf1',
+  filled: {},
+};
 const stints = [
   { driver_number: 4, stint_number: 1, lap_start: 1, lap_end: 5, compound: 'MEDIUM', tyre_age_at_start: 0 },
   { driver_number: 4, stint_number: 2, lap_start: 6, lap_end: 9, compound: 'HARD', tyre_age_at_start: 0 },

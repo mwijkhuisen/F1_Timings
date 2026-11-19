@@ -22,6 +22,8 @@ const text = z.string().nullable();
 const ms = int.nullable();
 const segments = z.array(int.nullable()).nullable();
 const ingestState = z.enum(['scheduled', 'due', 'fetched', 'final', 'failed']);
+/** A row's source: the DDL's CHECK list. */
+const source = z.enum(['openf1', 'f1-archive', 'f1-live', 'jolpica']);
 
 const Colour = z.enum(['purple', 'green', 'yellow']).nullable();
 
@@ -57,7 +59,7 @@ export const SessionDetail = z.strictObject({
   session: z.strictObject({
     ...SeasonSession.shape,
     meeting_key: int,
-    source: z.enum(['openf1', 'f1-archive', 'f1-live', 'jolpica']),
+    source,
     fetch_count: int,
     fail_count: int,
     last_error: z
@@ -162,6 +164,7 @@ export const Stints = z.array(
   }),
 );
 
+// #219 (A§7): a value's source is `filled[column] ?? source`; `filled` names only date, pit_ms, lane_ms and stop_ms.
 export const Pits = z.array(
   z.strictObject({
     driver_number: int,
@@ -170,6 +173,8 @@ export const Pits = z.array(
     pit_ms: ms,
     lane_ms: ms,
     stop_ms: ms,
+    source,
+    filled: z.record(z.string(), source),
   }),
 );
 
