@@ -20,6 +20,7 @@ const PINNED: Record<string, string> = {
   '20261115000002_standings.sql': '0150724dc02e83b1081487608760c9c2bda28805cdcd605b9d0a1dbe14f85e26',
   '20261116000001_telemetry.sql': '19759ad46db29fe1563dbc6e4f441169f12b3ad423aba34aa2ec66d2f8c26a19',
   '20261118000001_overtake.sql': 'd79c48dc3cd36808343e3645a1a0584c5f3f9630f087d68e55438fc04deb31e8',
+  '20261119000001_pit_sources.sql': '2b43878dd4b4c4a8f4e30fdcedc847bbb990c4817cc4ed66dbd2831268affd94',
 };
 
 const dir = fileURLToPath(new URL('../db/migrations/', import.meta.url));
