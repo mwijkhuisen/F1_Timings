@@ -387,7 +387,7 @@ describe('Player', () => {
       advance(1_250); // T = NOW + 1.5 s
 
       click('5 seconds earlier'); // renders the clock line at once
-      expect(pill()).toBe('LIVE, 5 s behind');
+      expect(pill()).toBe('LIVE, holding 5 s');
       expect(clock()).toBe(fmtClock(NOW + 1_000));
       // T stands at NOW + 1.5 s for the 5 s the page is now further behind.
       advance(1_000);
@@ -1451,6 +1451,8 @@ describe('the player bar', () => {
     expect($('.transport button:nth-child(4)').className).toBe('play');
     click('5 seconds earlier');
     expect(delayShown()).toBe(5);
+    expect(pill()).toBe('LIVE, holding 5 s'); // #237: T stands still for the added delay
+    advance(5_000);
     expect(pill()).toBe('LIVE, 5 s behind');
     click('5 seconds later');
     expect(delayShown()).toBe(0);
@@ -1459,7 +1461,7 @@ describe('the player bar', () => {
     expect(delayShown()).toBe(0);
     for (let i = 0; i < 5; i++) click('30 seconds earlier');
     expect(delayShown()).toBe(120);
-    expect(pill()).toBe('LIVE, 120 s behind');
+    expect(pill()).toBe('LIVE, holding 120 s');
     act(() => root.unmount());
 
     root = createRoot(host);
@@ -2342,6 +2344,167 @@ describe('the player bar', () => {
   });
 });
 
+describe('the player bar (#237)', () => {
+  const T = S + 3_600_000;
+  const chips = () => [...host.querySelectorAll('section.player .chips button')].map((b) => b.textContent);
+  const pill = () => $('.clockline .pill').textContent;
+  beforeEach(() => history.replaceState(null, '', '/'));
+
+  it('a seek leaves a chip with the T before it, and the chip is a seek that offers the T it came from', () => {
+    render({ recording: ended, start: T });
+    last().emit('snapshot', { t: T, state: {}, laps: [], stints: [] });
+    expect(chips()).toEqual([]);
+    slide('Position', T + 600_000);
+    expect(chips()).toEqual([]); // still pending
+    advance(400);
+    expect(atOf(last())).toBe(String(T + 600_000));
+    expect(chips()).toEqual([fmtClock(T)]);
+    button(fmtClock(T));
+    advance(400);
+    expect(atOf(last())).toBe(String(T));
+    expect(chips()).toEqual([fmtClock(T + 600_000)]); // the next seek replaces it
+  });
+
+  it('a burst of nudges while playing leaves the T before the first one, not the T the burst ended at', () => {
+    render({ recording: ended, start: T });
+    last().emit('snapshot', { t: T, state: {}, laps: [], stints: [] });
+    for (let i = 0; i < 4; i++) {
+      click('5 seconds later');
+      advance(390); // inside the 400 ms: one gesture, 1.2 s long
+    }
+    advance(400);
+    expect(chips()).toEqual([fmtClock(T)]);
+  });
+
+  it('minimized, a paused live session has Live in the head, after Play', () => {
+    localStorage.setItem('f1.minimized', '1');
+    render({ recording: open, start: 'live' });
+    const head = () => [...$('.barhead').children].map((c) => c.className);
+    expect(head()).toEqual(['clockline', 'play', 'bartoggle']); // live: nothing to go to
+    button('Pause');
+    expect(head()).toEqual(['clockline', 'play', 'golive', 'bartoggle']);
+    expect($('.barhead .golive').textContent).toBe('Live');
+    button('Live');
+    expect(atOf(last())).toBe('live');
+    expect(openCount()).toBe(1);
+    expect(head()).toEqual(['clockline', 'play', 'bartoggle']);
+    // Expanded, it is in the transport again, and only there.
+    act(() => $<HTMLButtonElement>('button.bartoggle').click());
+    button('Pause');
+    expect(host.querySelectorAll('.golive')).toHaveLength(1);
+    expect($('.transport .golive').textContent).toBe('Live');
+  });
+
+  it('the pill says Reconnecting after an error and Stale after a bad event, and the mode again after a snapshot', () => {
+    render({ recording: ended, start: T });
+    last().emit('snapshot', { t: T, state: {}, laps: [], stints: [] });
+    expect([$('.clockline .pill').className, pill()]).toEqual(['pill', 'Replay']);
+    last().emit('error');
+    expect([$('.clockline .pill').className, pill()]).toEqual(['pill warn', 'Reconnecting']);
+    expect(host.textContent).toContain('Reconnecting…'); // the line stays as the detail
+    advance(1_000);
+    last().emit('snapshot', { t: T, state: {}, laps: [], stints: [] });
+    expect([$('.clockline .pill').className, pill()]).toEqual(['pill', 'Replay']);
+    // Live too: the warning has no live dot.
+    act(() => root.unmount());
+    root = createRoot(host);
+    render({ recording: open, start: 'live' });
+    last().emit('error');
+    expect([$('.clockline .pill').className, pill()]).toEqual(['pill warn', 'Reconnecting']);
+    act(() => root.unmount());
+    root = createRoot(host);
+    render({ recording: ended, start: T });
+    last().emit('snapshot', { t: 'x' });
+    expect([$('.clockline .pill').className, pill()]).toEqual(['pill warn', 'Stale']);
+  });
+
+  it('Stale beats Reconnecting when both apply', () => {
+    render({ recording: ended, start: T });
+    last().emit('snapshot', { t: T, state: {}, laps: [], stints: [] });
+    last().emit('error');
+    expect(pill()).toBe('Reconnecting');
+    advance(1_000); // the retry's new stream
+    last().emit('snapshot', { t: 'x' });
+    expect([$('.clockline .pill').className, pill()]).toEqual(['pill warn', 'Stale']);
+  });
+
+  it('the minimized head of an ended recording has no Live, paused or not', () => {
+    localStorage.setItem('f1.minimized', '1');
+    render({ recording: ended, start: T });
+    button('Pause');
+    expect([...$('.barhead').children].map((c) => c.className)).toEqual(['clockline', 'play', 'bartoggle']);
+  });
+
+  describe('live nudges (item 9)', () => {
+    const nudges = () =>
+      Object.fromEntries(
+        [...host.querySelectorAll<HTMLButtonElement>('.transport button[aria-label]')].map((b) => [
+          b.getAttribute('aria-label'),
+          b.getAttribute('aria-disabled') === 'true',
+        ]),
+      );
+    const later = ['1 second later', '5 seconds later', '30 seconds later'];
+    const earlier = ['30 seconds earlier', '5 seconds earlier', '1 second earlier'];
+
+    it('a nudge that would do nothing is aria-disabled and does nothing: later at delay 0, earlier at 120', () => {
+      render({});
+      const n = nudges();
+      for (const l of later) expect(n[l]).toBe(true);
+      for (const l of earlier) expect(n[l]).toBe(false);
+      click('5 seconds later'); // a no-op, not a delay of -5
+      expect(delayShown()).toBe(0);
+      expect(host.querySelectorAll('.transport button:disabled')).toHaveLength(0); // aria-disabled keeps the focus
+      slide('Delay', 60);
+      for (const b of Object.values(nudges())) expect(b).toBe(false);
+      slide('Delay', 120);
+      const m = nudges();
+      for (const l of later) expect(m[l]).toBe(false);
+      for (const l of earlier) expect(m[l]).toBe(true);
+    });
+
+    it('in replay no nudge is disabled', () => {
+      render({ recording: ended, start: T });
+      for (const b of Object.values(nudges())) expect(b).toBe(false);
+    });
+
+    it('a delay increase says it is holding, counts down by the second, then says the delay', () => {
+      render({});
+      last().emit('snapshot', { t: NOW, state: {}, laps: [], stints: [] });
+      expect(pill()).toBe('LIVE · Delay not set');
+      click('30 seconds earlier');
+      expect(pill()).toBe('LIVE, holding 30 s');
+      advance(1_000);
+      expect(pill()).toBe('LIVE, holding 29 s');
+      advance(28_000);
+      expect(pill()).toBe('LIVE, holding 1 s');
+      advance(1_000);
+      expect(pill()).toBe('LIVE, 30 s behind');
+      advance(2_000);
+      expect(pill()).toBe('LIVE, 30 s behind');
+    });
+
+    it('a warning wins over the hold', () => {
+      render({});
+      last().emit('snapshot', { t: NOW, state: {}, laps: [], stints: [] });
+      click('30 seconds earlier');
+      last().emit('error');
+      expect(pill()).toBe('Reconnecting');
+    });
+  });
+
+  it('a seek to the same second keeps the earlier chip', () => {
+    render({ recording: ended, start: T });
+    last().emit('snapshot', { t: T, state: {}, laps: [], stints: [] });
+    slide('Position', T + 600_000);
+    advance(400);
+    expect(chips()).toEqual([fmtClock(T)]);
+    button('Pause');
+    slide('Position', T + 600_500); // the same second: nothing new to go back to, the earlier chip stays
+    advance(400);
+    expect(chips()).toEqual([fmtClock(T)]);
+  });
+});
+
 describe('wake lock', () => {
   type Sentinel = { released: boolean; release: () => Promise<void> };
   let sentinels: Sentinel[];
@@ -2633,6 +2796,7 @@ describe('the failure probe (#100, D3)', () => {
     failing(3);
     await settle();
     expect(host.textContent).toContain(MISSING);
+    expect([$('.clockline .pill').className, $('.clockline .pill').textContent]).toEqual(['pill warn', 'Stopped']);
     const opened = FakeES.all.length;
     advance(60_000);
     expect(FakeES.all).toHaveLength(opened);
@@ -2642,6 +2806,7 @@ describe('the failure probe (#100, D3)', () => {
     expect(FakeES.all).toHaveLength(opened + 1);
     expect(atOf(last())).toBe(String(start + 3_000)); // where it stopped
     expect(host.textContent).not.toContain(MISSING);
+    expect($('.clockline .pill').textContent).toBe('Replay');
   });
 });
 

@@ -2,7 +2,6 @@ import { type Lap, type Obj, type SessionDetail, view, type Weather } from '@f1/
 import {
   type CSSProperties,
   memo,
-  type ReactNode,
   type Ref,
   useEffect,
   useId,
@@ -77,7 +76,7 @@ import { WeatherPanels } from './Weather.tsx';
 
 // The player (A§13): one playback stream at a time; the bar holds the clock line, the seek bar with the marks at or
 // before T, the transport, the "Back to" chips, the delay slider (live) and the announcements toggle; minimized
-// (`f1.minimized`), only the clock line, Play/Pause and the Controls toggle, while the stream plays on. `open.at` is the
+// (`f1.minimized`), only the clock line, Play/Pause, Live and the Controls toggle, while the stream plays on. `open.at` is the
 // open stream's start: 'live', epoch ms (replay), or null while paused; a `still` stream only fetches the state at a
 // paused T and closes on its snapshot. Only the clock line, the seek bar, the Back to chips and the strip's LEFT cell
 // (and, on the Weather tab, the rain map) tick each second, from values derived per flush (no state parsing per tick);
@@ -461,20 +460,26 @@ const isBand = (k: MarkKind): k is Kind => k === 'sc' || k === 'vsc' || k === 'r
 const markClass = (m: Mark) =>
   isBand(m.kind) ? `marker m-band m-${m.kind}${m.open ? ' open' : ''}` : `marker m-${m.kind}`;
 
-/** The clock line: T, ticking locally, the time left and the lap (from the strip's values), then the mode. */
+/**
+ * The clock line: T, ticking locally, the time left and the lap (from the strip's values), then the pill. The pill's
+ * word is a function, so it is read at each tick (#237: a hold counts down).
+ */
 function Clock({
   now,
   stateNow,
   playing,
   strip,
-  children,
+  pill,
+  word,
 }: {
   now: () => number;
   /** The T the state stands at, for the time left (as the strip's LEFT). */
   stateNow: () => number;
   playing: boolean;
   strip: StripData | undefined;
-  children: ReactNode;
+  /** The pill's class, and its word per tick. */
+  pill: string;
+  word: () => string;
 }) {
   useTick(playing);
   const T = now();
@@ -488,7 +493,10 @@ function Clock({
           {strip.lap.total !== undefined && `/${strip.lap.total}`}
         </span>
       )}
-      {children}
+      <span className={pill}>
+        <span className="dot" aria-hidden="true" />
+        <span className="mode">{word()}</span>
+      </span>
     </p>
   );
 }
@@ -549,8 +557,12 @@ function Seek({
   );
 }
 
-/** "Back to": the latest mark of each kind at or before T, and the focused driver's last stop; seeks only go back. */
+/**
+ * "Back to": first the T before the last seek (#237), then the latest mark of each kind at or before T and the focused
+ * driver's last stop; the marks and the stop only go back.
+ */
 function BackTo({
+  before,
   now,
   playing,
   lo,
@@ -560,6 +572,7 @@ function BackTo({
   focused,
   onSeek,
 }: {
+  before: number | null;
   now: () => number;
   playing: boolean;
   lo: number;
@@ -574,12 +587,17 @@ function BackTo({
   // Sorted by time, so the last of each kind wins.
   const latest = new Map(markersUpTo(series, T, [lo, Math.max(lo, hi())]).map((m) => [m.kind, m.t]));
   const stop = focused && lastStop(laps, focused.n, T);
-  if (latest.size === 0 && !stop) return null;
+  if (before === null && latest.size === 0 && !stop) return null;
   return (
     <fieldset className="chips" aria-label="Back to">
       <span className="label" aria-hidden="true">
         Back to
       </span>
+      {before !== null && (
+        <button type="button" onClick={() => onSeek(before)}>
+          {fmtClock(before)}
+        </button>
+      )}
       {CHIPS.map(([kind, label]) => {
         const t = latest.get(kind);
         return (
@@ -728,6 +746,8 @@ export function Player({
   const at = open.at;
   const playing = at !== null && !open.still;
   const [seek, setSeek] = useState<number | null>(null); // a pending seek, shown on the bar
+  const [before, setBefore] = useState<number | null>(null); // the T before the last committed seek (#237)
+  const seekFrom = useRef<number | undefined>(undefined); // the T at the first seek of a burst: a drag or nudges move T on
   const [tab, setTab] = useState<PlayerTab>(() =>
     keepT ? parseTab(new URLSearchParams(location.search).get('tab')) : 'tower',
   );
@@ -749,7 +769,7 @@ export function Player({
   const [catchUp, setCatchUp] = useState(false); // the dialog is open; it never opens by itself
   const showRef = useRef<HTMLButtonElement>(null);
   const [announce, setAnnounce] = useState(readAnnounce);
-  // Minimized, the bar keeps only its head (the clock line, Play/Pause and the toggle); the stream is untouched.
+  // Minimized, the bar keeps only its head (the clock line, Play/Pause, Live and the toggle); the stream is untouched.
   const [minimized, setMinimized] = useState(readMinimized);
   const controlsId = useId();
   const toggleRef = useRef<HTMLButtonElement>(null);
@@ -939,12 +959,17 @@ export function Player({
   // A seek, a nudge or a chip: shown at once; 400 ms after the last one, T moves there and the stream reopens there,
   // or, while paused, a still frame fetches the state at that T. A pending still frame closes at the first input.
   const seekTo = (t: number) => {
+    seekFrom.current ??= nowT();
     const v = Math.round(clamp(t, lo, hi()));
     setSeek(v);
     setOpen((o) => (o.still ? { at: null } : o));
     clearTimeout(timers.current.seek);
     timers.current.seek = setTimeout(() => {
       jump.current = { from: lastFeed.current };
+      const was = seekFrom.current ?? nowT();
+      seekFrom.current = undefined;
+      const same = Math.floor(was / 1000) === Math.floor(v / 1000);
+      setBefore((b) => (same ? b : Math.round(was))); // until the next seek; one into the same second keeps the chip
       freeze(v);
       setSeek(null);
       setSince(null);
@@ -981,6 +1006,7 @@ export function Player({
     setOpen({ at: t });
   };
   const goLive = () => {
+    keepFocus(); // the Live button that was clicked goes
     rearm();
     clearTimeout(timers.current.delay); // a pending live delay reopen: this open supersedes it
     freeze(Date.now() - delay * 1000);
@@ -1132,8 +1158,30 @@ export function Player({
     : playing
       ? 'Replay'
       : 'Paused';
+  // The pill says when the stream is not delivering (#237): stale wins; the reconnect line stays as the detail.
+  const stopped = probe === 'missing' && at === null;
+  const warning = stale ? 'Stale' : stopped ? 'Stopped' : at !== null && fails > 0 ? 'Reconnecting' : null;
+  // A live delay increase holds T (`floor`, #101): the seconds left of it, rounded up, read at each tick.
+  const holding = () => {
+    const c = clock.current;
+    // No clamp at 0, unlike `clockT`: `wall` is ahead of now for the length of the hold.
+    return live && c.floor !== undefined ? Math.ceil((c.floor - (c.t + Date.now() - c.wall)) / 1000) : 0;
+  };
+  const pillWord = () => {
+    if (warning) return warning;
+    const n = holding();
+    return n > 0 ? `LIVE, holding ${n} s` : mode;
+  };
+  // Live, a nudge that would move nothing (later at no delay, earlier at the most) is off (#237): aria-disabled, not
+  // `disabled`, so a focused button keeps the focus; the click does nothing at the clamp.
   const nudgeButton = (s: number) => (
-    <button key={s} type="button" aria-label={nudgeLabel(s)} onClick={() => nudge(s)}>
+    <button
+      key={s}
+      type="button"
+      aria-label={nudgeLabel(s)}
+      aria-disabled={live && (s > 0 ? delay === 0 : delay === MAX_DELAY) ? 'true' : undefined}
+      onClick={() => nudge(s)}
+    >
       {signed(s)}
     </button>
   );
@@ -1143,11 +1191,18 @@ export function Player({
     </button>
   );
 
+  // In replay of an open recording: a mode switch, in the transport and, minimized, in the head after Play (#237).
+  const liveButton = !live && recording.ended_at === null && (
+    <button type="button" className="golive" onClick={goLive}>
+      Live
+    </button>
+  );
+
   // The reconnect line (A§13): a 404 stops the player and says so until Play; then the probe's answer, the reload
   // hint after FAILING errors, or "Reconnecting…".
   const line = stale
     ? null
-    : probe === 'missing' && at === null
+    : stopped
       ? PROBE_TEXT.missing
       : at === null || fails === 0
         ? null
@@ -1264,15 +1319,18 @@ export function Player({
       </ErrorBoundary>
       {!detail && detailError != null && <ErrorView error={detailError} />}
       <section className={minimized ? 'player min' : 'player'} aria-label="Playback controls">
-        {/* The head stays when minimized: the clock line, Play/Pause (from the transport) and the toggle. */}
+        {/* The head stays when minimized: the clock line, Play/Pause and Live (from the transport) and the toggle. */}
         <div className="barhead">
-          <Clock now={now} stateNow={stateNow} playing={playing} strip={wall?.strip}>
-            <span className={live ? 'pill live' : 'pill'}>
-              <span className="dot" aria-hidden="true" />
-              <span className="mode">{mode}</span>
-            </span>
-          </Clock>
+          <Clock
+            now={now}
+            stateNow={stateNow}
+            playing={playing}
+            strip={wall?.strip}
+            pill={warning ? 'pill warn' : live ? 'pill live' : 'pill'}
+            word={pillWord}
+          />
           {minimized && playButton}
+          {minimized && liveButton}
           <button
             ref={toggleRef}
             type="button"
@@ -1295,13 +1353,10 @@ export function Player({
                 {NUDGES.slice(0, 3).map(nudgeButton)}
                 {playButton}
                 {NUDGES.slice(3).map(nudgeButton)}
-                {!live && recording.ended_at === null && (
-                  <button type="button" className="golive" onClick={goLive}>
-                    Live
-                  </button>
-                )}
+                {liveButton}
               </div>
               <BackTo
+                before={before}
                 now={now}
                 playing={playing}
                 lo={lo}

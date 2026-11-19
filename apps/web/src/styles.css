@@ -1050,7 +1050,7 @@ header .links {
 
 /* The player bar (A§13, P4e): sticky at the bottom, within thumb reach; every target 44 px; it never scrolls. Wide: the
    head (clock line and the Controls toggle) across, then transport | seek bar, then the chips with the announce toggle
-   at the end, then the delay (live). A phone stacks them. Minimized (.min, #77) only the head stays, with Play/Pause. */
+   at the end, then the delay (live). A phone stacks them. Minimized (.min, #77) only the head stays, with Play/Pause and Live. */
 .player {
   position: sticky;
   bottom: 0;
@@ -1125,7 +1125,7 @@ header .links {
   color: var(--fg);
 }
 
-/* The bar's head (#77): the clock line, then Play/Pause (minimized only) and the Controls toggle at the right end. The
+/* The bar's head (#77): the clock line, then Play/Pause and Live (minimized only) and the Controls toggle at the right end. The
    rest of the bar is a `display: contents` wrapper, so its controls stay items of the bar's grid; minimized it is empty
    and hidden. */
 .barhead {
@@ -1139,7 +1139,7 @@ header .links {
   min-width: 0;
 }
 
-/* Minimized, the head stays one 44 px row: the mode pill gives way with an ellipsis rather than run under Play/Pause
+/* Minimized, the head stays one 44 px row: the mode pill gives way with an ellipsis rather than run under Play/Pause and Live
    (a phone narrower than 390 px) or wrap the head (just above 640 px). Its full text stays in the markup. */
 .player.min .pill {
   min-width: 0;
@@ -1200,6 +1200,11 @@ header .links {
 
 .barhead button {
   flex: none;
+}
+
+/* A nudge that would move nothing (#237): the button's own colour is inherited, so the browser's grey does not show. */
+.transport button[aria-disabled="true"] {
+  opacity: 0.4;
 }
 
 .player .play {
@@ -1365,7 +1370,7 @@ header .links {
   }
 
   /* Minimized, the head is one 44 px row: the time left and the lap are in the status strip, so only T and the mode,
-     stacked tightly beside Play/Pause and the toggle (a 61 px bar at 390 px). */
+     stacked tightly beside Play/Pause, Live and the toggle (a 61 px bar at 390 px). */
   .player.min .clockline {
     row-gap: 2px;
     line-height: 1.15;
