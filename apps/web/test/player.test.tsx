@@ -70,6 +70,20 @@ vi.mock('../src/views/LapTable.tsx', async (load) => {
   };
 });
 
+// Compare's body counts its renders (#237: a delta-only flush renders none, so no storage read either); else it is the real one.
+const comparison = vi.hoisted(() => ({ renders: 0 }));
+vi.mock('../src/views/Compare.tsx', async (load) => {
+  const m = await load<typeof import('../src/views/Compare.tsx')>();
+  const { createElement } = await import('react');
+  return {
+    ...m,
+    Comparison: (props: Parameters<typeof m.Comparison>[0]) => {
+      comparison.renders++;
+      return createElement(m.Comparison, props);
+    },
+  };
+});
+
 // The player (A§13, A§15): a real React tree in happy-dom, a fake EventSource, fake timers, a stubbed fetch.
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
@@ -3286,6 +3300,18 @@ describe('Compare, Stints and the Laps tab in the player (#112)', () => {
     expect(chart.options.length).toBe(mark);
   });
 
+  it('a delta-only flush does not render the Compare tab again', async () => {
+    begin(state(), upTo(3), []);
+    await compare();
+    const renders = comparison.renders;
+    expect(renders).toBeGreaterThan(0);
+    last().emit('delta', { t: T + 1_000, topic: 'TrackStatus', data: { Status: '2' } });
+    advance(250);
+    for (let i = 0; i < 3; i++) await act(async () => {});
+    expect(host.querySelector('.strip .lw')?.textContent).toBe('Yellow flag'); // the flush rendered the page
+    expect(comparison.renders).toBe(renders);
+  });
+
   // #114: the session page's pace table, run plan, track evolution and speed table on the stream's rows up to T.
   describe('pace, run plan, evolution and speeds (#114)', () => {
     /** Lap n starts at T − 700 s + 90 s × (n − 1) and takes 80.00n s: laps 1–7 all end before T (lap 7 at T − 80 s). */
@@ -3468,6 +3494,41 @@ describe('Compare, Stints and the Laps tab in the player (#112)', () => {
       advance(250);
       for (let i = 0; i < 3; i++) await act(async () => {});
     };
+
+    // #237 D1: the picks are remembered in `f1.tables`; the stored ones count where the session has the drivers.
+    it('start from the stored picks the session has, else the top 2, and a pick writes them', async () => {
+      localStorage.setItem('f1.tables', JSON.stringify({ picks: [1, 99, 44] }));
+      begin(three(), laps, []);
+      await compare();
+      expect(refs()).toEqual(['VER*', 'HAM']);
+      click('Remove HAM');
+      expect(JSON.parse(localStorage.getItem('f1.tables') ?? '{}')).toEqual({ picks: [1] });
+    });
+
+    it('start from the top 2 when only one stored pick is in the session', async () => {
+      localStorage.setItem('f1.tables', JSON.stringify({ picks: [1, 99] }));
+      begin(three(), laps, []);
+      await compare();
+      expect(refs()).toEqual(['HAM*', 'LEC']);
+    });
+
+    it('count a stored driver only when the laps up to T have a row for them', async () => {
+      localStorage.setItem('f1.tables', JSON.stringify({ picks: [1, 16, 44] }));
+      begin(
+        three(),
+        laps.filter((l) => l.driver_number !== 16),
+        [],
+      ); // LEC is in the DriverList but has no lap yet
+      await compare();
+      expect(refs()).toEqual(['VER*', 'HAM']);
+    });
+
+    it('start from the top 2 when the stored picks are none of the session’s', async () => {
+      localStorage.setItem('f1.tables', JSON.stringify({ picks: [99, 98] }));
+      begin(three(), laps, []);
+      await compare();
+      expect(refs()).toEqual(['HAM*', 'LEC']);
+    });
 
     it('are the top 2 of the order at T until the first pick', async () => {
       begin(three(), laps, []);

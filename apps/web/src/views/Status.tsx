@@ -179,6 +179,6 @@ export function StatusPanel({ status }: { status: StatusData }) {
 
 export function Status() {
   const status = useStatus(60_000);
-  if (!status.data) return <Pending error={status.error} />;
+  if (!status.data) return <Pending error={status.error} retry={() => void status.refetch()} />;
   return <StatusPanel status={status.data} />;
 }

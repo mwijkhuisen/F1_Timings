@@ -24,7 +24,11 @@ export function WeatherTab({ session, now, ...data }: Data & { session: number; 
   const weather = useWeather(session);
   return (
     <>
-      {weather.data ? <WeatherView rows={weather.data} now={now} {...data} /> : <Pending error={weather.error} />}
+      {weather.data ? (
+        <WeatherView rows={weather.data} now={now} {...data} />
+      ) : (
+        <Pending error={weather.error} retry={() => void weather.refetch()} />
+      )}
       {/* A session still to come shows its model forecast (#120). */}
       <ForecastCard detail={data.detail} now={now} />
       {/* The rain map comes from its own source (Open-Meteo, P5c), so it shows without OpenF1 rows too. */}

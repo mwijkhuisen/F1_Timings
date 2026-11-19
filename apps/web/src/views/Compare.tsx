@@ -6,6 +6,7 @@ import { cycleText, PIT_WINDOW, pitCycles } from '../lib/crossings.ts';
 import { evolution, evolutionSlots, SLOT_MS } from '../lib/evolution.ts';
 import { phaseName } from '../lib/quali.ts';
 import { type Driver, plural } from '../lib/session.ts';
+import { useTable } from '../lib/tables.ts';
 import { fmtHm, fmtLap } from '../lib/time.ts';
 import { type ClockPeriod, clockPeriods, type Period, trackPeriods } from '../lib/track.ts';
 import { errorText } from '../ui/ErrorView.tsx';
@@ -111,7 +112,7 @@ export function Comparison({
   children?: ReactNode;
   traces?: ReactNode;
 }) {
-  const [yWindow, setWindow] = useState<'fit' | '107'>('fit');
+  const [yWindow = 'fit', setWindow] = useTable('window');
   // What the charts draw, by content: the player's lap rows are a new array on each `laps` event (about one a second
   // in a race, mostly for other cars), and a redraw resets the tooltip (#112).
   const picked = new Set(drivers.map((d) => d.number));

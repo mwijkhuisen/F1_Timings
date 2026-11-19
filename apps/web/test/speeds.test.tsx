@@ -13,6 +13,7 @@ import { lap, sessionDetail } from './laps.ts';
 let root: Root;
 let host: HTMLElement;
 beforeEach(() => {
+  localStorage.clear();
   host = document.createElement('div');
   document.body.append(host);
   root = createRoot(host);

@@ -451,7 +451,7 @@ export function StintsTab({
       race && pits.data && stints.data ? pitStops(orderDrivers(detail, laps), pits.data, stints.data, periods) : [],
     [race, pits.data, stints.data, detail, laps, periods],
   );
-  if (!stints.data) return <Pending error={stints.error} />;
+  if (!stints.data) return <Pending error={stints.error} retry={() => void stints.refetch()} />;
   if (stints.data.length === 0) return <NoData session={detail.session} live={live} what="stints" now={now} />;
   return (
     <>

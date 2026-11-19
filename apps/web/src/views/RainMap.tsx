@@ -216,12 +216,12 @@ function RainLoader({
   if (capped && pick !== null && pick >= last) setPick(null);
   const onIndex = useCallback((i: number) => setPick(capped && i >= last ? null : i), [capped, last]);
 
-  if (!rain.data) return <Pending error={rain.error} />;
+  if (!rain.data) return <Pending error={rain.error} retry={() => void rain.refetch()} />;
   // A failed grid is never retried (A§8): say so rather than "not fetched yet" (#99).
   if (grid?.state === 'failed' && frames.length === 0) return <p>Rain map fetch failed: no rain data.</p>;
   if (grid === null || frames.length === 0) return <p>{NOT_FETCHED}</p>;
   if (last < 0) return <p>No rain frame up to this time yet.</p>;
-  if (!map.data) return <Pending error={map.error} />;
+  if (!map.data) return <Pending error={map.error} retry={() => void map.refetch()} />;
   const lastFrame = frames.at(-1)?.date;
   // The clock is the query's last answer, which a live grid refreshes every 60 s, so the note moves on with it.
   const arriving = rain.dataUpdatedAt <= Date.parse(session.date_end) + ARRIVING_MS;

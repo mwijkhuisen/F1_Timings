@@ -1,9 +1,10 @@
 import type { Lap, Laps, SessionDetail } from '@f1/contracts';
-import { type ReactNode, useState } from 'react';
+import type { ReactNode } from 'react';
 import { deltaStep, ownBests } from '../lib/bests.ts';
 import { type Compound, compoundOf, tyresWords, UNKNOWN_COMPOUND } from '../lib/compound.ts';
 import { phaseName } from '../lib/quali.ts';
 import { type Driver, orderDrivers, sourceWords, statusOf, teamStyle } from '../lib/session.ts';
+import { useTable } from '../lib/tables.ts';
 import { fmtClock, fmtDelta, fmtLap, fmtSector } from '../lib/time.ts';
 import { KIND_LABEL, KIND_NAME, type Kind, kindsAt, type Period, type Track } from '../lib/track.ts';
 import { Note } from '../ui/Note.tsx';
@@ -439,7 +440,7 @@ export function Legend({
   );
 }
 
-/** The metric switch, Times | Δ and the orientation toggle are component state, not URL state (D1). */
+/** The metric switch, Times | Δ and the orientation toggle are component state, not URL state, remembered in `f1.tables` (#237 D1). */
 export function LapTable({
   detail,
   laps,
@@ -452,9 +453,9 @@ export function LapTable({
   /** The holes' reasons and the race result's marks (#110): the session page only. */
   marks?: boolean;
 }) {
-  const [metric, setMetric] = useState<Metric>('lap');
-  const [show, setShow] = useState<Show>('times');
-  const [columns, setColumns] = useState(false);
+  const [metric = 'lap', setMetric] = useTable('metric');
+  const [show = 'times', setShow] = useTable('show');
+  const [columns = false, setColumns] = useTable('columns');
   if (laps.length === 0) return <p>No laps yet.</p>;
   const periods = track?.periods ?? [];
   return (
