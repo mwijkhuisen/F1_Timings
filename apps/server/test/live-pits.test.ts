@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { createPits, pitsSince } from '../src/live/pits.ts';
+import { createPits, MAX_PIT_ROWS, pitsSince } from '../src/live/pits.ts';
 import type { FeedEvent } from '../src/live/read.ts';
 
 // The pit-lane parser (#219) on synthetic events: every car, lap and time is invented.
@@ -24,8 +24,9 @@ const stop = (car: string, lap: string, at: number, laneTime?: string, stopTime?
   Timestamp: iso(at),
   PitStop: { RacingNumber: car, Lap: lap, PitLaneTime: laneTime, PitStopTime: stopTime },
 });
-const parse = (events: FeedEvent[]) => {
-  const pits = createPits();
+const info = (t: number, Key: number): FeedEvent => ({ t: T0 + t, topic: 'SessionInfo', payload: { Key } });
+const parse = (events: FeedEvent[], sessionKey?: number) => {
+  const pits = createPits(sessionKey);
   for (const ev of events) pits.push(ev);
   return pits.rows();
 };
@@ -123,6 +124,41 @@ describe('createPits', () => {
       [4, 1_040_500, null],
     ]);
     expect(got.skipped).toBe(0);
+  });
+});
+
+describe('createPits with a session key (the shared session gate)', () => {
+  const events = [
+    lane(100, entry('1', '1', '20.0')), // before any SessionInfo: not the session's
+    info(200, 9001), // another session's state
+    lane(300, entry('2', '2', '21.0')),
+    series(310, { 2: [stop('2', '2', 300, '21.001', '2.0')] }),
+    info(400, 9002), // the session's own keyframe
+    lane(500, entry('3', '3', '22.0')),
+    series(510, { 3: [stop('3', '3', 500, '22.001', '2.1')] }),
+    { t: T0 + 600, topic: 'SessionInfo', payload: { Name: 'Race' } } as FeedEvent, // a delta without Key keeps it
+    lane(700, entry('4', '4', '23.0')),
+    info(800, 9003), // the next session's: closed again
+    lane(900, entry('5', '5', '24.0')),
+  ];
+  it('reads the two topics only while the merged SessionInfo Key is the key', () => {
+    expect(parse(events, 9002).rows.map((r) => r.driver_number)).toEqual([3, 4]);
+    expect(parse(events, 9002).rows[0]).toMatchObject({ lane_ms: 22_001, stop_ms: 2_100 });
+  });
+  it('without a key every event is read, a pit line before the first SessionInfo included', () => {
+    expect(parse(events).rows.map((r) => r.driver_number)).toEqual([1, 2, 3, 4, 5]);
+  });
+});
+
+describe('the row cap', () => {
+  it(`keeps ${MAX_PIT_ROWS} PLTC entries and counts the rest in skipped`, () => {
+    const events: FeedEvent[] = [];
+    // 5,001 distinct (car, lap) entries, one per event: car 1-999, lap 0-5.
+    for (let i = 0; i <= MAX_PIT_ROWS; i++)
+      events.push(lane(i, entry(String((i % 999) + 1), String(Math.floor(i / 999)))));
+    const got = parse(events);
+    expect(got.rows).toHaveLength(MAX_PIT_ROWS);
+    expect(got.skipped).toBe(1);
   });
 });
 

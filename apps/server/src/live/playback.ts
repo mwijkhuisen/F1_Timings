@@ -29,8 +29,8 @@ import { decodeZ, positions, type ZFail } from './telemetry.ts';
 // The lap and stint rows come from createLaps over the same events: a snapshot carries all of them, a `laps` event the
 // rows that changed since the last send. So do the pit rows (#219): createPits over the recording's own session's
 // PitLaneTimeCollection and PitStopSeries lines, which stay UNPARSED (never applied, kept or sent as deltas), so the
-// browser gets the derived rows only (`source: 'f1-live'`, `filled: {}`). The weather rows are one per applied WeatherData delta since the last session
-// switch, at most the last MAX_WEATHER_ROWS (withWeatherRow).
+// browser gets the derived rows only (`source: 'f1-live'`, `filled: {}`). The weather rows are one per applied
+// WeatherData delta since the last session switch, at most the last MAX_WEATHER_ROWS (withWeatherRow).
 //
 // With `pos` (P7a, pos=1, A§11.3): `Position.z` streams as `pos` events, still never applied or kept in the state.
 
@@ -243,7 +243,7 @@ export async function* playback(o: {
   const feed = createFeed();
   let weather: Weather = [];
   const engine = createLaps(o.sessionKey, 'f1-live');
-  const pits = createPits(); // one per stream: a seek is a new stream, read from line 1
+  const pits = createPits(o.sessionKey); // one per stream: a seek is a new stream, read from line 1
   const sent = new Map<string, string>(); // row key → the row's JSON as last sent
   let dirty = false; // a LAP_TOPICS change since the rows were last sent
   let lapsAt = Number.NEGATIVE_INFINITY; // wall time of the last `laps` check
@@ -284,10 +284,11 @@ export async function* playback(o: {
         }
         continue;
       }
-      // The pit topics stay UNPARSED (never applied, kept or sent); the recording's own session's feed the pit rows.
-      if (PIT_TOPICS.has(ev.topic) && keyOf(feed.state.SessionInfo) === o.sessionKey) {
+      // The pit topics stay UNPARSED (never applied, kept or sent); the recording's own session's feed the pit rows, the
+      // builder gates them on SessionInfo.Key, so it sees every SessionInfo too.
+      if (PIT_TOPICS.has(ev.topic) || ev.topic === 'SessionInfo') {
         pits.push(ev);
-        dirty = true;
+        dirty ||= PIT_TOPICS.has(ev.topic);
       }
       if (ev.topic.endsWith('.z') || UNPARSED.has(ev.topic)) continue;
       // A new session's SessionInfo: no topic of the previous session stays (no ghost driver, line or message). The

@@ -166,8 +166,8 @@ function PlayerLaps({
  * out; the bars draw SC and VSC only), `clock` the practice's clock periods. The runs are rebuilt only when these
  * change, which is when the rows change. In a race the pit stops follow the bars (#219): the server's derived rows, with
  * stop times from the live feed's PitStopSeries where it sends them, none shown without a row. The player has no
- * race-control or weather query, so nothing "did not load": `weather` is the feed's rows up to T. The run plan's axis ends at T (`end`), never at the
- * scheduled `date_end`, which in a live session is a guess.
+ * race-control or weather query, so nothing "did not load": `weather` is the feed's rows up to T. The run plan's axis
+ * ends at T (`end`), never at the scheduled `date_end`, which in a live session is a guess.
  */
 function PlayerStints({
   detail,

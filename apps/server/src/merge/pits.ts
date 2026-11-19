@@ -40,6 +40,13 @@ const values = (v: Partial<PitValues>): PitValues => ({
   lane_ms: v.lane_ms ?? null,
   stop_ms: v.stop_ms ?? null,
 });
+const num = (x: unknown) => x === undefined || x === null || typeof x === 'number';
+/** A stored `sources` entry of the right shape: an object whose value columns are numbers or null (the CHECK: object). */
+const isValues = (v: unknown): v is Partial<PitValues> =>
+  typeof v === 'object' &&
+  v !== null &&
+  !Array.isArray(v) &&
+  PIT_VALUES.every((c) => num((v as Record<string, unknown>)[c]));
 const tally = (o: PerColumn, source: string, column: Column) => {
   o[source] = { ...o[source], [column]: (o[source]?.[column] ?? 0) + 1 };
 };
@@ -60,7 +67,10 @@ export function mergePits(
   for (const r of stored) {
     const own = Object.keys(r.sources).length === 0 ? { [r.source]: r } : r.sources;
     const sources: Record<string, PitValues> = {};
-    for (const [s, v] of Object.entries(own)) if (s !== source) sources[s] = values(v);
+    for (const [s, v] of Object.entries(own)) {
+      rank(s); // a key outside PIT_ORDER throws, a malformed entry is absent
+      if (s !== source && isValues(v)) sources[s] = values(v);
+    }
     all.set(keyOf(r), { driver_number: r.driver_number, lap_number: r.lap_number, sources });
   }
   for (const r of rows) {
@@ -72,7 +82,8 @@ export function mergePits(
     .map((r) => ({ ...r, order: Object.keys(r.sources).sort((a, b) => rank(a) - rank(b)) as PitSource[] }))
     .filter((r) => r.order.length > 0)
     .sort((a, b) => a.driver_number - b.driver_number || a.lap_number - b.lap_number);
-  const top = Math.min(...ordered.map((r) => rank(r.order[0] as PitSource)));
+  let top = Number.POSITIVE_INFINITY; // not Math.min(...rows): a spread of a hostile file's rows overflows the stack
+  for (const r of ordered) top = Math.min(top, rank(r.order[0] as PitSource));
   const counts: PitCounts = { rows: ordered.length, added: {}, filled: {}, diffs: {} };
   const merged = ordered.map(({ order, ...r }): MergedPit => {
     const base = order[0] as PitSource;

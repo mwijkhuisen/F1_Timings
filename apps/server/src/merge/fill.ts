@@ -29,9 +29,12 @@ type OvertakeRows = (Omit<Insertable<DB['overtake']>, 'session_key' | 'source' |
 /**
  * `undefined`: the source has no (complete) files here, so its stored candidates stay. A throw fails that source.
  * `overtakes` is undefined when the source has no OvertakeSeries; `pits` is empty when it has no pit-lane entries
- * from an hour before the start on, and then the source's stored pit candidates stay.
+ * from an hour before the start on, and then the source's stored pit candidates stay. `pitSkipped` counts the pit
+ * entries the parser dropped.
  */
-type Read = { laps: Laps; overtakes: OvertakeRows | undefined; pits: readonly PitInput[] } | undefined;
+type Read =
+  | { laps: Laps; overtakes: OvertakeRows | undefined; pits: readonly PitInput[]; pitSkipped: number }
+  | undefined;
 
 const fail = (code: string) => Object.assign(new Error(code), { code });
 const absent = (err: unknown) => codeOf(err) === 'ENOENT';
@@ -119,7 +122,12 @@ async function fromArchive(
   // The Heartbeat t0 can be minutes off (A§6.2): such times must not fill OpenF1's.
   if (built.value.stats.t0 === 'heartbeat') throw fail('t0_heartbeat');
   const overtakes = series === undefined ? undefined : overtakeRows(parseJsonStream(series, SERIES, 0).events);
-  return { laps: built.value.rows.lap, overtakes, pits: built.value.rows.pit };
+  return {
+    laps: built.value.rows.lap,
+    overtakes,
+    pits: built.value.rows.pit,
+    pitSkipped: built.value.stats.pit_skipped,
+  };
 }
 
 /**
@@ -154,10 +162,13 @@ async function fromRecording(dir: string, key: number, start: number, maxBytes: 
   const { info, rows } = reconstruct(events, 'f1-live');
   if (info?.Key === undefined || rows === undefined) throw fail('incomplete');
   if (info.Key !== key) throw fail('key_mismatch');
+  // Gated on the recording's own session: it can open on the previous session's state (A§11.3).
+  const pits = pitsSince(events, start, key);
   return {
     laps: rows.laps.map(({ at: _, ...lap }) => lap),
     overtakes: overtakeRows(series),
-    pits: pitsSince(events, start).rows,
+    pits: pits.rows,
+    pitSkipped: pits.skipped,
   };
 }
 
@@ -177,6 +188,7 @@ async function fillSession(deps: FillDeps, args: Omit<FillArgs, 'keys'>, key: nu
   if (!session) throw fail('unknown_session');
   const read: [Source, Laps][] = [];
   const pits: ['f1-archive' | 'f1-live', readonly PitInput[]][] = [];
+  const pitSkipped: Partial<Record<Source, number>> = {};
   const errors: Partial<Record<Source, string>> = {};
   let overtakes: { source: Source; rows: OvertakeRows } | undefined;
   const attempt = async (source: 'f1-archive' | 'f1-live', get: () => Read | Promise<Read>) => {
@@ -184,6 +196,7 @@ async function fillSession(deps: FillDeps, args: Omit<FillArgs, 'keys'>, key: nu
       const got = await get();
       if (!got) return;
       read.push([source, got.laps]);
+      pitSkipped[source] = got.pitSkipped;
       // A source without pit rows is absent: its stored pit candidates stay (as the overtakes').
       if (got.pits.length > 0) pits.push([source, got.pits]);
       // The archive is read first, so its entries win; else the recording's, else the stored rows stay.
@@ -237,6 +250,7 @@ async function fillSession(deps: FillDeps, args: Omit<FillArgs, 'keys'>, key: nu
     recording,
     ...(overtakes && { overtakes: { source: overtakes.source, rows: overtakes.rows.length } }),
     pits: Object.fromEntries(pits.map(([source, rows]) => [source, rows.length])),
+    pit_skipped: pitSkipped,
     merge,
     ...(pitMerge && { pit_merge: pitMerge }),
   };

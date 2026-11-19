@@ -813,8 +813,6 @@ describe('playback', () => {
   });
 });
 
-// pos=1 (P7a, A§11.3, T4) over a synthetic practice on the P5c Interlagos outline (test/track.ts, every value invented):
-// the frame is given here, fit.test.ts covers the fit.
 // The pit rows (#219): createPits over the recording's own session's pit-lane lines, synthetic cars, laps and times.
 const pit = (car: string, lap: string, duration: string) => ({
   PitTimes: { [car]: { RacingNumber: car, Lap: lap, Duration: duration } },
@@ -910,6 +908,8 @@ describe('playback pit rows (#219)', () => {
   });
 });
 
+// pos=1 (P7a, A§11.3, T4) over a synthetic practice on the P5c Interlagos outline (test/track.ts, every value invented):
+// the frame is given here, fit.test.ts covers the fit.
 describe('playback with pos (P7a)', () => {
   const OUTLINE = OUTLINES['br-1940'] as string;
   const FRAME: Frame = { s: 1.03, theta: (-57 * Math.PI) / 180, m: -1, tx: 210, ty: -140 };

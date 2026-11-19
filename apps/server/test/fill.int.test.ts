@@ -491,6 +491,7 @@ describe('the fill job (f1_ingest login, synthetic files)', { timeout: 120_000 }
       expect(await fill({ db, log }, args([KEY]))).toBe(true);
       const line = one();
       expect(line.pits).toEqual({ 'f1-archive': 2 });
+      expect(line.pit_skipped).toEqual({ 'f1-archive': 2 }); // the fixture's two bad entries, counted
       expect(line.pit_merge).toEqual({
         rows: 3,
         added: { openf1: 1 },
@@ -554,6 +555,82 @@ describe('the fill job (f1_ingest login, synthetic files)', { timeout: 120_000 }
         stop_ms: null,
         filled: {},
       });
+    });
+  });
+
+  describe('pits from a recording alone (#219)', () => {
+    const KEY = 9710;
+    const OTHER = 9799;
+    const at = (min: number, sec = 0) => new Date(T0 + min * 60_000 + sec * 1000).toISOString();
+    it("a recording's PitStopSeries gives the stop time, only its own session's lines are read, a bad entry is counted", async () => {
+      await admin
+        .insertInto('session')
+        .values({
+          session_key: KEY,
+          source: 'openf1',
+          meeting_key: M,
+          name: 'Race',
+          type: 'Race',
+          date_start: new Date(T0),
+          date_end: new Date(T0 + 3_600_000),
+        })
+        .execute();
+      const none = { driver: [], lap: [], stint: [], race_control: [], result: [], weather: [] };
+      const openf1 = {
+        driver_number: 8,
+        lap_number: 2,
+        date: at(20, 2),
+        pit_ms: 45_400,
+        lane_ms: 45_400,
+        stop_ms: null,
+      };
+      await db
+        .transaction()
+        .execute((trx) => replaceRows(trx, KEY, { ...none, pit: [{ ...openf1, session_key: KEY, source: 'openf1' }] }));
+      const stop = {
+        Timestamp: at(20, 1),
+        PitStop: { RacingNumber: '8', Lap: '2', PitLaneTime: '45.312', PitStopTime: '2.4' },
+      };
+      // The feed joins another session's state first: its entries lie inside the date window too.
+      const id = await record(KEY, `${KEY}-1`, KEY, 0, undefined, [
+        ['SessionInfo', { Key: OTHER }, at(10)],
+        ['PitLaneTimeCollection', { PitTimes: { 16: { RacingNumber: '16', Lap: '5', Duration: '23.0' } } }, at(10)],
+        [
+          'PitStopSeries',
+          { PitTimes: { 16: [{ Timestamp: at(10), PitStop: { RacingNumber: '16', Lap: '5', PitStopTime: '2.0' } }] } },
+          at(10),
+        ],
+        ['SessionInfo', { Key: KEY }, at(15)],
+        [
+          'PitLaneTimeCollection',
+          { PitTimes: { 8: { RacingNumber: '8', Lap: '2', Duration: '45.0' }, x: { RacingNumber: 'x', Lap: '3' } } },
+          at(20),
+        ],
+        ['PitStopSeries', { PitTimes: { 8: [stop] } }, at(20, 1)],
+      ]);
+      await complete(id);
+      expect(await fill({ db, log }, args([KEY]))).toBe(true);
+      const line = one();
+      expect(line.pits).toEqual({ 'f1-live': 1 });
+      expect(line.pit_skipped).toEqual({ 'f1-live': 1 });
+      expect(
+        await db
+          .selectFrom('pit')
+          .select(['driver_number', 'lap_number', 'source', 'date', 'pit_ms', 'lane_ms', 'stop_ms', 'filled'])
+          .where('session_key', '=', KEY)
+          .execute(),
+      ).toEqual([
+        {
+          driver_number: 8,
+          lap_number: 2,
+          source: 'f1-live',
+          date: new Date(at(20)),
+          pit_ms: 45_400,
+          lane_ms: 45_312,
+          stop_ms: 2400,
+          filled: { pit_ms: 'openf1' },
+        },
+      ]);
     });
   });
 

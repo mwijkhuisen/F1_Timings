@@ -125,4 +125,26 @@ describe('mergePits', () => {
     expect(() => mergePits([odd], 'openf1', [])).toThrow('a pit source outside PIT_ORDER');
     expect(() => mergePits([legacy(4, 18, 'fia', {})], 'openf1', [])).toThrow('a pit source outside PIT_ORDER');
   });
+
+  it('a stored sources entry that is not an object of numbers or null is absent; the others stay', () => {
+    const odd = (sources: unknown) => ({ ...legacy(4, 18, 'openf1', {}), sources }) as unknown as StoredPit;
+    const good = { 'f1-archive': v({ lane_ms: 21_937 }) };
+    for (const bad of [null, 7, 'x', [], { lane_ms: '21' }, { lane_ms: {} }]) {
+      const got = mergePits([odd({ ...good, openf1: bad })], 'f1-live', []);
+      expect(got.rows).toHaveLength(1);
+      expect(got.rows[0]).toMatchObject({ source: 'f1-archive', lane_ms: 21_937, filled: {} });
+      expect(got.rows[0]?.sources).toEqual(good);
+    }
+    // Nothing valid left: the row is dropped, not thrown on.
+    expect(mergePits([odd({ openf1: null })], 'f1-live', []).rows).toEqual([]);
+  });
+
+  it('200,000 rows merge: the top source is found without spreading the rows into a call', () => {
+    const rows = Array.from({ length: 200_000 }, (_, i) => ({
+      driver_number: (i % 999) + 1,
+      lap_number: Math.floor(i / 999),
+      lane_ms: 20_000,
+    }));
+    expect(mergePits([], 'openf1', rows).counts.rows).toBe(200_000);
+  });
 });
