@@ -5,7 +5,8 @@ import pg from 'pg';
 import type { Logger } from 'pino';
 import { codeOf, type DB } from '../db/db.ts';
 import type { MergeCounts } from '../merge/merge.ts';
-import { chunks, writeLaps } from '../merge/write.ts';
+import type { PitCounts } from '../merge/pits.ts';
+import { chunks, writeLaps, writePits } from '../merge/write.ts';
 import type { createClient, Query } from '../openf1/client.ts';
 import { type Endpoint, parse, type Result, type Rows, type ShapeError } from '../openf1/schemas.ts';
 import {
@@ -43,9 +44,10 @@ export const SESSION_ENDPOINTS = [
   'session_result',
   'weather',
 ] as const;
-// Laps are not among them: writeLaps replaces OpenF1's candidates only and rebuilds `lap` (P3b). raw_response
-// goes on its own, for the grid and the standings (O1).
-const REPLACED = ['driver', 'stint', 'pit', 'race_control', 'result', 'weather'] as const;
+// Laps and pits are not among them: writeLaps and writePits replace OpenF1's candidates only and rebuild `lap` and
+// `pit` (P3b, #219), so a refetch keeps the feed's values. raw_response goes on its own, for the grid and the
+// standings (O1).
+const REPLACED = ['driver', 'stint', 'race_control', 'result', 'weather'] as const;
 /** The ingest lock (#103): the daemon holds it, so a `backfill` next to it refuses (two limiters, A§8). */
 export const INGEST_LOCK = 0x4631_494e; // 'F1IN'
 
@@ -207,9 +209,16 @@ const lockSession = (trx: Transaction<DB>, key: number) =>
 const setProgress = (trx: Transaction<DB>, key: number, p: Progress) =>
   trx.updateTable('session').set(p).where('session_key', '=', key).execute();
 
-/** Replaces the session's child rows inside the caller's transaction: the REPLACED tables, then the laps (P3b). */
-export async function replaceRows(trx: Transaction<DB>, key: number, rows: SessionRows): Promise<MergeCounts> {
-  const { lap, ...children } = rows;
+/**
+ * Replaces the session's child rows inside the caller's transaction: the REPLACED tables, then the laps (P3b) and the
+ * pits (#219) through their merges.
+ */
+export async function replaceRows(
+  trx: Transaction<DB>,
+  key: number,
+  rows: SessionRows,
+): Promise<{ merge: MergeCounts; pits: PitCounts }> {
+  const { lap, pit, ...children } = rows;
   for (const table of REPLACED) await trx.deleteFrom(table).where('session_key', '=', key).execute();
   // The cast: Kysely cannot relate a table name from a loop to its row type.
   for (const [table, list] of Object.entries(children) as [keyof SessionRows, object[]][]) {
@@ -219,7 +228,8 @@ export async function replaceRows(trx: Transaction<DB>, key: number, rows: Sessi
         .values(chunk as never)
         .execute();
   }
-  return writeLaps(trx, key, 'openf1', lap);
+  const merge = await writeLaps(trx, key, 'openf1', lap);
+  return { merge, pits: await writePits(trx, key, 'openf1', pit) };
 }
 
 /**
@@ -353,6 +363,7 @@ export async function processSession(deps: Deps, key: number, refetch = false): 
     empty: boolean;
     endpoints?: string[];
     merge?: MergeCounts;
+    pits?: PitCounts;
     grid?: GridLog | undefined;
     championship?: Record<string, StandingLog> | undefined;
   };
@@ -444,7 +455,7 @@ export async function processSession(deps: Deps, key: number, refetch = false): 
         result = result.map((r) => ({ ...r, grid: old.get(r.driver_number) ?? null }));
         gridLog = { ...keep, kept: result.filter((r) => r.grid !== null).length };
       }
-      const merge = await replaceRows(trx, key, { ...rows, result });
+      const { merge, pits } = await replaceRows(trx, key, { ...rows, result });
       // P8 (A§8): a success replaces the raw row and the table's rows, in one savepoint, so a body or row that
       // PostgreSQL refuses is a failure of that endpoint only; a failure keeps the stored raw row and rows.
       const championship: Record<string, StandingLog> = {};
@@ -504,6 +515,7 @@ export async function processSession(deps: Deps, key: number, refetch = false): 
         next,
         empty: false,
         merge,
+        pits,
         grid: gridLog,
         championship: standings.length > 0 ? championship : undefined,
       };
@@ -528,6 +540,7 @@ export async function processSession(deps: Deps, key: number, refetch = false): 
       skipped,
       rules,
       merge: done.merge,
+      pit_merge: done.pits,
       grid: done.grid,
       championship: done.championship,
       ...rc_unmatched,

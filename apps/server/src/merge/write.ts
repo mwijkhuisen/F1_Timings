@@ -1,6 +1,7 @@
 import type { Insertable, Transaction } from 'kysely';
 import type { DB } from '../db/db.ts';
 import { type MergeCounts, merge, type Source, VALUES } from './merge.ts';
+import { mergePits, type PitCounts, type PitSource, type PitValues } from './pits.ts';
 
 // 1,000 rows × ≤ 21 columns stays far below PostgreSQL's 65,535 bind parameters.
 const CHUNK = 1_000;
@@ -103,6 +104,57 @@ export async function mergeSession(trx: Transaction<DB>, key: number): Promise<M
     await trx
       .insertInto('lap')
       .values(chunk.map((r) => ({ ...r, filled: JSON.stringify(r.filled) })))
+      .execute();
+  return counts;
+}
+
+/** One writer's pit row: its date a Date, an ISO string or epoch ms; any other column of `pit` is ignored. */
+export type PitInput = {
+  driver_number: number;
+  lap_number: number;
+  date?: Date | string | number | null;
+  pit_ms?: number | null;
+  lane_ms?: number | null;
+  stop_ms?: number | null;
+};
+
+/**
+ * The one pit write path (#219, A§7), inside the writer's transaction: lock the session row, replace this source's
+ * candidates in the session's `pit` rows (`sources`) and replace the rows with the merge (mergePits). Another source's
+ * values stay, so its fills come back on every rewrite; an empty `rows` removes only this source's candidates.
+ */
+export async function writePits(
+  trx: Transaction<DB>,
+  key: number,
+  source: PitSource,
+  rows: readonly PitInput[],
+): Promise<PitCounts> {
+  await lock(trx, key);
+  const stored = await trx
+    .selectFrom('pit')
+    .select(['driver_number', 'lap_number', 'source', 'date', 'pit_ms', 'lane_ms', 'stop_ms', 'sources'])
+    .where('session_key', '=', key)
+    .execute();
+  const ms = (d: PitInput['date']) => (d == null ? null : new Date(d).getTime());
+  const { rows: merged, counts } = mergePits(
+    stored.map((r) => ({ ...r, date: ms(r.date), sources: r.sources as Record<string, Partial<PitValues>> })),
+    source,
+    rows.map((r) => ({ ...r, date: ms(r.date) })),
+  );
+  await trx.deleteFrom('pit').where('session_key', '=', key).execute();
+  // `sources` and `filled` as JSON text, as mergeSession writes lap.filled.
+  for (const chunk of chunks(merged))
+    await trx
+      .insertInto('pit')
+      .values(
+        chunk.map((r) => ({
+          ...r,
+          session_key: key,
+          date: r.date === null ? null : new Date(r.date),
+          sources: JSON.stringify(r.sources),
+          filled: JSON.stringify(r.filled),
+        })),
+      )
       .execute();
   return counts;
 }
