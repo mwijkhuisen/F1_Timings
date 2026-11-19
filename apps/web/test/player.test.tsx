@@ -10,7 +10,7 @@ import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from 
 import { HttpError, isStale, markStale } from '../src/lib/api.ts';
 import { useTitle } from '../src/lib/routes.ts';
 import { createStore, type Feed, MAX_HELD, openStream, streamUrl } from '../src/lib/stream.ts';
-import { fmtClock } from '../src/lib/time.ts';
+import { fmtClock, fmtHm } from '../src/lib/time.ts';
 import { OFFLINE } from '../src/ui/ErrorView.tsx';
 import { Live, Replay } from '../src/views/Live.tsx';
 import { Player, type PlayerRecording } from '../src/views/Player.tsx';
@@ -1027,6 +1027,12 @@ describe('the pit wall in the player', () => {
     expect(host.querySelector('.strip')).toBeNull();
     expect(host.querySelector('.side')).toBeNull();
     expect(host.textContent).toContain('Waiting for the session');
+  });
+
+  it('the waiting line says when the session starts, from the session detail', () => {
+    withTitle({ sessionKey: 9999, detail });
+    snapshot(raceState({ track: '4' }));
+    expect(host.textContent).toContain(`Starts about ${fmtHm(Date.parse(detail.session.date_start))}.`);
   });
 
   it('clears the title word when the player unmounts', () => {
@@ -2103,7 +2109,16 @@ describe('the player bar', () => {
     expect(region.textContent).toBe('');
     const toggle = () => $<HTMLInputElement>('label.announce input[type="checkbox"]');
     expect(toggle().checked).toBe(false);
-    expect($('label.announce').textContent).toBe('Announce events');
+    expect($('label.announce').textContent).toBe(
+      'Announce events to a screen readerThe start, track status, fastest laps and what a skip passes over.',
+    );
+    expect($('label.announce span.muted').textContent).toBe(
+      'The start, track status, fastest laps and what a skip passes over.',
+    );
+    const hint = $('label.announce span.muted');
+    expect(hint.getAttribute('aria-hidden')).toBe('true');
+    expect(hint.id).not.toBe('');
+    expect(toggle().getAttribute('aria-describedby')).toBe(hint.id);
     let t = T;
     const delta = (topic: string, data: object, wait = 1_000) => {
       advance(wait - 250);
@@ -2279,6 +2294,36 @@ describe('the player bar', () => {
       expect(clock()).toBe(fmtClock(T + 1_000));
       expect(last()).toBe(playing);
       expect(playing.closed).toBe(false);
+    });
+
+    // #238: a phone starts minimised when nothing is stored; the stored choice wins; the default is not written.
+    const phone = (matches: boolean) =>
+      vi.stubGlobal('matchMedia', (q: string) => ({
+        matches: matches && q === '(max-width: 640px)',
+        addEventListener: () => {},
+        removeEventListener: () => {},
+      }));
+    const expanded = () => toggle().getAttribute('aria-expanded');
+
+    it('starts minimised on a phone when nothing is stored, and writes nothing', () => {
+      phone(true);
+      render({});
+      expect(expanded()).toBe('false');
+      expect(localStorage.getItem('f1.minimized')).toBeNull();
+    });
+
+    it('a stored choice wins on a phone', () => {
+      phone(true);
+      localStorage.setItem('f1.minimized', '0');
+      render({});
+      expect(expanded()).toBe('true');
+    });
+
+    it('starts expanded off a phone when nothing is stored', () => {
+      phone(false);
+      render({});
+      expect(expanded()).toBe('true');
+      expect(localStorage.getItem('f1.minimized')).toBeNull();
     });
 
     it('is remembered per device, and is expanded when storage throws', () => {

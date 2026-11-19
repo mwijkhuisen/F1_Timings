@@ -1,8 +1,8 @@
 import type { Live as LiveData, Recordings, SessionDetail } from '@f1/contracts';
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useLive, useRecordings, useSession, useStatus } from '../lib/api.ts';
 import { Link, sessionPath } from '../lib/routes.ts';
-import { fmtInstant } from '../lib/time.ts';
+import { fmtCountdown, fmtInstant } from '../lib/time.ts';
 import { NotFound, Pending } from '../ui/ErrorView.tsx';
 import { Player, type PlayerRecording } from './Player.tsx';
 import { RecorderWarnings } from './Status.tsx';
@@ -72,12 +72,20 @@ function Watch({
 const titleOf = (r: Names) => `${r.meeting_name ?? '—'} · ${r.session_name ?? '—'}`;
 
 /** The session /live offers when nothing is open: the next one, with its latest recording to replay. */
-export function Next({ live }: { live: LiveData }) {
+export function Next({ live, now: fixed }: { live: LiveData; now?: number }) {
+  // The countdown moves every minute, as Season's; only this paragraph re-renders.
+  const [tick, setTick] = useState(Date.now);
+  useEffect(() => {
+    const id = setInterval(() => setTick(Date.now()), 60_000);
+    return () => clearInterval(id);
+  }, []);
+  const now = fixed ?? tick;
   const { session, recording } = live;
   if (!session) return <p>No session is scheduled.</p>;
   return (
     <p>
       Next: {titleOf(session)} starts <time dateTime={session.date_start}>{fmtInstant(session.date_start)}</time>
+      {Date.parse(session.date_start) > now && `, in ${fmtCountdown(Date.parse(session.date_start) - now)}`}
       {recording && (
         <>
           {' · '}
