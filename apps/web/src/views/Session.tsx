@@ -74,7 +74,15 @@ export function Session({ session, view }: { session: number; view: View }) {
   const ready = d !== undefined;
   // biome-ignore lint/correctness/useExhaustiveDependencies: a tab change and the first render of the tabs rerun it
   useEffect(() => {
-    tabs.current?.querySelector('[aria-current="page"]')?.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+    // The row only, to the nearest edge: scrollIntoView would also move the page when the row is off-screen.
+    const t = tabs.current;
+    const a = t?.querySelector('[aria-current="page"]');
+    if (t && a) {
+      const r = a.getBoundingClientRect();
+      const b = t.getBoundingClientRect();
+      if (r.right > b.right) t.scrollLeft += r.right - b.right;
+      else if (r.left < b.left) t.scrollLeft -= b.left - r.left;
+    }
   }, [view, ready]);
 
   if (!d) return <Pending error={detail.error} retry={() => void detail.refetch()} />;

@@ -31,6 +31,7 @@ describe('DriverPicker', () => {
     act(() => nor?.click());
     expect(onToggle).toHaveBeenCalledWith(4);
     expect(details.open).toBe(false);
+    expect(document.activeElement).toBe(details.querySelector('summary'));
     act(() => root.unmount());
   });
 });

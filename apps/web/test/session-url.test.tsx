@@ -113,25 +113,35 @@ describe('Session: the picks in ?d=', () => {
 });
 
 describe('Session: the current tab scrolls into view (#238)', () => {
-  const original = Element.prototype.scrollIntoView;
-  const seen: Element[] = [];
+  const rect = (left: number, right: number) => ({ left, right, top: 0, bottom: 0, width: right - left, height: 0 });
+  const original = Element.prototype.getBoundingClientRect;
+  const originalInto = Element.prototype.scrollIntoView;
+  const spies = [vi.spyOn(window, 'scrollTo'), vi.spyOn(window, 'scrollBy')];
+  const intoView = vi.fn();
   beforeEach(() => {
-    seen.length = 0;
-    Element.prototype.scrollIntoView = function (this: Element) {
-      seen.push(this);
+    Element.prototype.scrollIntoView = intoView;
+    // The nav spans 0-100, the current tab 150-250: 150 px past the nav's right edge.
+    Element.prototype.getBoundingClientRect = function (this: Element) {
+      if (this.classList.contains('tabs')) return rect(0, 100) as DOMRect;
+      if (this.getAttribute('aria-current') === 'page') return rect(150, 250) as DOMRect;
+      return rect(0, 0) as DOMRect;
     };
   });
   afterEach(() => {
-    Element.prototype.scrollIntoView = original;
+    Element.prototype.getBoundingClientRect = original;
+    Element.prototype.scrollIntoView = originalInto;
+    for (const s of spies) s.mockClear();
   });
 
-  it('on mount and on a tab change', () => {
+  it('scrolls the row only, never the page, on mount and on a tab change', () => {
     // Views that fetch nothing more.
     render(`${PATH}/minisectors`, 'Race', 'minisectors');
-    expect(seen.map((e) => e.textContent)).toEqual(['Mini-sectors']);
-    expect(seen[0]?.getAttribute('aria-current')).toBe('page');
+    const nav = host.querySelector('nav.tabs') as HTMLElement;
+    expect(nav.scrollLeft).toBe(150);
     render(`${PATH}/order`, 'Race', 'order');
-    expect(seen.map((e) => e.textContent)).toEqual(['Mini-sectors', 'Order']);
+    expect((host.querySelector('nav.tabs') as HTMLElement).scrollLeft).toBe(300);
+    for (const s of spies) expect(s).not.toHaveBeenCalled();
+    expect(intoView).not.toHaveBeenCalled();
   });
 });
 

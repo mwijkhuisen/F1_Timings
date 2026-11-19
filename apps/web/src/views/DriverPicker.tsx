@@ -81,6 +81,8 @@ export function DriverPicker({
                 onToggle(d.number);
                 // A pick closes the disclosure (#238).
                 if (add.current) add.current.open = false;
+                // Focus was on a toggle inside it: keep it on the summary, not on body.
+                add.current?.querySelector('summary')?.focus();
               }}
             >
               {d.acronym}
