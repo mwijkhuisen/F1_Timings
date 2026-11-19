@@ -214,6 +214,14 @@ describe('retryAfterMs', () => {
 });
 
 describe('the daemon stop (#218, msw, fake timers)', () => {
+  it('starts no request once the stop has aborted (it came between two calls)', async () => {
+    const seen = laps(() => HttpResponse.json([]));
+    const stop = new AbortController();
+    stop.abort(new Error('SIGTERM'));
+    await expect(createClient().get('laps', { session_key: 1 }, stop.signal)).rejects.toThrow('SIGTERM');
+    expect(seen).toEqual([]);
+  });
+
   it('ends the request in flight: get rejects with the reason, with no second attempt', async () => {
     const stop = new AbortController();
     const seen = laps(() => {

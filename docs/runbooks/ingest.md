@@ -18,7 +18,7 @@ sudo docker compose -p f1 -f /etc/f1/compose.yaml --env-file /srv/f1/state/curre
 
 `compose stop ingest`, a restart and every deploy are safe at any time, during a drain too (#218, A§8). SIGTERM ends
 the OpenF1 wait or request in flight at once, the daemon logs `stopping` and exits 0 within seconds
-(`stop_grace_period: 30s` is the second layer). The session in flight writes nothing and stays `due`: the next start
+(`stop_grace_period: 30s` is the second layer; a rain request or healthchecks ping in flight still finishes, A§8). The session in flight writes nothing and stays `due`: the next start
 fetches it again from the start (up to 10 requests). Its rows stay as they were, since the one transaction per session
 had not begun.
 
@@ -48,8 +48,7 @@ to stop):
    sudo docker logs --since 1m f1-ingest-1 2>&1 | tail -3
    ```
 
-3. Start it again and let the drain finish: no `due` left after about 6 min, and `rain` lines between the `session`
-   lines while it runs:
+3. Start it again and let the drain finish: no `due` left after about 6 min:
 
    ```bash
    sudo docker compose -p f1 -f /etc/f1/compose.yaml --env-file /srv/f1/state/current.env start ingest

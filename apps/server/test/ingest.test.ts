@@ -17,6 +17,7 @@ import {
   SESSION_ENDPOINTS,
   SYNC_RETRY_MS,
   scheduleSync,
+  startIngest,
   TICK_SLICE_MS,
   tick,
 } from '../src/ingest/ingest.ts';
@@ -403,6 +404,25 @@ describe('minuteWork (the daemon job inside the busy guard)', () => {
     expect(log.error).not.toHaveBeenCalled();
   });
 
+  it("logs no `tick failed` for the stop's own AbortError (#218), but still logs another error during the stop", async () => {
+    const { log } = setup();
+    let stopping = false;
+    const fail = (err: Error) => async () => {
+      stopping = true;
+      throw err;
+    };
+    await minuteWork(
+      { sync: async () => {}, tick: fail(new DOMException('aborted', 'AbortError')) },
+      log,
+      () => stopping,
+    );
+    expect(log.error).not.toHaveBeenCalled();
+    stopping = false;
+    const pg = Object.assign(new Error('boom'), { code: 'XX000' });
+    await minuteWork({ sync: async () => {}, tick: fail(pg) }, log, () => stopping);
+    expect(log.error.mock.calls).toEqual([[{ cause: 'XX000' }, 'tick failed']]);
+  });
+
   it('runs without a rain step (backfill and refetch have none), and runs nothing once stopping', async () => {
     const { order, log, job } = setup();
     await minuteWork({ sync: job.sync, tick: job.tick }, log, () => false);
@@ -496,7 +516,7 @@ describe('a long queue (#218): the stop and the time slice', () => {
       now: () => t,
       sleep: async (ms, signal) => {
         waits.push(ms);
-        sigterm.abort(new Error('SIGTERM'));
+        sigterm.abort();
         signal?.throwIfAborted();
         t += ms;
       },
@@ -528,6 +548,32 @@ describe('a long queue (#218): the stop and the time slice', () => {
     expect(writes(queries)).toEqual([expect.stringMatching(/^update "session" set "ingest_state" = \$1 where /)]);
     expect(log.error).not.toHaveBeenCalled(); // no session line, no `tick failed`
     expect(rain.mock.calls).toEqual([[stopped]]); // it checks the flag before its request
+  });
+
+  it('startIngest: SIGTERM aborts the OpenF1 call in flight, and the daemon resolves with no `tick failed`', async () => {
+    const terms = process.listenerCount('SIGTERM');
+    const { db } = fakeDb();
+    // Each call waits until its stop aborts, as the limiter's wait after a 429 would.
+    const seen: (AbortSignal | undefined)[] = [];
+    const client = {
+      get: (_endpoint: string, _query: unknown, stop?: AbortSignal) => {
+        seen.push(stop);
+        return new Promise((_resolve, reject) =>
+          stop?.addEventListener('abort', () => reject(stop.reason), { once: true }),
+        );
+      },
+    } as unknown as ReturnType<typeof createClient>;
+    const log = { info: vi.fn(), error: vi.fn() };
+    const daemon = startIngest({ db, client, now: () => end, log, beat: () => {} });
+    await vi.waitFor(() => expect(seen).toHaveLength(1)); // the startup sync's first request
+    expect(seen[0]?.aborted).toBe(false);
+    process.emit('SIGTERM', 'SIGTERM'); // the listener only: no real signal reaches the worker
+    await daemon;
+    expect(seen).toHaveLength(1);
+    expect(seen[0]?.aborted).toBe(true);
+    expect(log.info.mock.calls.map((c) => c[1])).toContain('stopping');
+    expect(log.error).not.toHaveBeenCalled();
+    expect(process.listenerCount('SIGTERM')).toBe(terms);
   });
 
   it("a refetch job is not cut short by the daemon's stop rule: its deps carry no stop", async () => {

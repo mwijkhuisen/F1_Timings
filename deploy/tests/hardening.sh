@@ -4,7 +4,8 @@
 # /etc/f1 needed: the secret files and f1.env are never read by `config`) and checks the
 # result with one jq program: every check is named, and a failure prints the names. Besides the
 # container hardening it holds the log rotation (logging), the exact restart map, the services
-# with a stop_grace_period (db and live 60 s, ingest 30 s since #218) and security_opt being exactly no-new-privileges (#106).
+# with a stop_grace_period (db and live 60 s, ingest 30 s since #218) and security_opt being exactly
+# no-new-privileges (#106).
 # Then the negative cases: the same program over a broken copy must fail, naming the check.
 # Then the host files (#104): the GIDs in f1-lib.sh's F1_SECRETS match the program's $gid map; no
 # f1 unit runs as another user or adds a group (User=, Group=, DynamicUser=, SupplementaryGroups=);

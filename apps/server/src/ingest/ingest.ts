@@ -803,8 +803,9 @@ export async function minuteWork(
       await job.tick();
     }
   } catch (err) {
-    // The code only: busyGuard needs fn not to reject. The stop's rejection (#218) is no failure.
-    if (!stopping()) log.error({ cause: codeOf(err) }, 'tick failed');
+    // The code only: busyGuard needs fn not to reject. The stop's own rejection (#218, an AbortError) is no failure.
+    if (!(stopping() && err instanceof Error && err.name === 'AbortError'))
+      log.error({ cause: codeOf(err) }, 'tick failed');
   }
   // The tick breaks out of a live window instead of waiting in it, so the rain step runs every minute.
   await job.rain?.(stopping);
