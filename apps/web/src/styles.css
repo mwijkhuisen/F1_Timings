@@ -226,15 +226,21 @@ header {
 
 .tabs {
   display: flex;
-  flex-wrap: wrap;
-  gap: 4px 16px;
+  gap: 16px;
+  overflow-x: auto;
   border-bottom: 1px solid var(--line);
   margin-bottom: 12px;
 }
 
 .tabs a {
+  flex: none;
   text-decoration: none;
   border-bottom: 3px solid transparent;
+}
+
+/* Inside the scroll box the ring is inset, so the box never clips it. */
+.tabs :focus-visible {
+  outline-offset: -3px;
 }
 
 .tabs a[aria-current="page"] {

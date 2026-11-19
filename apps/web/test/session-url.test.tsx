@@ -112,6 +112,29 @@ describe('Session: the picks in ?d=', () => {
   });
 });
 
+describe('Session: the current tab scrolls into view (#238)', () => {
+  const original = Element.prototype.scrollIntoView;
+  const seen: Element[] = [];
+  beforeEach(() => {
+    seen.length = 0;
+    Element.prototype.scrollIntoView = function (this: Element) {
+      seen.push(this);
+    };
+  });
+  afterEach(() => {
+    Element.prototype.scrollIntoView = original;
+  });
+
+  it('on mount and on a tab change', () => {
+    // Views that fetch nothing more.
+    render(`${PATH}/minisectors`, 'Race', 'minisectors');
+    expect(seen.map((e) => e.textContent)).toEqual(['Mini-sectors']);
+    expect(seen[0]?.getAttribute('aria-current')).toBe('page');
+    render(`${PATH}/order`, 'Race', 'order');
+    expect(seen.map((e) => e.textContent)).toEqual(['Mini-sectors', 'Order']);
+  });
+});
+
 describe('Session: the Order tab (races and sprints only)', () => {
   it('lists Order right after Laps in a race, and shows the running order', () => {
     render(`${PATH}/order`, 'Race', 'order');
@@ -194,8 +217,9 @@ describe('Session without laps: the reason, no dead end (#99)', () => {
   };
 
   it('Compare and Mini-sectors show the reason instead of an empty picker', () => {
+    const lead = { compare: 'Compare needs laps.', minisectors: 'Mini-sectors need laps.' } as const;
     for (const view of ['compare', 'minisectors'] as const) {
-      expect(show(view)).toBe('<p>No laps in the OpenF1 data.</p>');
+      expect(show(view)).toBe(`<p>${lead[view]} No laps in the OpenF1 data.</p>`);
       expect(host.querySelector('.picked')).toBeNull();
     }
   });

@@ -1,5 +1,5 @@
 import type { SessionDetail } from '@f1/contracts';
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { useLaps, useLive, useRefetchOnFetch, useSession } from '../lib/api.ts';
 import { formatD, Link, parseD, replace, sessionPath, VIEW_LABEL, type View } from '../lib/routes.ts';
 import { orderDrivers } from '../lib/session.ts';
@@ -23,6 +23,9 @@ const pathOf = (d: SessionDetail, view: View) =>
     { key: d.session.session_key, name: d.session.name },
     view,
   );
+
+// The pick views say what they need before the reason (#238).
+const LEAD: Partial<Record<View, string>> = { compare: 'Compare needs laps.', minisectors: 'Mini-sectors need laps.' };
 
 // The Grid row's positions (#115): results[].grid, integers from 1 only (Jolpica's 0 is a pit-lane start, no place).
 const gridOf = (d: SessionDetail) =>
@@ -66,12 +69,20 @@ export function Session({ session, view }: { session: number; view: View }) {
     if (picks && chosen !== null) history.replaceState(history.state, '', location.pathname + search + location.hash);
   }, [picks, chosen, search]);
 
+  // The tabs scroll inside their own row (#238): the current one stays in view.
+  const tabs = useRef<HTMLElement>(null);
+  const ready = d !== undefined;
+  // biome-ignore lint/correctness/useExhaustiveDependencies: a tab change and the first render of the tabs rerun it
+  useEffect(() => {
+    tabs.current?.querySelector('[aria-current="page"]')?.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+  }, [view, ready]);
+
   if (!d) return <Pending error={detail.error} retry={() => void detail.refetch()} />;
   const race = d.session.type === 'Race';
   return (
     <>
       <SessionHeadLoader detail={d} view={view} live={live} />
-      <nav className="tabs">
+      <nav className="tabs" ref={tabs}>
         {(Object.keys(VIEW_LABEL) as View[])
           .filter((v) => v !== 'order' || race)
           .map((v) => (
@@ -97,7 +108,13 @@ export function Session({ session, view }: { session: number; view: View }) {
       ) : !laps.data ? (
         <Pending error={laps.error} retry={() => void laps.refetch()} />
       ) : laps.data.length === 0 ? (
-        <NoData session={d.session} live={live} what={view === 'stints' ? 'stints' : 'laps'} now={now} />
+        <NoData
+          session={d.session}
+          live={live}
+          what={view === 'stints' ? 'stints' : 'laps'}
+          now={now}
+          lead={LEAD[view]}
+        />
       ) : view === 'laps' ? (
         <LapsTab session={session} detail={d} laps={laps.data} />
       ) : view === 'order' ? (
