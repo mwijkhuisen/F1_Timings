@@ -2115,6 +2115,10 @@ describe('the player bar', () => {
     expect($('label.announce span.muted').textContent).toBe(
       'The start, track status, fastest laps and what a skip passes over.',
     );
+    const hint = $('label.announce span.muted');
+    expect(hint.getAttribute('aria-hidden')).toBe('true');
+    expect(hint.id).not.toBe('');
+    expect(toggle().getAttribute('aria-describedby')).toBe(hint.id);
     let t = T;
     const delta = (topic: string, data: object, wait = 1_000) => {
       advance(wait - 250);

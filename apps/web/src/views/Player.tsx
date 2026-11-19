@@ -795,6 +795,7 @@ export function Player({
   const [catchUp, setCatchUp] = useState(false); // the dialog is open; it never opens by itself
   const showRef = useRef<HTMLButtonElement>(null);
   const [announce, setAnnounce] = useState(readAnnounce);
+  const hint = useId();
   // Minimized, the bar keeps only its head (the clock line, Play/Pause, Live and the toggle); the stream is untouched.
   const [minimized, setMinimized] = useState(readMinimized);
   const controlsId = useId();
@@ -1430,9 +1431,16 @@ export function Player({
                 </label>
               )}
               <label className="announce">
-                <input type="checkbox" checked={announce} onChange={(e) => toggleAnnounce(e.target.checked)} />
+                <input
+                  type="checkbox"
+                  aria-describedby={hint}
+                  checked={announce}
+                  onChange={(e) => toggleAnnounce(e.target.checked)}
+                />
                 Announce events to a screen reader
-                <span className="muted">The start, track status, fastest laps and what a skip passes over.</span>
+                <span className="muted" id={hint} aria-hidden="true">
+                  The start, track status, fastest laps and what a skip passes over.
+                </span>
               </label>
             </>
           )}

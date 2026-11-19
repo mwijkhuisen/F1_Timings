@@ -72,7 +72,14 @@ function Watch({
 const titleOf = (r: Names) => `${r.meeting_name ?? '—'} · ${r.session_name ?? '—'}`;
 
 /** The session /live offers when nothing is open: the next one, with its latest recording to replay. */
-export function Next({ live, now }: { live: LiveData; now: number }) {
+export function Next({ live, now: fixed }: { live: LiveData; now?: number }) {
+  // The countdown moves every minute, as Season's; only this paragraph re-renders.
+  const [tick, setTick] = useState(Date.now);
+  useEffect(() => {
+    const id = setInterval(() => setTick(Date.now()), 60_000);
+    return () => clearInterval(id);
+  }, []);
+  const now = fixed ?? tick;
   const { session, recording } = live;
   if (!session) return <p>No session is scheduled.</p>;
   return (
@@ -105,12 +112,6 @@ export function RecordingsList({ recordings }: { recordings: Recordings }) {
 }
 
 export function Live() {
-  // The countdown moves every minute, as Season's.
-  const [now, setNow] = useState(Date.now);
-  useEffect(() => {
-    const id = setInterval(() => setNow(Date.now()), 60_000);
-    return () => clearInterval(id);
-  }, []);
   const live = useLive();
   const status = useStatus(60_000);
   // The recording the player follows: it stays (with its new `ended_at`) while `/live` names it, so a delayed viewer
@@ -128,7 +129,7 @@ export function Live() {
       ) : (
         <>
           <h1 tabIndex={-1}>Live</h1>
-          <Next live={live.data} now={now} />
+          <Next live={live.data} />
         </>
       )}
       <p>
