@@ -1,6 +1,6 @@
 import { isUnmatched } from '@f1/contracts';
 import { Cron } from 'croner';
-import { type Insertable, type Kysely, sql, type Transaction } from 'kysely';
+import { type Insertable, type Kysely, type RawBuilder, sql, type Transaction } from 'kysely';
 import pg from 'pg';
 import type { Logger } from 'pino';
 import { codeOf, type DB } from '../db/db.ts';
@@ -69,6 +69,11 @@ export type Deps = {
   rainStep?: (stopping: () => boolean) => Promise<void>;
   /** The daemon's hold on the ingest lock (`ingestLock`, D1): without it the minute job skips the sync and the tick. */
   held?: () => Promise<boolean>;
+  /**
+   * The daemon's stop (#218), aborted on SIGTERM/SIGINT: every OpenF1 call of the sync and the tick rejects with its
+   * reason, no request starts after it, and the session in flight writes nothing. The jobs have none.
+   */
+  stop?: AbortSignal;
 };
 export type Outcome = Result<IngestState, ErrorCode | 'unknown_session' | 'live_session' | 'not_openf1'>;
 
@@ -90,13 +95,16 @@ export const CHAMPIONSHIP = [
   { endpoint: 'championship_teams', table: 'championship_team' },
 ] as const;
 
-/** One OpenF1 call, parsed. The heartbeat follows each call, so slow but progressing work never goes stale. */
+/**
+ * One OpenF1 call, parsed. The heartbeat follows each call, so slow but progressing work never goes stale. Rejects only
+ * once `stop` has aborted (#218).
+ */
 export async function fetchRows<E extends Endpoint>(
-  { client, beat }: Deps,
+  { client, beat, stop }: Deps,
   endpoint: E,
   query: Query,
 ): Promise<Result<{ status: number; body: unknown; rows: Rows<E> }, FetchError>> {
-  const fetched = await client.get(endpoint, query);
+  const fetched = await client.get(endpoint, query, stop);
   beat();
   if (!fetched.ok) return { ok: false, error: { last_error: errorCode(fetched.error), endpoint } };
   const parsed = parse(endpoint, fetched.value.body);
@@ -105,10 +113,42 @@ export async function fetchRows<E extends Endpoint>(
   return { ok: true, value: { ...fetched.value, rows: parsed.value } };
 }
 
+// The schedule columns the sync owns: one list per table for the SET and for the change test (#218).
+const MEETING_COLUMNS = [
+  'source',
+  'year',
+  'name',
+  'official_name',
+  'location',
+  'country_code',
+  'circuit_short_name',
+  'gmt_offset',
+  'date_start',
+  'date_end',
+  'is_cancelled',
+] as const satisfies readonly (keyof DB['meeting'])[];
+const SESSION_COLUMNS = [
+  'source',
+  'meeting_key',
+  'type',
+  'name',
+  'date_start',
+  'date_end',
+  'is_cancelled',
+] as const satisfies readonly (keyof DB['session'])[];
+const fromExcluded = <C extends string>(columns: readonly C[]) =>
+  Object.fromEntries(columns.map((c) => [c, sql.ref(`excluded.${c}`)])) as Record<C, RawBuilder<never>>;
+/** `(t.a, …) IS DISTINCT FROM (excluded.a, …)`: an upsert that would change nothing writes no row version (#218). */
+const changed = (table: 'meeting' | 'session', columns: readonly string[]) =>
+  sql<boolean>`(${sql.join(columns.map((c) => sql.ref(`${table}.${c}`)))}) IS DISTINCT FROM (${sql.join(
+    columns.map((c) => sql.ref(`excluded.${c}`)),
+  )})`;
+
 /**
  * meetings + sessions per year → upsert, metadata only; `next_fetch_at` moves only while
  * `scheduled`; a cancelled session gets none, and the tick and the backfill skip it. One bad
- * row fails that year (one parse).
+ * row fails that year (one parse). A row whose values are unchanged is not rewritten (#218).
+ * Never throws, except the daemon's stop (`stop`, #218).
  */
 export async function syncSchedule(deps: Deps, years: readonly number[]): Promise<boolean> {
   const { db, log } = deps;
@@ -140,21 +180,10 @@ export async function syncSchedule(deps: Deps, years: readonly number[]): Promis
             .onConflict((oc) =>
               oc
                 .column('meeting_key')
-                .doUpdateSet((eb) => ({
-                  source: eb.ref('excluded.source'),
-                  year: eb.ref('excluded.year'),
-                  name: eb.ref('excluded.name'),
-                  official_name: eb.ref('excluded.official_name'),
-                  location: eb.ref('excluded.location'),
-                  country_code: eb.ref('excluded.country_code'),
-                  circuit_short_name: eb.ref('excluded.circuit_short_name'),
-                  gmt_offset: eb.ref('excluded.gmt_offset'),
-                  date_start: eb.ref('excluded.date_start'),
-                  date_end: eb.ref('excluded.date_end'),
-                  is_cancelled: eb.ref('excluded.is_cancelled'),
-                }))
+                .doUpdateSet(fromExcluded(MEETING_COLUMNS))
                 // An F1 archive meeting with the same key stays as it is (the archive job refuses the other way).
-                .where('meeting.source', '=', 'openf1'),
+                .where('meeting.source', '=', 'openf1')
+                .where(changed('meeting', MEETING_COLUMNS)),
             )
             .execute();
         }
@@ -166,13 +195,7 @@ export async function syncSchedule(deps: Deps, years: readonly number[]): Promis
               oc
                 .column('session_key')
                 .doUpdateSet((eb) => ({
-                  source: eb.ref('excluded.source'),
-                  meeting_key: eb.ref('excluded.meeting_key'),
-                  type: eb.ref('excluded.type'),
-                  name: eb.ref('excluded.name'),
-                  date_start: eb.ref('excluded.date_start'),
-                  date_end: eb.ref('excluded.date_end'),
-                  is_cancelled: eb.ref('excluded.is_cancelled'),
+                  ...fromExcluded(SESSION_COLUMNS),
                   next_fetch_at: eb
                     .case()
                     .when('session.ingest_state', '=', 'scheduled')
@@ -180,7 +203,17 @@ export async function syncSchedule(deps: Deps, years: readonly number[]): Promis
                     .else(eb.ref('session.next_fetch_at'))
                     .end(),
                 }))
-                .where('session.source', '=', 'openf1'),
+                .where('session.source', '=', 'openf1')
+                // Exactly "the SET would change something": the metadata, or a scheduled session's next_fetch_at.
+                .where((eb) =>
+                  eb.or([
+                    changed('session', SESSION_COLUMNS),
+                    eb.and([
+                      eb('session.ingest_state', '=', 'scheduled'),
+                      eb('session.next_fetch_at', 'is distinct from', eb.ref('excluded.next_fetch_at')),
+                    ]),
+                  ]),
+                ),
             )
             .execute();
         }
@@ -230,7 +263,8 @@ export async function replaceRows(trx: Transaction<DB>, key: number, rows: Sessi
  * A race also fetches its qualifying's starting grid, which fails on its own (O1, A§8): the
  * stored grid and its raw row stay, and the session goes on.
  * A race or sprint then fetches its two championship endpoints, each failing on its own the same way (P8).
- * Never throws; logs one line per session.
+ * Never throws; logs one line per session. The one exception is the daemon's stop (`stop`, #218): it rejects during the
+ * fetches, before the transaction, so the session is left as it was (no write, no state change) and logs no line.
  */
 export async function processSession(deps: Deps, key: number, refetch = false): Promise<Outcome> {
   const { db, now, log } = deps;
@@ -560,7 +594,13 @@ export async function live({ db, now }: Pick<Deps, 'db' | 'now'>): Promise<boole
 // ponytail: module state, one daemon per process; the live wait is logged on its transitions only.
 let waiting = false;
 
-/** Marks every session whose time has come `due`, then processes the due ones, newest first. */
+/**
+ * A tick ends once it has run this long (#218), between two sessions: a minute fired meanwhile, so the busy guard runs
+ * the minute job again at once (the sync check, the next slice) after the rain step. A drain shares the minute.
+ */
+export const TICK_SLICE_MS = 60_000;
+
+/** Marks every session whose time has come `due`, then processes the due ones, newest first, for one slice. */
 export async function tick(deps: Deps, stopping: () => boolean = () => false): Promise<number> {
   const at = deps.now();
   await deps.db
@@ -582,7 +622,8 @@ export async function tick(deps: Deps, stopping: () => boolean = () => false): P
     .execute();
   let processed = 0;
   for (const { session_key } of due) {
-    if (stopping()) break; // SIGTERM ends a long (first) tick after the current session
+    if (stopping()) break; // a SIGTERM after the session's fetches: its transaction has finished
+    if (deps.now().getTime() - at.getTime() >= TICK_SLICE_MS) break;
     const isLive = await live(deps);
     if (isLive !== waiting) {
       waiting = isLive;
@@ -762,7 +803,8 @@ export async function minuteWork(
       await job.tick();
     }
   } catch (err) {
-    log.error({ cause: codeOf(err) }, 'tick failed'); // the code only: busyGuard needs fn not to reject
+    // The code only: busyGuard needs fn not to reject. The stop's rejection (#218) is no failure.
+    if (!stopping()) log.error({ cause: codeOf(err) }, 'tick failed');
   }
   // The tick breaks out of a live window instead of waiting in it, so the rain step runs every minute.
   await job.rain?.(stopping);
@@ -849,19 +891,17 @@ export function ingestLock(url: URL | string, log: Pick<Logger, 'info' | 'error'
 
 /**
  * The daemon: one job every minute that syncs the schedule when due, ticks, then runs the rain step. Resolves
- * after SIGTERM/SIGINT once the running job has finished.
+ * after SIGTERM/SIGINT once the running job has finished: the stop (#218) ends its OpenF1 wait or request at once.
  */
 export async function startIngest(deps: Deps): Promise<void> {
   const { log } = deps;
-  let stopping = false;
-  const stopped = () => stopping;
-  const stop = new Promise<void>((resolve) => {
+  const stop = new AbortController();
+  const stopped = () => stop.signal.aborted;
+  const signalled = new Promise<void>((resolve) => {
     process.once('SIGTERM', resolve);
     process.once('SIGINT', resolve);
-  }).then(() => {
-    stopping = true;
   });
-  const job = daemon(deps, stopped);
+  const job = daemon({ ...deps, stop: stop.signal }, stopped);
   const work = busyGuard(() => minuteWork(job, log, stopped));
   deps.beat();
   void work.run();
@@ -873,7 +913,8 @@ export async function startIngest(deps: Deps): Promise<void> {
     new Cron('* * * * *', { timezone: 'UTC' }, () => void work.run()),
   ];
 
-  await stop;
+  await signalled;
+  stop.abort();
   log.info({}, 'stopping');
   for (const job of jobs) job.stop();
   await work.idle();

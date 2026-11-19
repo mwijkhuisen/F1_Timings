@@ -1,4 +1,4 @@
-import { HttpResponse, http } from 'msw';
+import { delay, HttpResponse, http } from 'msw';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { server } from '../../../test/msw.setup.ts';
 import { HEARTBEAT_MAX_AGE_MS } from '../src/heartbeat.ts';
@@ -19,7 +19,7 @@ beforeEach(() => vi.useFakeTimers());
 afterEach(() => vi.useRealTimers());
 
 /** Answers /laps from `reply(n)` for the n-th request (1-based) and records when each arrived. */
-function laps(reply: (n: number) => Response) {
+function laps(reply: (n: number) => Response | Promise<Response>) {
   const t0 = Date.now();
   const seen: number[] = [];
   server.use(
@@ -211,4 +211,32 @@ describe('retryAfterMs', () => {
   ])('%j → %i ms', (header, ms) => {
     expect(retryAfterMs(header, now)).toBe(ms);
   });
+});
+
+describe('the daemon stop (#218, msw, fake timers)', () => {
+  it('ends the request in flight: get rejects with the reason, with no second attempt', async () => {
+    const stop = new AbortController();
+    const seen = laps(() => {
+      stop.abort(new Error('SIGTERM'));
+      return delay(1_000).then(() => HttpResponse.json([]));
+    });
+    const pending = expect(createClient().get('laps', { session_key: 1 }, stop.signal)).rejects.toThrow('SIGTERM');
+    await vi.runAllTimersAsync();
+    await pending;
+    expect(seen).toEqual([0]);
+  });
+
+  it.each([503, 429])(
+    'ends the wait after a %i (a backoff, a Retry-After pause): no further attempt',
+    async (status) => {
+      const stop = new AbortController();
+      const seen = laps(() => new HttpResponse(null, { status, headers: { 'Retry-After': '30' } }));
+      const pending = expect(createClient().get('laps', { session_key: 1 }, stop.signal)).rejects.toThrow('SIGTERM');
+      await vi.advanceTimersByTimeAsync(500); // inside the 1 s backoff, or the 30 s pause
+      stop.abort(new Error('SIGTERM'));
+      await pending;
+      await vi.runAllTimersAsync();
+      expect(seen).toEqual([0]);
+    },
+  );
 });

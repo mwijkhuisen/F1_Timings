@@ -21,14 +21,28 @@ export const DEADLINE_MS = 120_000;
 export const MAX_BODY_BYTES = 64 * 1024 * 1024;
 
 export type Query = Readonly<Record<string, string | number>>;
-export type Clock = { now(): number; sleep(ms: number): Promise<void> };
+/** `sleep` rejects with the signal's reason once it aborts (the daemon's stop, #218). */
+export type Clock = { now(): number; sleep(ms: number, signal?: AbortSignal): Promise<void> };
 export type Fetched = { status: number; body: unknown };
 /** Fixed codes only: never a URL, a body or an underlying error message (A§14.5). */
 export type OpenF1Error = { code: 'http'; status: number } | { code: 'network' | 'timeout' | 'json' };
 
 export const systemClock: Clock = {
   now: () => Date.now(),
-  sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
+  // The global setTimeout, not node:timers/promises: the tests' fake timers replace only the global one.
+  sleep: (ms, signal) =>
+    new Promise((resolve, reject) => {
+      signal?.throwIfAborted();
+      const onAbort = () => {
+        clearTimeout(timer);
+        reject(signal?.reason);
+      };
+      const timer = setTimeout(() => {
+        signal?.removeEventListener('abort', onAbort);
+        resolve();
+      }, ms);
+      signal?.addEventListener('abort', onAbort, { once: true });
+    }),
 };
 
 export function url(endpoint: Endpoint, query: Query): string {
@@ -46,7 +60,7 @@ export function createLimiter(clock: Clock = systemClock, perMinute = PER_MINUTE
   let notBefore = 0;
   let queue = Promise.resolve();
 
-  async function next(): Promise<void> {
+  async function next(signal?: AbortSignal): Promise<void> {
     for (;;) {
       const now = clock.now();
       while (starts.length > 0 && (starts[0] ?? 0) <= now - 60_000) starts.shift();
@@ -59,14 +73,16 @@ export function createLimiter(clock: Clock = systemClock, perMinute = PER_MINUTE
         starts.push(now);
         return;
       }
-      await clock.sleep(at - now);
+      await clock.sleep(at - now, signal);
     }
   }
 
   return {
-    take(): Promise<void> {
-      queue = queue.then(next);
-      return queue;
+    /** Rejects with the signal's reason once it aborts during the wait; the takes after it still run in order. */
+    take(signal?: AbortSignal): Promise<void> {
+      const turn = queue.then(() => next(signal));
+      queue = turn.catch(() => {});
+      return turn;
     },
     /** No request starts for `ms` (a 429's Retry-After holds back every caller). */
     pause(ms: number): void {
@@ -139,7 +155,7 @@ export function createClient({ clock = systemClock, dispatcher, onAttempt = () =
       bodyTimeout: READ_TIMEOUT_MS,
     })) as unknown as NonNullable<RequestInit['dispatcher']>;
 
-  async function once(target: string): Promise<Result<Fetched, OpenF1Error>> {
+  async function once(target: string, stop?: AbortSignal): Promise<Result<Fetched, OpenF1Error>> {
     // A total deadline: undici's timeouts are idle timeouts, so a slow drip would never end.
     const deadline = new AbortController();
     const timer = setTimeout(() => deadline.abort(), DEADLINE_MS);
@@ -148,7 +164,7 @@ export function createClient({ clock = systemClock, dispatcher, onAttempt = () =
         dispatcher: agent,
         headers: { accept: 'application/json' },
         redirect: 'error', // never to another host
-        signal: deadline.signal,
+        signal: stop ? AbortSignal.any([deadline.signal, stop]) : deadline.signal,
       });
       const { status } = response;
       if (status === 429) limiter.pause(retryAfterMs(response.headers.get('retry-after'), clock.now()));
@@ -168,18 +184,24 @@ export function createClient({ clock = systemClock, dispatcher, onAttempt = () =
     }
   }
 
-  /** 429, 5xx, network errors and timeouts are retried, up to MAX_ATTEMPTS in all. */
-  async function get(endpoint: Endpoint, query: Query): Promise<Result<Fetched, OpenF1Error>> {
+  /**
+   * 429, 5xx, network errors and timeouts are retried, up to MAX_ATTEMPTS in all. `stop` (the daemon's SIGTERM, #218)
+   * ends the limiter's wait, a backoff and the request in flight, and then `get` rejects with its reason: no request
+   * starts after it. Without `stop` it never rejects.
+   */
+  async function get(endpoint: Endpoint, query: Query, stop?: AbortSignal): Promise<Result<Fetched, OpenF1Error>> {
     const target = url(endpoint, query);
     for (let attempt = 1; ; attempt++) {
-      await limiter.take();
+      await limiter.take(stop);
+      stop?.throwIfAborted();
       onAttempt();
-      const result = await once(target);
+      const result = await once(target, stop);
+      stop?.throwIfAborted();
       if (result.ok || attempt === MAX_ATTEMPTS) return result;
       const { error } = result;
       if (error.code === 'json' || (error.code === 'http' && error.status !== 429 && error.status < 500)) return result;
       // A 429 has already paused the limiter for its Retry-After; the rest back off.
-      if (error.code !== 'http' || error.status !== 429) await clock.sleep(backoffMs(attempt));
+      if (error.code !== 'http' || error.status !== 429) await clock.sleep(backoffMs(attempt), stop);
     }
   }
 

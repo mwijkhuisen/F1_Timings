@@ -302,6 +302,8 @@ services:
     mem_limit: 256m
     cpus: 0.5
     pids_limit: 64
+    # SIGTERM ends the OpenF1 wait or request in flight at once and exits 0 (#218); 30 s is the second layer.
+    stop_grace_period: 30s
     healthcheck: *node-healthcheck
 
   # The recorder (A§11.2, P2c): logs in to F1 TV and writes every scheduled session to disk.
