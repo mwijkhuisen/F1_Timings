@@ -42,6 +42,7 @@ export function RaceControlLog({
     <RaceControlCard
       rc={{ items, counts: countKinds(items), overtakes: all.some((i) => i.kind === 'overtake') }}
       className="card rclog"
+      id="race-control"
       filters={
         <div className="controls">
           {phases > 0 && (
