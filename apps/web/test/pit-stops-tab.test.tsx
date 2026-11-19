@@ -43,7 +43,7 @@ const stints = [
   { driver_number: 4, stint_number: 2, lap_start: 6, lap_end: 9, compound: 'HARD', tyre_age_at_start: 0 },
 ];
 
-function mount(type: string, pits: unknown[]) {
+function mount(type: string, pits: unknown[], source?: 'f1-archive') {
   server.use(
     http.get(`*/api/v1/sessions/${KEY}/stints`, () => HttpResponse.json(stints)),
     http.get(`*/api/v1/sessions/${KEY}/pits`, () => HttpResponse.json(pits)),
@@ -52,16 +52,12 @@ function mount(type: string, pits: unknown[]) {
   );
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   const laps = [lap(4, 1), lap(4, 9)];
+  const base = sessionDetail(type, type, [[4, 'NOR']]);
+  const detail = source ? { ...base, session: { ...base.session, source } } : base;
   act(() =>
     root.render(
       <QueryClientProvider client={client}>
-        <StintsTab
-          session={KEY}
-          detail={sessionDetail(type, type, [[4, 'NOR']])}
-          laps={laps}
-          live={null}
-          now={Date.now()}
-        />
+        <StintsTab session={KEY} detail={detail} laps={laps} live={null} now={Date.now()} />
       </QueryClientProvider>,
     ),
   );
@@ -72,6 +68,27 @@ describe('StintsTab pit stops', () => {
     mount('Race', [pit]);
     await vi.waitFor(() => expect(host.querySelector('table.pits')).not.toBeNull());
     expect(host.textContent).toContain('22.0 s');
+  });
+
+  it('names the source of a stop time, and the "No stop time" note only where there is none (#219)', async () => {
+    const stop = { ...pit, lap_number: 7, stop_ms: 2400, source: 'f1-archive', filled: { stop_ms: 'f1-archive' } };
+    mount('Race', [pit, stop]);
+    await vi.waitFor(() => expect(host.querySelector('table.pits')).not.toBeNull());
+    const notes = [...host.querySelectorAll('table.pits td button.note')].map((b) => [
+      b.getAttribute('title'),
+      b.textContent,
+    ]);
+    expect(notes).toContainEqual(['No stop time in the OpenF1 data or the F1 archive', '—']);
+    expect(notes).toContainEqual(['From the F1 archive', '2.4 s']);
+    expect(notes.filter(([t]) => t?.startsWith('No stop time'))).toHaveLength(1);
+  });
+
+  it('words the missing stop time by the session source: an archive session says it has none before 2025', async () => {
+    mount('Race', [{ ...pit, source: 'f1-archive' }], 'f1-archive');
+    await vi.waitFor(() => expect(host.querySelector('table.pits')).not.toBeNull());
+    expect(host.querySelector('table.pits td button.note[title^="No stop time"]')?.getAttribute('title')).toBe(
+      'No stop time in the F1 archive: it has none before 2025',
+    );
   });
 
   it('says there are no pit rows for a session without any, race or not', async () => {
