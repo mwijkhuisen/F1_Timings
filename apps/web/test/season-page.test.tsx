@@ -80,7 +80,7 @@ describe('the season page', () => {
   it('counts down to the next session of the weekend, with a link to Live', () => {
     expect(html).toContain('<p class="eyebrow">Up next</p><p class="count">3 h 30 min</p>');
     expect(html).toContain('Qualifying · <time dateTime="2026-11-07T18:00:00.000Z">');
-    expect(html).toContain('<a class="btnlink" href="/live">Open Live</a>');
+    expect(html).toContain('<a class="btnlink" href="/live">Follow</a>');
   });
 
   it('lists the other meetings as cards in season order, with their round and country', () => {
