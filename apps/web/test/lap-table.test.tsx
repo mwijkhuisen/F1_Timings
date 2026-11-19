@@ -347,6 +347,14 @@ describe('the lap grid', () => {
     const html = renderToStaticMarkup(<LapTable detail={detail} laps={laps} />);
     expect(html).toMatch(/<button type="button" aria-pressed="true">Lap<\/button>/);
     expect(html).toMatch(/aria-pressed="false">Drivers as columns</);
+    // The two switch groups are labelled as the Speeds phase switch is (#238); Drivers as columns is its own label.
+    expect(html).toContain(
+      '<span class="label" aria-hidden="true">Metric</span><fieldset class="segmented" aria-label="Metric">',
+    );
+    expect(html).toContain(
+      '<span class="label" aria-hidden="true">Values</span><fieldset class="segmented" aria-label="Values">',
+    );
+    expect(html.match(/class="label"/g)).toHaveLength(2);
     expect(html).toContain(
       '<div class="scroll" tabindex="0" role="region" aria-label="Lap times"><table class="laps lap-grid" aria-label="Lap times">',
     );

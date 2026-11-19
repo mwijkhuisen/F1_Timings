@@ -461,6 +461,9 @@ export function LapTable({
   return (
     <>
       <div className="controls">
+        <span className="label" aria-hidden="true">
+          Metric
+        </span>
         <fieldset className="segmented" aria-label="Metric">
           {Object.entries(LABEL).map(([id, label]) => (
             <button key={id} type="button" aria-pressed={metric === id} onClick={() => setMetric(id as Metric)}>
@@ -468,6 +471,9 @@ export function LapTable({
             </button>
           ))}
         </fieldset>
+        <span className="label" aria-hidden="true">
+          Values
+        </span>
         <fieldset className="segmented" aria-label="Values">
           <button type="button" aria-pressed={show === 'times'} onClick={() => setShow('times')}>
             Times
