@@ -5,6 +5,7 @@ import { Window } from 'happy-dom';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, expect, it, vi } from 'vitest';
 import type { Trend } from '../src/lib/crossings.ts';
+import { fmtHm } from '../src/lib/time.ts';
 import { Tower, towerRows } from '../src/views/Tower.tsx';
 import { practiceState, qualifyingState, raceState } from './feed-state.ts';
 
@@ -419,6 +420,13 @@ describe('the tower', () => {
       'Waiting for the session',
     );
     expect(html).toContain('<div class="scroll" tabindex="0" role="region" aria-label="Timing tower"><table');
+  });
+
+  it('the waiting line gives the start time when the session has one', () => {
+    const starts = '2026-10-25T20:00:00.000Z';
+    expect(renderToStaticMarkup(<Tower state={state} sessionKey={9964} starts={starts} />)).toBe(
+      `<p class="muted">Waiting for the session: the feed still shows the previous one. Starts about ${fmtHm(Date.parse(starts))}.</p>`,
+    );
   });
 
   it('renders feed text as text', () => {

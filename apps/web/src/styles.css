@@ -1229,6 +1229,17 @@ header .links {
   margin: 0;
 }
 
+/* #238: the muted line sits under the checkbox text, on its own line, in the grid cell or the phone stack. */
+.player label.announce {
+  flex-wrap: wrap;
+  max-width: 22em;
+  white-space: normal;
+}
+
+.player label.announce .muted {
+  flex-basis: 100%;
+}
+
 .player label.delay input[type="range"] {
   flex: 1;
   min-width: 0;

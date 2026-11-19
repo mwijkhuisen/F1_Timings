@@ -380,10 +380,12 @@ function writeAnnounce(on: boolean) {
   }
 }
 
-/** The bar is minimized only when stored as '1'; expanded when storage throws. */
+/** Minimized when stored as '1'; with nothing stored (#238) on a phone, else expanded; expanded when storage throws. */
 function readMinimized(): boolean {
   try {
-    return localStorage.getItem(MINIMIZED_KEY) === '1';
+    const stored = localStorage.getItem(MINIMIZED_KEY);
+    if (stored === null) return typeof matchMedia === 'function' && matchMedia('(max-width: 640px)').matches;
+    return stored === '1';
   } catch {
     return false;
   }
@@ -654,6 +656,7 @@ function TowerTab({
   lo,
   sessionKey,
   year,
+  starts,
   focus,
   onFocus,
 }: {
@@ -663,6 +666,8 @@ function TowerTab({
   sessionKey: number | undefined;
   /** The session's `meeting.year`, for the tyre compounds; null until the detail arrives. */
   year: number | null;
+  /** The session's `date_start`, for the waiting line. */
+  starts: string | undefined;
   focus: string | null;
   onFocus(n: string): void;
 }) {
@@ -679,7 +684,17 @@ function TowerTab({
     );
   }, [snap, series, lo]);
   return (
-    state && <Tower state={state} sessionKey={sessionKey} focus={focus} onFocus={onFocus} trend={trend} year={year} />
+    state && (
+      <Tower
+        state={state}
+        sessionKey={sessionKey}
+        focus={focus}
+        onFocus={onFocus}
+        trend={trend}
+        year={year}
+        starts={starts}
+      />
+    )
   );
 }
 
@@ -1064,6 +1079,7 @@ export function Player({
   // The series is parsed once per flush; the ticking bar only filters it at T.
   const series = useMemo(() => (snap.feed ? statusSeries(snap.feed.state) : []), [snap]);
   const year = detail?.meeting.year ?? null;
+  const starts = detail?.session.date_start;
   // The state is mutated in place: what is derived from it is keyed on the snapshot, a new object per store flush.
   const tower = useMemo(
     () =>
@@ -1074,6 +1090,7 @@ export function Player({
           lo={lo}
           sessionKey={sessionKey}
           year={year}
+          starts={starts}
           focus={focus}
           onFocus={(n) => {
             const next = focus === n ? null : n;
@@ -1083,7 +1100,7 @@ export function Player({
           }}
         />
       ),
-    [snap, series, lo, sessionKey, year, focus, keepT],
+    [snap, series, lo, sessionKey, year, starts, focus, keepT],
   );
   // The pit wall, once the feed shows this session (as the tower waits): the previous session's chequered flag would
   // otherwise light up.
@@ -1414,7 +1431,8 @@ export function Player({
               )}
               <label className="announce">
                 <input type="checkbox" checked={announce} onChange={(e) => toggleAnnounce(e.target.checked)} />
-                Announce events
+                Announce events to a screen reader
+                <span className="muted">The start, track status, fastest laps and what a skip passes over.</span>
               </label>
             </>
           )}

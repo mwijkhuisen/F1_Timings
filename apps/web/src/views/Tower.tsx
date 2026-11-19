@@ -4,6 +4,7 @@ import { compoundOf, tyresWords, UNKNOWN_COMPOUND } from '../lib/compound.ts';
 import type { Trend } from '../lib/crossings.ts';
 import { phaseName } from '../lib/quali.ts';
 import { type Driver, teamColour, teamStyle } from '../lib/session.ts';
+import { fmtHm } from '../lib/time.ts';
 import { Note } from '../ui/Note.tsx';
 import { Scroll } from '../ui/Scroll.tsx';
 import { MsLegend, segClass } from './MiniSectors.tsx';
@@ -374,6 +375,7 @@ export function Tower({
   onFocus,
   trend,
   year = null,
+  starts,
 }: {
   state: Obj;
   sessionKey?: number | undefined;
@@ -385,12 +387,19 @@ export function Tower({
   trend?: ReadonlyMap<number, { one: Trend; three: Trend }> | undefined;
   /** The session's `meeting.year`, for its compounds; null (no session detail yet) is today's map. */
   year?: number | null | undefined;
+  /** The session's `date_start`: the waiting line says when it starts. */
+  starts?: string | undefined;
 }) {
   // Under 640 px (#237) the columns run Pos, Driver, Gap, Int, Last, Best, ±, the trends: Last is on screen.
   const phone = useSyncExternalStore(watchPhone, onPhone, onPhone);
   // After a session switch the feed shows the previous session until the new one's SessionInfo arrives.
   if (sessionKey !== undefined && view(state, 'SessionInfo')?.Key !== sessionKey)
-    return <p className="muted">Waiting for the session: the feed still shows the previous one.</p>;
+    return (
+      <p className="muted">
+        Waiting for the session: the feed still shows the previous one.
+        {starts !== undefined && ` Starts about ${fmtHm(Date.parse(starts))}.`}
+      </p>
+    );
   const rows = towerRows(state);
   if (rows.length === 0) return <p className="muted">No timing yet.</p>;
   // Places since the start: in races, once any line has a grid position.

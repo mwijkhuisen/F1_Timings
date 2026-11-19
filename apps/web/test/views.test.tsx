@@ -630,17 +630,26 @@ describe('the next session on /live', () => {
   };
 
   it('names it with its start, and links the replay when a recording exists', () => {
-    const none = renderToStaticMarkup(<Next live={{ session, recording: null }} />);
+    const none = renderToStaticMarkup(
+      <Next live={{ session, recording: null }} now={Date.parse(session.date_start) + 1} />,
+    );
     expect(none).toContain(
       'Next: Singapore Grand Prix · Race starts <time dateTime="2026-10-11T12:00:00.000Z">Sun 11 Oct 2026, 14:00</time>',
     );
     expect(none).not.toContain('/replay/');
+    const t = Date.parse(session.date_start);
+    const at = (now: number) => renderToStaticMarkup(<Next live={{ session, recording: null }} now={now} />);
+    expect(at(t - 12 * 60_000)).toContain('</time>, in 12 min');
+    expect(at(t + 60_000)).not.toContain(', in ');
+    expect(at(t)).not.toContain(', in ');
     const recording = { id: 4, started_at: session.date_start, ended_at: session.date_end, complete: true };
-    expect(renderToStaticMarkup(<Next live={{ session, recording }} />)).toContain('<a href="/replay/4">Replay</a>');
+    expect(renderToStaticMarkup(<Next live={{ session, recording }} now={0} />)).toContain(
+      '<a href="/replay/4">Replay</a>',
+    );
   });
 
   it('says so when no session is scheduled', () => {
-    expect(renderToStaticMarkup(<Next live={{ session: null, recording: null }} />)).toBe(
+    expect(renderToStaticMarkup(<Next live={{ session: null, recording: null }} now={0} />)).toBe(
       '<p>No session is scheduled.</p>',
     );
   });
