@@ -17,6 +17,7 @@ Status: approved by the owner (2026-10-25). It builds on `ARCHITECTURE.md` (cite
 | Nov → Dec 2026 | **P7a** | Telemetry, map first (owner, 2026-11-15, #122): the player's car map from the recordings alone, so it needs nothing from P3e. Its [weekend] check needs a session: Yas Marina 4–6 Dec (else Lusail 27–29 Nov if P7a is ready, else 2027 pre-season testing, stated in the PR) |
 | After P7a | **P7b**, **P7c** | Telemetry (owner, 2026-11-15): the stored laps, the route and the per-lap figures (P7b: the VM backfill of recordings first; only its 2018-on backfill waits for P3e), then the traces on Compare (P7c) |
 | After the #123 plan PR | **P8** | Championship standings (owner, 2026-11-15), 2023 on; next to P4–P6 |
+| After the #201 plan PR | **P8b** | The season standings page and final caching (#201, #214) |
 
 Remaining 2026 weekends (OpenF1 schedule): Austin (race 25 Oct) · Mexico City 30 Oct–1 Nov · São Paulo 6–8 Nov · Las Vegas 20–22 Nov · Lusail 27–29 Nov · Yas Marina 4–6 Dec.
 
@@ -822,7 +823,7 @@ Remaining 2026 weekends (OpenF1 schedule): Austin (race 25 Oct) · Mexico City 3
 ### P8: Championship standings (owner, 2026-11-15; the plan of #123)
 
 - **Goal:** every race and sprint since 2023 shows the drivers' and constructors' championship standings after it, inside its Result tab.
-- **Decisions** (owner, 2026-11-15, #123): D1 standings appear only as a section of the Result tab; D2 drivers and constructors tables plus a progression chart; D3 P8 covers 2023 on, and 1950–2022 is #189 (Jolpica's standings tables); D4 OpenF1's `championship_drivers` and `championship_teams` are the ninth and tenth endpoints, with a cross-check on `/status`; D5 the standing after a settled session is the next session's `points_start` (it heals OpenF1's stale `session_result.points` in 7779 and 9213), with the sum as the fallback. The [U] facts are in A§6.1, the rules in A§9.
+- **Decisions** (owner, 2026-11-15, #123): D1 standings appear only as a section of the Result tab (reversed by #201: P8b); D2 drivers and constructors tables plus a progression chart; D3 P8 covers 2023 on, and 1950–2022 is #189 (Jolpica's standings tables); D4 OpenF1's `championship_drivers` and `championship_teams` are the ninth and tenth endpoints, with a cross-check on `/status`; D5 the standing after a settled session is the next session's `points_start` (it heals OpenF1's stale `session_result.points` in 7779 and 9213), with the sum as the fallback. The [U] facts are in A§6.1, the rules in A§9.
 - **Scope in:**
   - `session_result.points` kept by the schema and the normaliser into `result.points` (`real`, null without a value; only OpenF1 writes it)
   - OpenF1 `championship_drivers` and `championship_teams` as the ninth and tenth per-session endpoints, fetched for each openf1 `Race`-type session (races and sprints) by `session_key`: zod schemas (each field nullable and bounded by its column), fixtures, tables `championship_driver` and `championship_team` keyed (session_key, driver_number) and (session_key, team_name), the `raw_response.endpoint` CHECK extended, grants (`f1_ingest` replaces, `f1_api` reads). The failure rule is the starting grid's: a failure keeps the stored rows and never fails the session, and a 404 "No results found." is an empty answer (A§8)
@@ -855,6 +856,25 @@ Remaining 2026 weekends (OpenF1 schedule): Austin (race 25 Oct) · Mexico City 3
     - `standings_mismatch` lists 7779 (1 row) and 9213 (9 rows), and any other entry is explained
   - [owner] the final 2023, 2024 and 2025 standings and the current 2026 one match the official tables; a 2024 race, a 2025 sprint and a 2026 race look right on the phone.
 - **Models:** build on Opus 5.5 at `high`; code review on Sonnet 5.5 at `xhigh`; security review on Sonnet 5.5 at `medium`; GitHub chores on Haiku 5.5 at `low`. Branch `claude/p8-standings`.
+
+### P8b: The season standings page and final caching (owner, 2026-11-21; the plan of #201, with #214)
+
+- **Goal:** the championship standings of a season on a page of its own, reached from a header link and the season page, and the two final answers of #214 that never cache now do.
+- **Decisions** (owner, 2026-11-21, #201): E1 a "Standings" header link after Live · Replays · Status, always mounted, to `/<year>/standings` (the route's or the player's year, else the newest `/seasons` year), a second link under the season page's h1, and the year menu links `/<y>/standings` on that route; E2 #214's rule settles the finale, so `provisional` is false from 1 January and the caption is reworded to be true before then; E3 drivers and constructors side by side from a breakpoint B2 measured with #202's model, else one column, the chart below at full width; E4 the standings show as soon as the page opens, nothing lands by itself, links and titles stay names. (owner, 2026-11-16, #214): a season's last counted session is settled from 1 January (UTC) of the next year, with no per-season constant; a gridless final session takes the session's cache rule once `date_end` + 24 h has passed. The issue's defaults are kept: the web picks the latest non-cancelled `Race`-type session with `ingest_state` `fetched` or `final` from `/seasons/:year` and asks `/sessions/:key/standings` (no new endpoint); after a sprint the page shows the standings after the sprint; the page needs the network; one column at 390 px.
+- **Scope in:**
+  - B1 server (#214): `standings(season, key, now)` with the 1 January rule, the standings route passing `Date.now()`, the rain route's gridless rule (it reads `date_end` itself); tests in `standings.test.ts`, `api.int.test.ts` and `sw.test.ts`
+  - B2 web (#201): the `standings` route and title in `lib/routes.ts`, `latestCounted` in `lib/season.ts`, `views/Standings.tsx` reusing `StandingsSection` with a heading prop, the header link, `yearOf` and the year menu, the season link, the E2 caption, the B2 grid in `styles.css`, the router entry
+- **Scope out:** 1950–2022 (#189); a round picker; offline for the page.
+- **Acceptance:**
+  - [CI] the B1 tests: 31 Dec 23:59:59.999 UTC is provisional and 1 Jan 00:00 is settled; a mid-season fallback in a later year and the running season's finale stay provisional; a past season's finale answers `private, max-age=86400` with its `?v=`, the running season's finale `no-store`; a gridless final session the final rule after the window and `no-store` inside it; `sw.test.ts` stores both answers.
+  - [CI] `routes.test.ts`: `/2026/standings` parses, `/2026/standings/x` is Not found, the title is "Standings 2026".
+  - [CI] `season.test.ts`: `latestCounted` skips cancelled, `scheduled`, `due` and `failed` sessions, a sprint after the last race wins, ties go by `session_key`, and no candidate gives null.
+  - [CI] component tests: the page has the heading and its Result link, both tables, the chart, and the caption only when `provisional`; the empty text; the header link on every route with the E1 year, and the year menu keeping the view; the season page link, with the existing spoiler test still passing.
+  - [CI] the layout model: two columns at B2 and above, one below it, and no sideways scroll at 360 px or 390 px.
+  - [CI] `pnpm check` is green, and A§9, A§10 and A§13 are amended wherever the build differs from the plan.
+  - [owner] after the release, in the browser's DevTools (the api refuses a curl without an Access JWT): 2025's finale standings and a gridless final session's rain answer carry `max-age=86400`; 2026's latest race's standings `no-store`.
+  - [owner] on the phone at 390 px and on the desktop, in light and dark: 2025 shows the final standings without the caption; 2026 the current standings, after Las Vegas or Lusail; 2022 the empty text; the header link works from a session page and from the player.
+- **Models:** build on Opus 5.5 at `high`; code review on Sonnet 5.5 at `high` (recommended); no security review (no new route or input; only the cache headers of two existing routes change); GitHub chores on Haiku 5.5 at `low`. Branch `claude/p8b-standings-page`; the PR says "Closes #214, Refs #201".
 
 ## 4. Owner actions
 
