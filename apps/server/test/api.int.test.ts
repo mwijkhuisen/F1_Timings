@@ -742,6 +742,36 @@ describe('api (f1_api login, Access JWT)', { timeout: 120_000 }, () => {
     }
   });
 
+  it('rain: a final session without a grid takes the session rule once date_end + 24 h has passed (#214)', async () => {
+    const GRIDLESS = 11429; // a practice without a grid, made final here
+    const before = await admin
+      .selectFrom('session')
+      .select(['ingest_state', 'date_end'])
+      .where('session_key', '=', GRIDLESS)
+      .executeTakeFirstOrThrow();
+    const ended = (ms: number) =>
+      admin
+        .updateTable('session')
+        .set({ ingest_state: 'final', date_end: new Date(Date.now() - ms) })
+        .where('session_key', '=', GRIDLESS)
+        .execute();
+    const cacheOf = async (query = '') => {
+      const res = await get(`/api/v1/sessions/${GRIDLESS}/rain${query}`);
+      expect(await res.json()).toEqual({ grid: null, frames: [] });
+      return res.headers.get('cache-control');
+    };
+    try {
+      await ended(24 * 3_600_000 + 60_000); // past the rain job's final fetch time
+      expect(await cacheOf()).toBe('private, max-age=86400');
+      expect(await cacheOf(`?v=${SHA}`)).toBe('private, max-age=86400');
+      expect(await cacheOf(`?v=${SHA2}`)).toBe('no-store');
+      await ended(23 * 3_600_000); // the final fetch may still bring a grid
+      expect(await cacheOf()).toBe('no-store');
+    } finally {
+      await admin.updateTable('session').set(before).where('session_key', '=', GRIDLESS).execute();
+    }
+  });
+
   it('forecast: map_id, fetched_at and the hours by date, nulls kept, always no-store', async () => {
     const res = await get(`/api/v1/meetings/${VEGAS}/forecast`);
     expect(res.status).toBe(200);

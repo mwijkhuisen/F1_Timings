@@ -26,6 +26,7 @@ import { OUTLINES } from '../live/outlines.ts';
 import { playback } from '../live/playback.ts';
 import { AFTER_MS } from '../live/recorder.ts';
 import { zCounts } from '../live/telemetry.ts';
+import { FINAL_AFTER_MS } from '../rain/state.ts';
 import { unpackCar, unpackPos } from '../telemetry/pack.ts';
 import { colours } from '../timing/colours.ts';
 import { counted, type StandingsSeason, standings, standingsMismatches } from '../timing/standings.ts';
@@ -426,8 +427,18 @@ export function createApp({
       grid: grid ? { ...grid, state: grid.state as 'live' | 'final' | 'failed' } : null,
       frames: frames.map((f) => ({ date: f.date.toISOString(), mm: f.mm })),
     };
-    // Immutable only when the grid will never change: its own state, not just the session's.
-    return c.json(body, 200, cache(grid?.state === 'final' ? session.state : 'live', session.v));
+    // Immutable only when the grid will never change: its own state, not just the session's. Without a grid (#214):
+    // the session's rule once the rain job's final fetch time (date_end + 24 h, A§8) has passed.
+    let state = grid?.state === 'final' ? session.state : 'live';
+    if (!grid && session.state === 'final') {
+      const { date_end } = await db
+        .selectFrom('session')
+        .select('date_end')
+        .where('session_key', '=', session.key)
+        .executeTakeFirstOrThrow();
+      if (Date.now() >= date_end.getTime() + FINAL_AFTER_MS) state = 'final';
+    }
+    return c.json(body, 200, cache(state, session.v));
   });
 
   // P7b (A§10): one driver-lap, at most TELEMETRY_MAX_SAMPLES samples a topic (the DDL CHECK, and unpack again here).
@@ -495,6 +506,7 @@ export function createApp({
       const body: Standings = standings(
         { year: row.year, sessions, drivers: [], results: [], championship_drivers: [], championship_teams: [] },
         key,
+        Date.now(),
       );
       return c.json(body, 200, cache(row.ingest_state, v));
     }
@@ -529,7 +541,7 @@ export function createApp({
         .where('session_key', 'in', withNext)
         .execute(),
     };
-    const body: Standings = standings(season, key);
+    const body: Standings = standings(season, key, Date.now()); // the finale settles on 1 January (#214)
     const settled = !body.provisional && all.slice(0, i + 1).every((s) => s.ingest_state === 'final');
     return c.json(body, 200, cache(settled ? 'final' : 'live', v));
   });

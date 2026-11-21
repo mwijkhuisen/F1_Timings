@@ -196,8 +196,11 @@ function table(rounds: readonly Round[]) {
   });
 }
 
-/** The standings after session `sessionKey` (A§9, A§10); empty unless it is a counted session of 2023 on. */
-export function standings(season: StandingsSeason, sessionKey: number): Standings {
+/**
+ * The standings after session `sessionKey` (A§9, A§10); empty unless it is a counted session of 2023 on. `now` (epoch
+ * ms) settles the season's last counted session from 1 January (UTC) of the next year (#214).
+ */
+export function standings(season: StandingsSeason, sessionKey: number, now: number): Standings {
   const all = counted(season);
   const i = all.findIndex((s) => s.session_key === sessionKey);
   if (i < 0) return EMPTY;
@@ -205,6 +208,8 @@ export function standings(season: StandingsSeason, sessionKey: number): Standing
   const { drivers, teams } = kinds(season);
   const d = chain(drivers, upTo, all[i + 1]);
   const t = chain(teams, upTo, all[i + 1]);
+  // The finale has no next session to settle it; a mid-season fallback (N without rows yet) stays provisional.
+  const settled = i === all.length - 1 && now >= Date.UTC(season.year + 1, 0, 1);
 
   // Display fields from the counted sessions up to S only, the latest first, so S's team leads team_names.
   const info = new Map<string, { acronym: string | null; team_colour: string | null; team_names: string[] }>();
@@ -242,7 +247,7 @@ export function standings(season: StandingsSeason, sessionKey: number): Standing
       drivers: r.rows.map((x) => ({ full_name: x.key, points: x.points })),
       teams: (t[k]?.rows ?? []).map((x) => ({ team_name: x.key, points: x.points })),
     })),
-    provisional: Boolean(d.at(-1)?.fallback || t.at(-1)?.fallback),
+    provisional: !settled && Boolean(d.at(-1)?.fallback || t.at(-1)?.fallback),
   };
 }
 
