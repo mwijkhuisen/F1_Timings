@@ -3,7 +3,8 @@ import { sql } from 'kysely';
 import type { Logger } from 'pino';
 import { codeOf, type DB } from '../db/db.ts';
 import type { MergeCounts } from '../merge/merge.ts';
-import { chunks, writeLaps } from '../merge/write.ts';
+import type { PitCounts } from '../merge/pits.ts';
+import { chunks, writeLaps, writePits } from '../merge/write.ts';
 import { attachRound } from './attach.ts';
 import { DumpError } from './csv.ts';
 import { loadDump } from './dump.ts';
@@ -18,8 +19,8 @@ import { roundRows, type SessionRows } from './rows.ts';
 export const JOLPICA_DIR = '/srv/f1/jolpica';
 /** The advisory lock that keeps a second run out (`busy`). */
 export const LOCK_KEY = 0x4631_4a4f; // 'F1JO'
-// Laps are not among them: writeLaps replaces jolpica's candidates only and rebuilds `lap` (P3b).
-const CHILDREN = ['driver', 'result', 'pit'] as const;
+// Laps and pits are not among them: writeLaps and writePits replace jolpica's candidates only (P3b, #219).
+const CHILDREN = ['driver', 'result'] as const;
 
 export type JolpicaDeps = { db: Kysely<DB>; log: Pick<Logger, 'info' | 'error'> };
 /** `years` empty: every year in the dump. */
@@ -27,13 +28,13 @@ export type JolpicaArgs = { years: readonly number[]; dir: string };
 
 /**
  * One transaction: lock the meeting and session rows, refuse (`not_jolpica`) when either exists with another source,
- * else upsert both, replace the child rows and write the laps through the merge (its counts).
+ * else upsert both, replace the child rows and write the laps and the pits through their merges (their counts).
  */
 async function write(
   db: Kysely<DB>,
   meeting: Insertable<DB['meeting']>,
   rows: SessionRows,
-): Promise<'not_jolpica' | MergeCounts> {
+): Promise<'not_jolpica' | { merge: MergeCounts; pits: PitCounts }> {
   return db.transaction().execute(async (trx) => {
     const { meeting_key } = meeting;
     const m = await trx
@@ -56,8 +57,8 @@ async function write(
     for (const table of CHILDREN) await trx.deleteFrom(table).where('session_key', '=', rows.key).execute();
     for (const chunk of chunks(rows.driver)) await trx.insertInto('driver').values(chunk).execute();
     for (const chunk of chunks(rows.result)) await trx.insertInto('result').values(chunk).execute();
-    for (const chunk of chunks(rows.pit)) await trx.insertInto('pit').values(chunk).execute();
-    return writeLaps(trx, rows.key, 'jolpica', rows.lap);
+    const merge = await writeLaps(trx, rows.key, 'jolpica', rows.lap);
+    return { merge, pits: await writePits(trx, rows.key, 'jolpica', rows.pit) };
   });
 }
 
@@ -148,7 +149,7 @@ async function job({ db, log }: JolpicaDeps, args: JolpicaArgs): Promise<boolean
         renumbered: rows.renumbered,
         skipped: rows.skipped,
       };
-      let written: 'not_jolpica' | MergeCounts;
+      let written: Awaited<ReturnType<typeof write>>;
       try {
         written = await write(db, meeting, rows);
       } catch (err) {
@@ -162,7 +163,7 @@ async function job({ db, log }: JolpicaDeps, args: JolpicaArgs): Promise<boolean
         continue;
       }
       counts.imported++;
-      log.info({ ...fields, merge: written }, 'jolpica');
+      log.info({ ...fields, merge: written.merge, pit_merge: written.pits }, 'jolpica');
     }
   }
   return done(true);

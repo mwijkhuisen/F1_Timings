@@ -212,6 +212,9 @@ export const utc = (v: unknown): number | null => {
 // (2026-02-31) still parses, to 3 March.
 const ISO = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d{1,7})?Z?$/;
 
+/** A feed Timestamp of that shape only, as epoch ms (utc); anything else is null. overtakesOf and the pit parser. */
+export const isoTime = (v: unknown): number | null => (typeof v === 'string' && ISO.test(v) ? utc(v) : null);
+
 /**
  * The places gained per move (#236), read by the server's fill and the web's player alike: by time, then driver, then
  * index (Object.values gives index keys in numeric order and the sort is stable). A car key is 1 to 3 digits, `count`
@@ -224,7 +227,7 @@ export function overtakesOf(
   for (const [car, entries] of Object.entries(view(state, 'OvertakeSeries')?.Overtakes ?? {})) {
     if (!/^\d{1,3}$/.test(car)) continue;
     for (const e of Object.values(entries ?? {})) {
-      const [t, places] = [ISO.test(e?.Timestamp ?? '') ? utc(e?.Timestamp) : null, e?.count];
+      const [t, places] = [isoTime(e?.Timestamp), e?.count];
       if (t !== null && places !== undefined && places >= 1 && places <= 99)
         out.push({ driver_number: Number(car), t, places });
     }

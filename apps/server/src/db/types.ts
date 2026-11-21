@@ -158,11 +158,13 @@ export interface Overtake {
 export interface Pit {
   date: Timestamp | null;
   driver_number: number;
+  filled: Generated<Json>;
   lane_ms: number | null;
   lap_number: number;
   pit_ms: number | null;
   session_key: number;
   source: string;
+  sources: Generated<Json>;
   stop_ms: number | null;
 }
 

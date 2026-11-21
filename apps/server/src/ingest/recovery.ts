@@ -128,7 +128,7 @@ export async function rederive(deps: Pick<Deps, 'db' | 'log' | 'beat'>, keys: nu
           .execute();
         const grids = new Map(stored.map((r) => [r.driver_number, r.grid]));
         const result = rows.result.map((r) => ({ ...r, grid: grids.get(r.driver_number) ?? null }));
-        const merge = await replaceRows(trx, key, { ...rows, result });
+        const { merge, pits } = await replaceRows(trx, key, { ...rows, result });
         for (const { table, rows: list } of standings) {
           await trx.deleteFrom(table).where('session_key', '=', key).execute();
           for (const chunk of chunks(list))
@@ -142,7 +142,7 @@ export async function rederive(deps: Pick<Deps, 'db' | 'log' | 'beat'>, keys: nu
           ...standings.map((c) => [c.table, c.rows.length]),
         ]);
         const ms = Math.round(performance.now() - t);
-        return { outcome: 'rederived', line: { rows: counted, skipped, rules, merge, ms } };
+        return { outcome: 'rederived', line: { rows: counted, skipped, rules, merge, pit_merge: pits, ms } };
       });
     } catch (err) {
       done = { outcome: 'failed', line: { error: codeOf(err) } }; // the code only: a message could quote a value

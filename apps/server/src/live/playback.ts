@@ -3,6 +3,7 @@ import { join } from 'node:path';
 import {
   type Lap,
   type Obj,
+  type Pits,
   type PlaybackPos,
   type Stints,
   view,
@@ -15,6 +16,7 @@ import { markLaps } from '../timing/rules.ts';
 import { type Frame, toOutline } from './fit.ts';
 import { createLaps, type LapRow, qualifyingParts, type StintRow } from './laps.ts';
 import { createFeed } from './merge.ts';
+import { createPits } from './pits.ts';
 import { isObj, parseFeedLine, UNPARSED, utc } from './read.ts';
 import { type Line, missing, NOFOLLOW, notFile, segment, segments, splitter } from './recording.ts';
 import { decodeZ, positions, type ZFail } from './telemetry.ts';
@@ -25,17 +27,27 @@ import { decodeZ, positions, type ZFail } from './telemetry.ts';
 // advance, which is the back-pressure. `.z` topics are never applied, kept or sent (O1), nor are the UNPARSED ones (#96, #147). Nothing here logs.
 //
 // The lap and stint rows come from createLaps over the same events: a snapshot carries all of them, a `laps` event the
-// rows that changed since the last send. The weather rows are one per applied WeatherData delta since the last session
-// switch, at most the last MAX_WEATHER_ROWS (withWeatherRow).
+// rows that changed since the last send. So do the pit rows (#219): createPits over the recording's own session's
+// PitLaneTimeCollection and PitStopSeries lines, which stay UNPARSED (never applied, kept or sent as deltas), so the
+// browser gets the derived rows only (`source: 'f1-live'`, `filled: {}`). The weather rows are one per applied
+// WeatherData delta since the last session switch, at most the last MAX_WEATHER_ROWS (withWeatherRow).
 //
 // With `pos` (P7a, pos=1, A§11.3): `Position.z` streams as `pos` events, still never applied or kept in the state.
 
-type Snapshot = { t: number; state: Obj; laps: Lap[]; stints: Stints; weather: Weather; pos?: PlaybackPos | null };
+type Snapshot = {
+  t: number;
+  state: Obj;
+  laps: Lap[];
+  stints: Stints;
+  pits: Pits;
+  weather: Weather;
+  pos?: PlaybackPos | null;
+};
 /** `state` is the stream's own, which changes on the next `next()`: serialize it before. `weather` is never mutated. */
 export type PlaybackEvent =
   | { event: 'snapshot'; data: Snapshot }
   | { event: 'delta'; data: { t: number; topic: string; data: unknown } }
-  | { event: 'laps'; data: { t: number; laps: Lap[]; stints: Stints } }
+  | { event: 'laps'; data: { t: number; laps: Lap[]; stints: Stints; pits: Pits } }
   | { event: 'pos'; data: PlaybackPos }
   | { event: 'end'; data: { t: number } }
   | { event: 'ping'; data: { t: number } };
@@ -52,6 +64,7 @@ const FRAME_MS = 30_000; // without a frame, asked again at most this often (a l
 const keyOf = (info: unknown) => (isObj(info) && typeof info.Key === 'number' ? info.Key : undefined);
 // The topics the lap rows read: the engine's two, and A§9's race control and qualifying parts (lapRows).
 const LAP_TOPICS = new Set(['TimingData', 'TimingAppData', 'RaceControlMessages', 'SessionData']);
+const PIT_TOPICS = new Set(['PitLaneTimeCollection', 'PitStopSeries']);
 
 /**
  * The engine's rows in the shapes of the Lap and Stints contracts, with A§9's deleted laps and qualifying phases from
@@ -230,6 +243,7 @@ export async function* playback(o: {
   const feed = createFeed();
   let weather: Weather = [];
   const engine = createLaps(o.sessionKey, 'f1-live');
+  const pits = createPits(o.sessionKey); // one per stream: a seek is a new stream, read from line 1
   const sent = new Map<string, string>(); // row key → the row's JSON as last sent
   let dirty = false; // a LAP_TOPICS change since the rows were last sent
   let lapsAt = Number.NEGATIVE_INFINITY; // wall time of the last `laps` check
@@ -270,6 +284,12 @@ export async function* playback(o: {
         }
         continue;
       }
+      // The pit topics stay UNPARSED (never applied, kept or sent); the recording's own session's feed the pit rows, the
+      // builder gates them on SessionInfo.Key, so it sees every SessionInfo too.
+      if (PIT_TOPICS.has(ev.topic) || ev.topic === 'SessionInfo') {
+        pits.push(ev);
+        dirty ||= PIT_TOPICS.has(ev.topic);
+      }
       if (ev.topic.endsWith('.z') || UNPARSED.has(ev.topic)) continue;
       // A new session's SessionInfo: no topic of the previous session stays (no ghost driver, line or message). The
       // laps engine keeps going: it holds the recording's session only.
@@ -307,9 +327,20 @@ export async function* playback(o: {
     // key if a state ever holds far more.
     const own = keyOf(feed.state.SessionInfo) === o.sessionKey ? feed.state : {};
     const all = lapRows(engine.rows(), own);
+    const pit: Pits = pits
+      .rows()
+      .rows.sort((a, b) => a.date - b.date || a.driver_number - b.driver_number || a.lap_number - b.lap_number)
+      .map(({ date, ...p }) => ({
+        ...p,
+        date: new Date(date).toISOString(),
+        pit_ms: null,
+        source: 'f1-live',
+        filled: {},
+      }));
     return {
       laps: unsent(all.laps, (l) => `lap ${l.driver_number} ${l.lap_number}`),
       stints: unsent(all.stints, (s) => `stint ${s.driver_number} ${s.stint_number}`),
+      pits: unsent(pit, (p) => `pit ${p.driver_number} ${p.lap_number}`),
     };
   };
   /**
@@ -334,7 +365,7 @@ export async function* playback(o: {
   const changes = (): PlaybackEvent | undefined => {
     lapsAt = o.now();
     const data = { t: applied, ...rows() };
-    return data.laps.length + data.stints.length > 0 ? { event: 'laps', data } : undefined;
+    return data.laps.length + data.stints.length + data.pits.length > 0 ? { event: 'laps', data } : undefined;
   };
 
   // Seek: every line from the first one up to T, through one feed (its duplicate filter sees every line) and the laps.

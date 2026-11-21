@@ -34,6 +34,7 @@ import { along, type Car, session } from './track.ts';
 /** A feed.jsonl line: [receivedAt, topic, payload, F1 timestamp], or [receivedAt, '_subscribe', result]. */
 type Value = [number, string, unknown, string?];
 type Seen = { at: number; ev: PlaybackEvent };
+type PitRows = Extract<PlaybackEvent, { event: 'snapshot' }>['data']['pits'];
 
 const T0 = Date.parse('2027-01-01T12:00:00Z');
 const iso = (ms: number) => new Date(ms).toISOString();
@@ -86,7 +87,11 @@ async function record(dir: string, values: Value[], rotateMs: number) {
  * and the weather rows cleared before a SessionInfo with another Key than the state's, a weather row per applied
  * WeatherData delta (withWeatherRow), and A§9 from the final state when it is the session's own.
  */
-function full(values: Value[], t: number, key = 9001): { state: Obj; laps: Lap[]; stints: Stints; weather: Weather } {
+function full(
+  values: Value[],
+  t: number,
+  key = 9001,
+): { state: Obj; laps: Lap[]; stints: Stints; pits: []; weather: Weather } {
   const [feed, laps] = [createFeed(), createLaps(key, 'f1-live')];
   let weather: Weather = [];
   const keyOf = (v: unknown) => (isObj(v) && typeof v.Key === 'number' ? v.Key : undefined);
@@ -107,21 +112,23 @@ function full(values: Value[], t: number, key = 9001): { state: Obj; laps: Lap[]
     }
   }
   const own = keyOf(feed.state.SessionInfo) === key ? feed.state : {};
-  return plain({ state: feed.state, ...lapRows(laps.rows(), own), weather });
+  return plain({ state: feed.state, ...lapRows(laps.rows(), own), pits: [], weather }); // no pit lines in these recordings
 }
 
 /**
- * A client's lap and stint rows: a snapshot replaces them, a `laps` event replaces the rows of the same key. `apply`
- * returns how many rows it got that equal the row it held.
+ * A client's lap, stint and pit rows: a snapshot replaces them, a `laps` event replaces the rows of the same key.
+ * `apply` returns how many rows it got that equal the row it held.
  */
 function clientRows() {
   const laps = new Map<string, Lap>();
   const stints = new Map<string, Stints[number]>();
+  const pits = new Map<string, PitRows[number]>();
   return {
-    apply(data: { laps: Lap[]; stints: Stints }, snapshot: boolean) {
+    apply(data: { laps: Lap[]; stints: Stints; pits: PitRows }, snapshot: boolean) {
       if (snapshot) {
         laps.clear();
         stints.clear();
+        pits.clear();
       }
       let same = 0;
       const put = <R>(map: Map<string, R>, key: string, row: R) => {
@@ -130,11 +137,13 @@ function clientRows() {
       };
       for (const l of data.laps) put(laps, `${l.driver_number}/${l.lap_number}`, l);
       for (const s of data.stints) put(stints, `${s.driver_number}/${s.stint_number}`, s);
+      for (const p of data.pits) put(pits, `${p.driver_number}/${p.lap_number}`, p);
       return same;
     },
     rows: () => ({
       laps: [...laps.values()].sort((a, b) => a.driver_number - b.driver_number || a.lap_number - b.lap_number),
       stints: [...stints.values()].sort((a, b) => a.driver_number - b.driver_number || a.stint_number - b.stint_number),
+      pits: [...pits.values()].sort((a, b) => a.driver_number - b.driver_number || a.lap_number - b.lap_number),
     }),
   };
 }
@@ -429,7 +438,7 @@ describe('playback', () => {
     for (const { at, ev } of events) if ('data' in ev) expect(ev.data.t).toBeLessThanOrEqual(at - 45_000);
     expect(events[0]?.ev).toEqual({
       event: 'snapshot',
-      data: { t: T0 - 50_000, state: {}, laps: [], stints: [], weather: [] },
+      data: { t: T0 - 50_000, state: {}, laps: [], stints: [], pits: [], weather: [] },
     });
     expect(deltas(events).map((d) => d.t)).toEqual(values.map((v) => v[0])); // each line once, in order
     expect(events.at(-1)?.ev.event).toBe('end');
@@ -804,6 +813,101 @@ describe('playback', () => {
   });
 });
 
+// The pit rows (#219): createPits over the recording's own session's pit-lane lines, synthetic cars, laps and times.
+const pit = (car: string, lap: string, duration: string) => ({
+  PitTimes: { [car]: { RacingNumber: car, Lap: lap, Duration: duration } },
+});
+const stopOf = (car: string, lap: string, r: number, lane: string, stopTime: string) => ({
+  PitTimes: {
+    [car]: {
+      0: { Timestamp: iso(r), PitStop: { RacingNumber: car, Lap: lap, PitLaneTime: lane, PitStopTime: stopTime } },
+    },
+  },
+});
+const PITS: Value[] = [
+  [s(0), '_subscribe', { SessionInfo: { Key: 9001, Type: 'Race' } }],
+  at(s(10), 'TimingData', { Lines: { 7: { NumberOfLaps: 1 } } }),
+  at(s(100), 'PitLaneTimeCollection', pit('7', '3', '22.5')),
+  at(s(101), 'PitStopSeries', stopOf('7', '3', s(100), '22.512', '2.4')),
+  at(s(120), 'PitLaneTimeCollection', { PitTimes: { _deleted: ['7'] } }),
+  at(s(200), 'PitLaneTimeCollection', pit('44', '5', '19.8')),
+  at(s(220), 'TimingData', { Lines: { 7: { NumberOfLaps: 2 } } }),
+  at(s(300), 'PitStopSeries', stopOf('44', '5', s(200), '19.801', '2.1')),
+];
+const row = (driver_number: number, lap_number: number, r: number, lane_ms: number, stop_ms: number | null) => ({
+  driver_number,
+  lap_number,
+  date: iso(r),
+  pit_ms: null,
+  lane_ms,
+  stop_ms,
+  source: 'f1-live',
+  filled: {},
+});
+/** The pit rows of each snapshot and of each `laps` event that has some, in order. */
+const pitEvents = (events: Seen[]): { event: string; pits: PitRows }[] =>
+  events.flatMap(({ ev }) =>
+    (ev.event === 'snapshot' || ev.event === 'laps') && (ev.event === 'snapshot' || ev.data.pits.length > 0)
+      ? [{ event: ev.event, pits: ev.data.pits }]
+      : [],
+  );
+
+describe('playback pit rows (#219)', () => {
+  const open = async (values: Value[], at: number, sessionKey = 9001) => {
+    const dir = tmp();
+    await record(dir, values, 3_600_000);
+    const { gen, clock } = start(dir, { at, sessionKey });
+    return drain(gen, clock);
+  };
+
+  it('the snapshot carries the rows up to T, in the Pits shape; a laps event only the new or changed one', async () => {
+    const events = await open(PITS, s(150));
+    const lane7 = row(7, 3, s(100), 22_512, 2_400);
+    const lane44 = row(44, 5, s(200), 19_800, null);
+    expect(pitEvents(events)).toEqual([
+      { event: 'snapshot', pits: [lane7] }, // car 44 is after T
+      { event: 'laps', pits: [lane44] }, // s200; car 7 is not sent again
+      { event: 'laps', pits: [{ ...lane44, lane_ms: 19_801, stop_ms: 2_100 }] }, // s300: the PSS entry fills it
+    ]);
+    expect(kinds(events).at(-1)).toBe('end');
+  });
+
+  it('a seek rebuilds them from line 1: rows after T absent, rows before T present, none left over from another stream', async () => {
+    const lane7 = row(7, 3, s(100), 22_512, 2_400);
+    const final = [lane7, row(44, 5, s(200), 19_801, 2_100)];
+    // A seek at T alone, in any order of opens (each open is a fresh builder).
+    for (const [t, expected] of [
+      [s(450), final],
+      [s(50), []],
+      [s(150), [lane7]],
+      [s(250), [lane7, row(44, 5, s(200), 19_800, null)]], // PSS for 44 is after T: no stop time yet
+    ] as const)
+      expect(pitEvents(await open(PITS, t))[0]?.pits).toEqual(expected);
+  });
+
+  it('never sends a pit-lane topic as a delta, in a snapshot state or in any event', async () => {
+    const events = await open(PITS, s(0));
+    expect(deltas(events).map((d) => d.topic)).not.toContain('PitLaneTimeCollection');
+    expect(deltas(events).map((d) => d.topic)).not.toContain('PitStopSeries');
+    expect(deltas(events).length).toBeGreaterThan(0); // TimingData still streams
+    expect(JSON.stringify(events)).not.toMatch(/PitLaneTime|PitStopSeries|PitTimes|PitStopTime|_deleted/);
+  });
+
+  it("another session's lines add none: a recording of another session, and the lines after a switch", async () => {
+    // The recording is session 9001 for the stream; the same lines asked as 9005 are not its own.
+    expect(pitEvents(await open(PITS, s(450), 9005))[0]?.pits).toEqual([]);
+    const switched: Value[] = [
+      [s(0), '_subscribe', { SessionInfo: { Key: 9001, Type: 'Race' } }],
+      at(s(100), 'PitLaneTimeCollection', pit('7', '3', '22.5')),
+      at(s(150), 'SessionInfo', { Key: 9002, Type: 'Race' }),
+      at(s(200), 'PitLaneTimeCollection', pit('99', '8', '20.0')),
+      at(s(210), 'PitStopSeries', stopOf('99', '8', s(200), '20.001', '2.0')),
+    ];
+    const events = await open(switched, s(300));
+    expect(pitEvents(events).flatMap((e) => e.pits.map((p) => p.driver_number))).toEqual([7]);
+  });
+});
+
 // pos=1 (P7a, A§11.3, T4) over a synthetic practice on the P5c Interlagos outline (test/track.ts, every value invented):
 // the frame is given here, fit.test.ts covers the fit.
 describe('playback with pos (P7a)', () => {
@@ -875,6 +979,7 @@ describe('playback with pos (P7a)', () => {
       'state',
       'laps',
       'stints',
+      'pits',
       'weather',
     ]);
     expect(rest(withPos)).toEqual(rest(without));

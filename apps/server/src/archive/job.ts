@@ -8,7 +8,8 @@ import { live } from '../ingest/ingest.ts';
 import { DISK_LOW_BYTES, freeBytes } from '../live/recorder.ts';
 import { checkToken, readTokenFile } from '../live/token.ts';
 import type { MergeCounts } from '../merge/merge.ts';
-import { chunks, writeLaps } from '../merge/write.ts';
+import type { PitCounts } from '../merge/pits.ts';
+import { chunks, writeLaps, writePits } from '../merge/write.ts';
 import {
   download,
   type Failure,
@@ -43,6 +44,9 @@ export const TOPICS = [
   'RaceControlMessages',
   'WeatherData',
   'SessionStatus', // SessionData's StatusSeries where SessionData is a 403 (2018–2019)
+  // #219: the pit rows. PitLaneTimeCollection is in every race from 2018 on, PitStopSeries from 2025 (A§6.2).
+  'PitLaneTimeCollection',
+  'PitStopSeries',
 ] as const;
 const PARSED = new Set<string>(TOPICS);
 /**
@@ -128,7 +132,8 @@ export const FINAL_AFTER_MS = 24 * 3_600_000;
 const TYPES = new Set<string | null>(['Race', 'Qualifying', 'Practice']);
 /** A 403 or 404 on these leaves no marker: the session is incomplete for this run and a rerun asks again. */
 const REQUIRED = new Set<string>(['SessionInfo', 'TimingData']);
-// Laps are not among them: writeLaps replaces the archive's candidates only and rebuilds `lap` (P3b).
+// Laps and pits are not among them: writeLaps and writePits replace the archive's candidates only and rebuild `lap`
+// and `pit` (P3b, #219).
 const CHILDREN = ['driver', 'stint', 'race_control', 'result', 'weather'] as const;
 
 export type ArchiveDeps = {
@@ -154,9 +159,14 @@ function put(path: string, bytes: Buffer | string) {
 
 /**
  * One transaction: lock the meeting and session rows, refuse (`not_archive`) when either exists with another
- * source, else upsert both as `final`, replace the child rows and write the laps through the merge (its counts).
+ * source, else upsert both as `final`, replace the child rows and write the laps and the pits through their merges
+ * (their counts).
  */
-async function write(db: Kysely<DB>, plan: Planned, rows: ArchiveRows): Promise<'not_archive' | MergeCounts> {
+async function write(
+  db: Kysely<DB>,
+  plan: Planned,
+  rows: ArchiveRows,
+): Promise<'not_archive' | { merge: MergeCounts; pits: PitCounts }> {
   return db.transaction().execute(async (trx) => {
     const { meeting_key } = plan.meeting;
     const m = await trx
@@ -177,7 +187,7 @@ async function write(db: Kysely<DB>, plan: Planned, rows: ArchiveRows): Promise<
     if (s) await trx.updateTable('session').set(plan.session).where('session_key', '=', plan.key).execute();
     else await trx.insertInto('session').values(plan.session).execute();
     for (const table of CHILDREN) await trx.deleteFrom(table).where('session_key', '=', plan.key).execute();
-    const { lap, ...children } = rows;
+    const { lap, pit, ...children } = rows;
     // The cast: Kysely cannot relate a table name from a loop to its row type.
     for (const [table, list] of Object.entries(children) as [keyof ArchiveRows, object[]][]) {
       for (const chunk of chunks(list))
@@ -186,7 +196,8 @@ async function write(db: Kysely<DB>, plan: Planned, rows: ArchiveRows): Promise<
           .values(chunk as never)
           .execute();
     }
-    return writeLaps(trx, plan.key, 'f1-archive', lap);
+    const merge = await writeLaps(trx, plan.key, 'f1-archive', lap);
+    return { merge, pits: await writePits(trx, plan.key, 'f1-archive', pit) };
   });
 }
 
@@ -437,7 +448,7 @@ async function job(deps: ArchiveDeps, args: ArchiveArgs): Promise<boolean> {
     }
     const texts = new Map([...paths].map(([topic, path]) => [topic, readFileSync(path, 'utf8')]));
 
-    const built = archiveRows(texts, session.key, session.type);
+    const built = archiveRows(texts, session.key, session.type, session.start);
     if (!built.ok) {
       if (built.error === 'incomplete') counts.incomplete++;
       else counts.failed++;
@@ -454,11 +465,13 @@ async function job(deps: ArchiveDeps, args: ArchiveArgs): Promise<boolean> {
       drivers: rows.driver.length,
       race_control: rows.race_control.length,
       weather: rows.weather.length,
+      pits: rows.pit.length,
       phases: stats.phases,
       rules: stats.rules,
       skipped_lines: stats.skipped_lines,
+      pit_skipped: stats.pit_skipped,
     };
-    let written: 'not_archive' | MergeCounts;
+    let written: Awaited<ReturnType<typeof write>>;
     try {
       written = await write(db, session, rows);
     } catch (err) {
@@ -477,7 +490,10 @@ async function job(deps: ArchiveDeps, args: ArchiveArgs): Promise<boolean> {
     if (rawError !== undefined) counts.failed++;
     // The Heartbeat t0 can be minutes off (A§6.2): imported, but an error line to look at.
     const bad = stats.t0 === 'heartbeat' || rawError !== undefined;
-    log[bad ? 'error' : 'info'](line({ ...fields, merge: written, error: rawError }), 'archive');
+    log[bad ? 'error' : 'info'](
+      line({ ...fields, merge: written.merge, pit_merge: written.pits, error: rawError }),
+      'archive',
+    );
   }
   return done(true);
 }

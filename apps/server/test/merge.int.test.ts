@@ -8,7 +8,7 @@ import { server } from '../../../test/msw.setup.ts';
 import { createDb, type DB } from '../src/db/db.ts';
 import { type Deps, processSession, syncSchedule } from '../src/ingest/ingest.ts';
 import { run } from '../src/main.ts';
-import { writeLaps } from '../src/merge/write.ts';
+import { writeLaps, writePits } from '../src/merge/write.ts';
 import { type Clock, createClient, OPENF1 } from '../src/openf1/client.ts';
 import { createTestDb, type TestDb } from './db.ts';
 
@@ -191,6 +191,36 @@ describe('the lap merge (11388 through msw, f1_ingest login)', { timeout: 120_00
     expect(await merged()).toEqual(MERGED);
     expect(await laps()).toBe(63);
     expect(await perSource()).toEqual({ openf1: 62, 'f1-archive': 3 });
+  });
+
+  it('#219: an OpenF1 refetch keeps a stop time the feed gave (OpenF1 has none for this race)', async () => {
+    const pit = () =>
+      db
+        .selectFrom('pit')
+        .select(['driver_number', 'lap_number', 'source', 'stop_ms', 'filled'])
+        .where('session_key', '=', KEY)
+        .orderBy('date')
+        .execute();
+    const [first, ...rest] = await pit();
+    if (!first) expect.fail('no pit row');
+    expect([first, ...rest].every((r) => r.stop_ms === null && r.source === 'openf1')).toBe(true);
+    const { driver_number, lap_number } = first;
+    await db
+      .transaction()
+      .execute((trx) => writePits(trx, KEY, 'f1-archive', [{ driver_number, lap_number, stop_ms: 2345 }]));
+    openf1();
+    expect(await processSession(deps, KEY, true)).toEqual({ ok: true, value: 'final' });
+    expect(lastSession().pit_merge).toMatchObject({ rows: 5, added: { openf1: 4 } });
+    expect(await pit()).toEqual([
+      {
+        driver_number,
+        lap_number,
+        source: 'f1-archive',
+        stop_ms: 2345,
+        filled: { date: 'openf1', pit_ms: 'openf1', lane_ms: 'openf1' },
+      },
+      ...rest,
+    ]);
   });
 
   it("a writer with no laps and no other candidates deletes the session's laps (`stale_lap` is fill's guard only)", async () => {

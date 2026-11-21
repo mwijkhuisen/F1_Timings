@@ -21,6 +21,8 @@ const pits = Pits.parse(
     pit_ms: ms(r.pit_duration),
     lane_ms: ms(r.lane_duration),
     stop_ms: ms(r.stop_duration),
+    source: 'openf1',
+    filled: {},
   })),
 );
 
@@ -110,7 +112,8 @@ describe('PitStops', () => {
   });
 
   it('shows a dash with its reason for the stationary time, and labels the pass', () => {
-    expect(html.match(/No stop time in the OpenF1 data \(OpenF1 #484\)/g)?.length).toBeGreaterThanOrEqual(5);
+    expect(html.match(/No stop time in the OpenF1 data or the F1 archive/g)?.length).toBeGreaterThanOrEqual(5);
+    expect(html).not.toContain('OpenF1 #484');
     expect(html).toContain('Pit-lane pass: no tyre change in the stints data');
     expect(html.match(/Pit-lane pass/g)).toHaveLength(1);
   });
@@ -146,5 +149,72 @@ describe('StintBars popovers', () => {
 
   it('adds nothing without pit rows', () => {
     expect(renderToStaticMarkup(<StintBars detail={detail} laps={laps} stints={stints} />)).not.toContain('Stop after');
+  });
+});
+
+describe('the stop time notes (#219)', () => {
+  // Three stops with a stationary time, each from another source, and one without.
+  const stop = (i: number, source: 'openf1' | 'f1-archive' | 'f1-live', filled: Record<string, string>) => ({
+    ...pits[i],
+    stop_ms: 2400 + i * 100,
+    source,
+    filled,
+  });
+  const mixed = Pits.parse([
+    stop(0, 'openf1', { stop_ms: 'f1-archive' }), // OpenF1's row, the archive's stop time
+    stop(1, 'openf1', {}),
+    stop(2, 'f1-live', {}),
+    pits[3],
+  ]);
+  const rows = pitStops(drivers, mixed, stints, periods);
+  const html = renderToStaticMarkup(<PitStops detail={detail} rows={rows} />);
+  /** The stop cell's note text and what it wraps, per row. */
+  const cells = [...html.matchAll(/<td><button[^>]*title="((?:From|No stop)[^"]*)">([^<]*)<\/button>/g)].map((m) => [
+    m[1],
+    m[2],
+  ]);
+
+  it('a stop time carries its source: filled.stop_ms over the row source', () => {
+    expect(rows.map((r) => r.stopSource)).toEqual(['f1-archive', 'openf1', 'f1-live', null]);
+    expect(cells).toEqual([
+      ['From the F1 archive', '2.4 s'],
+      ['From the OpenF1 data', '2.5 s'],
+      ['From the F1 live feed', '2.6 s'],
+      ['No stop time in the OpenF1 data or the F1 archive', '—'],
+    ]);
+  });
+
+  it('keeps the note id and its popover for each stop cell', () => {
+    expect(html).toContain('popoverTarget="pit-stop-0"');
+    expect(html).toContain('<div popover="auto" id="pit-stop-0" class="pop">From the F1 archive</div>');
+    expect(html).toContain(
+      '<div popover="auto" id="pit-stop-3" class="pop">No stop time in the OpenF1 data or the F1 archive</div>',
+    );
+  });
+
+  it('a missing stop time says what was looked at, by the session source', () => {
+    const none = pitStops(drivers, pits, stints, []);
+    const say = (source?: 'openf1' | 'f1-archive' | 'f1-live' | 'jolpica') =>
+      renderToStaticMarkup(<PitStops detail={detail} rows={none} {...(source && { source })} />);
+    expect(say()).toContain('title="No stop time in the OpenF1 data or the F1 archive"');
+    expect(say('f1-archive')).toContain('title="No stop time in the F1 archive: it has none before 2025"');
+    expect(say('f1-live')).toContain('title="No stop time in the F1 live feed"');
+    expect(say('jolpica')).toContain('title="No stop time in the Jolpica data"');
+    // The session's own source is the default.
+    const archive = { ...detail, session: { ...detail.session, source: 'f1-archive' as const } };
+    expect(renderToStaticMarkup(<PitStops detail={archive} rows={none} />)).toContain(
+      'title="No stop time in the F1 archive: it has none before 2025"',
+    );
+    expect(say('f1-live')).not.toContain('OpenF1 data');
+  });
+
+  it('the popover line says what the lane time was looked up in, by source', () => {
+    const none = pitStops(drivers, Pits.parse([{ ...pits[0], lane_ms: null, pit_ms: null }]), stints, []);
+    const line = (pitSource?: 'f1-live') =>
+      renderToStaticMarkup(
+        <StintBars detail={detail} laps={laps} stints={stints} pitRows={none} {...(pitSource && { pitSource })} />,
+      );
+    expect(line()).toContain('<li>Stop after lap 22: no pit-lane time in the OpenF1 data</li>');
+    expect(line('f1-live')).toContain('<li>Stop after lap 22: no pit-lane time in the F1 live feed</li>');
   });
 });

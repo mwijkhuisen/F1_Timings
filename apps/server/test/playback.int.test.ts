@@ -6,6 +6,7 @@ import { join } from 'node:path';
 import {
   type Lap,
   Live,
+  type Pits,
   PlaybackDelta,
   PlaybackEnd,
   PlaybackLaps,
@@ -94,6 +95,9 @@ async function recordPractice(path: string, at: number) {
       rec.feed(at + i * 50, 'SessionInfo', (payload as { SessionInfo: unknown }).SessionInfo, 'undefined');
     else rec.feed(at + i * 50, topic, payload, ts ?? 'undefined');
   }
+  // #219: one pit stop of car 7, after the session's lines (synthetic).
+  const pit = { RacingNumber: '7', Lap: '3', Duration: '22.5' };
+  rec.feed(at + values.length * 50, 'PitLaneTimeCollection', { PitTimes: { 7: pit } }, 'undefined');
   await rec.finish();
 }
 
@@ -468,6 +472,7 @@ describe('playback routes (f1_api login, Access JWT, real socket)', { timeout: 6
       state: { TimingData: { Lines: { '1': { N: 0 } } } },
       laps: [],
       stints: [],
+      pits: [],
       weather: [],
     });
     const deltas = seen.slice(1, -1).map((e) => PlaybackDelta.parse(e.data));
@@ -489,6 +494,7 @@ describe('playback routes (f1_api login, Access JWT, real socket)', { timeout: 6
     expect(seen.at(-1)?.event).toBe('end');
     const laps = new Map<string, Lap>();
     const stints = new Map<string, Stints[number]>();
+    const pits = new Map<string, Pits[number]>();
     for (const { event, data } of seen) {
       if (event === 'delta') PlaybackDelta.parse(data);
       else if (event === 'end') PlaybackEnd.parse(data);
@@ -497,6 +503,7 @@ describe('playback routes (f1_api login, Access JWT, real socket)', { timeout: 6
         const rows = event === 'snapshot' ? PlaybackSnapshot.parse(data) : PlaybackLaps.parse(data);
         for (const l of rows.laps) laps.set(`${l.driver_number}/${l.lap_number}`, l);
         for (const s of rows.stints) stints.set(`${s.driver_number}/${s.stint_number}`, s);
+        for (const p of rows.pits) pits.set(`${p.driver_number}/${p.lap_number}`, p);
       }
     }
 
@@ -511,6 +518,20 @@ describe('playback routes (f1_api login, Access JWT, real socket)', { timeout: 6
       a.driver_number - b.driver_number || a.stint_number - b.stint_number;
     expect([...laps.values()].sort(byLap)).toEqual(all.laps);
     expect([...stints.values()].sort(byStint)).toEqual(all.stints);
+    // #219: the pit rows come through the same two events, as the Pits contract.
+    expect(all.pits).toEqual([
+      {
+        driver_number: 7,
+        lap_number: 3,
+        date: expect.any(String),
+        pit_ms: null,
+        lane_ms: 22_500,
+        stop_ms: null,
+        source: 'f1-live',
+        filled: {},
+      },
+    ]);
+    expect([...pits.values()]).toEqual(all.pits);
   });
 
   it('one open log line per stream: the mode, scan ms, lines and snapshot bytes, and nothing else (#101)', async () => {
@@ -799,7 +820,14 @@ describe('playback routes (f1_api login, Access JWT, real socket)', { timeout: 6
           const { pos: _, ...data } = PlaybackSnapshot.parse(e.data);
           return [{ event: e.event, data }];
         });
-      expect(keys(without[0]?.data as Record<string, unknown>)).toEqual(['laps', 'state', 'stints', 't', 'weather']);
+      expect(keys(without[0]?.data as Record<string, unknown>)).toEqual([
+        'laps',
+        'pits',
+        'state',
+        'stints',
+        't',
+        'weather',
+      ]);
       expect(rest(withPos)).toEqual(rest(without));
       expect(new Set(without.map((e) => e.event))).toEqual(new Set(['snapshot', 'delta', 'laps', 'end']));
 

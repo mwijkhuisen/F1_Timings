@@ -22,6 +22,8 @@ const text = z.string().nullable();
 const ms = int.nullable();
 const segments = z.array(int.nullable()).nullable();
 const ingestState = z.enum(['scheduled', 'due', 'fetched', 'final', 'failed']);
+/** A row's source: the DDL's CHECK list. */
+const source = z.enum(['openf1', 'f1-archive', 'f1-live', 'jolpica']);
 
 const Colour = z.enum(['purple', 'green', 'yellow']).nullable();
 
@@ -57,7 +59,7 @@ export const SessionDetail = z.strictObject({
   session: z.strictObject({
     ...SeasonSession.shape,
     meeting_key: int,
-    source: z.enum(['openf1', 'f1-archive', 'f1-live', 'jolpica']),
+    source,
     fetch_count: int,
     fail_count: int,
     last_error: z
@@ -162,6 +164,7 @@ export const Stints = z.array(
   }),
 );
 
+// #219 (A§7): a value's source is `filled[column] ?? source`; `filled` names only date, pit_ms, lane_ms and stop_ms.
 export const Pits = z.array(
   z.strictObject({
     driver_number: int,
@@ -170,6 +173,8 @@ export const Pits = z.array(
     pit_ms: ms,
     lane_ms: ms,
     stop_ms: ms,
+    source,
+    filled: z.record(z.string(), source),
   }),
 );
 
@@ -397,10 +402,11 @@ export const Recordings = z.array(
 
 // The SSE events of /playback/:recording/stream (A§10); each event's data is one of these as JSON. `state` is
 // {topic: value}; a delta's `data` is merged into state[topic] when it is an object, else it replaces it. A snapshot
-// carries every lap and stint row so far; `laps` only the rows that changed since the last snapshot or `laps`, which
-// replace the rows of the same (driver_number, lap_number) or (driver_number, stint_number). `weather` holds every
-// WeatherData sample since the stream's last session switch, one row per applied WeatherData delta, at most the last
-// MAX_WEATHER_ROWS; the client adds weatherRow of the merged view at the delta's t with withWeatherRow.
+// carries every lap, stint and pit row so far; `laps` only the rows that changed since the last snapshot or `laps`,
+// which replace the rows of the same (driver_number, lap_number), (driver_number, stint_number) or pit (driver_number,
+// lap_number). The pit rows (#219) are derived on the server from the pit-lane topics, which are never sent.
+// `weather` holds every WeatherData sample since the stream's last session switch, one row per applied WeatherData
+// delta, at most the last MAX_WEATHER_ROWS; the client adds weatherRow of the merged view at the delta's t with withWeatherRow.
 // With `pos=1` (P7a, A§11.3): `pos` events, at most one per 500 ms of t, each one Position timestamp on the receive
 // axis with every car of it as [x, y] in integer metres of the circuit outline's frame (x east, y south, from its
 // centre). The snapshot's `pos` is the last one before T, null while the session has no fitted frame; without `pos=1`
@@ -414,10 +420,11 @@ export const PlaybackSnapshot = z.strictObject({
   state: z.record(z.string(), z.unknown()),
   laps: Laps,
   stints: Stints,
+  pits: Pits,
   weather: Weather,
   pos: PlaybackPos.nullable().optional(),
 });
-export const PlaybackLaps = z.strictObject({ t: int, laps: Laps, stints: Stints });
+export const PlaybackLaps = z.strictObject({ t: int, laps: Laps, stints: Stints, pits: Pits });
 export const PlaybackDelta = z.strictObject({ t: int, topic: z.string(), data: z.unknown() });
 export const PlaybackEnd = z.strictObject({ t: int });
 // The heartbeat after 15 s without a write: a real event, because EventSource never delivers a comment to JS.

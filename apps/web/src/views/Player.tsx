@@ -48,6 +48,7 @@ import {
   createStore,
   type Feed,
   openStream,
+  type Pit,
   type Probe,
   probeStream,
   type Snap,
@@ -69,7 +70,7 @@ import { PaceTable, RunPlan } from './Pace.tsx';
 import { Panel, Strip, useTick } from './PitWall.tsx';
 import { RainMapCard } from './RainMap.tsx';
 import { SpeedTable } from './Speeds.tsx';
-import { StintBars } from './Stints.tsx';
+import { PitStops, pitStops, StintBars } from './Stints.tsx';
 import { QualiTiles, SessionTiles } from './Tiles.tsx';
 import { driverOf, gridOf, Tower, towerRows } from './Tower.tsx';
 import { TrackMap } from './TrackMap.tsx';
@@ -163,14 +164,16 @@ function PlayerLaps({
  * The Stints tab (#112, #114): the stint bars, then in races and practice the pace per run and, in practice, the run
  * plan, on the stream's rows up to T. `periods` are the race's lap periods (red included, so the pace leaves red laps
  * out; the bars draw SC and VSC only), `clock` the practice's clock periods. The runs are rebuilt only when these
- * change, which is when the rows change. The player has no race-control or weather query, so
- * nothing "did not load": `weather` is the feed's rows up to T. The run plan's axis ends at T (`end`), never at the
- * scheduled `date_end`, which in a live session is a guess.
+ * change, which is when the rows change. In a race the pit stops follow the bars (#219): the server's derived rows, with
+ * stop times from the live feed's PitStopSeries where it sends them, none shown without a row. The player has no
+ * race-control or weather query, so nothing "did not load": `weather` is the feed's rows up to T. The run plan's axis
+ * ends at T (`end`), never at the scheduled `date_end`, which in a live session is a guess.
  */
 function PlayerStints({
   detail,
   laps,
   stints,
+  pits,
   periods,
   clock,
   weather,
@@ -179,6 +182,7 @@ function PlayerStints({
   detail: SessionDetail;
   laps: Lap[];
   stints: Stint[];
+  pits: Pit[];
   periods: Period[];
   clock: ClockPeriod[];
   weather: Weather;
@@ -191,9 +195,15 @@ function PlayerStints({
     () => (race || practice ? paceRuns(laps, stints, type, { periods, clock }) : []),
     [race, practice, laps, stints, type, periods, clock],
   );
+  // The bars draw SC and VSC only, and the pit rows read the same periods as the session page's.
+  const drawn = useMemo(() => periods.filter((p) => p.kind !== 'red'), [periods]);
+  const pitRows = useMemo(
+    () => (race ? pitStops(orderDrivers(detail, laps), pits, stints, drawn) : []),
+    [race, detail, laps, pits, stints, drawn],
+  );
   return (
     <>
-      <StintBars detail={detail} laps={laps} stints={stints} periods={periods.filter((p) => p.kind !== 'red')} />
+      <StintBars detail={detail} laps={laps} stints={stints} periods={drawn} pitRows={pitRows} pitSource="f1-live" />
       {practice && runs.length > 0 && (
         <RunPlan detail={detail} laps={laps} runs={runs} clock={clock} weather={weather} end={end} />
       )}
@@ -207,6 +217,7 @@ function PlayerStints({
           unnumbered={race ? stints.filter((s) => s.lap_start === null || s.lap_end === null).length : 0}
         />
       )}
+      {pitRows.length > 0 && <PitStops detail={detail} rows={pitRows} source="f1-live" />}
     </>
   );
 }
@@ -227,6 +238,7 @@ const SessionTabs = memo(function SessionTabs({
   feed,
   laps,
   stints,
+  pits,
   weather,
   lo,
   reached,
@@ -238,6 +250,7 @@ const SessionTabs = memo(function SessionTabs({
   feed: Feed;
   laps: Lap[];
   stints: Stint[];
+  pits: Pit[];
   /** The feed's weather rows up to T (`snap.weather.rows`): a new array only when a row arrives. */
   weather: Weather;
   lo: number;
@@ -283,6 +296,7 @@ const SessionTabs = memo(function SessionTabs({
         detail={rows.detail}
         laps={laps}
         stints={stints}
+        pits={pits}
         periods={rows.track.periods}
         clock={rows.clock}
         weather={weather}
@@ -1333,6 +1347,7 @@ export function Player({
             feed={feed}
             laps={snap.laps}
             stints={snap.stints}
+            pits={snap.pits}
             weather={shown === 'stints' ? snap.weather.rows : NO_WEATHER}
             lo={lo}
             reached={reachedKey}

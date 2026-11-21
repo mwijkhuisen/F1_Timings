@@ -2,6 +2,7 @@ import {
   type Lap,
   merge,
   type Obj,
+  type Pits,
   PlaybackDelta,
   PlaybackEnd,
   PlaybackLaps,
@@ -23,6 +24,7 @@ import {
 // The weather rows (P5b): the snapshot's, then one per WeatherData delta, read from the merged view at the delta's t.
 
 export type Stint = Stints[number];
+export type Pit = Pits[number];
 /** `still`: a still frame (a paused seek, or a load that resumes at `?t`, A§13), which the server only logs (#101). */
 export type StreamParams = { recording: number; at: number | 'live'; delay: number; still?: boolean; pos?: boolean };
 /**
@@ -43,6 +45,8 @@ export type Feed = {
   state: Obj;
   laps: Map<string, Lap>;
   stints: Map<string, Stint>;
+  /** The server's derived pit rows (#219), keyed driver:lap. */
+  pits: Map<string, Pit>;
   weather: Weather;
   pos?: Positions | null;
 };
@@ -77,10 +81,12 @@ export async function probeStream(url: string, signal: AbortSignal): Promise<Pro
 
 const lapKey = (l: Lap) => `${l.driver_number}:${l.lap_number}`;
 const stintKey = (s: Stint) => `${s.driver_number}:${s.stint_number}`;
+const pitKey = (p: Pit) => `${p.driver_number}:${p.lap_number}`;
 
-function putRows(feed: Feed, rows: { laps: Lap[]; stints: Stint[] }) {
+function putRows(feed: Feed, rows: { laps: Lap[]; stints: Stint[]; pits: Pit[] }) {
   for (const l of rows.laps) feed.laps.set(lapKey(l), l);
   for (const s of rows.stints) feed.stints.set(stintKey(s), s);
+  for (const p of rows.pits) feed.pits.set(pitKey(p), p);
 }
 
 export const SILENT_MS = 40_000; // about 2.5 heartbeats
@@ -173,7 +179,14 @@ export function openStream(params: StreamParams, h: Handlers, ES: typeof EventSo
 
   on('snapshot', PlaybackSnapshot, (d) => {
     // merge copies into prototype-free objects and drops unsafe keys, as on the server.
-    feed = { t: d.t, state: Object.create(null), laps: new Map(), stints: new Map(), weather: [...d.weather] };
+    feed = {
+      t: d.t,
+      state: Object.create(null),
+      laps: new Map(),
+      stints: new Map(),
+      pits: new Map(),
+      weather: [...d.weather],
+    };
     if (d.pos !== undefined) feed.pos = d.pos && withPos(null, d.pos);
     merge(feed.state, d.state);
     putRows(feed, d);
@@ -241,15 +254,16 @@ export const utc = (v: string | undefined) =>
   v === undefined ? Number.NaN : Date.parse(v.endsWith('Z') ? v : `${v}Z`);
 
 /**
- * What React renders: a new object per flush, so it is the key for everything derived from the state. `laps` and
- * `stints` are new arrays only when the rows changed (a snapshot or a `laps` event); `weather` a new pair only when the
- * weather rows changed. The positions are not in it (P7a review): a `pos` event leaves it as it was.
+ * What React renders: a new object per flush, so it is the key for everything derived from the state. `laps`,
+ * `stints` and `pits` are new arrays only when the rows changed (a snapshot or a `laps` event); `weather` a new pair
+ * only when the weather rows changed. The positions are not in it (P7a review): a `pos` event leaves it as it was.
  */
 export type Snap = {
   rev: number;
   feed: Feed | undefined;
   laps: Lap[];
   stints: Stint[];
+  pits: Pit[];
   weather: { rows: Weather; laps: Lap[] };
 };
 
@@ -268,7 +282,7 @@ const subscriber = (subs: Set<() => void>) => (f: () => void) => {
  * their own channel on the same flush: a `pos` event (2–4 a second) renders the map only, never what `Snap` keys.
  */
 export function createStore(everyMs = 250) {
-  let snap: Snap = { rev: 0, feed: undefined, laps: [], stints: [], weather: { rows: [], laps: [] } };
+  let snap: Snap = { rev: 0, feed: undefined, laps: [], stints: [], pits: [], weather: { rows: [], laps: [] } };
   let pos: Positions | null | undefined;
   let pending: Feed | undefined;
   let [snapDirty, lapsDirty] = [false, false];
@@ -284,11 +298,12 @@ export function createStore(everyMs = 250) {
     snapDirty = false;
     const laps = lapsDirty && pending ? [...pending.laps.values()] : snap.laps;
     const stints = lapsDirty && pending ? [...pending.stints.values()] : snap.stints;
+    const pits = lapsDirty && pending ? [...pending.pits.values()] : snap.pits;
     // The Weather tab's chart option is rebuilt only when the rows change (about once a minute), not on every `laps`
     // event (up to one a second in a race): its lap rows are those as of the last row change.
     const rows = pending?.weather ?? snap.weather.rows;
     const weather = rows === snap.weather.rows ? snap.weather : { rows, laps };
-    snap = { rev: snap.rev + 1, feed: pending, laps, stints, weather };
+    snap = { rev: snap.rev + 1, feed: pending, laps, stints, pits, weather };
     lapsDirty = false;
     for (const f of subs) f();
   };

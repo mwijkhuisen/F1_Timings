@@ -121,7 +121,18 @@ const cases = [
   [
     'Pits',
     Pits,
-    [{ driver_number: 1, lap_number: 5, date: null, pit_ms: null, lane_ms: null, stop_ms: 2300 }],
+    [
+      {
+        driver_number: 1,
+        lap_number: 5,
+        date: null,
+        pit_ms: null,
+        lane_ms: null,
+        stop_ms: 2300,
+        source: 'openf1',
+        filled: { stop_ms: 'f1-archive' },
+      },
+    ],
     'lap_number',
   ],
   ['Overtakes', Overtakes, [{ driver_number: 7, date: iso, places: 2 }], 'date'],

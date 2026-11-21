@@ -8,15 +8,18 @@ import { TOPICS } from '../archive/job.ts';
 import { archiveRows } from '../archive/rows.ts';
 import { codeOf, type DB } from '../db/db.ts';
 import { createFeed } from '../live/merge.ts';
+import { pitsSince } from '../live/pits.ts';
 import { type FeedEvent, parseFeedLine, parseJsonStream } from '../live/read.ts';
 import { readCapped, segment, segments } from '../live/recording.ts';
 import type { Source } from './merge.ts';
-import { chunks, mergeSession, staleLap, storeCandidates } from './write.ts';
+import type { PitCounts } from './pits.ts';
+import { chunks, mergeSession, type PitInput, staleLap, storeCandidates, writePits } from './write.ts';
 
 // The fill job (P3b, A§4): reads a session's archive files and complete recording from disk, stores their laps as
 // candidates and merges the session again. No network: nothing here reaches the F1 host or OpenF1. Only OpenF1
 // sessions get file candidates (a session of another source has its own rows). Logs carry counts, ids and codes only.
 // #236: the same read also replaces the session's `overtake` rows, the archive's entries first.
+// #219: and writes each source's pit rows through writePits, as candidates next to OpenF1's.
 
 /** `maxBytes`: the size cap of one source's files, MAX_SESSION_BYTES unless a test sets it. */
 export type FillDeps = { db: Kysely<DB>; log: Pick<Logger, 'info' | 'error'>; maxBytes?: number };
@@ -25,9 +28,13 @@ type Laps = Parameters<typeof storeCandidates>[3];
 type OvertakeRows = (Omit<Insertable<DB['overtake']>, 'session_key' | 'source' | 'date'> & { date: Date })[];
 /**
  * `undefined`: the source has no (complete) files here, so its stored candidates stay. A throw fails that source.
- * `overtakes` is undefined when the source has no OvertakeSeries.
+ * `overtakes` is undefined when the source has no OvertakeSeries; `pits` is empty when it has no pit-lane entries
+ * from an hour before the start on, and then the source's stored pit candidates stay. `pitSkipped` counts the pit
+ * entries the parser dropped.
  */
-type Read = { laps: Laps; overtakes: OvertakeRows | undefined } | undefined;
+type Read =
+  | { laps: Laps; overtakes: OvertakeRows | undefined; pits: readonly PitInput[]; pitSkipped: number }
+  | undefined;
 
 const fail = (code: string) => Object.assign(new Error(code), { code });
 const absent = (err: unknown) => codeOf(err) === 'ENOENT';
@@ -81,8 +88,17 @@ function overtakeRows(events: readonly FeedEvent[]): OvertakeRows | undefined {
   return rows.length > 0 ? rows : undefined;
 }
 
-/** `<archiveDir>/<key>/`: rows of its topic files, each read through `readCapped` within what is left of `maxBytes`. */
-async function fromArchive(dir: string, key: number, type: string | null, maxBytes: number): Promise<Read> {
+/**
+ * `<archiveDir>/<key>/`: rows of its topic files, each read through `readCapped` within what is left of `maxBytes`.
+ * `start`: the session's date_start, epoch ms.
+ */
+async function fromArchive(
+  dir: string,
+  key: number,
+  type: string | null,
+  start: number,
+  maxBytes: number,
+): Promise<Read> {
   let names: string[];
   try {
     names = readdirSync(dir).filter((f) => FILES.has(f));
@@ -100,21 +116,26 @@ async function fromArchive(dir: string, key: number, type: string | null, maxByt
   }
   const series = files.get(SERIES);
   files.delete(SERIES);
-  const built = archiveRows(files, key, type);
+  const built = archiveRows(files, key, type, start);
   if (!built.ok && built.error === 'incomplete') return undefined; // no t0: as the archive job, not a failure
   if (!built.ok) throw fail(built.error);
   // The Heartbeat t0 can be minutes off (A§6.2): such times must not fill OpenF1's.
   if (built.value.stats.t0 === 'heartbeat') throw fail('t0_heartbeat');
   const overtakes = series === undefined ? undefined : overtakeRows(parseJsonStream(series, SERIES, 0).events);
-  return { laps: built.value.rows.lap, overtakes };
+  return {
+    laps: built.value.rows.lap,
+    overtakes,
+    pits: built.value.rows.pit,
+    pitSkipped: built.value.stats.pit_skipped,
+  };
 }
 
 /**
  * Every sealed segment of a complete recording in file order, the events not sorted. Only the archive job's topics and
  * OvertakeSeries are kept (so no `.z` topic): the parsers read no other. The directory must exist (`recording_missing`)
- * and hold a sealed segment and SessionInfo (`incomplete`).
+ * and hold a sealed segment and SessionInfo (`incomplete`). `start`: the session's date_start, epoch ms.
  */
-async function fromRecording(dir: string, key: number, maxBytes: number): Promise<Read> {
+async function fromRecording(dir: string, key: number, start: number, maxBytes: number): Promise<Read> {
   const events: FeedEvent[] = [];
   const series: FeedEvent[] = [];
   let bytes = 0;
@@ -141,9 +162,13 @@ async function fromRecording(dir: string, key: number, maxBytes: number): Promis
   const { info, rows } = reconstruct(events, 'f1-live');
   if (info?.Key === undefined || rows === undefined) throw fail('incomplete');
   if (info.Key !== key) throw fail('key_mismatch');
+  // Gated on the recording's own session: it can open on the previous session's state (A§11.3).
+  const pits = pitsSince(events, start, key);
   return {
     laps: rows.laps.map(({ at: _, ...lap }) => lap),
     overtakes: overtakeRows(series),
+    pits: pits.rows,
+    pitSkipped: pits.skipped,
   };
 }
 
@@ -162,13 +187,18 @@ async function fillSession(deps: FillDeps, args: Omit<FillArgs, 'keys'>, key: nu
     .executeTakeFirst();
   if (!session) throw fail('unknown_session');
   const read: [Source, Laps][] = [];
+  const pits: ['f1-archive' | 'f1-live', readonly PitInput[]][] = [];
+  const pitSkipped: Partial<Record<Source, number>> = {};
   const errors: Partial<Record<Source, string>> = {};
   let overtakes: { source: Source; rows: OvertakeRows } | undefined;
-  const attempt = async (source: Source, get: () => Read | Promise<Read>) => {
+  const attempt = async (source: 'f1-archive' | 'f1-live', get: () => Read | Promise<Read>) => {
     try {
       const got = await get();
       if (!got) return;
       read.push([source, got.laps]);
+      pitSkipped[source] = got.pitSkipped;
+      // A source without pit rows is absent: its stored pit candidates stay (as the overtakes').
+      if (got.pits.length > 0) pits.push([source, got.pits]);
       // The archive is read first, so its entries win; else the recording's, else the stored rows stay.
       // Races only, from an hour before the start on: a Subscribe state or a stream can open with the day before's
       // entries. A source with none left is absent. A failed archive leaves the stored rows: the recording must not
@@ -182,18 +212,21 @@ async function fillSession(deps: FillDeps, args: Omit<FillArgs, 'keys'>, key: nu
   };
   let recording: number | undefined;
   if (session.source === 'openf1') {
-    await attempt('f1-archive', () => fromArchive(join(args.archiveDir, String(key)), key, session.type, maxBytes));
+    const start = session.date_start.getTime();
+    await attempt('f1-archive', () =>
+      fromArchive(join(args.archiveDir, String(key)), key, session.type, start, maxBytes),
+    );
     const rec = await firstComplete(db, key);
     if (rec) {
       recording = Number(rec.id);
       // The CHECK pins the path already; checked again before it is joined to a directory.
       await attempt('f1-live', () => {
         if (!RECORDING.test(rec.path)) throw fail('bad_path');
-        return fromRecording(join(args.liveDir, rec.path), key, maxBytes);
+        return fromRecording(join(args.liveDir, rec.path), key, start, maxBytes);
       });
     }
   }
-  const merge = await db.transaction().execute(async (trx) => {
+  const { merge, pitMerge } = await db.transaction().execute(async (trx) => {
     if (await staleLap(trx, key)) throw fail('stale_lap');
     for (const [source, laps] of read) await storeCandidates(trx, key, source, laps);
     if (overtakes) {
@@ -205,14 +238,21 @@ async function fillSession(deps: FillDeps, args: Omit<FillArgs, 'keys'>, key: nu
           .values(chunk.map((r) => ({ ...r, session_key: key, source })))
           .execute();
     }
-    return mergeSession(trx, key);
+    const merge = await mergeSession(trx, key);
+    // Each writePits merges the whole session, so the last one's counts are the session's.
+    let pitMerge: PitCounts | undefined;
+    for (const [source, rows] of pits) pitMerge = await writePits(trx, key, source, rows);
+    return { merge, pitMerge };
   });
   return {
     sources: Object.fromEntries(read.map(([source, laps]) => [source, laps.length])),
     errors,
     recording,
     ...(overtakes && { overtakes: { source: overtakes.source, rows: overtakes.rows.length } }),
+    pits: Object.fromEntries(pits.map(([source, rows]) => [source, rows.length])),
+    pit_skipped: pitSkipped,
     merge,
+    ...(pitMerge && { pit_merge: pitMerge }),
   };
 }
 

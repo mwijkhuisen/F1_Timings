@@ -121,6 +121,8 @@ const letterClass = (letter: string) => (letter.length > 1 ? 'two' : undefined);
 
 const lapsText = (p: Period) => (p.from === p.to ? `lap ${p.from}` : `laps ${p.from}–${p.to}`);
 
+type Source = Pits[number]['source'];
+
 export type PitStop = {
   driver: Driver;
   /** The in-lap (A§9). */
@@ -128,6 +130,8 @@ export type PitStop = {
   time: string;
   laneMs: number | null;
   stopMs: number | null;
+  /** Where the stop time comes from: `filled.stop_ms ?? source` (#219); null without one. */
+  stopSource: Source | null;
   /** The stint that starts after the in-lap, and the one before it; none on a pit-lane pass. */
   after: Stints[number] | undefined;
   before: Stints[number] | undefined;
@@ -169,6 +173,7 @@ export function pitStops(
       time: p.date === null ? '—' : fmtClock(Date.parse(p.date)),
       laneMs: p.lane_ms ?? p.pit_ms,
       stopMs: p.stop_ms,
+      stopSource: p.stop_ms === null ? null : (p.filled.stop_ms ?? p.source),
       after,
       before: after && own.find((s) => s.stint_number === after.stint_number - 1),
       pass: !after,
@@ -185,11 +190,11 @@ export function pitStops(
 
 const seconds = (ms: number) => `${(ms / 1000).toFixed(1)} s`;
 
-/** A pit row in words for a stint popover. */
-function pitLine(r: PitStop): string {
+/** A pit row in words for a stint popover; `source` is the session's (the player's rows are the live feed's). */
+function pitLine(r: PitStop, source: Source): string {
   const head = `${r.pass ? 'Pit-lane pass' : 'Stop'} after lap ${r.n}`;
   if (r.laneMs === null)
-    return `${head}: no pit-lane time in the OpenF1 data${r.pass ? ', no tyre change in the stints data' : ''}`;
+    return `${head}: no pit-lane time in ${sourceWords(source)}${r.pass ? ', no tyre change in the stints data' : ''}`;
   return `${head}: ${seconds(r.laneMs)} in the pit lane${r.pass ? ', no tyre change in the stints data' : ''}`;
 }
 
@@ -199,6 +204,7 @@ export function StintBars({
   stints,
   periods = [],
   pitRows = [],
+  pitSource = detail.session.source,
 }: {
   detail: SessionDetail;
   laps: Laps;
@@ -207,6 +213,8 @@ export function StintBars({
   periods?: readonly Period[];
   /** A race's pit rows (`pitStops`), one popover line each (#111). */
   pitRows?: readonly PitStop[];
+  /** Where the pit rows come from, for the popover's wording: the session's, the live feed's in the player. */
+  pitSource?: Source;
 }) {
   const year = detail.meeting.year;
   const drivers = orderDrivers(detail, laps);
@@ -310,7 +318,7 @@ export function StintBars({
                         ))}
                         {ownPits.map((r, i) => (
                           // biome-ignore lint/suspicious/noArrayIndexKey: a driver's pit rows have no id; the list is static.
-                          <li key={i}>{pitLine(r)}</li>
+                          <li key={i}>{pitLine(r, pitSource)}</li>
                         ))}
                       </ul>
                     )}
@@ -345,8 +353,27 @@ function Tyres({ r, year, id }: { r: PitStop; year: number | null; id: string })
   );
 }
 
-/** The race's pit stops (#111, A§13): the OpenF1 pit rows with the lane time, the stop time and the tyre change. */
-export function PitStops({ detail, rows }: { detail: SessionDetail; rows: readonly PitStop[] }) {
+/** Why a pit row has no stop time, by where its session's rows come from (#219, A§13). */
+const noStop = (source: Source) =>
+  source === 'openf1'
+    ? 'No stop time in the OpenF1 data or the F1 archive'
+    : source === 'f1-archive'
+      ? 'No stop time in the F1 archive: it has none before 2025'
+      : `No stop time in ${sourceWords(source)}`;
+
+/**
+ * The race's pit stops (#111, A§13): the pit rows with the lane time, the stop time and the tyre change. A stop time
+ * names its source and a missing one what was looked at (#219); `source` is the session's, the live feed's in the player.
+ */
+export function PitStops({
+  detail,
+  rows,
+  source = detail.session.source,
+}: {
+  detail: SessionDetail;
+  rows: readonly PitStop[];
+  source?: Source;
+}) {
   const year = detail.meeting.year;
   return (
     <>
@@ -389,12 +416,14 @@ export function PitStops({ detail, rows }: { detail: SessionDetail; rows: readon
                   )}
                 </td>
                 <td>
-                  {r.stopMs === null ? (
-                    <Note id={`pit-stop-${i}`} text="No stop time in the OpenF1 data (OpenF1 #484)">
+                  {r.stopMs === null || r.stopSource === null ? (
+                    <Note id={`pit-stop-${i}`} text={noStop(source)}>
                       —
                     </Note>
                   ) : (
-                    seconds(r.stopMs)
+                    <Note id={`pit-stop-${i}`} text={`From ${sourceWords(r.stopSource)}`}>
+                      {seconds(r.stopMs)}
+                    </Note>
                   )}
                 </td>
                 <td>

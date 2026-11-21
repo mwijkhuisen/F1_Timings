@@ -107,6 +107,9 @@ class FakeES {
     // P5b: a snapshot carries `weather`; the tests that are not about it leave it out.
     if (name === 'snapshot' && data && typeof data === 'object' && !('weather' in data))
       data = { ...data, weather: [] };
+    // #219: a snapshot and a `laps` event carry `pits`; the tests that are not about it leave it out.
+    if ((name === 'snapshot' || name === 'laps') && data && typeof data === 'object' && !('pits' in data))
+      data = { ...data, pits: [] };
     const e = new MessageEvent(name, { data: data === undefined ? undefined : JSON.stringify(data) });
     act(() => {
       for (const f of this.listeners.get(name) ?? []) f(e);
@@ -285,7 +288,7 @@ describe('openStream hold (#101)', () => {
       ) ?? [])
         f(new MessageEvent(name, { data: JSON.stringify(data) }));
     };
-    listener('snapshot', { t: NOW, state: {}, laps: [], stints: [], weather: [] });
+    listener('snapshot', { t: NOW, state: {}, laps: [], stints: [], pits: [], weather: [] });
     for (let i = 1; i < MAX_HELD; i++) listener('delta', delta(i));
     expect(seen).toEqual([]);
     listener('delta', delta(MAX_HELD));
@@ -3077,14 +3080,32 @@ describe('Compare, Stints and the Laps tab in the player (#112)', () => {
         },
       },
     });
-  const snapshot = (t: number, st: object, laps: Lap[], rows: Stints) => {
-    last().emit('snapshot', { t, state: st, laps, stints: rows, weather: [] });
+  const snapshot = (t: number, st: object, laps: Lap[], rows: Stints, pits: object[] = []) => {
+    last().emit('snapshot', { t, state: st, laps, stints: rows, pits, weather: [] });
     advance(250);
   };
-  const begin = (st: object, laps: Lap[], rows: Stints) => {
+  const begin = (st: object, laps: Lap[], rows: Stints, pits: object[] = []) => {
     render({ recording: ended, start: T, sessionKey: 9100, detail });
-    snapshot(T, st, laps, rows);
+    snapshot(T, st, laps, rows, pits);
   };
+  /** A server-derived pit row (#219): the live feed's, `date` the car leaving the pit lane. */
+  const pitRow = (driver_number: number, lap_number: number, lane_ms: number, stop_ms: number | null) => ({
+    driver_number,
+    lap_number,
+    date: iso(T - 60_000 + lap_number * 1000),
+    pit_ms: null,
+    lane_ms,
+    stop_ms,
+    source: 'f1-live',
+    filled: {},
+  });
+  /** The Pit stops table's rows: driver, lap, pit lane, the stop cell's button text and its note. */
+  const pitTable = () =>
+    [...host.querySelectorAll('table.pits tbody tr')].map((tr) => {
+      const cells = [...tr.children].map((c) => c.textContent);
+      const note = tr.querySelector('td button.note');
+      return [cells[0], cells[1], cells[3]?.replace(', fastest', ''), note?.textContent, note?.getAttribute('title')];
+    });
   const seekTo = (t: number) => {
     slide('Position', t);
     advance(400);
@@ -3153,6 +3174,33 @@ describe('Compare, Stints and the Laps tab in the player (#112)', () => {
       ['HAM', 1, '0 stops'],
     ]);
     expect(Math.max(...(await compare()).map(lastLap))).toBe(2);
+  });
+
+  it('shows the pit rows from the stream up to T under the Stints bars: a laps event upserts one, a seek back takes them away (#219)', () => {
+    const own = stints([1, 1, 1, 3, 'MEDIUM'], [1, 2, 4, 4, 'HARD'], [44, 1, 1, 3, 'HARD'], [44, 2, 4, 4, 'MEDIUM']);
+    begin(state(), upTo(3), own, [pitRow(1, 3, 22_500, 2_400)]);
+    button('Stints');
+    expect(pitTable()).toEqual([['VER', '3', '22.5 s', '2.4 s', 'From the F1 live feed']]);
+    // A stop without a stationary time says what was looked at: the live feed.
+    last().emit('laps', { t: T + 10_000, laps: [], stints: [], pits: [pitRow(44, 3, 19_800, null)] });
+    advance(250);
+    expect(pitTable()).toEqual([
+      ['VER', '3', '22.5 s', '2.4 s', 'From the F1 live feed'],
+      ['HAM', '3', '19.8 s', '—', 'No stop time in the F1 live feed'],
+    ]);
+    // The row's stop time arrives later: the same row is replaced, not added.
+    last().emit('laps', { t: T + 20_000, laps: [], stints: [], pits: [pitRow(44, 3, 19_801, 2_100)] });
+    advance(250);
+    expect(pitTable()).toEqual([
+      ['VER', '3', '22.5 s', '2.4 s', 'From the F1 live feed'],
+      ['HAM', '3', '19.8 s', '2.1 s', 'From the F1 live feed'],
+    ]);
+    // Back before the stops: its snapshot has none, and nothing is drawn for them (no "No pit rows" text either).
+    seekTo(T - 100_000);
+    snapshot(T - 100_000, state(), upTo(2), stints([1, 1, 1, 2, 'MEDIUM'], [44, 1, 1, 2, 'HARD']));
+    expect(host.querySelector('table.pits')).toBeNull();
+    expect(host.textContent).not.toContain('Pit stops');
+    expect(host.textContent).not.toContain('No pit rows');
   });
 
   it('shows no SC band before the series has one, on Laps, Stints and Compare; never asks /race-control or /stints', async () => {
@@ -3249,6 +3297,7 @@ describe('Compare, Stints and the Laps tab in the player (#112)', () => {
       state: {},
       laps: new Map(upTo(1).map((l) => [`${l.driver_number}:${l.lap_number}`, l])),
       stints: new Map(own.map((s) => [`${s.driver_number}:${s.stint_number}`, s])),
+      pits: new Map(),
       weather: [],
     };
     store.update(feed, 'snapshot');
@@ -3759,7 +3808,15 @@ describe('the Map tab in the player (P7a)', () => {
 
   it('a pos event flushes the positions channel alone: the Snap stays the same object', () => {
     const store = createStore();
-    const feed: Feed = { t: T, state: {}, laps: new Map(), stints: new Map(), weather: [], pos: { at: T, cars: {} } };
+    const feed: Feed = {
+      t: T,
+      state: {},
+      laps: new Map(),
+      stints: new Map(),
+      pits: new Map(),
+      weather: [],
+      pos: { at: T, cars: {} },
+    };
     store.update(feed, 'snapshot');
     vi.advanceTimersByTime(250);
     const first = store.get();

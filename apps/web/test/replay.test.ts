@@ -324,6 +324,7 @@ describe('skipped', () => {
     state,
     laps: new Map(laps.map((l) => [`${l.driver_number}:${l.lap_number}`, l])),
     stints: new Map(),
+    pits: new Map(),
     weather: [],
   });
   const OLD = at('2026-10-25T20:15:00Z');
@@ -409,10 +410,11 @@ describe('skipped', () => {
       deleted_reason: 'TRACK LIMITS AT TURN 4',
       colour: { ...valid.colour, lap: 'yellow' as const },
     };
-    const snapshot = (t: number) => ['snapshot', { t, state: {}, laps: [valid], stints: [], weather: [] }] as const;
+    const snapshot = (t: number) =>
+      ['snapshot', { t, state: {}, laps: [valid], stints: [], pits: [], weather: [] }] as const;
     const old = stream([snapshot(OLD)]);
     // The new seek's stream: its snapshot, then the laps event the ruling sent.
-    const next = stream([snapshot(NEW - 1000), ['laps', { t: NEW, laps: [struck], stints: [] }]]);
+    const next = stream([snapshot(NEW - 1000), ['laps', { t: NEW, laps: [struck], stints: [], pits: [] }]]);
     expect(next.laps.get('7:2')).toEqual(struck);
     expect(skipped(old, next)?.deleted).toBe(1);
   });
@@ -446,6 +448,7 @@ describe('skippedEvents (#234)', () => {
     state,
     laps: new Map(laps.map((l) => [`${l.driver_number}:${l.lap_number}`, l])),
     stints: new Map(),
+    pits: new Map(),
     weather: [],
   });
   const msg = (min: number, Message: string, Lap?: number) => ({ Utc: feedUtc(min), Category: 'Other', Message, Lap });
