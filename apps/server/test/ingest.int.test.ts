@@ -27,7 +27,7 @@ import { acceptEmpty, rederive, refetch } from '../src/ingest/recovery.ts';
 import { ERROR_CODES } from '../src/ingest/state.ts';
 import { run } from '../src/main.ts';
 import { type Clock, createClient, OPENF1 } from '../src/openf1/client.ts';
-import type { Lap, Session } from '../src/openf1/schemas.ts';
+import type { Lap, Meeting, Session } from '../src/openf1/schemas.ts';
 import { createTestDb, type TestDb } from './db.ts';
 
 // The ingest pipeline against a real PostgreSQL 18, logged in as f1_ingest (the grants),
@@ -188,6 +188,66 @@ describe('ingest (fixtures through msw, f1_ingest login)', { timeout: 120_000 },
       is_cancelled: false,
       source: 'openf1',
     });
+  });
+
+  it('a second sync of the same answer rewrites no row; a changed field or a moved scheduled next_fetch_at still updates (#218)', async () => {
+    /** xmin per meeting and session row: a new value is a new row version. */
+    const versions = async () =>
+      Object.fromEntries(
+        (
+          await sql<{ k: string; x: string }>`
+            SELECT 'm' || meeting_key AS k, xmin::text AS x FROM meeting
+            UNION ALL SELECT 's' || session_key, xmin::text FROM session`.execute(db)
+        ).rows.map((r) => [r.k, r.x]),
+      );
+    const rewritten = (a: Record<string, unknown>, b: Record<string, unknown>) =>
+      Object.keys(b)
+        .filter((k) => a[k] !== b[k])
+        .sort();
+    openf1();
+    const before = await versions();
+    expect(Object.keys(before)).toHaveLength(27 + 131);
+    expect(await syncSchedule(deps, [2026])).toBe(true);
+    expect(rewritten(before, await versions())).toEqual([]);
+
+    // One changed field per table, and a scheduled session's next_fetch_at moved by hand.
+    const meetings = (raw('meetings-year') as Meeting[]).map((m) =>
+      m.meeting_key === 1296 ? { ...m, meeting_name: 'Changed Grand Prix' } : m,
+    );
+    const sessions = (raw('sessions-year') as Session[]).map((s) =>
+      s.session_key === 11388 ? { ...s, session_name: 'Changed' } : s,
+    );
+    const { next_fetch_at } = await session(11392);
+    await db
+      .updateTable('session')
+      .set({ next_fetch_at: new Date(0) })
+      .where('session_key', '=', 11392)
+      .execute();
+    const moved = await versions();
+    openf1((endpoint, key) =>
+      !Number.isNaN(key)
+        ? undefined
+        : endpoint === 'meetings'
+          ? HttpResponse.json(meetings)
+          : endpoint === 'sessions'
+            ? HttpResponse.json(sessions)
+            : undefined,
+    );
+    expect(await syncSchedule(deps, [2026])).toBe(true);
+    expect(rewritten(moved, await versions())).toEqual(['m1296', 's11388', 's11392']);
+    const name = async () =>
+      (await db.selectFrom('meeting').select('name').where('meeting_key', '=', 1296).executeTakeFirstOrThrow()).name;
+    expect(await name()).toBe('Changed Grand Prix');
+    expect(await session(11388)).toMatchObject({ name: 'Changed' });
+    expect(await session(11392)).toMatchObject({ ingest_state: 'scheduled', next_fetch_at });
+
+    // The fixture again: the names come back, and nothing else is rewritten.
+    const changed = await versions();
+    openf1();
+    expect(await syncSchedule(deps, [2026])).toBe(true);
+    expect(rewritten(changed, await versions())).toEqual(['m1296', 's11388']);
+    expect(await name()).not.toBe('Changed Grand Prix');
+    expect(await session(11388)).toMatchObject({ name: 'Race' });
   });
 
   it('a session is due at date_end + 35 min, not at + 34:59', async () => {

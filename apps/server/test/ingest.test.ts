@@ -1,7 +1,26 @@
-import { DummyDriver, Kysely, PostgresAdapter, PostgresIntrospector, PostgresQueryCompiler } from 'kysely';
+import {
+  type CompiledQuery,
+  type DatabaseConnection,
+  DummyDriver,
+  Kysely,
+  PostgresAdapter,
+  PostgresIntrospector,
+  PostgresQueryCompiler,
+} from 'kysely';
+import { HttpResponse, http } from 'msw';
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { server } from '../../../test/msw.setup.ts';
 import type { DB } from '../src/db/db.ts';
-import { minuteWork, SYNC_RETRY_MS, scheduleSync } from '../src/ingest/ingest.ts';
+import {
+  type Deps,
+  minuteWork,
+  SESSION_ENDPOINTS,
+  SYNC_RETRY_MS,
+  scheduleSync,
+  startIngest,
+  TICK_SLICE_MS,
+  tick,
+} from '../src/ingest/ingest.ts';
 import {
   championshipDriverRows,
   championshipTeamRows,
@@ -9,14 +28,49 @@ import {
   normaliseSession,
   withGrid,
 } from '../src/ingest/normalise.ts';
+import { refetch } from '../src/ingest/recovery.ts';
 import { afterFailure, afterSuccess, busyGuard, errorCode, firstFetchAt, type Progress } from '../src/ingest/state.ts';
-import type { createClient } from '../src/openf1/client.ts';
+import { type Clock, createClient, OPENF1 } from '../src/openf1/client.ts';
 import type { ChampionshipDrivers, ChampionshipTeams, Lap, StartingGrid, Weather } from '../src/openf1/schemas.ts';
 
 const MIN = 60_000;
 const end = new Date('2026-10-11T14:00:00Z');
 const at = (ms: number) => new Date(end.getTime() + ms);
 const fresh = { date_end: end, fetch_count: 0, fail_count: 0 };
+
+/** A Kysely whose driver records every query (and `begin`, `commit`) and answers it from `answer`; no rows by default. */
+function fakeDb(answer: (sql: string, parameters: readonly unknown[]) => unknown[] = () => []) {
+  const queries: string[] = [];
+  const connection: DatabaseConnection = {
+    executeQuery: async <R>(q: CompiledQuery) => {
+      queries.push(q.sql);
+      return { rows: answer(q.sql, q.parameters) as R[] };
+    },
+    streamQuery: () => {
+      throw new Error('not used');
+    },
+  };
+  class Recording extends DummyDriver {
+    override async acquireConnection() {
+      return connection;
+    }
+    override async beginTransaction() {
+      queries.push('begin');
+    }
+    override async commitTransaction() {
+      queries.push('commit');
+    }
+  }
+  const db = new Kysely<DB>({
+    dialect: {
+      createAdapter: () => new PostgresAdapter(),
+      createDriver: () => new Recording(),
+      createIntrospector: (k) => new PostgresIntrospector(k),
+      createQueryCompiler: () => new PostgresQueryCompiler(),
+    },
+  });
+  return { db, queries };
+}
 
 describe('state machine (fake clock)', () => {
   it('a synced session is due at end + 35 min, not at + 34:59', () => {
@@ -350,6 +404,25 @@ describe('minuteWork (the daemon job inside the busy guard)', () => {
     expect(log.error).not.toHaveBeenCalled();
   });
 
+  it("logs no `tick failed` for the stop's own AbortError (#218), but still logs another error during the stop", async () => {
+    const { log } = setup();
+    let stopping = false;
+    const fail = (err: Error) => async () => {
+      stopping = true;
+      throw err;
+    };
+    await minuteWork(
+      { sync: async () => {}, tick: fail(new DOMException('aborted', 'AbortError')) },
+      log,
+      () => stopping,
+    );
+    expect(log.error).not.toHaveBeenCalled();
+    stopping = false;
+    const pg = Object.assign(new Error('boom'), { code: 'XX000' });
+    await minuteWork({ sync: async () => {}, tick: fail(pg) }, log, () => stopping);
+    expect(log.error.mock.calls).toEqual([[{ cause: 'XX000' }, 'tick failed']]);
+  });
+
   it('runs without a rain step (backfill and refetch have none), and runs nothing once stopping', async () => {
     const { order, log, job } = setup();
     await minuteWork({ sync: job.sync, tick: job.tick }, log, () => false);
@@ -360,15 +433,8 @@ describe('minuteWork (the daemon job inside the busy guard)', () => {
 });
 
 describe('scheduleSync pings healthchecks', () => {
-  // Kysely's dummy driver: every query answers with no rows, transactions are no-ops.
-  const db = new Kysely<DB>({
-    dialect: {
-      createAdapter: () => new PostgresAdapter(),
-      createDriver: () => new DummyDriver(),
-      createIntrospector: (k) => new PostgresIntrospector(k),
-      createQueryCompiler: () => new PostgresQueryCompiler(),
-    },
-  });
+  // Every query answers with no rows, transactions are no-ops.
+  const { db } = fakeDb();
   type Reply = Awaited<ReturnType<ReturnType<typeof createClient>['get']>>;
   const good: Reply = { ok: true, value: { status: 200, body: [] } };
   const bad: Reply = { ok: false, error: { code: 'network' } };
@@ -408,5 +474,154 @@ describe('scheduleSync pings healthchecks', () => {
     state.at += SYNC_RETRY_MS;
     await sync.run();
     expect(ping.mock.calls).toEqual([['f1-ingest']]);
+  });
+});
+
+describe('a long queue (#218): the stop and the time slice', () => {
+  const KEY = 9158;
+  /**
+   * processSession's reads of an OpenF1 practice session (its row, the lock, the merge's lock) and the tick's due list;
+   * no rows for anything else. `onSession` sees each session processSession starts.
+   */
+  const answering =
+    (due: () => readonly number[], onSession: (key: number) => void = () => {}) =>
+    (sql: string, parameters: readonly unknown[]): unknown[] => {
+      if (sql.startsWith('select "type", "source", "name", "meeting_key" from "session"')) {
+        onSession(Number(parameters[0]));
+        return [{ type: 'Practice', source: 'openf1', name: 'Practice 1', meeting_key: 1 }];
+      }
+      if (sql.startsWith('select "date_end", "fetch_count", "fail_count" from "session"'))
+        return [{ date_end: end, fetch_count: 0, fail_count: 0 }];
+      if (sql.startsWith('select "type" from "session"')) return [{ type: 'Practice' }];
+      if (sql.startsWith('select "session_key" from "session" where "ingest_state" = $1'))
+        return due().map((session_key) => ({ session_key }));
+      return [];
+    };
+  /** OpenF1 through msw: every endpoint answers [], and each request is recorded by endpoint. */
+  const served = () => {
+    const requests: string[] = [];
+    server.use(
+      http.get(`${OPENF1}/:endpoint`, ({ params }) => {
+        requests.push(String(params.endpoint));
+        return HttpResponse.json([]);
+      }),
+    );
+    return requests;
+  };
+  /** The client's virtual clock. SIGTERM arrives during the first wait; a wait whose signal has aborted rejects. */
+  const clockWith = (sigterm: AbortController) => {
+    let t = 0;
+    const waits: number[] = [];
+    const clock: Clock = {
+      now: () => t,
+      sleep: async (ms, signal) => {
+        waits.push(ms);
+        sigterm.abort();
+        signal?.throwIfAborted();
+        t += ms;
+      },
+    };
+    return { clock, waits };
+  };
+  const writes = (queries: string[]) => queries.filter((q) => q === 'begin' || /^(insert|update|delete) /.test(q));
+
+  it("a SIGTERM during the third endpoint's limiter wait: no further request, no write, no state change; the job resolves", async () => {
+    const sigterm = new AbortController();
+    const stopped = () => sigterm.signal.aborted;
+    const { clock, waits } = clockWith(sigterm);
+    const requests = served();
+    const { db, queries } = fakeDb(answering(() => [KEY]));
+    const log = { info: vi.fn(), error: vi.fn() };
+    const deps: Deps = {
+      db,
+      client: createClient({ clock }),
+      now: () => end,
+      log,
+      beat: () => {},
+      stop: sigterm.signal,
+    };
+    const rain = vi.fn(async () => {});
+    await minuteWork({ sync: async () => {}, tick: () => tick(deps, stopped), rain }, log, stopped);
+    expect(requests).toEqual(['drivers', 'laps']);
+    expect(waits).toEqual([1_000]); // stints, the third, waits for the 2-in-1-s window
+    // The tick's due marking ran before the first request; after it nothing was written.
+    expect(writes(queries)).toEqual([expect.stringMatching(/^update "session" set "ingest_state" = \$1 where /)]);
+    expect(log.error).not.toHaveBeenCalled(); // no session line, no `tick failed`
+    expect(rain.mock.calls).toEqual([[stopped]]); // it checks the flag before its request
+  });
+
+  it('startIngest: SIGTERM aborts the OpenF1 call in flight, and the daemon resolves with no `tick failed`', async () => {
+    const terms = process.listenerCount('SIGTERM');
+    const { db } = fakeDb();
+    // Each call waits until its stop aborts, as the limiter's wait after a 429 would.
+    const seen: (AbortSignal | undefined)[] = [];
+    const client = {
+      get: (_endpoint: string, _query: unknown, stop?: AbortSignal) => {
+        seen.push(stop);
+        return new Promise((_resolve, reject) =>
+          stop?.addEventListener('abort', () => reject(stop.reason), { once: true }),
+        );
+      },
+    } as unknown as ReturnType<typeof createClient>;
+    const log = { info: vi.fn(), error: vi.fn() };
+    const daemon = startIngest({ db, client, now: () => end, log, beat: () => {} });
+    await vi.waitFor(() => expect(seen).toHaveLength(1)); // the startup sync's first request
+    expect(seen[0]?.aborted).toBe(false);
+    process.emit('SIGTERM', 'SIGTERM'); // the listener only: no real signal reaches the worker
+    await daemon;
+    expect(seen).toHaveLength(1);
+    expect(seen[0]?.aborted).toBe(true);
+    expect(log.info.mock.calls.map((c) => c[1])).toContain('stopping');
+    expect(log.error).not.toHaveBeenCalled();
+    expect(process.listenerCount('SIGTERM')).toBe(terms);
+  });
+
+  it("a refetch job is not cut short by the daemon's stop rule: its deps carry no stop", async () => {
+    const sigterm = new AbortController();
+    const { clock, waits } = clockWith(sigterm);
+    const requests = served();
+    const { db, queries } = fakeDb(answering(() => []));
+    const log = { info: vi.fn(), error: vi.fn() };
+    // As main.ts builds the jobs' deps: no `stop`.
+    const deps: Deps = { db, client: createClient({ clock }), now: () => end, log, beat: () => {} };
+    expect(await refetch(deps, [KEY])).toBe(true);
+    expect(sigterm.signal.aborted).toBe(true); // raised during the third endpoint's wait, as above
+    expect(waits).toEqual([1_000, 1_000, 1_000]);
+    expect(requests).toEqual([...SESSION_ENDPOINTS]);
+    expect(queries.slice(-1)).toEqual(['commit']);
+    expect(log.error).not.toHaveBeenCalled();
+  });
+
+  it('a tick with three due sessions and a clock that advances 40 s per session processes two; the rain step runs before the third', async () => {
+    expect(TICK_SLICE_MS).toBe(60_000);
+    let t = end.getTime();
+    const order: (number | string)[] = [];
+    const due = [3, 2, 1];
+    const { db } = fakeDb(
+      answering(
+        () => due,
+        (key) => {
+          order.push(key);
+          due.splice(due.indexOf(key), 1); // processed: no longer due
+          t += 40_000;
+        },
+      ),
+    );
+    const client = {
+      get: async () => ({ ok: true, value: { status: 200, body: [] } }),
+    } as unknown as ReturnType<typeof createClient>;
+    const log = { info: vi.fn(), error: vi.fn() };
+    const deps: Deps = { db, client, now: () => new Date(t), log, beat: () => {} };
+    const job = {
+      sync: async () => {},
+      tick: async () => void order.push(`tick ${await tick(deps)}`),
+      rain: async () => void order.push('rain'),
+    };
+    const work = busyGuard(() => minuteWork(job, log, () => false));
+    const first = work.run();
+    void work.run(); // the minute that fires during the long tick
+    await first;
+    expect(order).toEqual([3, 2, 'tick 2', 'rain', 1, 'tick 1', 'rain']);
+    expect(log.error).not.toHaveBeenCalled();
   });
 });

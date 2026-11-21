@@ -4,7 +4,8 @@
 # /etc/f1 needed: the secret files and f1.env are never read by `config`) and checks the
 # result with one jq program: every check is named, and a failure prints the names. Besides the
 # container hardening it holds the log rotation (logging), the exact restart map, the services
-# with a stop_grace_period (only db and live) and security_opt being exactly no-new-privileges (#106).
+# with a stop_grace_period (db and live 60 s, ingest 30 s since #218) and security_opt being exactly
+# no-new-privileges (#106).
 # Then the negative cases: the same program over a broken copy must fail, naming the check.
 # Then the host files (#104): the GIDs in f1-lib.sh's F1_SECRETS match the program's $gid map; no
 # f1 unit runs as another user or adds a group (User=, Group=, DynamicUser=, SupplementaryGroups=);
@@ -46,9 +47,10 @@ program='
     api: "unless-stopped", caddy: "unless-stopped", cloudflared: "unless-stopped", db: "unless-stopped",
     ingest: "unless-stopped", live: "unless-stopped",
     archive: "no", fill: "no", jolpica: "no", migrate: "no", telemetry: "no"}),
-  # Only db and live need time to stop cleanly. Compose v5.5.1 renders 1m0s; another version may say 60s.
-  stop_grace_period: (([$s[] | select(.value.stop_grace_period != null) | {(.key): .value.stop_grace_period}] | add // {}) as $g
-    | (($g | keys) == ["db", "live"] and all($g[]; . == "1m0s" or . == "60s"))),
+  # Exactly these: db and live need time to stop cleanly, ingest stops at once and has 30 s as a second layer (#218).
+  # Compose v5.5.1 renders 1m0s; another version may say 60s.
+  stop_grace_period: (([$s[] | select(.value.stop_grace_period != null) | {(.key): .value.stop_grace_period}] | add // {})
+    | map_values(if . == "1m0s" then "60s" else . end) == {db: "60s", ingest: "30s", live: "60s"}),
   user_62532: all($s[]; .value.user == "62532:62532"),
   limits: all($s[]; .value.mem_limit != null and .value.cpus != null and .value.pids_limit != null),
   # `config` leaves out a 0, so soft: 0, hard: 0 renders as core: {}. e2e sees the 0s on the running containers.
@@ -157,6 +159,8 @@ negative "ingest with restart no" restart '.services.ingest.restart = "no"'
 negative "migrate with restart unless-stopped" restart '.services.migrate.restart = "unless-stopped"'
 negative "live without stop_grace_period" stop_grace_period 'del(.services.live.stop_grace_period)'
 negative "caddy with stop_grace_period 5s" stop_grace_period '.services.caddy.stop_grace_period = "5s"'
+negative "ingest without stop_grace_period" stop_grace_period 'del(.services.ingest.stop_grace_period)'
+negative "ingest with stop_grace_period 10s" stop_grace_period '.services.ingest.stop_grace_period = "10s"'
 negative "db with seccomp=unconfined" security_opt '.services.db.security_opt += ["seccomp=unconfined"]'
 
 # ------------------------------------------------------------------ the host (#104)

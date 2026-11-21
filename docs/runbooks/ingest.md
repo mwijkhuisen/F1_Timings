@@ -14,6 +14,48 @@ sudo docker compose -p f1 -f /etc/f1/compose.yaml --env-file /srv/f1/state/curre
 - Logs are one JSON line per session and a `*_done` line: counts and fixed codes, never a value or a URL.
 - Exit codes for every role: 0 ok, 1 a failure or a refusal (the code is in the log), 64 a usage error, 78 without the database secret.
 
+## Stopping the daemon [owner]
+
+`compose stop ingest`, a restart and every deploy are safe at any time, during a drain too (#218, A§8). SIGTERM ends
+the OpenF1 wait or request in flight at once, the daemon logs `stopping` and exits 0 within seconds
+(`stop_grace_period: 30s` is the second layer; a rain request or healthchecks ping in flight still finishes, A§8). The session in flight writes nothing and stays `due`: the next start
+fetches it again from the start (up to 10 requests). Its rows stay as they were, since the one transaction per session
+had not begun.
+
+A long queue (a re-queue migration, a catch-up after downtime) runs in slices of about a minute, so the rain step and
+the weekend forecast keep their minute while it drains.
+
+## The stop drill (#218) [owner] [box]
+
+Once, after the release that carries #218, outside a live window (the daemon waits in one, so there would be no drain
+to stop):
+
+1. Make a short drain: the 20 newest `final` sessions, fetched again with `next_fetch_at = now()` (so no
+   `due_backlog` ping). That is about 150 requests and 6 min, and the rows come back as they are:
+
+   ```bash
+   sudo docker compose -p f1 -f /etc/f1/compose.yaml --env-file /srv/f1/state/current.env exec -T db \
+     psql -U postgres -d f1 -c "UPDATE session SET ingest_state = 'fetched', next_fetch_at = now() WHERE session_key IN (SELECT session_key FROM session WHERE source = 'openf1' AND ingest_state = 'final' AND NOT is_cancelled ORDER BY date_end DESC LIMIT 20)"
+   ```
+
+2. Once the log shows `session` lines (within a minute), stop it mid-drain. Expect under 10 s and exit code 0, and a
+   last line `stopping`, with no `tick failed`:
+
+   ```bash
+   sudo docker logs --since 2m f1-ingest-1 2>&1 | grep -c '"msg":"session"'
+   time sudo docker stop f1-ingest-1
+   sudo docker inspect -f '{{.State.ExitCode}}' f1-ingest-1
+   sudo docker logs --since 1m f1-ingest-1 2>&1 | tail -3
+   ```
+
+3. Start it again and let the drain finish: no `due` left after about 6 min:
+
+   ```bash
+   sudo docker compose -p f1 -f /etc/f1/compose.yaml --env-file /srv/f1/state/current.env start ingest
+   sudo docker compose -p f1 -f /etc/f1/compose.yaml --env-file /srv/f1/state/current.env exec -T db \
+     psql -U postgres -d f1 -c "SELECT ingest_state, count(*) FROM session WHERE source = 'openf1' AND NOT is_cancelled GROUP BY 1 ORDER BY 1"
+   ```
+
 ## Backfill [owner]
 
 `backfill` syncs the schedule and fetches every OpenF1 session that is not `final` (A§8). It needs the daemon stopped, because each process has its own rate limiter. It takes the ingest lock and refuses without it.
