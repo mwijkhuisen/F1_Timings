@@ -32,7 +32,7 @@ describe('the season page', () => {
   });
 
   it('heads the page with the year and this weekend, its round of the season and country', () => {
-    expect(html).toContain('<h1 tabindex="-1">2026</h1>');
+    expect(html).toContain('<h1 tabindex="-1">2026</h1><p><a href="/2026/standings">Standings</a></p>'); // #201
     expect(html).toContain('<section class="weekend" aria-label="This weekend">');
     expect(html).toContain('<p class="eyebrow">This weekend · Round 2 of 3 · BRA</p><h2>São Paulo Grand Prix</h2>');
     expect(html).toContain('Interlagos · Amsterdam time, track time beside it');
@@ -46,8 +46,9 @@ describe('the season page', () => {
     expect(html).toContain('<span class="state live">live now · <a href="/live">Follow</a></span>');
     expect(html).toContain('<span class="state next">next</span>');
     expect(html).toContain('<span class="state scheduled">scheduled</span>');
-    // Standings show in a race's Result tab only (A§13 spoiler rule).
-    expect(html).not.toContain('Standings');
+    // Standings show in a race's Result tab and on the standings page only (A§13 spoiler rule); here the one
+    // "Standings" is the link's name (#201).
+    expect(html.replace('<a href="/2026/standings">Standings</a>', '')).not.toContain('Standings');
     // The open recording is followed live, never offered as a replay.
     expect(html).not.toContain('/replay/42');
   });

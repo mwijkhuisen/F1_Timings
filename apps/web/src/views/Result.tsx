@@ -197,17 +197,18 @@ function StandingsTable({
 /**
  * The standings after a race or sprint (P8, A§13): the drivers' and constructors' tables, the grid's columns 2 and 3
  * beside the classification, then a full-width foot with the points chart (the tables are its text alternative)
- * (#202). A fragment, so all of them are items of the tab's one grid. Nothing when the answer has no rows.
+ * (#202). A fragment, so all of them are items of the tab's one grid. Nothing when the answer has no rows. `after`
+ * names the session in the headings ("Drivers after this race"); the standings page (#201) leaves it out.
  */
-export function StandingsSection({ standings, sprint }: { standings: Standings; sprint: boolean }) {
+export function StandingsSection({ standings, after }: { standings: Standings; after?: 'race' | 'sprint' }) {
   const [who, setWho] = useState<Who>('drivers');
   const option = useCallback((t: ChartTokens) => standingsChartOption(standings, who, t), [standings, who]);
   if (standings.drivers.length === 0 && standings.teams.length === 0) return null;
-  const after = `after this ${sprint ? 'sprint' : 'race'}`;
+  const tail = after ? ` after this ${after}` : '';
   return (
     <>
       <section>
-        <h2>Drivers {after}</h2>
+        <h2>Drivers{tail}</h2>
         <StandingsTable
           label="Drivers' standings"
           head="Driver"
@@ -222,7 +223,7 @@ export function StandingsSection({ standings, sprint }: { standings: Standings; 
         />
       </section>
       <section>
-        <h2>Constructors {after}</h2>
+        <h2>Constructors{tail}</h2>
         <StandingsTable
           label="Constructors' standings"
           head="Team"
@@ -230,8 +231,12 @@ export function StandingsSection({ standings, sprint }: { standings: Standings; 
         />
       </section>
       <div className="result-foot">
+        {/* #201 E2: also true for a season's finale, which #214 settles on 1 January. */}
         {standings.provisional && (
-          <p className="muted">Provisional: from this session's classification until OpenF1's next standings.</p>
+          <p className="muted">
+            Provisional: from this session's classification, until the next race or sprint's standings (after a season's
+            last race, until 31 December).
+          </p>
         )}
         <div className="panel-title">
           <h2>Points progression</h2>
@@ -257,7 +262,8 @@ export function StandingsSection({ standings, sprint }: { standings: Standings; 
  */
 function StandingsLoader({ detail }: { detail: SessionDetail }) {
   const q = useStandings(detail.session.session_key);
-  if (q.data) return <StandingsSection standings={q.data} sprint={detail.session.name === 'Sprint'} />;
+  if (q.data)
+    return <StandingsSection standings={q.data} after={detail.session.name === 'Sprint' ? 'sprint' : 'race'} />;
   return q.isError ? <p className="muted">Standings did not load.</p> : null;
 }
 

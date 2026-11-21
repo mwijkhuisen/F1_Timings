@@ -125,15 +125,17 @@ describe('the page links', () => {
     ['/replay', { id: 'replays' }, '/replay'],
     ['/replay/41', { id: 'replay', recording: 41 }, null],
     ['/status', { id: 'status' }, '/status'],
+    ['/2026/standings', { id: 'standings', year: 2026 }, '/2026/standings'],
     ['not found', null, null],
   ];
 
-  it.each(routes)('%s: Live, Replays and Status, the current one marked', (_name, route, current) => {
+  it.each(routes)('%s: Live, Replays, Status and Standings, the current one marked', (_name, route, current) => {
     const html = links(route);
     for (const [to, text] of [
       ['/live', 'Live'],
       ['/replay', 'Replays'],
       ['/status', 'Status'],
+      ['/2026/standings', 'Standings'],
     ])
       expect(html).toContain(`${to === current ? 'aria-current="page" ' : ''}href="${to}">${text}</a>`);
     expect(html.match(/aria-current/g)?.length ?? 0).toBe(current ? 1 : 0);
@@ -146,9 +148,42 @@ describe('the page links', () => {
     ] as const)
       expect(links({ id: 'live' }, theme)).toMatch(
         new RegExp(
-          `Status</a></nav><button type="button" class="theme" aria-pressed="${pressed}" aria-label="Dark theme"`,
+          `Standings</a></nav><button type="button" class="theme" aria-pressed="${pressed}" aria-label="Dark theme"`,
         ),
       );
+  });
+
+  it("links Standings to the route's year, else the player's, else the newest season with a session (#201, E1)", () => {
+    const to = (route: Route | null, more: Partial<Parameters<typeof HeaderView>[0]> = {}) => {
+      const html = header(route, 'dark', more);
+      return tag(html.slice(html.indexOf('aria-label="Pages"')), '/standings"');
+    };
+    expect(to({ id: 'year', year: 2025 })).toContain('href="/2025/standings"');
+    expect(to({ id: 'standings', year: 2024 })).toContain('href="/2024/standings"');
+    expect(to({ id: 'session', year: 2025, meeting: 1, session: 2, view: 'result' })).toContain(
+      'href="/2025/standings"',
+    );
+    expect(to({ id: 'live' }, { player: { year: 2025, session: 9 } })).toContain('href="/2025/standings"');
+    // seasons lists 2027 without a session first: the newest with one is 2026.
+    expect(to({ id: 'status' })).toContain('href="/2026/standings"');
+    expect(to(null, { seasons: undefined })).toContain(`href="/${new Date().getUTCFullYear()}/standings"`);
+  });
+
+  it('wraps the links, right aligned, rather than scroll sideways at 360 px (#201 review)', () => {
+    // Live and Status with their pills, Replays and Standings: 371 px in Edge, more than a 360 px phone's 328.
+    const css = readFileSync(fileURLToPath(new URL('../src/styles.css', import.meta.url)), 'utf8');
+    expect(css).toMatch(/\nheader \.links \{[^}]*\n {2}flex-wrap: wrap;\n {2}justify-content: flex-end;\n\}/);
+    expect(css).toMatch(/\nheader \{\n {2}flex-wrap: wrap;/);
+  });
+
+  it('keeps the standings view in the year menu on the standings route, and only there', () => {
+    const html = header({ id: 'standings', year: 2026 });
+    expect(html).toContain('<a aria-current="page" href="/2026/standings">2026</a>');
+    expect(html).toContain('<a href="/2025/standings">2025</a>');
+    expect(html).not.toContain('href="/2025"');
+    expect(html).not.toContain('menu-meeting');
+    expect(html).not.toContain('class="step"');
+    expect(header({ id: 'year', year: 2026 })).toContain('<a href="/2025">2025</a>');
   });
 });
 

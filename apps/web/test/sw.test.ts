@@ -70,6 +70,16 @@ describe("a final session's answers", () => {
     expect(await stored()).toEqual([]);
   });
 
+  it("keeps #214's two answers: a settled season finale's standings and a gridless final session's rain", async () => {
+    const bodies: Record<string, string> = {
+      [`${ORIGIN}${SESSION}/standings?v=1`]: '{"drivers":[],"teams":[],"rounds":[],"provisional":false}',
+      [`${ORIGIN}${SESSION}/rain?v=1`]: '{"grid":null,"frames":[]}',
+    };
+    const { d, stored } = setup((url) => answer(bodies[url] ?? '', FINAL));
+    for (const url of Object.keys(bodies)) await respond(req(url.slice(ORIGIN.length)), d);
+    expect(await stored()).toEqual(Object.keys(bodies));
+  });
+
   it('offline, answers with the kept copy, else with a network error', async () => {
     const online = setup();
     await respond(req(`${SESSION}/laps?v=1`), online.d);

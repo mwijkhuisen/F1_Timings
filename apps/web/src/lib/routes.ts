@@ -24,6 +24,7 @@ export const switchView = (view: View): View => (view === 'result' ? 'laps' : vi
 export type Route =
   | { id: 'latest' }
   | { id: 'year'; year: number }
+  | { id: 'standings'; year: number }
   /** `view` is null for `/:year/:meeting/:session`, which redirects to `laps`. */
   | { id: 'session'; year: number; meeting: number; session: number; view: View | null }
   | { id: 'status' }
@@ -59,6 +60,7 @@ export function routeOf(pathname: string): Route | null {
   if (!YEAR.test(a)) return null;
   const year = Number(a);
   if (b === undefined) return { id: 'year', year };
+  if (b === 'standings') return c === undefined ? { id: 'standings', year } : null; // #201, before the keys
   const meeting = keyOf(b);
   const session = c === undefined ? null : keyOf(c);
   if (meeting === null || session === null) return null;
@@ -79,6 +81,8 @@ export function titleOf(route: Route | null, names?: Names): string {
         return null;
       case 'year':
         return `${route.year}`;
+      case 'standings':
+        return `Standings ${route.year}`;
       case 'session':
         return n ? `${n} · ${VIEW_LABEL[route.view ?? 'laps']}` : `${route.year}`;
       case 'status':

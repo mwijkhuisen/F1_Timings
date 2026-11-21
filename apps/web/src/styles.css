@@ -1763,9 +1763,13 @@ header {
   font-size: 11px;
 }
 
+/* Four links and both pills (Live, warning) are 371 px in Edge (#201 review): a 360 px phone wraps them, right
+   aligned, rather than scroll sideways. */
 header .links {
   margin-left: auto;
   gap: 2px;
+  flex-wrap: wrap;
+  justify-content: flex-end;
 }
 
 /* The moon (lib/theme.ts): outlined on the light theme, filled when the dark one is on (aria-pressed). */
@@ -2803,7 +2807,8 @@ dl.duel > div {
 }
 
 /* Inline links in a sentence are exempt from the 44 px target (WCAG 2.5.8). */
-.rainsrc a {
+.rainsrc a,
+.standings-after a {
   display: inline;
   min-width: 0;
   min-height: 0;
@@ -2957,6 +2962,21 @@ section.rainmap .raintime input[type="range"] {
 @media (min-width: 1400px) {
   .result-grid {
     grid-template-columns: repeat(3, max-content) 1fr;
+  }
+}
+
+/* The standings page (#201, E3): the drivers' and the constructors' tables side by side from B2, else one column, as
+   .result-grid; StandingsSection's foot (the chart) spans every track below them. B2 = 1000 px is measured as B
+   (#202): the layout test's model of the two 2026 tables (× 1.05), one gap, the gutter and a scroll bar need 985. */
+.standings-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  column-gap: 24px;
+}
+
+@media (min-width: 1000px) {
+  .standings-grid {
+    grid-template-columns: repeat(2, max-content) 1fr;
   }
 }
 

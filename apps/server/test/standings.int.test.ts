@@ -24,6 +24,8 @@ const R5 = 105; // no championship rows to begin with: R4's standing is a fallba
 const OLD = 200; // 2022
 const R300 = 300; // 2024, two mismatches
 const R301 = 301;
+const RUNNING = 400; // the running season's only race, so its finale until 1 January (#214)
+const THIS_YEAR = new Date().getUTCFullYear();
 
 const FINAL = 'private, max-age=86400';
 const NO_STORE = 'no-store';
@@ -73,6 +75,7 @@ describe('standings route and /status (f1_api login, Access JWT)', { timeout: 12
         meeting(4, 2022, 'Old Grand Prix'),
         meeting(5, 2024, 'Delta Grand Prix'),
         meeting(6, 2024, 'Epsilon Grand Prix'),
+        meeting(7, THIS_YEAR, 'Zeta Grand Prix'),
       ])
       .execute();
     const session = (session_key: number, meeting_key: number, type: string, name: string, day: string) => ({
@@ -97,10 +100,11 @@ describe('standings route and /status (f1_api login, Access JWT)', { timeout: 12
         session(OLD, 4, 'Race', 'Race', '2022-03-20'),
         session(R300, 5, 'Race', 'Race', '2024-03-10'),
         session(R301, 6, 'Race', 'Race', '2024-03-24'),
+        session(RUNNING, 7, 'Race', 'Race', `${THIS_YEAR}-01-01`),
       ])
       .execute();
     // Two people in every session of the seasons, Ann in the Red car and Bob in the Blue one.
-    const all = [QUALI, R1, SPRINT, R3, R4, R5, OLD, R300, R301];
+    const all = [QUALI, R1, SPRINT, R3, R4, R5, OLD, R300, R301, RUNNING];
     await admin
       .insertInto('driver')
       .values(
@@ -140,6 +144,7 @@ describe('standings route and /status (f1_api login, Access JWT)', { timeout: 12
         ...result(R3, [1, 25], [2, 18]),
         ...result(R300, [1, 25], [2, 18]),
         ...result(R301, [1, 25], [2, 18]),
+        ...result(RUNNING, [1, 25], [2, 18]),
       ])
       .execute();
     // points_start per session (Ann, Bob). 2025: R2's Ann start is 1 more than R1's points give, R4's Bob start 1 more
@@ -276,6 +281,26 @@ describe('standings route and /status (f1_api login, Access JWT)', { timeout: 12
     expect((await parsed(R3)).cache).toBe(NO_STORE);
     await setState(R3, 'final');
     expect((await parsed(R3)).cache).toBe(FINAL);
+  });
+
+  it('a past season finale is settled and cached from 1 January; the running season finale stays provisional (#214)', async () => {
+    // 2025's last counted session R5 has no next session: the fallback, settled since 1 January 2026.
+    const past = await parsed(R5, `?v=${SHA}`);
+    expect(past.body.provisional).toBe(false);
+    expect(past.cache).toBe(FINAL);
+    expect((await parsed(R5)).cache).toBe(FINAL);
+    expect((await parsed(R5, `?v=${OTHER}`)).cache).toBe(NO_STORE);
+    expect(past.body.drivers.map((d) => [d.full_name, d.points])).toEqual([
+      [ANN, 58],
+      [BOB, 45],
+    ]); // R4's standing (R5's own rows are absent) plus nothing: only the flag changed
+    const running = await parsed(RUNNING, `?v=${SHA}`);
+    expect(running.body.provisional).toBe(true);
+    expect(running.body.drivers.map((d) => [d.full_name, d.points])).toEqual([
+      [ANN, 25],
+      [BOB, 18],
+    ]);
+    expect(running.cache).toBe(NO_STORE);
   });
 
   it("a standing without the next session's rows is the previous standing plus its own points, and provisional", async () => {

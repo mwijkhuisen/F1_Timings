@@ -123,6 +123,10 @@ export function SeasonView({
   return (
     <>
       <h1 tabIndex={-1}>{year}</h1>
+      {/* #201 E1: a name only, so the page stays spoiler-safe. */}
+      <p>
+        <Link to={`/${year}/standings`}>Standings</Link>
+      </p>
       {weekend && (
         <section className="weekend" aria-label="This weekend">
           <div>

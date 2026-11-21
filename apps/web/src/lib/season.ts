@@ -76,6 +76,15 @@ export function thisWeekend(season: Season, now: number, live: Live | null): Mee
 export const started = (m: Meeting, now: number): boolean =>
   m.sessions.some((s) => !s.is_cancelled && Date.parse(s.date_start) <= now);
 
+/**
+ * The standings page's session (#201, A§13): the latest open Race-type session (a race or a sprint) whose data is
+ * fetched or final, by start, then key; null without one.
+ */
+export const latestCounted = (season: Season): Slot | null =>
+  slots(season).findLast(
+    ({ session: s }) => s.type === 'Race' && (s.ingest_state === 'fetched' || s.ingest_state === 'final'),
+  ) ?? null;
+
 /** The first session to start after `now` that is not cancelled, or null. */
 export const nextSession = (season: Season, now: number): Slot | null =>
   slots(season).find((s) => Date.parse(s.session.date_start) > now) ?? null;

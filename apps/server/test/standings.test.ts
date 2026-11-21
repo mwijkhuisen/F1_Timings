@@ -46,6 +46,7 @@ const season = (over: Partial<StandingsSeason>): StandingsSeason => ({
   championship_teams: [],
   ...over,
 });
+const NOW = Date.UTC(2030, 5, 1); // mid-season: no finale is settled yet (#214)
 const points = (s: Standings) => Object.fromEntries(s.drivers.map((d) => [d.full_name, d.points]));
 const places = (s: Standings) => s.drivers.map((d) => [d.position, d.full_name]);
 
@@ -63,7 +64,7 @@ const healed = season({
 
 describe('standings (A§9)', () => {
   it('heals a stale session_result with the next session points_start', () => {
-    const s = standings(healed, 1);
+    const s = standings(healed, 1, NOW);
     expect(Standings.parse(s)).toEqual(s);
     expect(points(s)).toEqual({ Ana: 25, Ben: 18 });
     expect(s.drivers[0]).toMatchObject({ full_name: 'Ana', position: 1, change: null, session_points: 25 });
@@ -72,13 +73,15 @@ describe('standings (A§9)', () => {
 
   it('falls back to the sum without the next session rows, provisional', () => {
     // Race 3 exists but has no rows yet: race 2's standing is race 1's plus race 2's points.
-    const s = standings(healed, 2);
+    const s = standings(healed, 2, NOW);
     expect(points(s)).toEqual({ Ana: 40, Ben: 43 });
     expect(s.drivers.map((d) => [d.full_name, d.position, d.change, d.session_points])).toEqual([
       ['Ben', 1, 1, 25],
       ['Ana', 2, -1, 15],
     ]);
     expect(s.provisional).toBe(true);
+    // A mid-season fallback (race 3 has no rows yet) is never settled by the date (#214).
+    expect(standings(healed, 2, Date.UTC(2035, 0, 1)).provisional).toBe(true);
     expect(s.rounds.map((r) => [r.session_key, r.drivers])).toEqual([
       [
         1,
@@ -97,6 +100,15 @@ describe('standings (A§9)', () => {
     ]);
   });
 
+  it('settles the season finale from 1 January (UTC) of the next year, and nothing else (#214)', () => {
+    // Race 3 is the last counted session: no next session will ever settle its fallback.
+    const running = standings(healed, 3, NOW);
+    expect(running.provisional).toBe(true);
+    expect(standings(healed, 3, Date.UTC(2030, 11, 31, 23, 59, 59, 999))).toEqual(running);
+    const settled = standings(healed, 3, Date.UTC(2031, 0, 1));
+    expect(settled).toEqual({ ...running, provisional: false });
+  });
+
   it('carries a person absent from the next session rows', () => {
     // Cy scores 2 in race 1 and leaves: the endpoint drops him from race 2 and 3.
     const s = season({
@@ -105,8 +117,8 @@ describe('standings (A§9)', () => {
       results: [...healed.results, result(1, 3, 9, 2)],
       championship_drivers: [...healed.championship_drivers, start(1, 3, 0), start(3, 1, 43), start(3, 2, 43)],
     });
-    expect(points(standings(s, 1))).toEqual({ Ana: 25, Ben: 18, Cy: 2 });
-    expect(points(standings(s, 2))).toEqual({ Ana: 43, Ben: 43, Cy: 2 });
+    expect(points(standings(s, 1, NOW))).toEqual({ Ana: 25, Ben: 18, Cy: 2 });
+    expect(points(standings(s, 2, NOW))).toEqual({ Ana: 43, Ben: 43, Cy: 2 });
   });
 
   it('maps a number through the season driver rows, not the session alone', () => {
@@ -118,7 +130,7 @@ describe('standings (A§9)', () => {
       results: [...healed.results, result(1, 7, 3, 15)],
       championship_drivers: [...healed.championship_drivers, start(2, 7, 15)],
     });
-    expect(points(standings(s, 1))).toEqual({ Ana: 25, Ben: 18, Dee: 15 });
+    expect(points(standings(s, 1, NOW))).toEqual({ Ana: 25, Ben: 18, Dee: 15 });
   });
 
   it('joins one person with two numbers', () => {
@@ -129,14 +141,14 @@ describe('standings (A§9)', () => {
       results: [result(1, 38, 7, 6), result(2, 2, 1, 25), result(3, 50, 10, 1)],
       championship_drivers: [start(2, 2, 0), start(3, 2, 25), start(3, 50, 6), start(4, 50, 7)],
     });
-    const after3 = standings(s, 3);
+    const after3 = standings(s, 3, NOW);
     expect(points(after3)).toEqual({ Ben: 25, Eli: 7 });
     expect(after3.drivers.find((d) => d.full_name === 'Eli')).toMatchObject({
       team_names: ['Beta', 'Alpha'],
       team_colour: '0000BB',
       session_points: 1,
     });
-    expect(points(standings(s, 2))).toEqual({ Ben: 25, Eli: 6 });
+    expect(points(standings(s, 2, NOW))).toEqual({ Ben: 25, Eli: 6 });
   });
 
   it('sums two championship rows of one person in a session', () => {
@@ -147,7 +159,7 @@ describe('standings (A§9)', () => {
       results: [result(1, 38, 7, 6)],
       championship_drivers: [start(2, 38, 4), start(2, 50, 2)],
     });
-    expect(points(standings(s, 1))).toEqual({ Eli: 6 });
+    expect(points(standings(s, 1, NOW))).toEqual({ Eli: 6 });
   });
 
   it('credits team points to the session team', () => {
@@ -157,7 +169,7 @@ describe('standings (A§9)', () => {
       drivers: [driver(1, 1, 'Fay'), driver(1, 2, 'Gus', 'Beta'), driver(2, 1, 'Fay', 'Beta'), driver(2, 2, 'Gus')],
       results: [result(1, 1, 1, 25), result(1, 2, 2, 18), result(2, 1, 1, 8), result(2, 2, 2, 7)],
     });
-    const after = standings(s, 2);
+    const after = standings(s, 2, NOW);
     expect(after.teams.map((t) => [t.position, t.team_name, t.points, t.session_points, t.change])).toEqual([
       [1, 'Alpha', 32, 7, 0],
       [2, 'Beta', 26, 8, 0],
@@ -176,7 +188,7 @@ describe('standings (A§9)', () => {
       drivers: [1, 2].flatMap((k) => [driver(k, 1, 'Ivo'), driver(k, 2, 'Hal', 'Beta')]),
       results: [result(1, 2, 2, 18), result(1, 1, 3, 15), result(2, 1, 1, 8), result(2, 2, 4, 5)],
     });
-    expect(places(standings(s, 2))).toEqual([
+    expect(places(standings(s, 2, NOW))).toEqual([
       [1, 'Hal'],
       [2, 'Ivo'],
     ]);
@@ -189,7 +201,7 @@ describe('standings (A§9)', () => {
       drivers: [driver(1, 1, 'Jo'), driver(1, 2, 'Zoe'), driver(1, 3, 'Abe', 'Beta'), driver(1, 4, 'Kit', 'Beta')],
       results: [result(1, 1, 1, 25), result(1, 2, null, 0), result(1, 3, null, 0), result(1, 4, 12, null)],
     });
-    expect(places(standings(s, 1))).toEqual([
+    expect(places(standings(s, 1, NOW))).toEqual([
       [1, 'Jo'],
       [2, 'Kit'],
       [3, 'Abe'],
@@ -211,15 +223,15 @@ describe('standings (A§9)', () => {
       // Race 1's standing comes from race 5, the next counted session, never the cancelled race 2.
       championship_drivers: [start(2, 1, 99), start(3, 1, 99), start(4, 1, 99), start(5, 1, 20), start(5, 2, 5)],
     });
-    expect(points(standings(s, 1))).toEqual({ Ana: 20, Ben: 5 });
-    expect(standings(s, 5).rounds.map((r) => r.session_key)).toEqual([1, 5]);
+    expect(points(standings(s, 1, NOW))).toEqual({ Ana: 20, Ben: 5 });
+    expect(standings(s, 5, NOW).rounds.map((r) => r.session_key)).toEqual([1, 5]);
     for (const key of [2, 3, 4, 6])
-      expect(standings(s, key)).toEqual({ drivers: [], teams: [], rounds: [], provisional: false });
-    expect(standings({ ...healed, year: 2022 }, 1).drivers).toEqual([]);
+      expect(standings(s, key, NOW)).toEqual({ drivers: [], teams: [], rounds: [], provisional: false });
+    expect(standings({ ...healed, year: 2022 }, 1, NOW).drivers).toEqual([]);
   });
 
   it('never counts a later session, nor lists a person who first appears in it', () => {
-    const before = standings(healed, 1);
+    const before = standings(healed, 1, NOW);
     // Race 2's results, a newcomer in race 2 (with a 0 points_start) and everything about race 3 change nothing.
     const later = season({
       ...healed,
@@ -233,7 +245,7 @@ describe('standings (A§9)', () => {
       championship_drivers: [...healed.championship_drivers, start(2, 9, 0), start(3, 9, 25), start(3, 1, 0)],
       championship_teams: [...healed.championship_teams, { session_key: 3, team_name: 'Gamma', points_start: 25 }],
     });
-    expect(standings(later, 1)).toEqual(before);
+    expect(standings(later, 1, NOW)).toEqual(before);
     expect(before.drivers.map((d) => d.full_name)).toEqual(['Ana', 'Ben']);
   });
 });

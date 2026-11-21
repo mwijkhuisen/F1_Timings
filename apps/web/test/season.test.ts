@@ -1,6 +1,7 @@
 import { Live, Recordings, Season, Seasons } from '@f1/contracts';
 import { describe, expect, it } from 'vitest';
 import {
+  latestCounted,
   type Meeting,
   meetingTarget,
   neighbours,
@@ -369,5 +370,34 @@ describe('fmtCountdown', () => {
     [(77 * 60 + 1) * 60_000, '3 days 5 h'],
   ])('%i ms → %s', (ms, text) => {
     expect(fmtCountdown(ms)).toBe(text);
+  });
+});
+
+describe('latestCounted: the standings page session (#201)', () => {
+  const key = (s: Season) => latestCounted(s)?.session.session_key ?? null;
+  const race = (k: number, day: string, state = 'final', o: S = {}) =>
+    session(k, 'Race', `2026-${day}T13:00:00Z`, { state, ...o });
+
+  it('takes the latest fetched or final Race-type session, skipping cancelled, scheduled, due and failed ones', () => {
+    const s = Season.parse([
+      meeting(1, 'A', [race(1, '03-01'), session(2, 'Qualifying', '2026-03-08T13:00:00Z', { state: 'final' })]),
+      meeting(2, 'B', [race(3, '03-15', 'fetched'), race(4, '03-22', 'final', { cancelled: true })]),
+      meeting(3, 'C', [race(5, '03-29')], true),
+      meeting(4, 'D', [race(6, '04-05', 'scheduled'), race(7, '04-12', 'due'), race(8, '04-19', 'failed')]),
+    ]);
+    expect(key(s)).toBe(3);
+    expect(latestCounted(s)?.meeting.meeting_key).toBe(2);
+  });
+
+  it('a sprint after the last race wins, and a tie goes by session_key', () => {
+    const sprint = session(9, 'Sprint', '2026-05-02T13:00:00Z', { state: 'fetched' });
+    expect(key(Season.parse([meeting(1, 'A', [race(1, '04-26'), sprint])]))).toBe(9);
+    const tie = Season.parse([meeting(1, 'A', [race(12, '05-03'), race(11, '05-03')])]);
+    expect(key(tie)).toBe(12);
+  });
+
+  it('is null without a candidate', () => {
+    expect(key(Season.parse([]))).toBeNull();
+    expect(key(Season.parse([meeting(1, 'A', [race(1, '03-01', 'scheduled')])]))).toBeNull();
   });
 });
