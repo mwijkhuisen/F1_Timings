@@ -6,6 +6,7 @@ import { Header } from './views/Header.tsx';
 import { Live, Replay, Replays } from './views/Live.tsx';
 import { Season, Start } from './views/Season.tsx';
 import { Session } from './views/Session.tsx';
+import { Standings } from './views/Standings.tsx';
 import { Status } from './views/Status.tsx';
 
 function Page({ route }: { route: Route | null }) {
@@ -20,6 +21,8 @@ function Page({ route }: { route: Route | null }) {
       return <Start />;
     case 'year':
       return <Season year={route.year} />;
+    case 'standings':
+      return <Standings year={route.year} />;
     case 'session':
       return route.view === null ? null : <Session key={route.session} session={route.session} view={route.view} />;
     case 'status':

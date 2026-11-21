@@ -9,12 +9,12 @@ import { Cancelled } from '../ui/Cancelled.tsx';
 import { Menu } from '../ui/Menu.tsx';
 import { recorderWarning } from './Status.tsx';
 
-// The header (A§13): the session switcher (‹ year / meeting / session ›), Live · Replays · Status and the moon
-// (the dark theme on or off). It reads /seasons, the route's season, /live (every 30 s) and /status (every 60 s), and
-// on the player routes /recordings, for the player's session in the switcher (#100); never a session itself.
+// The header (A§13): the session switcher (‹ year / meeting / session ›), Live · Replays · Status · Standings and the
+// moon (the dark theme on or off). It reads /seasons, the route's season, /live (every 30 s) and /status (every 60 s),
+// and on the player routes /recordings, for the player's session in the switcher (#100); never a session itself.
 
 const yearOf = (route: Route | null): number | null =>
-  route?.id === 'year' || route?.id === 'session' ? route.year : null;
+  route?.id === 'year' || route?.id === 'standings' || route?.id === 'session' ? route.year : null;
 
 /** The player's session (#100): the replay's recording, or the one `/live` names; null on any other route. */
 export function playerSession(
@@ -85,7 +85,10 @@ export function HeaderView({
         <Menu id="menu-season" label={year ?? 'Season'} name={year === null ? undefined : `Season ${year}`}>
           {seasons?.map((s) => (
             <li key={s.year}>
-              <Link to={`/${s.year}`} aria-current={s.year === year ? 'page' : undefined}>
+              <Link
+                to={route?.id === 'standings' ? `/${s.year}/standings` : `/${s.year}`}
+                aria-current={s.year === year ? 'page' : undefined}
+              >
                 {s.year}
               </Link>
             </li>
@@ -153,6 +156,14 @@ export function HeaderView({
               <span className="pill warn">warning</span>
             </>
           )}
+        </Link>
+        {/* #201 E1: a name only. Else the newest season with a session (as `/`), or before /seasons loads (or when it
+            fails) the current UTC year. */}
+        <Link
+          to={`/${year ?? seasons?.find((s) => s.sessions > 0)?.year ?? new Date().getUTCFullYear()}/standings`}
+          aria-current={page('standings')}
+        >
+          Standings
         </Link>
       </nav>
       <button

@@ -2960,6 +2960,21 @@ section.rainmap .raintime input[type="range"] {
   }
 }
 
+/* The standings page (#201, E3): the drivers' and the constructors' tables side by side from B2, else one column, as
+   .result-grid; StandingsSection's foot (the chart) spans every track below them. B2 = 1000 px is measured as B
+   (#202): the layout test's model of the two 2026 tables (× 1.05), one gap, the gutter and a scroll bar need 985. */
+.standings-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  column-gap: 24px;
+}
+
+@media (min-width: 1000px) {
+  .standings-grid {
+    grid-template-columns: repeat(2, max-content) 1fr;
+  }
+}
+
 .result-foot {
   grid-column: 1 / -1;
 }

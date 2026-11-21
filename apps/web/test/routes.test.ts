@@ -20,6 +20,7 @@ describe('routeOf', () => {
   it.each([
     ['/', { id: 'latest' }],
     ['/2026', { id: 'year', year: 2026 }],
+    ['/2026/standings', { id: 'standings', year: 2026 }],
     ['/status', { id: 'status' }],
     ['/live', { id: 'live' }],
     ['/replay', { id: 'replays' }],
@@ -64,6 +65,9 @@ describe('routeOf', () => {
     '/abcd',
     '/2026/',
     '/2026/1290',
+    '/2026/standings/x',
+    '/2026/standings/',
+    '/2026/Standings',
     '/2026/1290/9965/laps/extra',
     '/2026/1290/9965/weather/extra',
     '/2026/1290/9965/Weather',
@@ -126,6 +130,7 @@ describe('titleOf: the title for every route', () => {
   it.each<[Route | null, string, string]>([
     [{ id: 'latest' }, 'F1 Timings', 'F1 Timings'],
     [{ id: 'year', year: 2026 }, '2026 · F1 Timings', '2026 · F1 Timings'],
+    [{ id: 'standings', year: 2026 }, 'Standings 2026 · F1 Timings', 'Standings 2026 · F1 Timings'],
     [session, '2026 · F1 Timings', 'Mexico City Grand Prix · Race · Laps · F1 Timings'],
     [{ ...session, view: null }, '2026 · F1 Timings', 'Mexico City Grand Prix · Race · Laps · F1 Timings'],
     [{ ...session, view: 'order' }, '2026 · F1 Timings', 'Mexico City Grand Prix · Race · Order · F1 Timings'],

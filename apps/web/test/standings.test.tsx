@@ -118,7 +118,7 @@ const standings = Standings.parse({
 });
 
 const render = (s: Standings, sprint = false) =>
-  renderToStaticMarkup(<StandingsSection standings={s} sprint={sprint} />);
+  renderToStaticMarkup(<StandingsSection standings={s} after={sprint ? 'sprint' : 'race'} />);
 const rows = (html: string, label: string) => {
   const table =
     new RegExp(`<table class="result" aria-label="${label.replace("'", '&#x27;')}">([\\s\\S]*?)</table>`).exec(
@@ -187,10 +187,12 @@ describe('the standings section', () => {
   });
 
   it("says Provisional only when the standing is from the session's own classification", () => {
-    const caption = "Provisional: from this session's classification until OpenF1's next standings.";
+    // #201 E2: true for a finale too, until #214 settles it on 1 January.
+    const caption =
+      "Provisional: from this session's classification, until the next race or sprint's standings (after a season's last race, until 31 December).";
     expect(html).not.toContain('Provisional');
     expect(render({ ...standings, provisional: true })).toContain(
-      `<p class="muted">${caption.replace("'", '&#x27;').replace("'", '&#x27;')}</p>`,
+      `<p class="muted">${caption.replaceAll("'", '&#x27;')}</p>`,
     );
   });
 
@@ -558,15 +560,21 @@ describe('the spoiler rule', () => {
     );
   const using = (re: RegExp) => files.filter((f) => re.test(readFileSync(join(src, f), 'utf8'))).sort();
 
-  it('has the standings query used by views/Result.tsx alone', () => {
-    expect(using(/useStandings/)).toEqual(['lib/api.ts', 'views/Result.tsx']);
+  it('has the standings query used by views/Result.tsx and the standings page (#201) alone', () => {
+    expect(using(/useStandings/)).toEqual(['lib/api.ts', 'views/Result.tsx', 'views/Standings.tsx']);
     expect(using(/standings-chart-option/)).toEqual(['views/Result.tsx']);
     // The headings "Drivers after this race" and the like (#202).
-    expect(using(/after this \$\{sprint/)).toEqual(['views/Result.tsx']);
+    expect(using(/after this \$\{after\}/)).toEqual(['views/Result.tsx']);
+    // The standings page is reached by its route only (App.tsx), never from the season page, `/` or the player.
+    expect(using(/Standings\.tsx'/)).toEqual(['App.tsx']);
   });
 
   it('keeps the Result tab out of the season page, the live pages and the player: only Session.tsx uses it', () => {
-    expect(using(/from '(?:\.\/|\.\.\/views\/)Result\.tsx'/)).toEqual(['views/Session.tsx']);
-    expect(using(/Result\.tsx'/)).toEqual(['views/Session.tsx']);
+    expect(using(/from '(?:\.\/|\.\.\/views\/)Result\.tsx'/)).toEqual(['views/Session.tsx', 'views/Standings.tsx']);
+    expect(using(/Result\.tsx'/)).toEqual(['views/Session.tsx', 'views/Standings.tsx']);
+    // The standings page takes the standings section only, never the classification (#201).
+    expect(readFileSync(join(src, 'views/Standings.tsx'), 'utf8')).toMatch(
+      /^import \{ StandingsSection \} from '\.\/Result\.tsx';$/m,
+    );
   });
 });

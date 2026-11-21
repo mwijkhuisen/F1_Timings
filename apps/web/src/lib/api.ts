@@ -153,8 +153,9 @@ export const usePits = (key: number) =>
   });
 
 /**
- * The championship standings after a race or sprint (P8, A§10): asked by the Result tab of a race-type session only
- * (views/Result.tsx), never by `/`, the season page or the player (spoilers, A§13).
+ * The championship standings after a race or sprint (P8, A§10): asked by the Result tab of a race-type session
+ * (views/Result.tsx) and the standings page (#201, views/Standings.tsx) only, never by `/`, the season page or the
+ * player (spoilers, A§13).
  */
 export const useStandings = (key: number) =>
   useQuery({

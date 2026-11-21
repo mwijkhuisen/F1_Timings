@@ -3,8 +3,11 @@ import { Standings } from '@f1/contracts';
 import { format } from 'echarts/core';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, expect, it } from 'vitest';
+import { latestCounted } from '../src/lib/season.ts';
 import { ResultTable, StandingsSection } from '../src/views/Result.tsx';
+import { StandingsView } from '../src/views/Standings.tsx';
 import { resultFixture, sessionDetail } from './laps.ts';
+import { season } from './season-data.ts';
 
 // The Result tab's tables at 360 and 390 px and the three-column breakpoint (#202). CI has no browser and happy-dom no layout,
 // so this models the browser's auto table layout, as P8's chart test lays out through ECharts' own text metrics. A
@@ -59,27 +62,28 @@ const place = (p: Place) => ({
   points: p.points_current,
   session_points: p.points_current - p.points_start,
 });
+const standingsOf = (file: string) =>
+  Standings.parse({
+    drivers: golden<(Place & { driver_number: number })[]>(`championship_drivers-${file}`).map((p, i) => ({
+      ...place(p),
+      full_name: `Driver ${p.driver_number}`,
+      acronym: `D${p.driver_number}`,
+      // 2026's mid-season swap: one driver shows both teams (11412: "Racing Bulls / Red Bull Racing").
+      team_names: i === 1 ? ['Racing Bulls', 'Red Bull Racing'] : [TEAMS[i % TEAMS.length]],
+    })),
+    teams: golden<(Place & { team_name: string })[]>(`championship_teams-${file}`).map((p) => ({
+      ...place(p),
+      team_name: p.team_name,
+    })),
+    rounds: [],
+    provisional: false,
+  });
 const standings = (file: string, sprint: boolean) =>
-  renderToStaticMarkup(
-    <StandingsSection
-      sprint={sprint}
-      standings={Standings.parse({
-        drivers: golden<(Place & { driver_number: number })[]>(`championship_drivers-${file}`).map((p, i) => ({
-          ...place(p),
-          full_name: `Driver ${p.driver_number}`,
-          acronym: `D${p.driver_number}`,
-          // 2026's mid-season swap: one driver shows both teams (11412: "Racing Bulls / Red Bull Racing").
-          team_names: i === 1 ? ['Racing Bulls', 'Red Bull Racing'] : [TEAMS[i % TEAMS.length]],
-        })),
-        teams: golden<(Place & { team_name: string })[]>(`championship_teams-${file}`).map((p) => ({
-          ...place(p),
-          team_name: p.team_name,
-        })),
-        rounds: [],
-        provisional: false,
-      })}
-    />,
-  );
+  renderToStaticMarkup(<StandingsSection after={sprint ? 'sprint' : 'race'} standings={standingsOf(file)} />);
+// The standings page (#201) renders the same tables under its own headings.
+const page = renderToStaticMarkup(
+  <StandingsView year={2026} slot={latestCounted(season)} standings={standingsOf('normal')} />,
+);
 
 const width = (text: string, px: number, weight = 400) =>
   format.getTextRect(text, `${weight} ${px}px sans-serif`).width;
@@ -152,6 +156,8 @@ describe('the Result tab on a phone (#202)', () => {
     ['the constructors after the race', race.standings, "Constructors' standings"],
     ['the drivers after the sprint', sprint.standings, "Drivers' standings"],
     ['the constructors after the sprint', sprint.standings, "Constructors' standings"],
+    ['the drivers on the standings page (#201)', page, "Drivers' standings"],
+    ['the constructors on the standings page (#201)', page, "Constructors' standings"],
   ])('fits %s in 358 px at 390 and in 328 px at 360, nothing cut off', (_, html, label) => {
     const rows = cells(html, label);
     expect(rows.length).toBeGreaterThan(11);
@@ -188,5 +194,34 @@ describe('the three-column breakpoint B (#202)', () => {
   ])('fits the three %s tables side by side, unwrapped, with the gaps, the gutter and a scroll bar', (_, tab) => {
     const sum = three(tab, 'max').reduce((a, b) => a + b, 0);
     expect(sum * K + 2 * gap + 2 * GUTTER + SCROLLBAR).toBeLessThanOrEqual(B);
+  });
+});
+
+describe('the standings page breakpoint B2 (#201, E3)', () => {
+  const B2 = Number(/\n@media \(min-width: (\d+)px\) \{\n {2}\.standings-grid \{/.exec(css)?.[1]);
+  const gap = Number(/\n\.standings-grid \{[^}]*column-gap: (\d+)px;/.exec(css)?.[1]);
+  // The drivers' and the constructors' tables unwrapped, × K, with one gap, the gutter and a scroll bar.
+  const need = Math.max(
+    ...[race, sprint].map((tab) => {
+      const [, drivers = 0, teams = 0] = three(tab, 'max');
+      return (drivers + teams) * K + gap + 2 * GUTTER + SCROLLBAR;
+    }),
+  );
+
+  it('is one column below B2 and two max-content tracks from it, the foot spanning both', () => {
+    expect(page).toMatch(
+      /<div class="standings-grid"><section><h2>Drivers<\/h2><table[\s\S]*<\/table><\/section><section><h2>Constructors<\/h2><table[\s\S]*<\/table><\/section><div class="result-foot">/,
+    );
+    expect(css).toMatch(/\n\.standings-grid \{\n {2}display: grid;\n {2}grid-template-columns: minmax\(0, 1fr\);/);
+    expect(css).toMatch(
+      /\n@media \(min-width: \d+px\) \{\n {2}\.standings-grid \{\n {4}grid-template-columns: repeat\(2, max-content\) 1fr;/,
+    );
+    expect(css).toMatch(/\n\.result-foot \{\n {2}grid-column: 1 \/ -1;/);
+  });
+
+  it('is measured: the two tables fit side by side from B2, and B2 is at most 20 px above the need', () => {
+    expect(gap).toBeGreaterThan(0);
+    expect(need).toBeLessThanOrEqual(B2);
+    expect(B2 - need, `need ${need.toFixed(1)} px`).toBeLessThan(20);
   });
 });
