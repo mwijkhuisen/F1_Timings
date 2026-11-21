@@ -36,7 +36,8 @@ export function StandingsView({
   return (
     <>
       {h1}
-      <p className="muted">
+      {/* A link in a sentence: no 44 px box (.standings-after a, as .rainsrc a). */}
+      <p className="muted standings-after">
         After the <Link to={result}>{`${m.name ?? '—'} · ${s.name ?? '—'}`}</Link>
       </p>
       <div className="standings-grid">

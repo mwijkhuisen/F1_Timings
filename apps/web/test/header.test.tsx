@@ -169,6 +169,13 @@ describe('the page links', () => {
     expect(to(null, { seasons: undefined })).toContain(`href="/${new Date().getUTCFullYear()}/standings"`);
   });
 
+  it('wraps the links, right aligned, rather than scroll sideways at 360 px (#201 review)', () => {
+    // Live and Status with their pills, Replays and Standings: 371 px in Edge, more than a 360 px phone's 328.
+    const css = readFileSync(fileURLToPath(new URL('../src/styles.css', import.meta.url)), 'utf8');
+    expect(css).toMatch(/\nheader \.links \{[^}]*\n {2}flex-wrap: wrap;\n {2}justify-content: flex-end;\n\}/);
+    expect(css).toMatch(/\nheader \{\n {2}flex-wrap: wrap;/);
+  });
+
   it('keeps the standings view in the year menu on the standings route, and only there', () => {
     const html = header({ id: 'standings', year: 2026 });
     expect(html).toContain('<a aria-current="page" href="/2026/standings">2026</a>');

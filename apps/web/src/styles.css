@@ -1763,9 +1763,13 @@ header {
   font-size: 11px;
 }
 
+/* Four links and both pills (Live, warning) are 371 px in Edge (#201 review): a 360 px phone wraps them, right
+   aligned, rather than scroll sideways. */
 header .links {
   margin-left: auto;
   gap: 2px;
+  flex-wrap: wrap;
+  justify-content: flex-end;
 }
 
 /* The moon (lib/theme.ts): outlined on the light theme, filled when the dark one is on (aria-pressed). */
@@ -2803,7 +2807,8 @@ dl.duel > div {
 }
 
 /* Inline links in a sentence are exempt from the 44 px target (WCAG 2.5.8). */
-.rainsrc a {
+.rainsrc a,
+.standings-after a {
   display: inline;
   min-width: 0;
   min-height: 0;

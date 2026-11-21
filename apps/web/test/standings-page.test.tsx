@@ -56,7 +56,7 @@ describe('the standings page', () => {
   it("heads the page with the year and links the session's Result tab by its names", () => {
     expect(html).toMatch(
       new RegExp(
-        `^<h1 tabindex="-1">Standings 2026</h1><p class="muted">After the <a href="${RESULT}">Mexico City Grand Prix · Race</a></p><div class="standings-grid">`,
+        `^<h1 tabindex="-1">Standings 2026</h1><p class="muted standings-after">After the <a href="${RESULT}">Mexico City Grand Prix · Race</a></p><div class="standings-grid">`,
       ),
     );
   });
