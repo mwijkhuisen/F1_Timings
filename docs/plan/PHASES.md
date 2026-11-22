@@ -12,8 +12,8 @@ Status: approved by the owner (2026-10-25). It builds on `ARCHITECTURE.md` (cite
 | Las Vegas 20–22 Nov 2026 (fallbacks: Lusail 27–29 Nov, Yas Marina 4–6 Dec) | **P2f** | Live verified on a real session |
 | Nov 2026 → Jan 2027 | **P4a–P4f** | The redesign (owner, 2026-11-07): web only, on the API as it is, so it can run next to P2f and the last 2026 weekends |
 | Nov 2026 → Jan 2027 | **P5a–P5c** | Weather (owner, 2026-11-07), next to P4. P5c's live check needs a session (Lusail 27–29 Nov or Yas Marina 4–6 Dec 2026, else 2027 testing) |
-| Nov 2026 → Jan 2027 | **P6a–P6c** | Team radio (owner, 2026-11-09), next to P4 and P5. P6a's live check needs a session (Las Vegas 20–22 Nov, else Lusail or Yas Marina). P6b and P6c start only after their gate checks |
-| After P2 | **P3a–P3g** | History (owner, 2026-11-10): the F1 archive from 2018 (every topic, 2023 on as files only), Jolpica 1950–2017, the FIA PDFs from 2012, the sources combined, old-season views. P3d's probes come first |
+| Nov 2026 → Jan 2027 | **P6a**, **P6b** | Team radio (owner, 2026-11-09), next to P4 and P5. P6a is built now, in two PRs, the clip download first; its live check is Yas Marina 4–6 Dec, else 2027 pre-season testing (owner, 2026-11-22, plan review). P6b follows P6a, and its live check is 2027 pre-season testing unless it is deployed before Yas Marina. P6c is closed (owner, 2026-11-22, plan review) |
+| After P2 | **P3a–P3h** | History (owner, 2026-11-10): the F1 archive from 2018 (every topic, 2023 on as files only), Jolpica 1950–2017, the FIA PDFs from 2012, the sources combined, old-season views. P3d's probes come first. Since 2026-11-22 (H17–H21): P3e's VM download runs before Lusail FP1 (27 Nov), P3h gives 2022 and the other holes their sessions, and the `fia.com` probe comes before P3f |
 | Nov → Dec 2026 | **P7a** | Telemetry, map first (owner, 2026-11-15, #122): the player's car map from the recordings alone, so it needs nothing from P3e. Its [weekend] check needs a session: Yas Marina 4–6 Dec (else Lusail 27–29 Nov if P7a is ready, else 2027 pre-season testing, stated in the PR) |
 | After P7a | **P7b**, **P7c** | Telemetry (owner, 2026-11-15): the stored laps, the route and the per-lap figures (P7b: the VM backfill of recordings first; only its 2018-on backfill waits for P3e), then the traces on Compare (P7c) |
 | After the #123 plan PR | **P8** | Championship standings (owner, 2026-11-15), 2023 on; next to P4–P6 |
@@ -265,16 +265,31 @@ Remaining 2026 weekends (OpenF1 schedule): Austin (race 25 Oct) · Mexico City 3
   - **H13, old-season views:** the views hide per-lap columns a session has no data for, and add a panel with the session's bests (best sectors and top speeds).
   - **H14, measure first:** the first full archive download (all topics, telemetry included) runs on the owner's machine for one season and measures size, time and RSS. The caps and the VM run come after.
   - **H15, telemetry:** it gets its own phase (P7). Since 2026-11-15 (T7) P7a, the player's map from the recordings, needs nothing from P3e; P7b and P7c come after P7a, and only P7b's 2018-on backfill waits for P3e.
-  - **H16, order:** the probes first (P3d), then P3e, P3c, P3f, P3b and P3g. P7a needs nothing from P3e; P7b and P7c come after P7a, and only P7b's 2018-on backfill waits for P3e (T7, owner, 2026-11-15). Owner decision D1, 2026-11-12: the P3b merge core comes before P3c; P3b is two PRs.
+  - **H16, order:** the probes first (P3d), then P3e, P3c, P3f, P3b and P3g. Since 2026-11-22 (H17–H21): P3h comes before P3f, P3b PR 2 and #189, and the `fia.com` probe before P3f. P7a needs nothing from P3e; P7b and P7c come after P7a, and only P7b's 2018-on backfill waits for P3e (T7, owner, 2026-11-15). Owner decision D1, 2026-11-12: the P3b merge core comes before P3c; P3b is two PRs.
+- **Decisions** (owner, 2026-11-22, plan review):
+  - **H17, a season or weekend no better source has** (owner, 2026-11-16, #220; written here on 2026-11-22):
+    - Jolpica creates its meetings and sessions with the derived keys, as for 1950–2017: results, race laps and pit stops only. Today that is the 2022 season, which the F1 archive answers 403 for (A§6.2), and any meeting of 2018 on that neither the archive (its Index and the `OFF_INDEX` table) nor OpenF1 has.
+    - If the archive serves such a session later, its data is merged into the derived session. The derived keys stay, so links, cached pages and saved sessions keep working. The archive session is matched to the derived one by year, round and session type, and its values come in as the better source through the merges (H6).
+    - The season page says in one short line why such a season or weekend is thinner ("results and race laps only").
+    - H6 for 2022 reads: archive (once served) > FIA > Jolpica, under the derived keys.
+    - The build is P3h.
+  - **H18, who owns a row where FIA and Jolpica both have the session** (2012–2017, and the H17 sessions):
+    - Jolpica owns the `meeting` row, the `session` rows it writes (qualifying, race and sprint), and their `driver` and `result` rows.
+    - The `fia` job never writes a row of another source. It adds lap candidates (`writeLaps`), pit candidates (`writePits`) and the per-session bests table to an existing session, and it creates only the session rows nobody has (practice, `TT` 01–03) under the existing meeting, with `source = 'fia'`.
+    - H6 still decides each lap value: FIA > Jolpica. The FIA classification (H11) is a cross-check of Jolpica's `result` rows, with its differences counted, not a second writer.
+    - So the `jolpica` job runs before the `fia` job for a season, and a `fia` run without the Jolpica rows skips the meeting with a fixed code.
+  - **H19, results for 2018 on from Jolpica:** where an archive session's `result` row has an empty field that Jolpica has (grid, status, time or gap, points), Jolpica fills it. The archive's own values stay, and a filled field is marked with its source, as H7 does for laps. This is the first merge of `result`; it is in P3b PR 2.
+  - **H20, the `fia.com` probe comes first:** no P3f parser work before the probe (P3f, "Gate") has shown that the site's terms allow the download and which seasons and documents exist. If it fails, the owner decides whether P3f is dropped.
+  - **H21, the first half of 2024:** the 2024 Index lists sessions only from the Spanish GP on (A§6.2). The missing meetings (Bahrain to Canada, and the test) are probed by path, as the 2018 gaps were (P3e, D1), and the sessions found join `OFF_INDEX`.
 - **Related issues:**
   - #96 (pit-lane topics, its topic check) and #126 (2018 compound names) take facts from P3d;
   - #122 is P7;
   - #123 (standings) is P8, from 2023 on; #189 plans 1950–2022 from Jolpica's standings tables (owner, 2026-11-15, #123, D3).
-- **Keys for sessions without one** (Jolpica and FIA before 2018; confirmed by P3c, 2026-11-12, with the `TT` table 01 FP1, 02 FP2, 03 FP3, 04 Qualifying, 05 Race, recorded in A§7):
+- **Keys for sessions without one** (Jolpica and FIA before 2018, and since H17 the 2022 season and any other hole; confirmed by P3c, 2026-11-12, with the `TT` table 01 FP1, 02 FP2, 03 FP3, 04 Qualifying, 05 Race, recorded in A§7; P3h adds 06 Sprint and 07 Sprint Qualifying, the sprint's own qualifying session):
   - The keys are derived in a reserved range that collides with neither the archive (session keys under 7,200 through 2021) nor OpenF1 (7,763 on).
   - `meeting_key = 1YYYYRR` (7 digits) and `session_key = 1YYYYRRTT` (9 digits, within the API's `^\d{1,9}$`). `TT` is a fixed code per session type.
   - FIA and Jolpica derive the same key for the same session, so they meet in one row.
-  - From 2018, FIA and Jolpica rows attach to the archive's or OpenF1's session, matched by year, round and type.
+  - From 2018, FIA and Jolpica rows attach to the archive's or OpenF1's session, matched by year, round and type. The built Jolpica rule matches a race by its start time within 1 h (A§7), because an archive session stores no round; P3f needs the round, so its plan states how a round is derived for an archive or OpenF1 meeting (the views' `roundNumbers` rule, A§13, or the Jolpica race matched by time). Where no such session exists (H17), they attach to the derived one.
 
 ### P3a: History 2018–2022 from the F1 archive
 
@@ -312,11 +327,15 @@ Remaining 2026 weekends (OpenF1 schedule): Austin (race 25 Oct) · Mexico City 3
   - `archive` job topics: every topic in the session's own `Index.json`. Before the 2018 US GP it has none, so the job uses the list P3d measured. 403 and 404 leave a marker as now.
   - The CLI accepts 2018 to the current year. For 2023 on it downloads files only and writes no rows (H3), and it never downloads during the live window, as now.
   - **Raw-only topics** (telemetry, `TeamRadio`, `ContentStreams` and any topic no row reads) are never parsed. Their file cap is set from P3e's own measurement, and the 16 MiB session cap counts parsed topics only.
-  - **Testing:** testing sessions from 2018–2022 get rows. The session type and the views' handling of a testing day follow from P3d. Testing from 2023 on is already OpenF1's.
+  - **Testing:** testing sessions from 2018–2022 get rows. The session type and the views' handling of a testing day follow from P3d. Testing from 2023 on is already OpenF1's. As measured (A§6.2): only the 2020 and 2021 test days are reachable. The 2018 and 2019 guesses answered 403 and 2022 is a 403 as a whole, so those have no rows.
   - [box] H14: one full season on the owner's machine first (`--dir …/fixtures-private/archive`): bytes per topic and per session type, time, and peak RSS. Then the A§14.1 disk budget, the caps and the VM run.
 - **Acceptance:**
   - [CI] the topic list, the raw-only rule, the year range and files-only for 2023 on, on synthetic fixtures.
-  - [box] the measured season is in A§6.2; 2018 to now is downloaded on the VM with `failed: 0` per year, or each failure is listed with its code.
+  - [box] the measured season is in A§6.2; 2018 to now is downloaded on the VM with `failed: 0` per year, or each failure is listed with its code. 2022's `index_http_403` is the expected answer, not a failure (H17).
+- **The VM run** (owner, 2026-11-22, plan review): now, before Lusail. The `archive` job has no F1 TV password and reads the recorder's cached token, which lasts about 4 days and is renewed only when a session is within 48 h (A§12.3). After Yas Marina (4–6 Dec) every run needs a token pasted by hand until 2027 testing.
+  - The run needs the release with #205 on the VM, and it must end before the recorder connects for Lusail FP1 (27 Nov, 60 min before the session): the job stops inside a live window.
+  - A token that expires during the run stops it; a rerun skips the files already present. If the token from Las Vegas has run out, paste one (`docs/runbooks/update.md`, "F1 TV token by hand"), or finish the run on the Lusail token between Lusail and Yas Marina.
+- **The 2024 probe (H21):** a SessionInfo-only probe by path for the 2024 meetings the Index lacks, on the owner's machine with the token file, at least 2 s apart, keys and paths only (the D1 probe of #130). The sessions found are added to `OFF_INDEX`, and one more `archive 2024` run on the VM fetches them. It does not hold up the run above.
 
 ### P3c: Jolpica, 1950–2017 (owner, 2026-11-10)
 
@@ -333,10 +352,21 @@ Remaining 2026 weekends (OpenF1 schedule): Austin (race 25 Oct) · Mexico City 3
 ### P3f: FIA timing PDFs, 2012 on (owner, 2026-11-10)
 
 - **Goal:** lap times for every session from 2012, plus per-session bests and pit stops (H1, H10, H11).
+- **Gate (H20, owner, 2026-11-22, plan review; nothing else of P3f is built before it passes):**
+  1. [owner] the terms: `fia.com`'s terms of use and `robots.txt`, read for automated access, text and data mining, and storing copies. formula1.com was ruled out on such a clause (A§6.3). The result goes into ADR-0009.
+  2. `scripts/fia-probe.ts`, on the `archive-probe.ts` pattern: the owner's machine only (it refuses under `CI`), a fixed host, no redirects off it, at least 2 s between requests. Per season 2012 to now it asks for the season's event list and one event's document list, and prints only the season, a status or a fixed code, and counts: events, and timing documents per kind (H11). Never a body, a URL or a document.
+  3. [box] its output goes into A§6.3: which seasons and document kinds exist, where the 2026 documents live, and the first year of the Race Sector Analysis (all **[U]** today).
+  - **Fails if** the terms bar it, the site refuses automated requests, or the 2012–2017 lap documents are missing. Then the owner decides: drop P3f (H6 loses its FIA tier, P3g loses the bests panel, and 2012–2017 keep Jolpica's race laps), or another way in.
+  - [CI] the probe's argument checks, the `CI` refusal and its output on msw fixtures.
+- **Depends on:** the gate, P3h (the 2022 sessions) and P3c. The `jolpica` job runs before the `fia` job (H18).
 - **Scope in:**
   - an owner-run `fia` job: it walks the `fia.com/f1-archives` event pages per season, downloads the timing PDFs at a polite rate, keeps them under `/srv/f1/fia/<year>/<event>/`, parses them and writes rows with `source = 'fia'`. It is resumable like the archive job.
   - parsers for the history chart and lap analysis (lap times), best sectors, the speed trap and maximum speeds, the pit stop summary, the classification and the lap chart. Where the Race Sector Analysis exists (seen from 2023), it also gives per-lap sectors.
-  - its lap rows go through `writeLaps` (P3b), as the `fia` candidates; it appends `fia` to the merge `ORDER` with the CHECK migration.
+  - its lap rows go through `writeLaps` (P3b), as the `fia` candidates; it inserts `fia` before `jolpica` in the merge `ORDER` (H6: FIA > Jolpica; A§7; this replaces "appends"), with a CHECK migration of its own for `fia` on `session`, `lap`, `lap_source`, `pit` and the pit candidates (the Jolpica migration added only `jolpica`).
+  - its pit stop summary goes through `writePits`, and `fia` gets a place in `PIT_ORDER` (A§7), before `jolpica`.
+  - the row ownership of H18: it writes no `meeting`, `driver` or `result` row and no session row of another source; it creates the practice sessions (`TT` 01–03) nobody has.
+  - the rollback trap of P3c again (A§7): an older image's merge throws on a source it does not know, so a rollback past this release needs the `fia` candidates removed first. The runbook says so.
+  - `/srv/f1/fia` in `f1-install`, a `jobs`-profile compose service with its bind and its egress, and the A§14.1 and A§14.2 rows.
   - a table for the per-session bests (best sectors and top speeds), which has no home in `lap`.
   - a PDF text library, with an ADR-lite line, or a hand-rolled reader. Decided in the phase.
 - **Acceptance:**
@@ -349,7 +379,11 @@ Remaining 2026 weekends (OpenF1 schedule): Austin (race 25 Oct) · Mexico City 3
 - **Two PRs** (owner decision D1, 2026-11-12; issue #17, PR 1 says "Part of #17"):
   - **PR 1:** the store, the marking, the merge on every lap write, the OpenF1, archive and recording tiers, the `fill` job, and the [box] on the Mexico race 11404.
   - **PR 2:** after P3d, P3c and P3f. It adds their tiers (`fia`, `jolpica`), the archive's other files where P3d found they help, the Singapore [box] and the 2018 [box]. P3c and P3f write their 2018+ laps through `writeLaps`.
-  - **The Singapore [box] moves to PR 2** (owner decision, 2026-11-12). The archive fills none of the Singapore 2026 race's (11388) `—` cells: our parser follows OpenF1's rules, so both build the same laps from the same feed (A§7, [box] P3b PR 1). FIA and Jolpica lap times can fill its empty lap times. Its empty speed traps are a follow-up issue.
+  - **PR 2's scope and [box] changed** (owner, 2026-11-22, plan review):
+    - The Singapore [box] and the 2018 [box] are dropped. What PR 1 and P3d measured rules them out (A§6.2, A§7): Singapore's empty cells are empty in the archive too, its 4 empty lap times are unfinished last laps that Jolpica does not list, and the 2018 sessions P3d found broken are either filled by nothing (Australia FP2), not broken in our rows (Azerbaijan) or a stint count (the Italian GP), while `stint` is not merged. The 2018 lap-2 hole was fixed in #198.
+    - In their place: counts per season of the cells that `fia` and `jolpica` filled, per column, with every conflict counted (D3).
+    - PR 2 also adds the `result` fill of H19: per field, Jolpica fills what the archive's `result` row leaves empty for 2018 on, the archive's values stay, and each filled field is marked with its source. Its storage follows D2's pattern and is settled in the PR's plan mode. Since #219 `pit` is merged too (A§7); `stint` still is not.
+  - **The Singapore [box] moved to PR 2** (owner decision, 2026-11-12; dropped on 2026-11-22, above). The archive fills none of the Singapore 2026 race's (11388) `—` cells: our parser follows OpenF1's rules, so both build the same laps from the same feed (A§7, [box] P3b PR 1). FIA and Jolpica lap times can fill its empty lap times. Its empty speed traps are a follow-up issue.
 - **Owner decisions** (2026-11-12):
   - **D2, storage:** a candidate table `lap_source` per (session, driver, lap, source), each writer replaces only its own rows and `lap` is rebuilt per session; `lap.filled` is `{column: source}`.
   - **D3, conflicts:** a higher value always stays; a lower source fills nothing on a lap where a lap or sector time both have differs by more than 1 ms; a lap the higher source lacks is added from the next source.
@@ -365,7 +399,7 @@ Remaining 2026 weekends (OpenF1 schedule): Austin (race 25 Oct) · Mexico City 3
   - No automatic fill: the owner runs `fill`. A timer can come when P3e downloads the 2023+ files.
 - **Acceptance:**
   - [CI] the order and the marking per value on fixtures where the sources disagree.
-  - [box] a 2023+ session with an OpenF1 live-ingest hole has fewer `—` cells than before, and they survive a refetch (PR 1: the Mexico race 11404). The Singapore 2026 race has fewer `—` cells than before, and so does each 2018 session P3d found broken (PR 2).
+  - [box] a 2023+ session with an OpenF1 live-ingest hole has fewer `—` cells than before, and they survive a refetch (PR 1: the Mexico race 11404). PR 2 (owner, 2026-11-22, plan review): per season, the cells `fia` and `jolpica` filled per column and the conflicts, from a query the PR supplies; and for one 2019 race and one 2021 race, the `result` fields Jolpica filled (H19), spot-checked against the official classification. This replaces "the Singapore 2026 race has fewer `—` cells than before, and so does each 2018 session P3d found broken".
 
 ### P3g: Old-season views (owner, 2026-11-10)
 
@@ -374,11 +408,33 @@ Remaining 2026 weekends (OpenF1 schedule): Austin (race 25 Oct) · Mexico City 3
   - per-lap columns (sectors, mini-sectors, traps, stints) are hidden where a session has no data for them;
   - a bests panel: best sectors and top speeds per driver, from P3f;
   - a results view for 1950–1995;
-  - a filled cell is marked with its source;
+  - a filled cell is marked with its source. This is not web-only (owner, 2026-11-22, plan review): `lap.filled` reaches neither the contracts nor `/laps` today (only `/pits` carries `filled`), so the phase adds it to the `Laps` contract and the route, and the `result` marking of H19 likewise;
+  - the one-line note of H17 on a season or weekend that has results and race laps only;
   - the season list reaches back to 1950.
+- **Depends on:** P3b PR 2 (the marking and the `result` fill), P3h (2022), and P3f for the bests panel, which is left out if P3f is dropped (H20).
 - **Acceptance:**
   - [CI] component tests for a 1950 race, a 2005 race (Jolpica laps only), a 2014 qualifying (FIA), a 2018 race with filled values, and a 2023 testing day.
   - [owner] the same five sessions look right on the phone.
+
+### P3h: The seasons and weekends no better source has (owner, 2026-11-16, #220; planned 2026-11-22)
+
+- **Goal:** the season list has no hole: 2022, and any 2018-on meeting that neither the archive nor OpenF1 has, show their results, race laps and pit stops from Jolpica (H17).
+- **Depends on:** P3c (the importer and the dump on the VM). **Owner actions:** the `jolpica` run on the VM.
+- **Scope in:**
+  - the derived keys beyond 2017 (`jolpica/keys.ts`, A§7): a year of 2018 on is allowed for a round that has no `openf1` or `f1-archive` meeting. Whether a round has one is read from the database at run time, never from a list of years.
+  - `TT` 06 Sprint and 07 Sprint Qualifying, and the sprint's result rows: the 2022 season had sprints, and #189 needs the session a sprint's standings attach to. 1950–2017 has no sprint, so no existing key changes.
+  - the importer creates those meetings and sessions as it does for 1950–2017 (qualifying, sprint and race; results, race laps, pit stops), and its 2018+ attach tier skips them (they are its own rows, not a `no_match`).
+  - **the archive arriving later:** the `archive` job, before it creates a session, looks for a derived session of the same year, round and session type. If there is one, it writes its rows under the derived key: lap and pit candidates through `writeLaps` and `writePits`, and the fields of `session`, `driver`, `stint` and `result` by a rule the phase's plan mode sets per table. `key_mismatch` and the raw files' directory name keep F1's own key. Until F1 serves 2022 this path is proven on a synthetic fixture only.
+  - the season response says which meetings are of this kind, so the season page can show H17's line (P3g renders it, or this phase if P3g comes later).
+  - A§6.2, A§6.3, A§7 and ADR-0009 amended; #131, #189 and #17 each get one line on 2022.
+- **Scope out:** practice and qualifying laps for 2022 (no source; P3f adds FIA's if its gate passes), sectors, mini-sectors, telemetry, standings (#189).
+- **Acceptance:**
+  - [CI] the importer on a synthetic dump: a 2022 round without a better source gets its meeting, qualifying, sprint and race with the derived keys; a 2021 round that has an archive meeting gets none and still attaches its laps; a rerun is idempotent.
+  - [CI] the archive job on a synthetic fixture: a session that matches a derived one writes under the derived key, the Jolpica rows stay where the archive has no value, and a second run changes nothing.
+  - [CI] the keys: 06 and 07, the 9-digit bound, and no change to any 1950–2017 key.
+  - [box] VM: 2022 has 22 meetings, with counts of sessions, results, laps and pit stops against the dump's own counts; the `no_match` count of the 2018+ tier falls by the 2022 races.
+  - [owner] the 2022 season page and one 2022 race look right on the phone, with the note.
+- **Reviews:** a fresh-session `/code-review` (it changes what the archive job writes); a Sonnet security review is recommended. Branch `claude/p3h-season-holes`. The issue is opened from this section; #220 closes with this plan PR.
 
 ### P4: Redesign (owner, 2026-11-07)
 
@@ -574,11 +630,22 @@ Remaining 2026 weekends (OpenF1 schedule): Austin (race 25 Oct) · Mexico City 3
   - The browser still makes no third-party request: clips are fetched by the recorder, which already reaches `livetiming.formula1.com`, and served by our `api` under `media-src 'self'`.
   - Audio and transcripts are F1 data: never committed (A§12.1 invariant 3), and test fixtures are synthetic.
   - We never build anything that gets around DRM.
-- **Order:** P6a first. P6b after P6a and its spike. P6c only after its gate check, independent of P6b.
+- **Order:** P6a first, now, in two PRs (owner, 2026-11-22, plan review). P6b after P6a and its spike. P6c is closed.
 
 ### P6a: Team radio in the player
 
 - **Goal:** live and replay list the team-radio clips up to T, and each one plays in the page.
+- **Two PRs, built now** (owner, 2026-11-22, plan review):
+  - **Why the download first:** the clips answered without a token once, on 2026-11-09. F1 put the archive's JSON on the same host behind a token in October and has stopped serving 2022, so the clips of sessions already recorded may not stay reachable. The download and the backfill do not wait for the page.
+  - **PR 1, the download:** the `TeamRadio` view and `radioFile`, the recorder's download, the `radio <recording dir>` role, and the [box] backfill of every recording on the VM, run as soon as the release is deployed. It changes nothing in the `api`, the CSP or the web.
+  - **PR 2, the page:** the route, `media-src 'self'`, the card, and the [weekend] and [owner] checks.
+  - **The [weekend] check:** Yas Marina 4–6 Dec 2026 if PR 2 is deployed by then, else 2027 pre-season testing, stated in the PR.
+- **Rules the first plan text missed** (the 2026-11-09 gap analysis on #84, and this review):
+  - **Each capture is paired with its session.** A connect's first Subscribe state can still hold the previous session's captures (A§11.1), and a recording that starts mid-session holds the clips so far. A capture is fetched under the `SessionInfo.Path` that was in force when it first arrived, and one whose `Utc` lies before the session's start is skipped; the card hides the same captures the download skips.
+  - **The `radio` role runs in the `live` service**, as `reindex-recordings` does (A§12.5): it needs `/srv/f1/live` read-write and the egress to `livetiming.formula1.com`, and no other service has both. It uses the shared recorder-directory reader of #109.
+  - **The cache rule is an exception to A§10**, which is `no-store` on everything under `/api` but a final session's routes: a clip never changes, so the clip route answers `private, max-age=31536000, immutable`. PR 2 writes the exception into A§10 and the device copy into A§12.1's accepted risks.
+  - **The stream's topic list:** `TeamRadio` reaches the browser today because it is not in `UNPARSED`. If #215's allow-list lands first, `TeamRadio` goes on it.
+  - **If the clips go behind the token:** the download stays anonymous in this phase. A clip that answers 401 or 403 gets a fixed code and no retry, and the owner then decides whether the recorder may send its token to that path (ADR-0005).
 - **Scope in:**
   - a `TeamRadio` view in `packages/contracts` (`Captures`: `Utc`, `RacingNumber`, `Path`) and a pure `radioFile(path)`, the basename only when `Path` is `TeamRadio/<1–64 of A–Z a–z 0–9 _>.mp3`
   - the recorder downloads each new clip into `<recording>/radio/`:
@@ -606,7 +673,7 @@ Remaining 2026 weekends (OpenF1 schedule): Austin (race 25 Oct) · Mexico City 3
   - [CI] the pinned CSP includes `media-src 'self'`.
   - [CI] component tests: the card (order, driver, time, lap, empty state, escaping), and in happy-dom a `TeamRadio` delta adds an item while a seek back drops it.
   - [box] `radio <dir>` on the VM's São Paulo recordings: the clips found, downloaded and failed (counts only).
-  - [weekend] in a live session clips appear at about T and play on desktop and on the phone, and the recorder stays within its limits (`f1-measure`).
+  - [weekend] in a live session clips appear at about T and play on desktop and on the phone, and the recorder stays within its limits (`f1-measure`). Yas Marina 4–6 Dec 2026, else 2027 pre-season testing (owner, 2026-11-22, plan review).
   - [owner] in a replay, a clip sits where it airs on the F1 TV replay.
 
 ### P6b: Transcripts of the clips
@@ -698,7 +765,7 @@ Remaining 2026 weekends (OpenF1 schedule): Austin (race 25 Oct) · Mexico City 3
     - p50 and p90 seconds per clip
     - `stt`'s peak memory (`f1-measure`), with no OOM
     - AVX2 in `/proc/cpuinfo`
-  - [weekend] in a live session the text appears within about 60 s of its clip, and `live` and `api` stay within their limits.
+  - [weekend] in a live session the text appears within about 60 s of its clip, and `live` and `api` stay within their limits. 2027 pre-season testing, unless P6b is deployed before Yas Marina (4–6 Dec 2026) (owner, 2026-11-22, plan review).
   - [owner] a spot check of 10 transcripts against the audio.
 - **Rollout order:**
   1. the P6b release is deployed (`current.env`)
@@ -707,15 +774,16 @@ Remaining 2026 weekends (OpenF1 schedule): Austin (race 25 Oct) · Mexico City 3
 
   `f1-install` recreates the stack with the image already deployed, so running it earlier makes `stt` exit 64.
 - **Order:** after P6a is merged (the gate has passed).
+- **Notes from the plan review** (owner, 2026-11-22, plan review):
+  - The VM has 6 vCPU and 12 GB (A1, done). "The VM's 1 CPU" in A§11.3 means a container's `cpus: 1.0`. So `stt`'s 4 threads fit, through `cpu_shares`, next to the other services; the [box] still checks AVX2.
+  - `stt` is a seventh daemon and `api` gets a second read-only bind: `hardening.sh`'s exact maps and A§14.2's table change with it. The gate measured a peak of 1.17 GB, so the `mem_limit: 3g` is checked against the [box] number and lowered if that holds.
+  - `/srv/f1/transcripts` joins the off-VM copy (#224).
 
-### P6c: Onboard radio (gate check first)
+### P6c: Onboard radio (closed, owner, 2026-11-22)
 
-- **Goal:** the radio from every driver's F1 TV onboard channel, recorded and transcribed, beyond the clips F1 picks.
-- **Gate, in order (no plan and no VM work before it passes):**
-  1. [owner] In the browser (DevTools, a past session's replay, one onboard channel): HLS or DASH; any `EXT-X-KEY` with `SAMPLE-AES` or a Widevine, PlayReady or FairPlay key format, any DASH `ContentProtection`, or a licence request; an audio-only rendition and its codec and bitrate; and whether the audio carries radio that is not among the clips. **DRM present = stop.**
-  2. Without DRM: a harness on the owner's machine (outside the repository, the token read through `--token-file` as `fetch-archive.ts` does) records 10 min of one onboard's audio and measures the speech share, Whisper's cost on the speech only, and the messages heard against the clips of those 10 min.
-  3. An ADR on recording F1 TV audio (terms, storage; as ADR-0005), then P6c's scope, sized by those numbers: 20 streams × the session's length, disk per race, CPU on the VM.
-- **Acceptance:** written into this section and the issue once the gate has passed.
+- **Closed without a build** (owner, 2026-11-22, plan review): the F1 TV streams are taken to carry DRM, and the phase's own gate said "DRM present = stop". #86 is closed as not planned.
+- **What it was:** the radio from every driver's F1 TV onboard channel, recorded and transcribed, beyond the clips F1 picks. Its gate was a DevTools check of one onboard channel for DRM, then a 10-minute measurement, then an ADR on recording F1 TV audio.
+- **The rule stays:** we never build anything that gets around DRM (P6 rules, H9). Reopening this needs a new owner decision and that DevTools check first.
 
 ### P7: Telemetry (owner, 2026-11-10; replanned 2026-11-15; the plan of #122)
 
@@ -809,7 +877,7 @@ Remaining 2026 weekends (OpenF1 schedule): Austin (race 25 Oct) · Mexico City 3
 - **Scope in:**
   - a telemetry card in `Comparison` (`apps/web/src/views/Compare.tsx`, A§13): speed with throttle and brake (and gear) for two picked laps, by default each driver's fastest.
   - x = distance (T3), and a gap breaks the line (`connectNulls: false`).
-  - DRS as a thin strip only where the channel exists (2019 and 2021).
+  - DRS as a thin strip only where the channel exists (2019 and 2021). As built (2026-11-16, A§13): the strip shows for a session year of 2025 or earlier, which replaces "2019 and 2021".
   - ECharts in its lazy chunk, at 390 px.
   - only inside an opened session (P4c's spoiler rule); A§13 amended.
 - **Scope out:** traces in the player's Compare tab (out of P7), a DRS strip for 2026, any new endpoint.
@@ -891,6 +959,11 @@ Remaining 2026 weekends (OpenF1 schedule): Austin (race 25 Oct) · Mexico City 3
 | A8 | Create a fine-grained GitHub token for agent sessions on this repository only (contents, pull requests and issues read/write; no Administration, no secrets) and log agent sessions in with it instead of your admin token (A§12.4) | P1f |
 | A9 | Run `scripts/archive-probe.ts` with your F1 TV token, and note which JSON requests the F1 TV web app's data screens make for a 2018 session and a pre-2018 replay (H9: hosts, paths and topic names, never a body or a token) | P3d |
 | A10 | Download the Jolpica CSV dump to the VM (`/srv/f1/jolpica`), and to `fixtures-private/jolpica/` for the [box] checks | P3c |
+| A11 | Run the P3e download on the VM before Lusail FP1 (27 Nov), with the release that holds #205 deployed; paste a token if the Las Vegas one has run out | P3e |
+| A12 | Run the 2024 path probe with your token file (H21), then `archive 2024` on the VM once its sessions are in `OFF_INDEX` | P3e |
+| A13 | Read `fia.com`'s terms and `robots.txt` for automated access and stored copies, and run `scripts/fia-probe.ts` (H20) | P3f |
+| A14 | Run `radio <dir>` over every recording on the VM as soon as P6a's first PR is deployed | P6a |
+| A15 | Set up the daily pull on your Windows PC into an encrypted OneDrive folder, and keep its key somewhere that is not OneDrive (#224, A§3) | #224 |
 
 ## 5. First task
 

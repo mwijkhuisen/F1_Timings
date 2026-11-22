@@ -29,3 +29,9 @@
 - **Login timing (owner decision O4):** `live` logs in when a session starts within 48 h and the token does not cover that session's end + 1 h, replacing "when the cached token expires within the next session window + 1 h". It warns before expiry (under 24 h) only when a session is due within 48 h, and always warns on a failed login.
 - **Limits (P2a security review):** one login per 10 min, and one per 6 h after 3 failures in a row, kept in the database so a restart does not reset them. A token the feed rejects is ignored until the file changes.
 - `archive` is not built yet: until P3 only `live` is the consumer of `f1tv_username` and `f1tv_password` (GIDs 62007 and 62008).
+
+## Amendment 2026-11-22 (plan review)
+
+- **The `archive` job never got the password** (P3a, A§12.3): it reads the token file `live` caches, read-only, and holds neither `f1tv_username` nor `f1tv_password`. Only `live` consumes them. This replaces "readable only by the `live` and `archive` containers' GID" in the decision above.
+- **Between seasons** the cached token runs out about four days after the last session, and `live` logs in again only for a session within 48 h. An `archive` run in that gap needs a token pasted by hand, so long runs are planned inside the season (PHASES P3e).
+- **Radio clips (P6a)** are fetched without the token. If F1 puts them behind it, sending the token to that path is a new owner decision recorded here.

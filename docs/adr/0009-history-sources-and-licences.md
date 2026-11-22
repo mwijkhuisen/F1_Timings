@@ -53,6 +53,14 @@ As now (A§6.2, invariant 3): raw files on the VM and in `fixtures-private/`, sy
 - New outbound hosts for owner-run jobs: `api.jolpi.ca` (the dump, downloaded by the owner) and `www.fia.com` (P3f). Like the other hosts, they are fixed in code; the firewall limits the port, not the host (A§14.3).
 - Pre-2018 sessions show fewer columns, and the views say why (P3g).
 
+## Amendment 2026-11-22 (plan review; owner decisions of 2026-11-16, #220, and 2026-11-22)
+
+- **2022 and other holes (H17):** the F1 archive answers 403 for 2022, so Jolpica creates that season's meetings and sessions with the derived keys, as for 1950–2017, under the same terms (the dump stays on the VM and is never committed). If the archive serves the year later, its data is merged into those sessions. The same holds for any 2018-on meeting no better source has. Built in P3h.
+- **Row ownership (H18):** where FIA and Jolpica both have a session, Jolpica owns the meeting, session, driver and result rows; the FIA job adds lap and pit candidates and the bests, and creates only the practice sessions. H6 still ranks each lap value FIA > Jolpica.
+- **Results from Jolpica for 2018 on (H19):** Jolpica fills the fields an archive result row leaves empty, marked with its source.
+- **`fia.com` is checked before it is used (H20):** this ADR accepted the FIA PDFs on the terms read on 2026-11-10. Before P3f builds anything, the owner reads the site's terms and `robots.txt` again for automated access, text and data mining and stored copies, and a probe counts what exists. The result is written here; if it fails, the FIA tier is dropped.
+- **Copies off the VM (#224):** the Jolpica dump and the FIA PDFs join the encrypted off-VM copy (A§3). It is the owner's private store, never shared, so the terms above are unchanged.
+
 ## Sources (read 2026-11-10)
 
 - FastF1: https://github.com/theOehrly/Fast-F1/discussions/550, issues #248, #668, #677, #688, #841, #863, #930, #978; https://docs.fastf1.dev/data_reference/index.html
