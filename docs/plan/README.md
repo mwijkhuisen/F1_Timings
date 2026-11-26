@@ -3,8 +3,8 @@
 | File | What |
 |---|---|
 | [ARCHITECTURE.md](ARCHITECTURE.md) | Product, stack, data map, data model, ingestion, timing rules, API, live/replay, security, deployment, risks (cited A§x) |
-| [PHASES.md](PHASES.md) | Timeline, workflow, phases P0–P3 with acceptance criteria, owner actions, first task |
-| [../adr/](../adr/) | Architecture decisions (ADR-0001 … 0007) |
+| [PHASES.md](PHASES.md) | Timeline, workflow, phases P0–P8 with acceptance criteria, owner actions, first task |
+| [../adr/](../adr/) | Architecture decisions (ADR-0001 … 0009; ADR-0010 is reserved for P6b's speech-to-text) |
 | [planning-prompt.md](planning-prompt.md) | The prompt this plan was made from (2026-10-25) |
 
 Rules:
