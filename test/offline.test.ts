@@ -69,8 +69,9 @@ describe('the guard, with msw closed (real sockets)', () => {
   });
 });
 
-describe('an aborted fetch under msw (mswjs/interceptors#881)', () => {
-  // A 502 without a body has no length, so cancelling it aborts the request mid-response, as access.ts does.
+describe('an aborted fetch under msw (mswjs/interceptors#881, fixed in msw 3.0.6)', () => {
+  // A 502 without a body has no length, so cancelling it aborts the request mid-response, as access.ts does. undici
+  // then connects again and writes nothing; msw before 3.0.6 passed that idle connection through to the real host.
   const url = 'https://certs.example.test/cdn-cgi/access/certs';
   let answered = 0;
   beforeEach(() => {
@@ -94,16 +95,5 @@ describe('an aborted fetch under msw (mswjs/interceptors#881)', () => {
     await res.arrayBuffer();
     expect([res.status, answered]).toEqual([502, 2]);
     expect(attempts()).toEqual([]);
-  });
-
-  it('without the idle-reconnect close, msw passes the connection through to the real host', async () => {
-    offline.closeIdleReconnects(false);
-    try {
-      await abortedFetch();
-    } finally {
-      offline.closeIdleReconnects(true);
-    }
-    // Nothing attempted means msw no longer passes an idle connection through: drop that part of test/offline.ts.
-    expect(attempts()).toEqual(['lookup certs.example.test']);
   });
 });
