@@ -1,4 +1,3 @@
-import { subscribe } from 'node:diagnostics_channel';
 import dns from 'node:dns';
 import { BlockList, isIP, Socket } from 'node:net';
 import { getSystemErrorMap } from 'node:util';
@@ -12,14 +11,12 @@ import { expect } from 'vitest';
 //   are refused before anything leaves the process, and recorded. Every HTTP and WebSocket client in Node goes through
 //   these two (nothing here uses UDP or c-ares queries). msw.setup.ts calls `check()` after each test and each file,
 //   which fails with what was refused: a refused request alone can pass unnoticed (a fire-and-forget ping swallows it).
-// - Idle reconnects. After an aborted request (a timeout, a `res.body.cancel()` before the end) undici connects again,
-//   then drops the request without writing it. msw 3 passes such an idle connection through to the real host one
-//   `setImmediate` later (its read-before-write check; mswjs/interceptors#881, open for msw 3.0.3 and
-//   @mswjs/interceptors 0.45.9). So a connection undici sent no request on is closed first, as a server closes an
-//   idle keep-alive connection. offline.test.ts fails once msw stops doing this; then this part can go.
+//
+// Until msw 3.0.6 (@mswjs/interceptors 0.45.12, mswjs/interceptors#881) this also closed the idle connection undici
+// opens after an aborted request, which msw passed through to the real host; offline.test.ts keeps that case.
 
 export type Attempt = { kind: 'lookup' | 'connect'; target: string; test: string | undefined };
-type Guard = { attempts: Attempt[]; closeIdle: boolean; currentTest: () => string | undefined };
+type Guard = { attempts: Attempt[]; currentTest: () => string | undefined };
 
 const LOOPBACK = new BlockList();
 LOOPBACK.addSubnet('127.0.0.0', 8, 'ipv4');
@@ -33,7 +30,7 @@ export function isLoopback(address: string): boolean {
 const isLocalhost = (name: string) => /^localhost\.?$/i.test(name);
 
 function install(): Guard {
-  const guard: Guard = { attempts: [], closeIdle: true, currentTest: () => undefined };
+  const guard: Guard = { attempts: [], currentTest: () => undefined };
   const record = (kind: Attempt['kind'], target: string) => {
     guard.attempts.push({ kind, target, test: guard.currentTest() });
   };
@@ -83,20 +80,6 @@ function install(): Guard {
     };
     Reflect.set(tcp, method, guarded);
   }
-
-  // Idle reconnects (see the top). undici writes a live request in the same turn as `connected`, so a socket without
-  // `sendHeaders` by the next tick carries nothing, and that tick runs before msw's setImmediate.
-  const sent = new WeakSet<object>();
-  subscribe('undici:client:sendHeaders', (message) => {
-    sent.add((message as { socket: object }).socket);
-  });
-  subscribe('undici:client:connected', (message) => {
-    const { socket, connectParams } = message as { socket: Socket; connectParams: { hostname: string } };
-    if (isLocalhost(connectParams.hostname) || isLoopback(connectParams.hostname)) return;
-    process.nextTick(() => {
-      if (guard.closeIdle && !sent.has(socket) && !socket.destroyed) socket.destroy();
-    });
-  });
   return guard;
 }
 
@@ -121,9 +104,5 @@ export const offline = {
         'Answer the request with an msw handler, or use a loopback server.',
       ].join('\n'),
     );
-  },
-  /** On by default; off only to show that msw still passes an idle connection through (offline.test.ts). */
-  closeIdleReconnects(on: boolean): void {
-    guard.closeIdle = on;
   },
 };

@@ -56,15 +56,23 @@ async function settle<T>(pending: Promise<T>): Promise<T> {
  * One byte every 15 s (never idle for undici's 30 s), five in all, then a stall: bounded on purpose. (Not closed:
  * msw's emulated socket would deliver the end after undici's abort.) Sent with a declared length the drip never
  * reaches, as a real slow server would send it (without one, the socket's close after the abort would end the
- * message: an undici assertion).
+ * message: an undici assertion). msw 3.0.6 cancels the body on that abort, so a byte still pending is dropped.
  */
 const drip = () => {
   let sent = 0;
+  let cancelled = false;
   const body = new ReadableStream({
     pull: (controller) =>
       new Promise<void>((resolve) => {
-        if (sent++ < 5) setTimeout(() => resolve(controller.enqueue(new TextEncoder().encode('['))), 15_000);
+        if (sent++ < 5)
+          setTimeout(() => {
+            if (!cancelled) controller.enqueue(new TextEncoder().encode('['));
+            resolve();
+          }, 15_000);
       }),
+    cancel: () => {
+      cancelled = true;
+    },
   });
   return new HttpResponse(body, { headers: { 'content-length': '1000' } });
 };

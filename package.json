@@ -12,11 +12,11 @@
     "test:integration": "vitest run --project integration"
   },
   "devDependencies": {
-    "@biomejs/biome": "2.6.6",
+    "@biomejs/biome": "2.6.7",
     "@types/node": "26.6.6",
     "fast-check": "4.10.2",
     "happy-dom": "21.0.4",
-    "msw": "3.0.4",
+    "msw": "3.0.6",
     "typescript": "6.0.3",
     "vitest": "5.1.0"
   }
