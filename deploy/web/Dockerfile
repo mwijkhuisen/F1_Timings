@@ -2,7 +2,7 @@
 # in (A§3, A§12.1; P1f). Bases pinned by digest. Build context: the repository
 # root, through the allowlist in /.dockerignore:
 #   docker build -f deploy/web/Dockerfile --build-arg F1_REVISION=<sha> .
-FROM node:26.13.0-trixie-slim@sha256:5adad64f9a1fca2d51972caa65983634c8a774eb300d72b20f7f2a0f60368072 AS build
+FROM node:26.13.1-trixie-slim@sha256:e6bedef217677b276c591795e169840edd9096dbf13f29df8ef8d1856b8820bc AS build
 RUN apt-get update \
   && apt-get install -y --no-install-recommends ca-certificates curl \
   && rm -rf /var/lib/apt/lists/*
@@ -15,7 +15,7 @@ ENV PATH=/opt/pnpm/bin:$PATH
 ARG F1_REVISION=dev
 RUN pnpm install --frozen-lockfile && pnpm --filter @f1/web build
 
-FROM caddy:2.11.8-alpine@sha256:f6228111e5fafa1a5238258d0858e103f10599b8d1659a146e7726681a002bb9
+FROM caddy:2.11.9-alpine@sha256:003a97808e781aa9f7e75cc2f43d34d461099031faf5e20faefb9f61126836f0
 # The stock binary carries a cap_net_bind_service file capability, and the
 # kernel refuses to exec such a binary under cap_drop: ALL (caddy-docker#396).
 # A plain copy drops the xattr. Caddy runs as uid 62532 with no capability and
