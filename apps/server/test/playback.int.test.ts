@@ -811,15 +811,17 @@ describe('playback routes (f1_api login, Access JWT, real socket)', { timeout: 6
       expect(withPos.at(-1)?.event).toBe('end');
       expect(without.map((e) => e.event)).not.toContain('pos');
 
-      // Without pos: the same events, the `pos` events and the snapshot's `pos` key aside (and the end's t, on the clock).
+      // Without pos: the same events, the `pos` events and the snapshot's `pos` key aside (and the end's and snapshot's
+      // t, on the clock: the seek's t is at + its elapsed ms × 16, so a ms tick between two opens moves it by 16).
       const rest = (list: typeof withPos) =>
         list.flatMap((e): unknown[] => {
           if (e.event === 'pos') return [];
           if (e.event === 'end') return [{ event: 'end' }];
           if (e.event !== 'snapshot') return [e];
-          const { pos: _, ...data } = PlaybackSnapshot.parse(e.data);
+          const { pos: _, t: __, ...data } = PlaybackSnapshot.parse(e.data);
           return [{ event: e.event, data }];
         });
+      for (const list of [withPos, without]) expect(PlaybackSnapshot.parse(list[0]?.data).t).toBeGreaterThanOrEqual(at);
       expect(keys(without[0]?.data as Record<string, unknown>)).toEqual([
         'laps',
         'pits',
